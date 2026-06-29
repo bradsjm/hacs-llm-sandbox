@@ -16,6 +16,7 @@ from ..snapshot.models import (
     SafeState,
 )
 from . import await_normalization, result_binding
+from .builtin_normalization import normalize_builtins
 from .contracts import MONTY_TYPE_STUBS
 from .errors import CodeErrorPayload, HelperErrorPayload, HelperExecutionError, helper_error_from_exception
 from .executor_support import (
@@ -23,6 +24,7 @@ from .executor_support import (
     helper_error_payload_for_state,
     json_safe,
     load_monty_factory,
+    refine_code_error,
     underlying_exception,
     validation_error,
 )
@@ -103,13 +105,14 @@ async def async_execute_home_code(
         ) from err
 
     # Forgiveness pipeline (Postel's law): each pass is independent and
-    # fails open. Order matters: await normalization first (cheap, syntactic),
-    # then last-expression promotion, then append_result_expression which
-    # depends on knowing whether ``result`` is explicitly assigned.
-    normalized_code, await_labels = await_normalization.normalize_awaits(code, DATACLASS_REGISTRY)
+    # fails open. Order matters: builtin normalization first resolves safe
+    # reflection syntax, then await normalization, then last-expression
+    # promotion before append_result_expression checks explicit ``result``.
+    builtin_code, builtin_labels = normalize_builtins(code)
+    normalized_code, await_labels = await_normalization.normalize_awaits(builtin_code, DATACLASS_REGISTRY)
     promoted_code, promote_labels = result_binding.promote_last_expression_to_result(normalized_code)
     executable_code = result_binding.append_result_expression(promoted_code)
-    runtime.state.normalizations = [*await_labels, *promote_labels]
+    runtime.state.normalizations = [*builtin_labels, *await_labels, *promote_labels]
 
     # Build facade globals from the snapshot.
     facade_inputs = build_facades(snapshot)
@@ -174,10 +177,14 @@ async def async_execute_home_code(
             if specific.__class__ is Exception and specific.args == (candidate.marker,):
                 return helper_error_payload_for_state(candidate, runtime.state)
         specific = underlying_exception(err)
+        refined_kind, refined_message, available_attributes = refine_code_error(
+            specific.__class__.__name__, str(specific) or str(err), code
+        )
         return code_error_payload_for_state(
-            kind=specific.__class__.__name__,
-            message=str(specific) or str(err),
+            kind=refined_kind,
+            message=refined_message,
             state=runtime.state,
+            available_attributes=available_attributes,
         )
     finally:
         # Capture print output even on success; CollectString.output is a

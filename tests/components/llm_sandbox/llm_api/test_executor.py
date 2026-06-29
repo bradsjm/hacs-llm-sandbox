@@ -366,3 +366,52 @@ result = "ok"
 
     assert result["execution"]["status"] == "ok"
     assert "awaited_async_calls" in result["execution"]["normalizations"]
+
+
+async def test_forgiveness_layer_collapses_home_tour_to_single_call(
+    hass: HomeAssistant,
+    loaded_entry: MockConfigEntry,
+) -> None:
+    """R3: alias fields + reflection builtins resolve in one successful call.
+
+    Reproduces the "tell me about my home" patterns that previously took five
+    calls and three errors, now collapsing to one ok result.
+    """
+    from homeassistant.helpers import area_registry as ar
+    from homeassistant.helpers import floor_registry as fr
+
+    floor = fr.async_get(hass).async_create("Ground Floor")
+    bedroom = ar.async_get(hass).async_get_area_by_name("Bedroom")
+    ar.async_get(hass).async_update(bedroom.id, floor_id=floor.floor_id)
+
+    code = """
+floors = [(f.name, f.floor_id, f.id) for f in floor_registry.async_list_floors()]
+areas = [(a.name, a.id, a.area_id) for a in area_registry.async_list_areas()]
+result = {
+    "floor_count": len(floors),
+    "floors": floors,
+    "areas": areas,
+    "has_list": hasattr(floor_registry, "async_list_floors"),
+    "has_bogus": hasattr(floor_registry, "nope"),
+    "area_count_via_getattr": len(getattr(area_registry, "async_list_areas")()),
+    "type_name": type(floor_registry).__name__,
+}
+"""
+
+    result = await _run_code(hass, loaded_entry, code)
+
+    assert result["execution"]["status"] == "ok"
+    output = result["output"]
+    assert output["floor_count"] == 1
+    # Alias: f.id equals canonical f.floor_id.
+    assert output["floors"][0][1] == output["floors"][0][2]
+    # Alias: a.area_id equals canonical a.id.
+    assert output["areas"][0][1] == output["areas"][0][2]
+    assert output["has_list"] is True
+    assert output["has_bogus"] is False
+    assert output["area_count_via_getattr"] == 1
+    assert output["type_name"] == "SafeFloorRegistry"
+    normalizations = result["execution"]["normalizations"]
+    assert "hasattr_resolved" in normalizations
+    assert "getattr_resolved" in normalizations
+    assert "type_name_resolved" in normalizations

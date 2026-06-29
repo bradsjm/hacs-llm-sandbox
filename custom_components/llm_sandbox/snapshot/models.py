@@ -175,6 +175,7 @@ class SafeAreaEntry:
     """Frozen view of a Home Assistant area registry entry."""
 
     id: str
+    area_id: str
     name: str
     aliases: tuple[str, ...]
     floor_id: str | None
@@ -191,6 +192,7 @@ class SafeAreaEntry:
             JsonValueType,
             {
                 "id": self.id,
+                "area_id": self.area_id,
                 "name": self.name,
                 "aliases": self.aliases,
                 "floor_id": self.floor_id,
@@ -210,6 +212,7 @@ class SafeFloorEntry:
     """Frozen view of a Home Assistant floor registry entry."""
 
     floor_id: str
+    id: str
     name: str
     aliases: tuple[str, ...]
     level: int | None
@@ -222,6 +225,7 @@ class SafeFloorEntry:
             JsonValueType,
             {
                 "floor_id": self.floor_id,
+                "id": self.id,
                 "name": self.name,
                 "aliases": self.aliases,
                 "level": self.level,

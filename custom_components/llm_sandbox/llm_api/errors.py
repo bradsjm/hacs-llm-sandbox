@@ -39,6 +39,7 @@ class CodeErrorExecutionPayload(TypedDict):
     available_globals: list[str]
     suggested_methods: list[str]
     normalizations: list[str]
+    available_attributes: NotRequired[list[str]]
     location: NotRequired[dict[str, int]]
 
 
@@ -128,9 +129,10 @@ def code_error_payload(
     suggested_methods: list[str],
     normalizations: list[str],
     printed: list[str],
+    available_attributes: list[str] | None = None,
 ) -> CodeErrorPayload:
     """Return compact code-error execution payload."""
-    return {
+    payload: CodeErrorPayload = {
         "execution": {
             "status": "code_error",
             "kind": kind,
@@ -144,6 +146,9 @@ def code_error_payload(
         "output": None,
         "printed": printed,
     }
+    if available_attributes is not None:
+        payload["execution"]["available_attributes"] = available_attributes
+    return payload
 
 
 def setup_error_payload(key: str, placeholders: TranslationPlaceholders) -> SetupErrorPayload:

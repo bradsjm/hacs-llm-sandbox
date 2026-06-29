@@ -17,3 +17,11 @@ def test_monty_type_stubs_exclude_private_methods() -> None:
     assert "async def async_call" in MONTY_TYPE_STUBS
     assert "def async_get" in MONTY_TYPE_STUBS
     assert "def __getitem__" in MONTY_TYPE_STUBS
+
+
+def test_monty_type_stubs_include_alias_fields() -> None:
+    """Denormalized alias fields appear next to their canonical keys in stubs."""
+    # SafeFloorEntry: floor_id followed by the id alias.
+    assert "floor_id: str\n    id: str" in MONTY_TYPE_STUBS
+    # SafeAreaEntry: id followed by the area_id alias.
+    assert "id: str\n    area_id: str" in MONTY_TYPE_STUBS

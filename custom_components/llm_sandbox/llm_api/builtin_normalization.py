@@ -1,0 +1,169 @@
+"""AST normalization for safe builtin reflection conveniences.
+
+This pass statically resolves ``getattr``/``hasattr`` calls with literal names
+and ``type(x).__name__`` for bare facade-global receivers. It is intentionally
+scoped to known globals so the sandbox can forgive common Python discovery
+patterns without enabling dunder walking or dynamic type resolution.
+"""
+
+import ast
+import inspect
+from dataclasses import fields
+
+from ..snapshot.models import (
+    SafeAreaEntry,
+    SafeContext,
+    SafeDeviceEntry,
+    SafeFloorEntry,
+    SafeRegistryEntry,
+    SafeState,
+)
+from .facade_views import (
+    SafeAreaModule,
+    SafeAreaRegistry,
+    SafeDeviceModule,
+    SafeDeviceRegistry,
+    SafeEntityModule,
+    SafeEntityRegistry,
+    SafeFloorModule,
+    SafeFloorRegistry,
+    SafeHass,
+    SafeLLMContext,
+    SafeServiceRegistry,
+    SafeStateMachine,
+)
+
+GLOBAL_TYPE_MAP: dict[str, type] = {
+    "hass": SafeHass,
+    "states": SafeStateMachine,
+    "er": SafeEntityModule,
+    "dr": SafeDeviceModule,
+    "ar": SafeAreaModule,
+    "fr": SafeFloorModule,
+    "entity_registry": SafeEntityRegistry,
+    "device_registry": SafeDeviceRegistry,
+    "area_registry": SafeAreaRegistry,
+    "floor_registry": SafeFloorRegistry,
+    "llm_context": SafeLLMContext,
+}
+
+_SUPPORTED_OPERATOR_DUNDERS = frozenset({"__getitem__", "__contains__", "__len__", "__iter__"})
+HASATTR_RESOLVED = "hasattr_resolved"
+GETATTR_RESOLVED = "getattr_resolved"
+TYPE_NAME_RESOLVED = "type_name_resolved"
+
+
+def public_surface(cls: type) -> frozenset[str]:
+    """Return public dataclass fields and supported methods for ``cls``."""
+    field_names = {field.name for field in fields(cls)}
+    method_names: set[str] = set()
+    for name, _member in inspect.getmembers(cls, predicate=inspect.isfunction):
+        if name.startswith("_") and name not in _SUPPORTED_OPERATOR_DUNDERS:
+            continue
+        method_names.add(name)
+    return frozenset(field_names | method_names)
+
+
+def surface_for_class_name(name: str) -> frozenset[str] | None:
+    """Return the public surface for a facade or snapshot record class name."""
+    classes_by_name = {
+        cls.__name__: cls
+        for cls in (
+            *GLOBAL_TYPE_MAP.values(),
+            SafeServiceRegistry,
+            SafeContext,
+            SafeState,
+            SafeRegistryEntry,
+            SafeDeviceEntry,
+            SafeAreaEntry,
+            SafeFloorEntry,
+        )
+    }
+    if (cls := classes_by_name.get(name)) is None:
+        return None
+    return public_surface(cls)
+
+
+def normalize_builtins(code: str) -> tuple[str, list[str]]:
+    """Resolve safe builtin reflection over known facade globals."""
+    try:
+        module = ast.parse(code)
+    except SyntaxError:
+        return code, []
+
+    resolver = _BuiltinResolver()
+    resolved_module = resolver.visit(module)
+    if not resolver.applied:
+        return code, []
+
+    ast.fix_missing_locations(resolved_module)
+    return ast.unparse(resolved_module), sorted(resolver.applied)
+
+
+class _BuiltinResolver(ast.NodeTransformer):
+    """Rewrite literal builtin reflection when the receiver is a known global."""
+
+    def __init__(self) -> None:
+        self.applied: set[str] = set()
+
+    def visit_Call(self, node: ast.Call) -> ast.AST:
+        """Recurse first so nested builtin rewrites settle before this call."""
+        self.generic_visit(node)
+        if isinstance(node.func, ast.Name) and node.func.id == "hasattr":
+            return self._resolve_hasattr(node)
+        if isinstance(node.func, ast.Name) and node.func.id == "getattr":
+            return self._resolve_getattr(node)
+        return node
+
+    def visit_Attribute(self, node: ast.Attribute) -> ast.AST:
+        """Resolve ``type(<global>).__name__`` without rewriting bare ``type``."""
+        self.generic_visit(node)
+        if node.attr != "__name__":
+            return node
+        if not isinstance(node.value, ast.Call):
+            return node
+        if not isinstance(node.value.func, ast.Name) or node.value.func.id != "type":
+            return node
+        if len(node.value.args) != 1:
+            return node
+        if (cls := _qualifying_global_type(node.value.args[0])) is None:
+            return node
+        # Expose only the safe facade class name, not the type object itself.
+        self.applied.add(TYPE_NAME_RESOLVED)
+        return ast.copy_location(ast.Constant(value=cls.__name__), node)
+
+    def _resolve_hasattr(self, node: ast.Call) -> ast.AST:
+        # Only literal-name checks on bare known globals are statically safe.
+        if len(node.args) != 2:
+            return node
+        if (cls := _qualifying_global_type(node.args[0])) is None:
+            return node
+        if not isinstance(node.args[1], ast.Constant) or not isinstance(node.args[1].value, str):
+            return node
+        self.applied.add(HASATTR_RESOLVED)
+        return ast.copy_location(ast.Constant(value=node.args[1].value in public_surface(cls)), node)
+
+    def _resolve_getattr(self, node: ast.Call) -> ast.AST:
+        # Only literal-name lookups on bare known globals are statically safe.
+        if len(node.args) not in {2, 3}:
+            return node
+        if (cls := _qualifying_global_type(node.args[0])) is None:
+            return node
+        if not isinstance(node.args[1], ast.Constant) or not isinstance(node.args[1].value, str):
+            return node
+        attr = node.args[1].value
+        if attr in public_surface(cls):
+            self.applied.add(GETATTR_RESOLVED)
+            return ast.copy_location(ast.Attribute(value=node.args[0], attr=attr, ctx=ast.Load()), node)
+        if len(node.args) == 3:
+            self.applied.add(GETATTR_RESOLVED)
+            return ast.copy_location(node.args[2], node)
+        # Missing attributes without defaults keep their natural runtime error.
+        return node
+
+
+def _qualifying_global_type(node: ast.AST) -> type | None:
+    """Return the facade type only for bare Monty global names."""
+    if not isinstance(node, ast.Name):
+        return None
+    return GLOBAL_TYPE_MAP.get(node.id)

@@ -91,6 +91,21 @@ async def test_snapshot_captures_states_and_registry_entries(hass: HomeAssistant
     assert entry.unique_id == "bedroom"
 
 
+async def test_snapshot_area_and_floor_alias_fields_match_canonical(hass: HomeAssistant) -> None:
+    """Alias fields (area.area_id, floor.id) mirror their canonical keys."""
+    floor_id, _area_id, _device_id = _add_area_device(hass, "Loft")
+
+    snapshot = build_snapshot(hass)
+
+    floor = snapshot.floors[floor_id]
+    # Canonical floor_id mirrors the denormalized id alias.
+    assert floor.id == floor.floor_id == floor_id
+
+    area = next(a for a in snapshot.areas.values() if a.floor_id == floor_id)
+    # Canonical id mirrors the denormalized area_id alias.
+    assert area.area_id == area.id
+
+
 async def test_snapshot_datetimes_are_iso_strings(hass: HomeAssistant) -> None:
     hass.states.async_set("sensor.temp", "23.5", {"friendly_name": "Temp"})
 

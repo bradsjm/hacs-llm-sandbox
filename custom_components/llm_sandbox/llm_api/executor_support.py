@@ -1,7 +1,9 @@
 """Shared helper and runtime support for the Monty executor."""
 
+import ast
 import inspect
 import math
+import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Protocol, cast
@@ -12,7 +14,6 @@ from homeassistant.util.json import JsonValueType
 
 from ..const import DEFAULT_HELPER_CALL_BUDGET, DOMAIN
 from ..types import TranslationPlaceholders
-from .contracts import AVAILABLE_GLOBALS, suggested_methods
 from .errors import (
     CodeErrorPayload,
     HelperErrorPayload,
@@ -137,6 +138,8 @@ def helper_error_payload_for_state(
     state: ExecutionState,
 ) -> HelperErrorPayload:
     """Build a helper-error response using current execution state."""
+    from .contracts import AVAILABLE_GLOBALS, suggested_methods
+
     return helper_error_payload(
         err,
         helper_calls=state.helper_calls,
@@ -154,8 +157,11 @@ def code_error_payload_for_state(
     message: str,
     state: ExecutionState,
     location: dict[str, int] | None = None,
+    available_attributes: list[str] | None = None,
 ) -> CodeErrorPayload:
     """Build a code-execution error response using current state."""
+    from .contracts import AVAILABLE_GLOBALS, suggested_methods
+
     payload = code_error_payload(
         kind=kind,
         message=message,
@@ -165,10 +171,66 @@ def code_error_payload_for_state(
         suggested_methods=suggested_methods(),
         normalizations=list(state.normalizations),
         printed=list(state.printed),
+        available_attributes=available_attributes,
     )
     if location is not None:
         payload["execution"]["location"] = location
     return payload
+
+
+def refine_code_error(kind: str, message: str, code: str) -> tuple[str, str, list[str] | None]:
+    """Refine Monty/type-check errors into actionable sandbox guidance."""
+    from .builtin_normalization import GLOBAL_TYPE_MAP, public_surface, surface_for_class_name
+
+    # Monty appends informational lines that are noisy in LLM-facing payloads.
+    cleaned_message = "\n".join(line for line in message.splitlines() if not line.strip().startswith("info:"))
+    if "unresolved-reference" in cleaned_message or "used when not defined" in cleaned_message:
+        # Convert Monty unresolved-reference wording into a familiar NameError.
+        if (name_match := re.search(r"`([A-Za-z_]\w*)`", cleaned_message)) is None:
+            return kind, cleaned_message, None
+        name = name_match.group(1)
+        available_attributes: list[str] | None = None
+        if name in {"dir", "vars"}:
+            cleaned_message = (
+                f"`{name}` is not available in the sandbox; use the listed attributes or direct attribute access."
+            )
+            available_attributes = _attributes_for_first_discovery_call(code, name, GLOBAL_TYPE_MAP, public_surface)
+        elif name in {"setattr", "delattr"}:
+            cleaned_message = f"`{name}` is not available in the sandbox; use direct local values instead of mutating facade objects."
+        return "NameError", cleaned_message, available_attributes
+
+    if (attr_match := re.search(r"'(\w+)' object has no attribute '(\w+)'", cleaned_message)) is not None:
+        # Surface the known public attributes for safe facade/record objects.
+        class_name = attr_match.group(1)
+        if (surface := surface_for_class_name(class_name)) is not None:
+            return "AttributeError", cleaned_message, sorted(surface)
+        return "AttributeError", cleaned_message, None
+
+    return kind, cleaned_message, None
+
+
+def _attributes_for_first_discovery_call(
+    code: str,
+    function_name: str,
+    global_type_map: Mapping[str, type],
+    surface_func: Callable[[type], frozenset[str]],
+) -> list[str] | None:
+    """Return attributes for the first ``dir``/``vars`` call on a facade global."""
+    try:
+        module = ast.parse(code)
+    except SyntaxError:
+        return None
+    for node in ast.walk(module):
+        # Only a single bare-global argument is eligible for discovery help.
+        if not isinstance(node, ast.Call):
+            continue
+        if not isinstance(node.func, ast.Name) or node.func.id != function_name:
+            continue
+        if len(node.args) != 1 or not isinstance(node.args[0], ast.Name):
+            continue
+        if (cls := global_type_map.get(node.args[0].id)) is not None:
+            return sorted(surface_func(cls))
+    return None
 
 
 def underlying_exception(err: Exception) -> Exception:

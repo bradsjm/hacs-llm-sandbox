@@ -240,6 +240,7 @@ def _safe_area(area: ar.AreaEntry) -> SafeAreaEntry:
     """Convert a live area registry entry into a frozen safe record."""
     return SafeAreaEntry(
         id=area.id,
+        area_id=area.id,
         name=area.name,
         aliases=tuple(sorted(area.aliases)),
         floor_id=area.floor_id,
@@ -257,6 +258,7 @@ def _safe_floor(floor: fr.FloorEntry) -> SafeFloorEntry:
     """Convert a live floor registry entry into a frozen safe record."""
     return SafeFloorEntry(
         floor_id=floor.floor_id,
+        id=floor.floor_id,
         name=floor.name,
         aliases=tuple(sorted(floor.aliases)),
         level=floor.level,
