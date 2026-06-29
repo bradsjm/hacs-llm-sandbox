@@ -39,7 +39,7 @@ class LlmSandboxAPI(llm.API):
         super().__init__(
             hass=hass,
             id=f"{DOMAIN}_{entry_id}",
-            name=f"{entry_title} LLM Sandbox",
+            name=entry_title,
         )
         self.entry_id = entry_id
 

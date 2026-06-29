@@ -3,7 +3,7 @@
 from typing import Final
 
 DOMAIN: Final = "llm_sandbox"
-DEFAULT_NAME: Final = "LLM Sandbox"
+DEFAULT_NAME: Final = "Assistant Sandbox"
 DEFAULT_ASSISTANT: Final = "conversation"
 
 CONF_ASSISTANT: Final = "assistant"
