@@ -44,9 +44,6 @@
     "monty_execution_failed": {
       "message": "Code execution could not start: {error}."
     },
-    "monty_execution_timeout": {
-      "message": "Code execution timed out after {seconds} seconds."
-    },
     "service_not_found": {
       "message": "Service {domain}.{service} is not available."
     },

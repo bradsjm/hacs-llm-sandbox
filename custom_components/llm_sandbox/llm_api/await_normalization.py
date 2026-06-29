@@ -87,7 +87,7 @@ def _classify_view_methods(view_classes: list[type]) -> tuple[set[str], set[str]
     sync_names: set[str] = set()
     for cls in view_classes:
         for name, member in inspect.getmembers(cls, predicate=inspect.isfunction):
-            if name.startswith("__") and name != "__getitem__":
+            if name.startswith("_") and name != "__getitem__":
                 continue
             if inspect.iscoroutinefunction(member):
                 async_names.add(name)

@@ -112,7 +112,7 @@ async def async_execute_home_code(
     runtime.state.normalizations = [*await_labels, *promote_labels]
 
     # Build facade globals from the snapshot.
-    facade_inputs = build_facades(snapshot, runtime=runtime)
+    facade_inputs = build_facades(snapshot)
     facade_inputs["llm_context"] = llm_context
     input_names = list(facade_inputs.keys())
 
@@ -150,12 +150,13 @@ async def async_execute_home_code(
             ),
             timeout=runtime.settings.execution_timeout_seconds,
         )
-    except TimeoutError as err:
-        raise HomeAssistantError(
-            translation_domain=DOMAIN,
-            translation_key="monty_execution_timeout",
-            translation_placeholders={"seconds": str(runtime.settings.execution_timeout_seconds)},
-        ) from err
+    except TimeoutError:
+        _capture_printed()
+        return code_error_payload_for_state(
+            kind="TimeoutError",
+            message=f"Code execution timed out after {runtime.settings.execution_timeout_seconds} seconds.",
+            state=runtime.state,
+        )
     except HelperExecutionError as err:
         _capture_printed()
         return helper_error_payload_for_state(err, runtime.state)

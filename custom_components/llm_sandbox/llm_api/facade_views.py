@@ -33,7 +33,7 @@ from ..snapshot.models import (
 )
 from ..types import ProposedAction
 from .executor_support import helper_response, json_safe
-from .runtime import RuntimeContext, require_runtime
+from .runtime import require_runtime
 
 # ---------------------------------------------------------------------------
 # State machine
@@ -520,8 +520,6 @@ class SafeLLMContext:
 
 def build_facades(
     snapshot: HomeSnapshot,
-    *,
-    runtime: RuntimeContext | None = None,
 ) -> dict[str, object]:
     """Build all Monty-visible facade globals from a snapshot.
 
@@ -530,7 +528,6 @@ def build_facades(
     ``area_registry``, ``floor_registry``, and ``llm_context``. ``llm_context``
     is added separately by the tool caller (it depends on the live request).
     """
-    _ = runtime  # Reads need no runtime; services.async_call resolves it via ContextVar.
     entity_registry = SafeEntityRegistry(entities=snapshot.entities)
     device_registry = SafeDeviceRegistry(devices=snapshot.devices)
     area_registry = SafeAreaRegistry(areas=snapshot.areas)

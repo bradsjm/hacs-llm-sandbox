@@ -13,6 +13,8 @@ The sandbox never receives the live `hass` object, live registries, the event bu
 - Propose-only service calls through `await hass.services.async_call(...)`; calls are recorded in `proposed_actions` and are not executed.
 - Options for execution timeout and helper-call budget.
 
+Not included in this MVP: semantic index/query APIs, enrichment, timeseries, a frontend panel, live service execution, exposure filtering, redaction, or non-Home-Assistant helper globals.
+
 ## Tool behavior
 
 `execute_home_code` accepts one argument:
@@ -33,6 +35,7 @@ It returns:
 ```
 
 `execution.status` can be `ok`, `code_error`, `helper_error`, or `setup_error`.
+Execution timeouts are returned as `code_error` with `kind` set to `TimeoutError`.
 
 Example propose-only action:
 

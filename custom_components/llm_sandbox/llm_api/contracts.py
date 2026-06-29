@@ -115,7 +115,7 @@ def _build_monty_type_stubs() -> str:
     def _render_methods(cls: type[Any]) -> list[str]:
         lines: list[str] = []
         for name, member in inspect.getmembers(cls, predicate=inspect.isfunction):
-            if name.startswith("__") and name not in {"__getitem__", "__contains__", "__len__", "__iter__"}:
+            if name.startswith("_") and name not in {"__getitem__", "__contains__", "__len__", "__iter__"}:
                 continue
             try:
                 sig = inspect.signature(member)

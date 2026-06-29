@@ -1,7 +1,11 @@
 """End-to-end tests for the Monty executor with HA-native facades."""
 
 import json
+from collections.abc import Awaitable
+from typing import Any
 
+import pytest
+from custom_components.llm_sandbox.llm_api import executor
 from custom_components.llm_sandbox.llm_api.api import _execute
 from homeassistant.core import Context, HomeAssistant, SupportsResponse
 from homeassistant.helpers import llm
@@ -192,6 +196,28 @@ async def test_large_allocation_fails_with_monty_resource_limit(
 
     assert result["execution"]["status"] == "code_error"
     assert result["execution"]["kind"] == "MemoryError"
+
+
+async def test_timeout_returns_code_error(
+    hass: HomeAssistant,
+    loaded_entry: MockConfigEntry,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify execution timeouts are runtime code errors, not setup errors."""
+
+    async def _raise_timeout(_awaitable: Awaitable[Any], **_kwargs: object) -> Any:
+        close = getattr(_awaitable, "close", None)
+        if callable(close):
+            close()
+        raise TimeoutError
+
+    monkeypatch.setattr(executor.asyncio, "wait_for", _raise_timeout)
+
+    result = await _run_code(hass, loaded_entry, "result = 1")
+
+    assert result["execution"]["status"] == "code_error"
+    assert result["execution"]["kind"] == "TimeoutError"
+    assert result["output"] is None
 
 
 async def test_proposed_action_service_not_found_raises_helper_error(

@@ -126,10 +126,7 @@ async def _execute(
     )
 
     runtime = RuntimeContext(
-        hass=hass,
-        snapshot=snapshot,
         state=ExecutionState(helper_call_limit=settings.helper_call_budget),
-        context=context,
         settings=settings,
     )
 
