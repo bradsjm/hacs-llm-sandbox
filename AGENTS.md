@@ -34,6 +34,7 @@ This repository contains the `llm_sandbox` Home Assistant custom integration. It
 
 ## Testing Guidance
 
+- Avoid creating regression tests unless explicitly requested.
 - Prefer assertions on user-visible behavior, persisted data, emitted events, stable error keys, and runtime side effects over assertions on constructor kwargs, mock call choreography, private helpers, import paths, or other implementation details that can change during harmless refactors.
 - When changing config flows, assert flow result types, translated error keys, placeholders, created subentry data, and reconfigure behavior. Do not over-specify serialized selector structure, field ordering, or exact UI text unless that exact presentation is itself the contract being protected.
 - When changing runtime behavior, cover metrics, repairs, diagnostics, system health counts, live overlay state, and cleanup/unload when relevant.

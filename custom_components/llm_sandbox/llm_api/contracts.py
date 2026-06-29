@@ -36,6 +36,7 @@ def suggested_methods() -> list[str]:
         "er.async_entries_for_area(er.async_get(hass), '<area_id>')",
         "er.async_entries_for_device(er.async_get(hass), '<device_id>')",
         "area_registry.async_get_area_by_name('Bedroom')",
+        "[(area.name, area.id) for area in area_registry.async_list_areas()]",
         "device_registry.async_get('<device_id>')",
         "hass.services.has_service('light', 'turn_on')",
         "await hass.services.async_call('light', 'turn_on', {'brightness_pct': 80}, target={'entity_id': 'light.bedroom'})",
