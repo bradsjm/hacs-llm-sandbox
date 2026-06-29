@@ -13,7 +13,7 @@ from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.util.json import JsonValueType
 
 from ..const import DEFAULT_HELPER_CALL_BUDGET, DOMAIN
-from ..types import TranslationPlaceholders
+from ..types import ActionRecord, TranslationPlaceholders
 from .errors import (
     CodeErrorPayload,
     HelperErrorPayload,
@@ -67,10 +67,9 @@ class ExecutionState:
     # Captured print() output, one entry per call. Independent of the helper
     # call budget: print() routes through Monty's print_callback, not helper_response.
     printed: list[str] = field(default_factory=list)
-    # Proposed service actions recorded by the propose-only services facade.
-    # In the MVP (Option A) these are never executed; they surface in the
-    # tool response payload so a caller can confirm/execute them later.
-    proposed_actions: list[dict[str, object]] = field(default_factory=list)
+    # Service action outcomes recorded by the services facade. Actions execute
+    # sequentially, and prior successful entries remain when a later call fails.
+    actions: list[ActionRecord] = field(default_factory=list)
     # Last helper validation error raised inside a facade method. Monty wraps
     # such exceptions into MontyRuntimeError without preserving __cause__, so
     # the executor recovers the structured error from here only when Monty's
@@ -101,6 +100,9 @@ async def helper_response(
         value = callback()
         if inspect.isawaitable(value):
             value = await cast(Awaitable[JsonValueType], value)
+    except HelperExecutionError as err:
+        state.last_helper_error = err
+        raise
     except ServiceValidationError as err:
         helper_err = HelperExecutionError(
             helper,
@@ -148,6 +150,8 @@ def helper_error_payload_for_state(
         suggested_methods=suggested_methods(),
         normalizations=list(state.normalizations),
         printed=list(state.printed),
+        actions=cast(list[ActionRecord], json_safe(state.actions)),
+        service_hints=err.hints,
     )
 
 
@@ -171,6 +175,7 @@ def code_error_payload_for_state(
         suggested_methods=suggested_methods(),
         normalizations=list(state.normalizations),
         printed=list(state.printed),
+        actions=cast(list[ActionRecord], json_safe(state.actions)),
         available_attributes=available_attributes,
     )
     if location is not None:

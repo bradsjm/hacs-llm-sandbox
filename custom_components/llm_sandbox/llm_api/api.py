@@ -1,7 +1,8 @@
 """Home Assistant LLM API for LLM Sandbox."""
 
 import logging
-from typing import cast, final, override
+import time
+from typing import Any, cast, final, override
 
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntryState
@@ -16,6 +17,7 @@ from ..const import DOMAIN, TOOL_EXECUTE_HOME_CODE
 from ..runtime import SandboxConfigEntry, settings_from_entry
 from ..snapshot import build_snapshot
 from ..snapshot.models import HomeSnapshot
+from ..types import ProposedAction
 from .errors import setup_error_payload, tool_error_from_exception
 from .executor import MAX_MONTY_CODE_CHARS, async_execute_home_code
 from .executor_support import ExecutionState
@@ -119,6 +121,7 @@ async def _execute(
 
     settings = settings_from_entry(typed_entry)
     code = cast(str, data["code"])
+    deadline = time.monotonic() + settings.execution_timeout_seconds
 
     # Build a fresh Monty view on the event loop before execution.
     snapshot = build_snapshot(
@@ -128,13 +131,13 @@ async def _execute(
     )
 
     # Build the LLM context view from the live request metadata.
-    context = llm_context.context if llm_context.context is not None else Context()
+    real_context = llm_context.context if llm_context.context is not None else Context()
     area_id, area_name, floor_id, floor_name = _snapshot_location(snapshot, llm_context.device_id)
     safe_context = build_llm_context(
         platform=llm_context.platform,
-        context_id=context.id,
-        parent_id=context.parent_id,
-        user_id=context.user_id,
+        context_id=real_context.id,
+        parent_id=real_context.parent_id,
+        user_id=real_context.user_id,
         language=llm_context.language,
         assistant=llm_context.assistant,
         device_id=llm_context.device_id,
@@ -144,9 +147,22 @@ async def _execute(
         floor_name=floor_name,
     )
 
+    async def _invoke(action: ProposedAction) -> object:
+        return await hass.services.async_call(
+            cast(str, action["domain"]),
+            cast(str, action["service"]),
+            service_data=cast(dict[str, Any] | None, action["service_data"] or None),
+            target=cast(dict[str, Any] | None, action["target"]),
+            blocking=cast(bool, action["blocking"]),
+            return_response=cast(bool, action["return_response"]),
+            context=real_context,
+        )
+
     runtime = RuntimeContext(
         state=ExecutionState(helper_call_limit=settings.helper_call_budget),
         settings=settings,
+        invoke=_invoke,
+        deadline=deadline,
     )
 
     result = await async_execute_home_code(
@@ -158,11 +174,11 @@ async def _execute(
     if isinstance(result, dict):
         execution = result.get("execution", {})
         _LOGGER.debug(
-            "execute_home_code: status=%s helper_calls=%s/%s proposed_actions=%d",
+            "execute_home_code: status=%s helper_calls=%s/%s actions=%d",
             execution.get("status") if isinstance(execution, dict) else "n/a",
             runtime.state.helper_calls,
             runtime.state.helper_call_limit,
-            len(runtime.state.proposed_actions),
+            len(runtime.state.actions),
         )
     return cast(JsonObjectType, result)
 

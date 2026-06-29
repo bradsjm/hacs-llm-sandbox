@@ -107,9 +107,11 @@ def test_refine_unknown_name_keeps_message_no_attributes() -> None:
             [
                 "async_call",
                 "async_services",
+                "async_services_for_domain",
                 "has_service",
                 "services",
                 "services_supports_response",
+                "supports_response",
             ],
             id="service-registry-facade",
         ),

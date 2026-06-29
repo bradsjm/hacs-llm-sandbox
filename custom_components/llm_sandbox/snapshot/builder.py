@@ -8,12 +8,14 @@ combined additively over state-bearing entity ids, and the service catalog is
 never filtered.
 """
 
+import voluptuous as vol
 from homeassistant.components.homeassistant.exposed_entities import async_should_expose
 from homeassistant.core import HomeAssistant, State
 from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import floor_registry as fr
+from homeassistant.helpers.service import async_get_cached_service_description
 from homeassistant.util import dt as dt_util
 
 from .models import (
@@ -25,9 +27,13 @@ from .models import (
     SafeFloorEntry,
     SafeRegistryEntry,
     SafeState,
+    ServiceFieldBrief,
+    ServiceSchemaBrief,
     SnapshotIndexes,
     SnapshotScope,
 )
+
+SERVICE_SCHEMA_FIELD_LIMIT = 12
 
 
 def build_snapshot(
@@ -47,7 +53,7 @@ def build_snapshot(
     areas = {area.id: _safe_area(area) for area in area_registry.async_list_areas()}
     floors = {floor.floor_id: _safe_floor(floor) for floor in floor_registry.async_list_floors()}
 
-    service_catalog, service_response = _safe_services(hass)
+    service_catalog, service_response, services_schema = _safe_services(hass)
 
     # Visibility restrictions always run through one combined predicate so the
     # no-restrictions scope still derives from state-bearing entities.
@@ -73,6 +79,7 @@ def build_snapshot(
         services=service_catalog,
         services_supports_response=service_response,
         indexes=indexes,
+        services_schema=services_schema,
     )
 
 
@@ -251,28 +258,162 @@ def _safe_floor(floor: fr.FloorEntry) -> SafeFloorEntry:
     )
 
 
-def _safe_services(hass: HomeAssistant) -> tuple[dict[str, tuple[str, ...]], dict[str, dict[str, str]]]:
+def _safe_services(
+    hass: HomeAssistant,
+) -> tuple[
+    dict[str, tuple[str, ...]],
+    dict[str, dict[str, str]],
+    dict[str, dict[str, ServiceSchemaBrief]],
+]:
     """Snapshot the service catalog as domain -> service names.
 
-    Returns (services, services_supports_response) where the second mapping
-    preserves each service's ``supports_response`` enum value as a JSON-safe
-    string.
+    Returns ``(services, services_supports_response, services_schema)`` where
+    response support preserves each service's enum value as a JSON-safe string,
+    and service schemas are eager JSON-safe parameter briefs.
     """
     catalog = hass.services.async_services()
     services: dict[str, tuple[str, ...]] = {}
     supports_response: dict[str, dict[str, str]] = {}
+    services_schema: dict[str, dict[str, ServiceSchemaBrief]] = {}
     for domain, domain_services in catalog.items():
         names: list[str] = []
         response_values: dict[str, str] = {}
+        schema_values: dict[str, ServiceSchemaBrief] = {}
         for service_name, service in domain_services.items():
             names.append(service_name)
             # Preserve the HA enum value instead of collapsing optional/only
             # services into a bool; the facade uses the value for HA-parity
             # propose-only validation.
             response_values[service_name] = service.supports_response.value
+            schema_values[service_name] = _service_schema_brief(hass, domain, service_name, service.schema)
         services[domain] = tuple(sorted(names))
         supports_response[domain] = {name: response_values[name] for name in sorted(response_values)}
-    return services, supports_response
+        services_schema[domain] = {name: schema_values[name] for name in sorted(schema_values)}
+    return services, supports_response, services_schema
+
+
+def _service_schema_brief(
+    hass: HomeAssistant,
+    domain: str,
+    service_name: str,
+    schema: object,
+) -> ServiceSchemaBrief:
+    """Build a JSON-safe brief for one service schema."""
+    if schema is None:
+        return {"fields": [], "dynamic": False}
+
+    raw_schema = (
+        schema.schema
+        if isinstance(schema, vol.Schema)
+        else vol.Schema(schema).schema
+        if isinstance(schema, dict)
+        else None
+    )
+    if not isinstance(raw_schema, dict):
+        return {"fields": [], "dynamic": True}
+
+    description_fields = _service_description_fields(hass, domain, service_name)
+    fields: list[ServiceFieldBrief] = []
+    dynamic = False
+    for key, validator in raw_schema.items():
+        name, required = _service_field_name_and_required(key)
+        if name is None:
+            dynamic = True
+            continue
+
+        field_description = description_fields.get(name, {})
+        # Selector metadata and non-primitive validators often encode dynamic
+        # value spaces; keep the brief coarse and mark the schema as dynamic.
+        dynamic = dynamic or "selector" in field_description or not _is_plain_service_validator(validator)
+        description = field_description.get("description")
+        fields.append(
+            {
+                "name": name,
+                "required": required,
+                "type_hint": _service_type_hint(validator),
+                "description": description if isinstance(description, str) else None,
+            }
+        )
+
+    fields = sorted(fields, key=lambda field: str(field["name"]))
+    if len(fields) > SERVICE_SCHEMA_FIELD_LIMIT:
+        dynamic = True
+        fields = fields[:SERVICE_SCHEMA_FIELD_LIMIT]
+    return {"fields": fields, "dynamic": dynamic}
+
+
+def _service_description_fields(hass: HomeAssistant, domain: str, service_name: str) -> dict[str, dict[str, object]]:
+    """Return cached services.yaml fields for a service, if HA has them."""
+    description = async_get_cached_service_description(hass, domain, service_name)
+    if not isinstance(description, dict):
+        return {}
+    fields = description.get("fields")
+    if not isinstance(fields, dict):
+        return {}
+    return {str(name): field for name, field in fields.items() if isinstance(field, dict)}
+
+
+def _service_field_name_and_required(key: object) -> tuple[str | None, bool]:
+    """Extract a service field name and required flag from a voluptuous key."""
+    if isinstance(key, vol.Required):
+        name = key.schema
+        required = True
+    elif isinstance(key, vol.Optional):
+        name = key.schema
+        required = False
+    else:
+        name = key
+        required = True
+    return (name, required) if isinstance(name, str) else (None, required)
+
+
+def _service_type_hint(validator: object, depth: int = 0) -> str | None:
+    """Derive a coarse JSON-safe type hint from a voluptuous validator."""
+    if depth > 4:
+        return None
+    primitive_hint = _primitive_type_hint(validator)
+    if primitive_hint is not None:
+        return primitive_hint
+
+    coerced_type = getattr(validator, "type", None)
+    primitive_hint = _primitive_type_hint(coerced_type)
+    if primitive_hint is not None:
+        return primitive_hint
+
+    child_validators = getattr(validator, "validators", None)
+    if isinstance(child_validators, tuple):
+        hints = {_service_type_hint(child, depth + 1) for child in child_validators}
+        hints.discard(None)
+        if hints == {"integer", "number"}:
+            return "number"
+        if len(hints) == 1:
+            return hints.pop()
+    return None
+
+
+def _primitive_type_hint(validator: object) -> str | None:
+    """Map simple Python validators and container schemas to coarse types."""
+    if validator is str:
+        return "string"
+    if validator is bool:
+        return "boolean"
+    if validator is int:
+        return "integer"
+    if validator is float:
+        return "number"
+    if isinstance(validator, list | tuple):
+        return "array"
+    if isinstance(validator, dict):
+        return "object"
+    return None
+
+
+def _is_plain_service_validator(validator: object) -> bool:
+    """Whether a validator is simple enough that values are not dynamic."""
+    if _primitive_type_hint(validator) is not None:
+        return True
+    coerced_type = getattr(validator, "type", None)
+    return _primitive_type_hint(coerced_type) is not None
 
 
 def _build_indexes(

@@ -40,7 +40,7 @@ async def loaded_entry(
 
     Registers ``light.bedroom`` and ``light.living_room`` in the entity
     registry, a Bedroom area, and sets live states so tests can exercise the
-    snapshot-backed read facades and propose-only action path.
+    snapshot-backed read facades and service action path.
     """
     from homeassistant.helpers import area_registry as ar
     from homeassistant.helpers import entity_registry as er

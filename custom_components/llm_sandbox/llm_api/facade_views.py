@@ -2,9 +2,9 @@
 
 Each facade is a frozen dataclass that reads from a frozen ``HomeSnapshot``.
 Reads mirror Home Assistant's synchronous registry/state-machine callbacks
-and cost zero helper calls. The only async method is
-``hass.services.async_call``, which records a proposed action (Option A) and
-costs one helper call.
+    and cost zero helper calls. The only async method is
+    ``hass.services.async_call``, which validates against the snapshot and
+    executes through a private runtime invoker.
 
 The facades intentionally expose only the documented public surface. They
 never leak the live ``HomeAssistant`` object, mutable registries, the event
@@ -14,11 +14,15 @@ bus, the config, or auth into the Monty sandbox.
 
 # ruff: noqa: D105, ANN401
 
+import asyncio
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, cast
 
+import voluptuous as vol
 from homeassistant.core import SupportsResponse
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.util.json import JsonValueType
 
 from ..snapshot.models import (
@@ -31,9 +35,12 @@ from ..snapshot.models import (
     SafeState,
     SnapshotIndexes,
 )
-from ..types import ProposedAction
+from ..types import ActionRecord, ProposedAction, TranslationPlaceholders
+from .errors import HelperExecutionError
 from .executor_support import helper_response, json_safe
-from .runtime import require_runtime
+from .runtime import require_runtime, require_snapshot
+
+_TARGET_SELECTOR_KEYS = frozenset(("entity_id", "device_id", "area_id", "label_id", "label", "floor_id"))
 
 # ---------------------------------------------------------------------------
 # State machine
@@ -342,23 +349,42 @@ class SafeFloorModule:
 
 
 # ---------------------------------------------------------------------------
-# Service registry (read catalog + propose-only async_call)
+# Service registry (read catalog + live async_call boundary)
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class SafeServiceRegistry:
-    """Read-only service catalog + propose-only ``async_call``.
+    """Read-only service catalog + live ``async_call``.
 
     ``has_service`` and ``async_services`` reflect the frozen service catalog.
-    ``async_call`` validates the service exists against the catalog, records a
-    proposed action into ``ExecutionState.proposed_actions``, and returns what
-    real Home Assistant would return (``None``, or ``{}`` when
-    ``return_response=True``). No real service is executed in the MVP.
+    ``async_call`` validates the service against the catalog and visible target
+    indexes, records an action outcome, and invokes live Home Assistant through
+    the private runtime callable.
     """
 
     services: Mapping[str, tuple[str, ...]]
     services_supports_response: Mapping[str, Mapping[str, str]]
+
+    def __init__(
+        self,
+        *,
+        services: Mapping[str, tuple[str, ...]],
+        services_supports_response: Mapping[str, Mapping[str, str]],
+        snapshot: HomeSnapshot | None = None,
+    ) -> None:
+        """Initialize with snapshot data kept outside dataclass fields."""
+        if snapshot is not None:
+            object.__setattr__(self, "_snapshot_value", snapshot)
+        object.__setattr__(self, "services", services)
+        object.__setattr__(self, "services_supports_response", services_supports_response)
+
+    @property
+    def _snapshot(self) -> HomeSnapshot:
+        """Return the private source snapshot for validation helpers."""
+        if "_snapshot_value" in self.__dict__:
+            return cast(HomeSnapshot, self.__dict__["_snapshot_value"])
+        return require_snapshot()
 
     def has_service(self, domain: str, service: str) -> bool:
         """Return True if ``domain.service`` exists in the service catalog."""
@@ -366,95 +392,255 @@ class SafeServiceRegistry:
 
     def async_services(self) -> dict[str, dict[str, dict[str, object]]]:
         """Return the service catalog as a nested dict mirroring HA's shape."""
-        result: dict[str, dict[str, dict[str, object]]] = {}
-        for domain, services in self.services.items():
-            response_values = self.services_supports_response.get(domain, {})
-            result[domain] = {service: {"supports_response": response_values[service]} for service in services}
-        return result
+        return {domain: self.async_services_for_domain(domain) for domain in self.services}
+
+    def async_services_for_domain(self, domain: str) -> dict[str, dict[str, object]]:
+        """Return JSON-safe service metadata for one domain from the snapshot."""
+        response_values = self.services_supports_response.get(domain, {})
+        return {service: {"supports_response": response_values[service]} for service in self.services.get(domain, ())}
+
+    def supports_response(self, domain: str, service: str) -> str:
+        """Return the response mode value for ``domain.service`` from the snapshot."""
+        return self.services_supports_response.get(domain.lower(), {}).get(
+            service.lower(), SupportsResponse.NONE.value
+        )
 
     async def async_call(
         self,
         domain: str,
         service: str,
         service_data: Mapping[str, object] | None = None,
-        *,
         blocking: bool = False,
-        context: object | None = None,
+        context: object | None = None,  # noqa: ARG002
         target: Mapping[str, object] | None = None,
         return_response: bool = False,
     ) -> JsonValueType:
-        """Record a proposed service call without executing it (Option A).
+        """Validate, execute, and record one service call outcome.
 
-        Validates the service exists and the response flags match HA's service
-        call contract against the frozen catalog. Returns what real Home
-        Assistant would return: ``None`` normally, or ``{}`` when
-        ``return_response=True``. Costs one helper call.
+        The sandbox-supplied ``context`` is intentionally ignored. The private
+        invoker supplies the real Home Assistant context for attribution.
         """
-        del context  # Reserved for future live execution boundary.
 
-        def _record() -> dict[str, object] | None:
+        async def _call() -> object:
             runtime = require_runtime(None)
             settings = runtime.settings
+            cleaned_service_data, merged_target = _extract_target_selectors(service_data, target)
+            raw_target = cast(dict[str, object], json_safe(merged_target)) if merged_target is not None else None
+
+            def _request_action(action_target: dict[str, object] | None) -> ProposedAction:
+                return {
+                    "domain": domain,
+                    "service": service,
+                    "service_data": cleaned_service_data,
+                    "target": action_target,
+                    "blocking": blocking,
+                    "return_response": return_response,
+                }
+
+            def _raise_validation(
+                key: str,
+                placeholders: TranslationPlaceholders,
+                *,
+                hints: Mapping[str, object] | None = None,
+            ) -> None:
+                action = _request_action(raw_target)
+                runtime.state.actions.append(
+                    _action_record(
+                        action,
+                        status="error",
+                        response=None,
+                        error=_action_error(key, placeholders, key),
+                    )
+                )
+                raise HelperExecutionError("services.async_call", key, placeholders, hints=hints)
+
             # Action master switch: refuse all service calls when disabled.
             if not settings.actions_enabled:
-                from ..types import TranslationPlaceholders
-                from .executor_support import validation_error
-
-                raise validation_error("actions_disabled", cast(TranslationPlaceholders, {}))
+                _raise_validation("actions_disabled", {})
             # Domain allowlist: empty means all domains allowed.
             if settings.action_domains and domain not in settings.action_domains:
-                from ..types import TranslationPlaceholders
-                from .executor_support import validation_error
-
-                raise validation_error(
+                _raise_validation(
                     "action_domain_not_allowed",
                     cast(TranslationPlaceholders, {"domain": domain}),
                 )
             if not self.has_service(domain, service):
-                from ..types import TranslationPlaceholders
-                from .executor_support import validation_error
-
-                raise validation_error(
+                _raise_validation(
                     "service_not_found",
                     cast(TranslationPlaceholders, {"domain": domain, "service": service}),
+                    hints={"available_services": self._snapshot.services_schema.get(domain, {})},
                 )
             supports_response = self.services_supports_response[domain][service]
             if return_response and not blocking:
-                from ..types import TranslationPlaceholders
-                from .executor_support import validation_error
-
-                raise validation_error(
+                _raise_validation(
                     "service_response_requires_blocking",
                     cast(TranslationPlaceholders, {"blocking": "blocking=True"}),
                 )
             if supports_response == SupportsResponse.NONE.value and return_response:
-                from ..types import TranslationPlaceholders
-                from .executor_support import validation_error
-
-                raise validation_error(
+                _raise_validation(
                     "service_response_not_supported",
                     cast(TranslationPlaceholders, {"return_response": "return_response=True"}),
                 )
             if supports_response == SupportsResponse.ONLY.value and not return_response:
-                from ..types import TranslationPlaceholders
-                from .executor_support import validation_error
-
-                raise validation_error(
+                _raise_validation(
                     "service_lacks_response_request",
                     cast(TranslationPlaceholders, {"return_response": "return_response=True"}),
                 )
-            action: ProposedAction = {
+            try:
+                resolved_target = self._visible_target(merged_target)
+            except HelperExecutionError as err:
+                runtime.state.actions.append(
+                    _action_record(
+                        _request_action(raw_target),
+                        status="error",
+                        response=None,
+                        error=_action_error(err.key, err.placeholders, err.key),
+                    )
+                )
+                raise
+            action = _request_action(resolved_target)
+            record = _action_record(action, status="ok", response=None, error=None)
+            runtime.state.actions.append(record)
+            remaining = runtime.deadline - time.monotonic()
+            # Mutate the just-recorded action before raising when no per-call budget remains.
+            if remaining <= 0:
+                error = _action_error(
+                    "service_call_timeout",
+                    {"domain": domain, "service": service},
+                    "Service call timed out before execution",
+                )
+                record["status"] = "error"
+                record["error"] = error
+                raise HelperExecutionError(
+                    "services.async_call",
+                    "service_call_timeout",
+                    {"domain": domain, "service": service},
+                )
+            try:
+                result = await asyncio.wait_for(runtime.invoke(action), timeout=remaining)
+            except TimeoutError as err:
+                error = _action_error("service_call_timeout", {"domain": domain, "service": service}, str(err))
+                record["status"] = "error"
+                record["error"] = error
+                raise HelperExecutionError(
+                    "services.async_call",
+                    "service_call_timeout",
+                    {"domain": domain, "service": service},
+                ) from err
+            except ServiceValidationError as err:
+                helper_err = self._service_call_error(err, domain, service)
+                record["status"] = "error"
+                record["error"] = _action_error(helper_err.key, helper_err.placeholders, str(err))
+                raise helper_err from err
+            except vol.Invalid as err:
+                helper_err = self._service_call_error(err, domain, service)
+                record["status"] = "error"
+                record["error"] = _action_error(helper_err.key, helper_err.placeholders, str(err))
+                raise helper_err from err
+            except HomeAssistantError as err:
+                helper_err = self._service_call_error(err, domain, service)
+                record["status"] = "error"
+                record["error"] = _action_error(helper_err.key, helper_err.placeholders, str(err))
+                raise helper_err from err
+            except Exception as err:
+                helper_err = self._service_call_error(err, domain, service)
+                record["status"] = "error"
+                record["error"] = _action_error(helper_err.key, helper_err.placeholders, str(err))
+                raise helper_err from err
+            record["response"] = json_safe(result) if return_response else None
+            return result
+
+        return await helper_response(self._require_state(), "services.async_call", _call)
+
+    def _visible_target(self, target: Mapping[str, object] | None) -> dict[str, object] | None:
+        """Resolve supported HA target selectors to visible entity IDs."""
+        if not target:
+            return cast(dict[str, object] | None, json_safe(target))
+
+        indexes = self._snapshot.indexes
+        entity_ids: set[str] = set()
+        supported_values: list[str] = []
+        supported_keys: list[str] = []
+
+        if "entity_id" in target:
+            supported_keys.append("entity_id")
+            for entity_id in _target_values(target["entity_id"]):
+                supported_values.append(entity_id)
+                if entity_id not in self._snapshot.states:
+                    raise HelperExecutionError(
+                        "services.async_call",
+                        "service_target_not_visible",
+                        {"entity_id": entity_id},
+                    )
+                entity_ids.add(entity_id)
+        if "device_id" in target:
+            supported_keys.append("device_id")
+            for device_id in _target_values(target["device_id"]):
+                supported_values.append(device_id)
+                entity_ids.update(indexes.entity_ids_by_device_id.get(device_id, ()))
+        if "area_id" in target:
+            supported_keys.append("area_id")
+            for area_id in _target_values(target["area_id"]):
+                supported_values.append(area_id)
+                entity_ids.update(indexes.entity_ids_by_area_id.get(area_id, ()))
+        if "label_id" in target:
+            supported_keys.append("label_id")
+            for label_id in _target_values(target["label_id"]):
+                supported_values.append(label_id)
+                entity_ids.update(indexes.entity_ids_by_label.get(label_id, ()))
+        if "label" in target:
+            supported_keys.append("label")
+            for label_id in _target_values(target["label"]):
+                supported_values.append(label_id)
+                entity_ids.update(indexes.entity_ids_by_label.get(label_id, ()))
+        if "floor_id" in target:
+            supported_keys.append("floor_id")
+            for floor_id in _target_values(target["floor_id"]):
+                supported_values.append(floor_id)
+                for area_id in indexes.area_ids_by_floor_id.get(floor_id, ()):
+                    entity_ids.update(indexes.entity_ids_by_area_id.get(area_id, ()))
+
+        if entity_ids:
+            return {"entity_id": sorted(entity_ids)}
+        if supported_values:
+            raise HelperExecutionError(
+                "services.async_call",
+                "service_target_not_visible",
+                {"entity_id": supported_values[0]},
+            )
+        if supported_keys:
+            raise HelperExecutionError(
+                "services.async_call",
+                "service_target_not_visible",
+                {"entity_id": supported_keys[0]},
+            )
+        return cast(dict[str, object], json_safe(target))
+
+    def _service_call_error(
+        self,
+        err: Exception,
+        domain: str,
+        service: str,
+    ) -> HelperExecutionError:
+        """Classify live Home Assistant service-call and schema failures."""
+        translation_key = getattr(err, "translation_key", None)
+        if translation_key is None:
+            key = "service_call_failed"
+            placeholders: TranslationPlaceholders = {
                 "domain": domain,
                 "service": service,
-                "service_data": cast(dict[str, object], json_safe(service_data)) if service_data else {},
-                "target": cast(dict[str, object], json_safe(target)) if target else None,
-                "blocking": blocking,
-                "return_response": return_response,
+                "reason": err.__class__.__name__,
             }
-            runtime.state.proposed_actions.append(action)
-            return {} if return_response else None
-
-        return await helper_response(self._require_state(), "services.async_call", _record)
+        else:
+            key = str(translation_key)
+            raw_placeholders = getattr(err, "translation_placeholders", None)
+            if isinstance(raw_placeholders, Mapping):
+                placeholders = {str(item_key): str(value) for item_key, value in raw_placeholders.items()}
+            else:
+                placeholders = {"domain": domain, "service": service, "reason": key}
+        hints = None
+        if (brief := self._snapshot.services_schema.get(domain, {}).get(service)) is not None:
+            hints = {"available_services": {service: brief}}
+        return HelperExecutionError("services.async_call", key, placeholders, hints=hints)
 
     def _require_state(self) -> Any:
         """Return the active runtime's execution state for helper-call budgeting."""
@@ -560,6 +746,7 @@ def build_facades(
 
     state_machine = SafeStateMachine(states=snapshot.states)
     service_registry = SafeServiceRegistry(
+        snapshot=snapshot,
         services=snapshot.services,
         services_supports_response=snapshot.services_supports_response,
     )
@@ -613,3 +800,55 @@ def build_llm_context(
         floor_id=floor_id,
         floor_name=floor_name,
     )
+
+
+def _target_values(value: object) -> list[str]:
+    """Return HA target selector values as strings."""
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list | tuple | set):
+        return [str(item) for item in value]
+    return [str(value)]
+
+
+def _extract_target_selectors(
+    service_data: Mapping[str, object] | None,
+    target: Mapping[str, object] | None,
+) -> tuple[dict[str, object] | None, dict[str, object] | None]:
+    """Move HA target selector keys from service data into the target mapping."""
+    raw_service_data = dict(service_data) if service_data is not None else {}
+    extracted_target = {
+        key: raw_service_data.pop(key) for key in tuple(raw_service_data) if key in _TARGET_SELECTOR_KEYS
+    }
+    raw_target = dict(target) if target is not None else {}
+
+    # Explicit target values win over selector values supplied inside service data.
+    merged_target = extracted_target | raw_target
+    cleaned_service_data = cast(dict[str, object], json_safe(raw_service_data)) if raw_service_data else None
+    return cleaned_service_data, cast(dict[str, object], json_safe(merged_target)) if merged_target else None
+
+
+def _action_error(key: str, placeholders: TranslationPlaceholders, message: str) -> dict[str, object]:
+    """Build the JSON-safe action error shape."""
+    return {"key": key, "placeholders": placeholders, "message": message}
+
+
+def _action_record(
+    action: ProposedAction,
+    *,
+    status: str,
+    response: object,
+    error: dict[str, object] | None,
+) -> ActionRecord:
+    """Build one mutable service action record."""
+    return {
+        "domain": action["domain"],
+        "service": action["service"],
+        "service_data": action["service_data"],
+        "target": action["target"],
+        "blocking": action["blocking"],
+        "return_response": action["return_response"],
+        "status": status,
+        "response": response,
+        "error": error,
+    }

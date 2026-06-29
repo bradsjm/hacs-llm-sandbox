@@ -92,6 +92,11 @@ result = {
     "has_missing": hass.services.has_service("light", "nonexistent"),
     "domain_count": len(hass.services.async_services()),
     "services": hass.services.async_services(),
+    "light_services": hass.services.async_services_for_domain("light"),
+    "missing_services": hass.services.async_services_for_domain("missing"),
+    "turn_on_response": hass.services.supports_response("light", "turn_on"),
+    "required_response": hass.services.supports_response("test_response", "required"),
+    "missing_response": hass.services.supports_response("missing", "missing"),
 }
 """
 
@@ -104,24 +109,18 @@ result = {
     assert output["domain_count"] >= 1
     assert output["services"]["light"]["turn_on"]["supports_response"] == "none"
     assert output["services"]["test_response"]["required"]["supports_response"] == "only"
+    assert output["light_services"]["turn_on"]["supports_response"] == "none"
+    assert output["missing_services"] == {}
+    assert output["turn_on_response"] == "none"
+    assert output["required_response"] == "only"
+    assert output["missing_response"] == "none"
 
 
-async def test_proposed_action_recorded_without_execution(
+async def test_service_action_executes_and_records_outcome(
     hass: HomeAssistant,
     loaded_entry: MockConfigEntry,
 ) -> None:
-    """Verify async_call records a proposed action and does not mutate state.
-
-    This is the core Option A assertion: the LLM code proposes a service call,
-    it shows up in proposed_actions, the return matches HA's shape, and no
-    real service event fires.
-    """
-    call_log: list[str] = []
-
-    async def _mock_async_call(domain, service, *args, **kwargs):
-        call_log.append(f"{domain}.{service}")
-
-    # Track whether the real service bus fires by listening for call_service events.
+    """Verify async_call executes and records a successful action outcome."""
     events: list[str] = []
     hass.bus.async_listen("call_service", lambda event: events.append(event.data.get("service", "")))
 
@@ -136,28 +135,29 @@ result = ret
 """
 
     result = await _run_code(hass, loaded_entry, code)
+    await hass.async_block_till_done()
 
     assert result["execution"]["status"] == "ok"
     # Return value matches HA: None (not return_response).
     assert result["output"] is None
-    # One proposed action recorded.
-    proposed = result["proposed_actions"]
-    assert len(proposed) == 1
-    action = proposed[0]
+    actions = result["actions"]
+    assert len(actions) == 1
+    action = actions[0]
     assert action["domain"] == "light"
     assert action["service"] == "turn_on"
     assert action["service_data"]["brightness_pct"] == 80
-    assert action["target"]["entity_id"] == "light.bedroom"
-    # No real service call fired.
-    assert call_log == []
-    assert events == []
+    assert action["target"]["entity_id"] == ["light.bedroom"]
+    assert action["status"] == "ok"
+    assert action["response"] is None
+    assert action["error"] is None
+    assert events == ["turn_on"]
 
 
-async def test_proposed_action_payload_is_json_safe(
+async def test_action_payload_is_json_safe(
     hass: HomeAssistant,
     loaded_entry: MockConfigEntry,
 ) -> None:
-    """Verify nested non-primitive proposed service data is serialized safely."""
+    """Verify nested non-primitive service action data is serialized safely."""
     code = """
 state = hass.states.get("light.bedroom")
 await hass.services.async_call(
@@ -178,8 +178,8 @@ result = "ok"
     result = await _run_code(hass, loaded_entry, code)
 
     assert result["execution"]["status"] == "ok"
-    json.dumps(result["proposed_actions"])
-    action = result["proposed_actions"][0]
+    json.dumps(result["actions"])
+    action = result["actions"][0]
     nested = action["service_data"]["7"]
     assert nested["levels"] == [1, 2]
     assert set(nested["labels"]) == {"cozy", "night"}
@@ -220,7 +220,7 @@ async def test_timeout_returns_code_error(
     assert result["output"] is None
 
 
-async def test_proposed_action_service_not_found_raises_helper_error(
+async def test_service_not_found_raises_helper_error(
     hass: HomeAssistant,
     loaded_entry: MockConfigEntry,
 ) -> None:
@@ -235,6 +235,8 @@ result = "should not reach"
     assert result["execution"]["status"] == "helper_error"
     assert result["output"] is None
     assert result["execution"]["code"] == "service_not_found"
+    assert result["actions"][0]["status"] == "error"
+    assert result["actions"][0]["error"]["key"] == "service_not_found"
 
 
 async def test_response_required_service_without_return_response_raises_helper_error(
@@ -304,7 +306,7 @@ async def test_response_required_service_with_return_response_records_action(
     hass: HomeAssistant,
     loaded_entry: MockConfigEntry,
 ) -> None:
-    """Verify return_response=True records an ONLY service proposal."""
+    """Verify return_response=True records an executed ONLY service action."""
     hass.services.async_register(
         "test_response",
         "required",
@@ -323,12 +325,56 @@ result = await hass.services.async_call(
     result = await _run_code(hass, loaded_entry, code)
 
     assert result["execution"]["status"] == "ok"
+    actions = result["actions"]
+    assert len(actions) == 1
+    assert actions[0]["domain"] == "test_response"
+    assert actions[0]["service"] == "required"
+    assert actions[0]["return_response"] is True
+    assert actions[0]["status"] == "ok"
+    assert actions[0]["response"] == result["output"]
+
+
+async def test_positional_response_service_call_records_action(
+    hass: HomeAssistant,
+    loaded_entry: MockConfigEntry,
+) -> None:
+    """Verify HA-style positional async_call arguments are accepted."""
+    hass.services.async_register(
+        "test_response",
+        "required",
+        lambda call: {},
+        supports_response=SupportsResponse.ONLY,
+    )
+    events: list[str] = []
+    hass.bus.async_listen("call_service", lambda event: events.append(event.data.get("service", "")))
+    code = """
+result = await hass.services.async_call(
+    "test_response",
+    "required",
+    None,
+    True,
+    None,
+    {"entity_id": "light.bedroom"},
+    True,
+)
+"""
+
+    result = await _run_code(hass, loaded_entry, code)
+
+    assert result["execution"]["status"] == "ok"
     assert result["output"] == {}
-    proposed = result["proposed_actions"]
-    assert len(proposed) == 1
-    assert proposed[0]["domain"] == "test_response"
-    assert proposed[0]["service"] == "required"
-    assert proposed[0]["return_response"] is True
+    actions = result["actions"]
+    assert len(actions) == 1
+    action = actions[0]
+    assert action["domain"] == "test_response"
+    assert action["service"] == "required"
+    assert action["service_data"] is None
+    assert action["blocking"] is True
+    assert action["target"]["entity_id"] == ["light.bedroom"]
+    assert action["return_response"] is True
+    assert action["status"] == "ok"
+    assert action["response"] == result["output"]
+    assert events == ["required"]
 
 
 async def test_llm_context_device_id_accessible(

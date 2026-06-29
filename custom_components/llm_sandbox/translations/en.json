@@ -36,8 +36,8 @@
           "section_visibility": "Visibility restrictions"
         },
         "data_description": {
-          "action_domains": "Restrict proposed calls to these service domains. Leave empty to allow all domains when actions are enabled.",
-          "actions_enabled": "Master switch for proposing service calls. When off, hass.services.async_call is rejected.",
+          "action_domains": "Restrict service calls to these domains. Leave empty to allow all domains when actions are enabled.",
+          "actions_enabled": "Master switch for performing service calls. When off, hass.services.async_call is rejected.",
           "exclude_config": "Drop entities in the configuration category.",
           "exclude_diagnostic": "Drop entities in the diagnostic category.",
           "exclude_hidden": "Drop entities hidden in the registry.",
@@ -60,6 +60,15 @@
     },
     "service_not_found": {
       "message": "Service {domain}.{service} is not available."
+    },
+    "service_target_not_visible": {
+      "message": "Entity {entity_id} is not available to control."
+    },
+    "service_call_timeout": {
+      "message": "Service call to {domain}.{service} timed out."
+    },
+    "service_call_failed": {
+      "message": "Service call to {domain}.{service} failed: {reason}."
     },
     "service_response_requires_blocking": {
       "message": "Service responses require {blocking}."

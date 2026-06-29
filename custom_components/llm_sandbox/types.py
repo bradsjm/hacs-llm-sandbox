@@ -5,3 +5,4 @@ from homeassistant.util.json import JsonValueType
 type TranslationPlaceholders = dict[str, str]
 type ToolArgs = dict[str, JsonValueType]
 type ProposedAction = dict[str, object]
+type ActionRecord = dict[str, object]

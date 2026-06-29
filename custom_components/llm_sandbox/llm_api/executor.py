@@ -128,7 +128,7 @@ async def async_execute_home_code(
         runtime.state.printed = [line for line in print_collector.output.splitlines() if line]
 
     try:
-        activate_runtime(runtime)
+        activate_runtime(runtime, snapshot)
         limits: pydantic_monty.ResourceLimits = {
             "max_allocations": MONTY_MAX_ALLOCATIONS,
             "max_duration_secs": runtime.settings.execution_timeout_seconds,
@@ -202,5 +202,5 @@ async def async_execute_home_code(
         },
         "output": result,
         "printed": list(runtime.state.printed),
-        "proposed_actions": json_safe(runtime.state.proposed_actions),
+        "actions": json_safe(runtime.state.actions),
     }

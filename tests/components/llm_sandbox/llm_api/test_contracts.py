@@ -15,6 +15,12 @@ def test_monty_type_stubs_exclude_private_methods() -> None:
 
     # Public methods and explicitly supported operator dunders remain exposed.
     assert "async def async_call" in MONTY_TYPE_STUBS
+    assert (
+        "async def async_call(self, domain: str, service: str, service_data: Mapping[str, object] | None = None, blocking: bool = None"
+        in MONTY_TYPE_STUBS
+    )
+    assert "def async_services_for_domain" in MONTY_TYPE_STUBS
+    assert "def supports_response" in MONTY_TYPE_STUBS
     assert "def async_get" in MONTY_TYPE_STUBS
     assert "def __getitem__" in MONTY_TYPE_STUBS
 

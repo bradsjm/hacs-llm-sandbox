@@ -11,7 +11,6 @@ This repository contains the `llm_sandbox` Home Assistant custom integration. It
 - Keep Monty-visible objects safe, JSON-compatible, and derived from snapshot records.
 - Preserve HA-native read API shapes where practical (`hass.states`, `er.async_get(hass)`, registry instance methods).
 - Keep service calls propose-only unless a future task explicitly designs and tests a live-action boundary.
-- Do not add semantic index, query, enrichment, timeseries, or panel code to this MVP repo.
 - Store per-entry runtime state on typed `entry.runtime_data`.
 - Register LLM APIs and unload callbacks through Home Assistant lifecycle helpers.
 

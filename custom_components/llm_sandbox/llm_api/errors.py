@@ -2,14 +2,14 @@
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Literal, NotRequired, TypedDict, cast
+from typing import Any, Literal, NotRequired, TypedDict, cast
 from uuid import uuid4
 
 import voluptuous as vol
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.util.json import JsonObjectType
 
-from ..types import TranslationPlaceholders
+from ..types import ActionRecord, TranslationPlaceholders
 
 
 class HelperErrorExecutionPayload(TypedDict):
@@ -58,6 +58,8 @@ class HelperErrorPayload(TypedDict):
     execution: HelperErrorExecutionPayload
     output: None
     printed: list[str]
+    actions: NotRequired[list[ActionRecord]]
+    service_hints: NotRequired[Mapping[str, Any] | None]
 
 
 class CodeErrorPayload(TypedDict):
@@ -66,6 +68,7 @@ class CodeErrorPayload(TypedDict):
     execution: CodeErrorExecutionPayload
     output: None
     printed: list[str]
+    actions: NotRequired[list[ActionRecord]]
 
 
 class SetupErrorPayload(TypedDict):
@@ -83,6 +86,7 @@ class HelperExecutionError(Exception):
     helper: str
     key: str
     placeholders: TranslationPlaceholders
+    hints: Mapping[str, Any] | None = None
     marker: str = field(default_factory=lambda: f"llm_sandbox_helper_error:{uuid4().hex}")
 
     def __post_init__(self) -> None:
@@ -99,9 +103,11 @@ def helper_error_payload(
     suggested_methods: list[str],
     normalizations: list[str],
     printed: list[str],
+    actions: list[ActionRecord] | None = None,
+    service_hints: Mapping[str, Any] | None = None,
 ) -> HelperErrorPayload:
     """Return compact helper-error execution payload."""
-    return {
+    payload: HelperErrorPayload = {
         "execution": {
             "status": "helper_error",
             "helper": err.helper,
@@ -117,6 +123,10 @@ def helper_error_payload(
         "output": None,
         "printed": printed,
     }
+    if actions is not None:
+        payload["actions"] = actions
+    payload["service_hints"] = service_hints
+    return payload
 
 
 def code_error_payload(
@@ -129,6 +139,7 @@ def code_error_payload(
     suggested_methods: list[str],
     normalizations: list[str],
     printed: list[str],
+    actions: list[ActionRecord] | None = None,
     available_attributes: list[str] | None = None,
 ) -> CodeErrorPayload:
     """Return compact code-error execution payload."""
@@ -146,6 +157,8 @@ def code_error_payload(
         "output": None,
         "printed": printed,
     }
+    if actions is not None:
+        payload["actions"] = actions
     if available_attributes is not None:
         payload["execution"]["available_attributes"] = available_attributes
     return payload

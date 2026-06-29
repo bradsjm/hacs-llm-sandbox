@@ -13,7 +13,7 @@ BASE_API_PROMPT = (
     "## Globals\n"
     "The following globals are pre-bound (no imports needed):\n"
     "- hass: the Home Assistant root. Exposes hass.states (StateMachine) and "
-    "hass.services (service catalog + propose-only async_call).\n"
+    "hass.services (service catalog + async_call).\n"
     "- states: hass.states (same object). Read entity state.\n"
     "- er, dr, ar, fr: module facades. Pass hass only to these facades: "
     "er.async_get(hass), dr.async_get(hass), ar.async_get(hass), and "
@@ -66,15 +66,32 @@ BASE_API_PROMPT = (
     "- Floor objects expose: floor_id, name, aliases, level, icon, created_at, "
     "modified_at.\n"
     "\n"
-    "## Service calls (propose only)\n"
+    "## Service calls\n"
     "- hass.services.has_service('light', 'turn_on') checks if a service exists.\n"
     "- hass.services.async_services() returns the service catalog with "
     "supports_response values (none, optional, or only).\n"
+    "- hass.services.async_services_for_domain('light') returns one domain's "
+    "service metadata, or {} for an unknown domain.\n"
+    "- hass.services.supports_response('light', 'turn_on') returns response-mode "
+    "metadata (none, optional, or only); it is not a service-existence check.\n"
     "- await hass.services.async_call('light', 'turn_on', "
-    "{'brightness_pct': 80}, target={'entity_id': 'light.bedroom'}) proposes a "
-    "service call. The call is NOT executed; it is recorded as a proposed action "
-    "and returned in the response for the caller to confirm or execute later.\n"
-    "- async_call costs one helper call. Reads cost zero.\n"
+    "{'brightness_pct': 80}, target={'entity_id': 'light.bedroom'}) performs "
+    "the service call for real. Keep service data and target separate; put "
+    "entities in target={'entity_id': ...}.\n"
+    "- blocking=True waits for completion. blocking=False is fire-and-forget "
+    "and yields no result and no detailed outcome error, so prefer blocking "
+    "when you need to know whether the action succeeded.\n"
+    "- return_response=True is required for services that produce a response, "
+    "returns the response dict, and requires blocking=True.\n"
+    "- The frozen snapshot is taken before actions run. A follow-up read in the "
+    "same execute_home_code call will not reflect the change; call "
+    "execute_home_code again to observe new state.\n"
+    "- Actions apply sequentially with no rollback. If a later call fails, "
+    "earlier calls have already happened.\n"
+    "- Service-call errors are captured as helper_error with failed-call "
+    "details. If the service name is wrong, the response includes valid "
+    "services for that domain with brief parameter schemas; correct and retry.\n"
+    "- async_call costs one helper call. Reads cost zero; respect the budget.\n"
     "\n"
     "## Execution rules\n"
     "- Assign the final answer to result, or end the code with a bare expression "
@@ -101,17 +118,18 @@ BASE_API_PROMPT = (
 
 ACTIONS_DISABLED_PROMPT = (
     "## Service calls (disabled)\n"
-    "Proposed service calls are disabled for this assistant. Do not call "
+    "Service calls are disabled for this assistant. Do not call "
     "hass.services.async_call; it will be rejected. Read states and "
     "registries only.\n"
 )
 
 
 EXECUTE_HOME_CODE_OUTPUT = (
-    "Returns {execution, output, printed, proposed_actions}. execution.status "
+    "Returns {execution, output, printed, actions}. execution.status "
     "is ok, code_error, helper_error, or setup_error. Use output only when "
-    "status is ok. printed holds captured print() lines. proposed_actions lists "
-    "service calls recorded by hass.services.async_call (not yet executed)."
+    "status is ok. printed holds captured print() lines. actions lists "
+    "service calls from hass.services.async_call with status, response, and "
+    "error details."
 )
 
 
@@ -121,7 +139,7 @@ def build_execute_home_code_description() -> str:
         [
             "Execute bounded Python/Monty code against a frozen read-only Home Assistant view.",
             "Read states and registries using native Home Assistant API patterns.",
-            "Propose service calls via hass.services.async_call (recorded, not executed).",
+            "Perform service calls via hass.services.async_call with structured action results.",
             EXECUTE_HOME_CODE_OUTPUT,
         ]
     )

@@ -42,7 +42,9 @@ def suggested_methods() -> list[str]:
         "[(f.name, f.floor_id) for f in floor_registry.async_list_floors()]",
         "device_registry.async_get('<device_id>')",
         "hass.services.has_service('light', 'turn_on')",
-        "await hass.services.async_call('light', 'turn_on', {'brightness_pct': 80}, target={'entity_id': 'light.bedroom'})",
+        "hass.services.async_services_for_domain('light')",
+        "hass.services.supports_response('light', 'turn_on')",
+        "await hass.services.async_call('light', 'turn_on', {'brightness_pct': 80}, target={'entity_id': 'light.bedroom'})  # performs the call",
     ]
 
 

@@ -15,10 +15,14 @@ input value, so Python-side mutability is irrelevant from the sandbox).
 
 # ruff: noqa: D105
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from typing import cast
 
 from homeassistant.util.json import JsonValueType
+
+type ServiceFieldBrief = dict[str, str | bool | None]
+type ServiceSchemaBrief = dict[str, list[ServiceFieldBrief] | bool]
 
 
 @dataclass(frozen=True, slots=True)
@@ -297,3 +301,4 @@ class HomeSnapshot:
     services: dict[str, tuple[str, ...]]
     services_supports_response: dict[str, dict[str, str]]
     indexes: SnapshotIndexes
+    services_schema: Mapping[str, Mapping[str, ServiceSchemaBrief]] = field(default_factory=dict)

@@ -11,10 +11,11 @@ The sandbox never receives the live `hass` object, live registries, the event bu
 - Fresh per-call snapshot of states, entity/device/area/floor registries, and the service catalog.
 - HA-style read globals in Monty: `hass`, `states`, `er`, `dr`, `ar`, `fr`, `entity_registry`, `device_registry`, `area_registry`, `floor_registry`, `now`, and `llm_context`.
 - `llm_context` includes the initiating `device_id` plus derived `area_id`, `area_name`, `floor_id`, and `floor_name` when Home Assistant provides a satellite device.
-- Propose-only service calls through `await hass.services.async_call(...)`; calls are recorded in `proposed_actions` and are not executed.
+- Live service calls through `await hass.services.async_call(...)` when actions are enabled; per-call outcomes are returned in `actions`.
+- Action safety controls: `actions_enabled` gates all service calls, `action_domains` restricts controllable domains, targets must be visible to the sandbox, and real Home Assistant context is used for attribution.
 - Options for execution timeout and helper-call budget.
 
-Not included in this MVP: live service execution, exposure filtering, redaction, or non-Home-Assistant helper globals.
+Not included in this MVP: redaction or non-Home-Assistant helper globals.
 
 ## Tool behavior
 
@@ -31,14 +32,15 @@ It returns:
   "execution": {"status": "ok"},
   "output": "on",
   "printed": [],
-  "proposed_actions": []
+  "actions": []
 }
 ```
 
 `execution.status` can be `ok`, `code_error`, `helper_error`, or `setup_error`.
 Execution timeouts are returned as `code_error` with `kind` set to `TimeoutError`.
+Service call errors are captured and returned to the LLM so it can recover. If a service name is wrong, the response includes the valid services for that domain plus brief parameter schemas.
 
-Example propose-only action:
+Example action:
 
 ```py
 await hass.services.async_call(
@@ -47,10 +49,10 @@ await hass.services.async_call(
     {"brightness_pct": 80},
     target={"entity_id": "light.bedroom"},
 )
-result = "proposed"
+result = "called"
 ```
 
-The real Home Assistant service is not called. The requested call is returned in `proposed_actions`.
+When actions are enabled and the domain and target are allowed, Home Assistant runs the service call. The outcome is returned in `actions`.
 
 ## Development
 

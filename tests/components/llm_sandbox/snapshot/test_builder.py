@@ -1,10 +1,11 @@
 """Tests for the snapshot builder."""
 
 import pytest
+import voluptuous as vol
 from custom_components.llm_sandbox.snapshot import DEFAULT_SCOPE, SnapshotScope, build_snapshot
 from homeassistant.components.homeassistant.const import DATA_EXPOSED_ENTITIES
 from homeassistant.components.homeassistant.exposed_entities import ExposedEntities, async_expose_entity
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, SupportsResponse
 from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
@@ -166,12 +167,47 @@ async def test_snapshot_effective_area_index_uses_entity_override_then_device(ha
 async def test_snapshot_service_catalog(hass: HomeAssistant) -> None:
     hass.services.async_register("light", "turn_on", lambda call: None)
     hass.services.async_register("light", "turn_off", lambda call: None)
+    hass.services.async_register(
+        "test_response",
+        "required",
+        lambda call: None,
+        supports_response=SupportsResponse.ONLY,
+    )
     await hass.async_block_till_done()
 
     snapshot = build_snapshot(hass)
 
     assert "turn_on" in snapshot.services.get("light", ())
     assert "turn_off" in snapshot.services.get("light", ())
+    assert snapshot.services_supports_response["light"]["turn_on"] == "none"
+    assert snapshot.services_supports_response["test_response"]["required"] == "only"
+
+
+async def test_snapshot_service_schema_brief(hass: HomeAssistant) -> None:
+    hass.services.async_register(
+        "schema_test",
+        "do_thing",
+        lambda call: None,
+        schema=vol.Schema(
+            {
+                vol.Required("count"): vol.Coerce(int),
+                vol.Optional("label"): str,
+            }
+        ),
+    )
+    await hass.async_block_till_done()
+
+    snapshot = build_snapshot(hass)
+
+    brief = snapshot.services_schema["schema_test"]["do_thing"]
+    assert isinstance(brief["dynamic"], bool)
+    assert brief["dynamic"] is False
+    assert brief["fields"] == [
+        {"name": "count", "required": True, "type_hint": "integer", "description": None},
+        {"name": "label", "required": False, "type_hint": "string", "description": None},
+    ]
+    assert all(isinstance(field["name"], str) for field in brief["fields"])
+    assert all(isinstance(field["required"], bool) for field in brief["fields"])
 
 
 async def test_snapshot_device_identifiers_and_connections_are_json_safe(hass: HomeAssistant) -> None:

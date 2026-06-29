@@ -65,6 +65,18 @@ VIEW_CLASSES = [
             id="already-correct-await",
         ),
         pytest.param(
+            "result = await hass.services.async_services_for_domain('light')",
+            "result = hass.services.async_services_for_domain('light')",
+            {STRIPPED_AWAIT_FROM_SYNC},
+            id="strip-await-from-sync-domain-services",
+        ),
+        pytest.param(
+            "result = await hass.services.supports_response('light', 'turn_on')",
+            "result = hass.services.supports_response('light', 'turn_on')",
+            {STRIPPED_AWAIT_FROM_SYNC},
+            id="strip-await-from-sync-supports-response",
+        ),
+        pytest.param(
             "result = await er.async_get(hass)",
             "result = er.async_get(hass)",
             {STRIPPED_AWAIT_FROM_SYNC},
