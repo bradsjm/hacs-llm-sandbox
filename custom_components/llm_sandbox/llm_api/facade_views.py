@@ -488,8 +488,9 @@ class SafeHass:
 class SafeLLMContext:
     """Bounded view of the Home Assistant LLM request context.
 
-    Carries the initiating device id (when the request came from a device)
-    so Monty code can resolve it through ``device_registry.async_get``.
+    Carries the initiating device id and derived location ids (when the
+    request came from a device assigned to an area/floor) so Monty code can
+    scope ambiguous local requests without touching live registries.
     """
 
     platform: str
@@ -497,6 +498,10 @@ class SafeLLMContext:
     language: str | None
     assistant: str | None
     device_id: str | None
+    area_id: str | None
+    area_name: str | None
+    floor_id: str | None
+    floor_name: str | None
     type: str = "llm_context"
 
     def __llm_sandbox_json__(self) -> JsonValueType:
@@ -509,6 +514,10 @@ class SafeLLMContext:
                 "language": self.language,
                 "assistant": self.assistant,
                 "device_id": self.device_id,
+                "area_id": self.area_id,
+                "area_name": self.area_name,
+                "floor_id": self.floor_id,
+                "floor_name": self.floor_name,
             },
         )
 
@@ -571,6 +580,10 @@ def build_llm_context(
     language: str | None,
     assistant: str | None,
     device_id: str | None,
+    area_id: str | None,
+    area_name: str | None,
+    floor_id: str | None,
+    floor_name: str | None,
 ) -> SafeLLMContext:
     """Build the bounded LLM context view from live request metadata."""
     return SafeLLMContext(
@@ -579,4 +592,8 @@ def build_llm_context(
         language=language,
         assistant=assistant,
         device_id=device_id,
+        area_id=area_id,
+        area_name=area_name,
+        floor_id=floor_id,
+        floor_name=floor_name,
     )

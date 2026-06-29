@@ -25,7 +25,7 @@ BASE_API_PROMPT = (
     "- now: the frozen snapshot creation time as an ISO string. Use it as the "
     "reference time for comparisons with State timestamp strings.\n"
     "- llm_context: the current request context (platform, language, assistant, "
-    "device_id, context).\n"
+    "device_id, area_id, area_name, floor_id, floor_name, context).\n"
     "\n"
     "## Reading state\n"
     "- hass.states.get('light.bedroom') returns the State or None.\n"

@@ -10,6 +10,7 @@ The sandbox never receives the live `hass` object, live registries, the event bu
 - One LLM API tool: `execute_home_code`.
 - Fresh per-call snapshot of states, entity/device/area/floor registries, and the service catalog.
 - HA-style read globals in Monty: `hass`, `states`, `er`, `dr`, `ar`, `fr`, `entity_registry`, `device_registry`, `area_registry`, `floor_registry`, `now`, and `llm_context`.
+- `llm_context` includes the initiating `device_id` plus derived `area_id`, `area_name`, `floor_id`, and `floor_name` when Home Assistant provides a satellite device.
 - Propose-only service calls through `await hass.services.async_call(...)`; calls are recorded in `proposed_actions` and are not executed.
 - Options for execution timeout and helper-call budget.
 
