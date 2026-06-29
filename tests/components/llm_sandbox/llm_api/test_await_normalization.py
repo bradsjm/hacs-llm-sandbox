@@ -1,0 +1,107 @@
+"""Tests for Monty await-forgiveness normalization."""
+
+import pytest
+from custom_components.llm_sandbox.llm_api.await_normalization import (
+    AWAITED_ASYNC_CALLS,
+    STRIPPED_AWAIT_FROM_SYNC,
+    normalize_awaits,
+)
+from custom_components.llm_sandbox.llm_api.facade_views import (
+    SafeAreaModule,
+    SafeAreaRegistry,
+    SafeDeviceModule,
+    SafeDeviceRegistry,
+    SafeEntityModule,
+    SafeEntityRegistry,
+    SafeFloorModule,
+    SafeFloorRegistry,
+    SafeHass,
+    SafeLLMContext,
+    SafeServiceRegistry,
+    SafeStateMachine,
+)
+
+VIEW_CLASSES = [
+    SafeHass,
+    SafeStateMachine,
+    SafeServiceRegistry,
+    SafeEntityRegistry,
+    SafeDeviceRegistry,
+    SafeAreaRegistry,
+    SafeFloorRegistry,
+    SafeEntityModule,
+    SafeDeviceModule,
+    SafeAreaModule,
+    SafeFloorModule,
+    SafeLLMContext,
+]
+
+
+@pytest.mark.parametrize(
+    ("code", "expected_code", "expected_labels"),
+    [
+        pytest.param(
+            "result = hass.states.get('light.bedroom')",
+            "result = hass.states.get('light.bedroom')",
+            set(),
+            id="sync-state-get-unchanged",
+        ),
+        pytest.param(
+            "result = await hass.states.get('light.bedroom')",
+            "result = hass.states.get('light.bedroom')",
+            {STRIPPED_AWAIT_FROM_SYNC},
+            id="strip-await-from-sync-get",
+        ),
+        pytest.param(
+            "result = hass.services.async_call('light', 'turn_on')",
+            "result = await hass.services.async_call('light', 'turn_on')",
+            {AWAITED_ASYNC_CALLS},
+            id="wrap-missing-await-on-async-call",
+        ),
+        pytest.param(
+            "result = await hass.services.async_call('light', 'turn_on')",
+            "result = await hass.services.async_call('light', 'turn_on')",
+            set(),
+            id="already-correct-await",
+        ),
+        pytest.param(
+            "result = await er.async_get(hass)",
+            "result = er.async_get(hass)",
+            {STRIPPED_AWAIT_FROM_SYNC},
+            id="strip-await-from-sync-module-get",
+        ),
+        pytest.param(
+            "result = await area_registry.async_get_area_by_name('Bedroom')",
+            "result = area_registry.async_get_area_by_name('Bedroom')",
+            {STRIPPED_AWAIT_FROM_SYNC},
+            id="strip-await-from-sync-area-lookup",
+        ),
+        pytest.param(
+            "state = await hass.states.get('light.bedroom')\nresult = hass.services.async_call('light', 'turn_on')",
+            "state = hass.states.get('light.bedroom')\nresult = await hass.services.async_call('light', 'turn_on')",
+            {AWAITED_ASYNC_CALLS, STRIPPED_AWAIT_FROM_SYNC},
+            id="wrap-and-strip",
+        ),
+        pytest.param(
+            "result = x.get('foo')",
+            "result = x.get('foo')",
+            set(),
+            id="local-variable-not-rooted",
+        ),
+        pytest.param(
+            "result = hass.services.async_call(",
+            "result = hass.services.async_call(",
+            set(),
+            id="syntax-error-fail-open",
+        ),
+    ],
+)
+def test_normalize_awaits_rewrites_only_rooted_facade_operations(
+    code: str,
+    expected_code: str,
+    expected_labels: set[str],
+) -> None:
+    normalized, labels = normalize_awaits(code, VIEW_CLASSES)
+
+    assert normalized == expected_code
+    assert set(labels) == expected_labels

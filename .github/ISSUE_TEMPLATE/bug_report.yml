@@ -1,0 +1,37 @@
+name: Bug Report
+description: Report an LLM Sandbox problem
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Include only sanitized logs and diagnostics. Do not paste private entity names, prompts, transcripts, or raw tool payloads unless you have reviewed them.
+  - type: input
+    id: version
+    attributes:
+      label: Integration version
+      description: Version from HACS or `manifest.json`.
+      placeholder: 0.1.0
+    validations:
+      required: true
+  - type: input
+    id: home_assistant_version
+    attributes:
+      label: Home Assistant version
+      placeholder: 2026.6.4
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What happened, what you expected, and how to reproduce it.
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Sanitized diagnostics or logs
+      description: Attach redacted diagnostics/log excerpts if available.
+      render: text

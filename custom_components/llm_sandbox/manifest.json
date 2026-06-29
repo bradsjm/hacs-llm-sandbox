@@ -1,0 +1,12 @@
+{
+  "domain": "llm_sandbox",
+  "name": "LLM Sandbox",
+  "codeowners": ["@bradsjm"],
+  "config_flow": true,
+  "documentation": "https://github.com/bradsjm/hacs-llm-sandbox",
+  "integration_type": "service",
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/bradsjm/hacs-llm-sandbox/issues",
+  "requirements": ["pydantic-monty==0.0.18"],
+  "version": "0.1.0"
+}

@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+uv run yamllint .github .pre-commit-config.yaml .yamllint

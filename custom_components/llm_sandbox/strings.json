@@ -1,0 +1,68 @@
+{
+  "config": {
+    "abort": {
+      "already_configured": "LLM Sandbox is already configured for this assistant scope."
+    },
+    "step": {
+      "user": {
+        "data": {
+          "assistant": "Assistant scope",
+          "name": "Name"
+        },
+        "description": "Expose a Monty-sandboxed Home Assistant code execution tool for one Assist exposure scope.",
+        "title": "LLM Sandbox"
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "LLM Sandbox options",
+        "description": "Adjust code execution limits for this assistant.",
+        "data": {
+          "execution_timeout_seconds": "Maximum execution time (seconds)",
+          "helper_call_budget": "Maximum service calls per request"
+        },
+        "data_description": {
+          "execution_timeout_seconds": "Lower values respond faster but may cut off complex requests. Higher values allow more involved requests at the cost of longer waits.",
+          "helper_call_budget": "How many service calls a single request may propose. Higher values allow more complex multi-step reasoning but take longer."
+        }
+      }
+    }
+  },
+  "exceptions": {
+    "monty_code_required": {
+      "message": "Code is required."
+    },
+    "monty_code_too_long": {
+      "message": "Code must not exceed {max_length} characters."
+    },
+    "monty_execution_failed": {
+      "message": "Code execution could not start: {error}."
+    },
+    "monty_execution_timeout": {
+      "message": "Code execution timed out after {seconds} seconds."
+    },
+    "service_not_found": {
+      "message": "Service {domain}.{service} is not available."
+    },
+    "service_response_requires_blocking": {
+      "message": "Service responses require {blocking}."
+    },
+    "service_response_not_supported": {
+      "message": "This service does not support {return_response}."
+    },
+    "service_lacks_response_request": {
+      "message": "This service requires {return_response}."
+    },
+    "config_entry_not_loaded": {
+      "message": "LLM Sandbox config entry {config_entry_id} is not loaded."
+    },
+    "unknown_config_entry": {
+      "message": "Unknown or unloaded LLM Sandbox config entry: {config_entry_id}."
+    },
+    "invalid_tool_input": {
+      "message": "Invalid tool input: {error}."
+    }
+  }
+}

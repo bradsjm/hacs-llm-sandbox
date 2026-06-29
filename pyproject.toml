@@ -1,0 +1,128 @@
+[project]
+name = "hacs-llm-sandbox"
+version = "0.1.0"
+description = "Home Assistant custom integration for LLM code execution in a Monty sandbox"
+readme = "README.md"
+topics = ["home-assistant", "llm", "monty"]
+requires-python = ">=3.14.2"
+license = "Apache-2.0"
+dependencies = ["pydantic-monty==0.0.18"]
+
+[tool.uv]
+package = false
+
+[dependency-groups]
+dev = [
+  "home-assistant-intents>=2026.6.24",
+  "homeassistant>=2026.6.4",
+  "mypy>=2.1.0",
+  "pre-commit>=4.6.0",
+  "pytest-aiohttp>=1.1.0",
+  "pytest-asyncio>=1.3.0",
+  "pytest-homeassistant-custom-component>=0.13.340",
+  "pytest-timeout>=2.4.0",
+  "pytest-xdist>=3.8.0",
+  "pytest>=9.0.3",
+  "ruff>=0.15.20",
+  "yamllint>=1.37.1",
+]
+
+[tool.ruff]
+required-version = ">=0.15.20"
+target-version = "py314"
+line-length = 119
+src = ["custom_components", "tests", "scripts"]
+
+[tool.ruff.format]
+docstring-code-format = true
+
+[tool.ruff.lint]
+select = [
+    "ANN",
+    "ARG",
+    "ASYNC",
+    "B",
+    "BLE",
+    "C4",
+    "D",
+    "DTZ",
+    "E",
+    "F",
+    "G",
+    "I",
+    "LOG",
+    "PIE",
+    "PT",
+    "PTH",
+    "RET",
+    "RSE",
+    "RUF",
+    "SIM",
+    "SLOT",
+    "T20",
+    "TC",
+    "UP",
+    "W",
+]
+ignore = [
+    "E501",
+    "TC001",
+    "TC002",
+    "TC003",
+    "TC006",
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.mccabe]
+max-complexity = 25
+
+[tool.ruff.lint.per-file-ignores]
+"**/__init__.py" = ["D104"]
+"tests/**/*.py" = ["ARG", "D", "ANN", "TC"]
+
+[tool.mypy]
+files = ["custom_components", "tests"]
+python_version = "3.14"
+platform = "linux"
+show_error_codes = true
+pretty = true
+follow_imports = "normal"
+local_partial_types = true
+explicit_package_bases = true
+strict_equality = true
+strict_bytes = true
+no_implicit_optional = true
+check_untyped_defs = true
+disallow_incomplete_defs = true
+disallow_subclassing_any = true
+disallow_untyped_calls = true
+disallow_untyped_decorators = true
+disallow_untyped_defs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_return_any = true
+warn_unreachable = true
+enable_error_code = ["deprecated", "ignore-without-code", "redundant-self", "truthy-iterable"]
+disable_error_code = ["annotation-unchecked", "import-not-found", "import-untyped"]
+
+[[tool.mypy.overrides]]
+module = ["tests.*"]
+disallow_incomplete_defs = false
+disallow_untyped_calls = false
+disallow_untyped_decorators = false
+disallow_untyped_defs = false
+disable_error_code = [
+    "call-overload",
+    "arg-type",
+    "index",
+    "operator",
+    "union-attr",
+    "unreachable",
+    "var-annotated",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+uv run ruff check custom_components/llm_sandbox tests/components/llm_sandbox
