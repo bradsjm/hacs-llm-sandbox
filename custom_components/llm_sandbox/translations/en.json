@@ -22,14 +22,20 @@
     "step": {
       "init": {
         "title": "LLM Sandbox options",
-        "description": "Adjust code execution limits for this assistant.",
+        "description": "Adjust code execution limits and snapshot scope for this assistant.",
         "data": {
+          "exclude_hidden": "Exclude hidden entities",
+          "excluded_entity_categories": "Excluded entity categories",
           "execution_timeout_seconds": "Maximum execution time (seconds)",
-          "helper_call_budget": "Maximum service calls per request"
+          "helper_call_budget": "Maximum service calls per request",
+          "scope_mode": "Snapshot scope"
         },
         "data_description": {
+          "exclude_hidden": "Applies only in By characteristics mode.",
+          "excluded_entity_categories": "Applies only in By characteristics mode.",
           "execution_timeout_seconds": "Lower values respond faster but may cut off complex requests. Higher values allow more involved requests at the cost of longer waits.",
-          "helper_call_budget": "How many service calls a single request may propose. Higher values allow more complex multi-step reasoning but take longer."
+          "helper_call_budget": "How many service calls a single request may propose. Higher values allow more complex multi-step reasoning but take longer.",
+          "scope_mode": "Choose All entities, Assist exposure, or By characteristics to reduce snapshot size. This is not a security boundary."
         }
       }
     }

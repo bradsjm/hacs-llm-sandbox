@@ -1,11 +1,22 @@
 """Tests for the snapshot builder."""
 
-from custom_components.llm_sandbox.snapshot import build_snapshot
+import pytest
+from custom_components.llm_sandbox.snapshot import DEFAULT_SCOPE, ScopeMode, SnapshotScope, build_snapshot
+from homeassistant.components.homeassistant.const import DATA_EXPOSED_ENTITIES
+from homeassistant.components.homeassistant.exposed_entities import ExposedEntities, async_expose_entity
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import floor_registry as fr
 from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+CHARACTERISTICS_SCOPE = SnapshotScope(
+    mode=ScopeMode.CHARACTERISTICS,
+    assistant="conversation",
+    excluded_entity_categories=frozenset({"config", "diagnostic"}),
+    exclude_hidden=True,
+)
 
 
 def _add_device_owner_entry(hass: HomeAssistant) -> str:
@@ -13,6 +24,51 @@ def _add_device_owner_entry(hass: HomeAssistant) -> str:
     entry = MockConfigEntry(domain="test", title="Device Owner")
     entry.add_to_hass(hass)
     return str(entry.entry_id)
+
+
+def _add_entity(
+    hass: HomeAssistant,
+    entity_id: str,
+    unique_id: str,
+    *,
+    device_id: str | None = None,
+    area_id: str | None = None,
+    entity_category: er.EntityCategory | None = None,
+    hidden_by: er.RegistryEntryHider | None = None,
+    disabled_by: er.RegistryEntryDisabler | None = None,
+) -> None:
+    """Add a registry entity and matching state unless disabled."""
+    domain, object_id = entity_id.split(".", 1)
+    registry = er.async_get(hass)
+    registry.async_get_or_create(
+        domain,
+        "test",
+        unique_id,
+        suggested_object_id=object_id,
+        device_id=device_id,
+        entity_category=entity_category,
+        disabled_by=disabled_by,
+    )
+    registry.async_update_entity(entity_id, area_id=area_id, hidden_by=hidden_by)
+    if disabled_by is None:
+        hass.states.async_set(entity_id, "on", {"friendly_name": object_id.replace("_", " ").title()})
+
+
+def _add_area_device(hass: HomeAssistant, area_name: str) -> tuple[str, str, str]:
+    """Add a floor, area, and device for scope-filter tests."""
+    floor_registry = fr.async_get(hass)
+    area_registry = ar.async_get(hass)
+    device_registry = dr.async_get(hass)
+
+    floor = floor_registry.async_create(f"{area_name} Floor")
+    area = area_registry.async_create(area_name)
+    area_registry.async_update(area.id, floor_id=floor.floor_id)
+    device = device_registry.async_get_or_create(
+        config_entry_id=_add_device_owner_entry(hass),
+        identifiers={("test", f"{area_name.lower()}-device")},
+    )
+    device_registry.async_update_device(device.id, area_id=area.id)
+    return floor.floor_id, area.id, device.id
 
 
 async def test_snapshot_captures_states_and_registry_entries(hass: HomeAssistant) -> None:
@@ -117,3 +173,185 @@ async def test_snapshot_device_identifiers_and_connections_are_json_safe(hass: H
     assert ("mac", "aa:bb:cc:dd:ee:ff") in device.connections
     # Tuples are JSON-safe (frozen as tuples).
     assert all(isinstance(ident, tuple) for ident in device.identifiers)
+
+
+async def test_build_snapshot_all_mode_fast_path_unfiltered(hass: HomeAssistant) -> None:
+    _floor_id, area_id, device_id = _add_area_device(hass, "Office")
+    _add_entity(hass, "light.office", "office", device_id=device_id, area_id=area_id)
+    _add_entity(
+        hass,
+        "sensor.config_value",
+        "config_value",
+        device_id=device_id,
+        entity_category=er.EntityCategory.CONFIG,
+    )
+
+    default_snapshot = build_snapshot(hass)
+    explicit_snapshot = build_snapshot(hass, scope=DEFAULT_SCOPE)
+
+    assert default_snapshot.states.keys() == explicit_snapshot.states.keys()
+    assert default_snapshot.entities.keys() == explicit_snapshot.entities.keys()
+    assert default_snapshot.devices.keys() == explicit_snapshot.devices.keys()
+    assert "sensor.config_value" in default_snapshot.entities
+    assert device_id in default_snapshot.devices
+
+
+@pytest.mark.parametrize(
+    ("entity_category", "hidden_by", "expected_visible"),
+    [
+        pytest.param(None, None, True, id="normal"),
+        pytest.param(er.EntityCategory.CONFIG, None, False, id="config"),
+        pytest.param(er.EntityCategory.DIAGNOSTIC, None, False, id="diagnostic"),
+        pytest.param(None, er.RegistryEntryHider.USER, False, id="hidden"),
+    ],
+)
+async def test_build_snapshot_characteristics_filters_by_category_and_hidden(
+    hass: HomeAssistant,
+    entity_category: er.EntityCategory | None,
+    hidden_by: er.RegistryEntryHider | None,
+    expected_visible: bool,
+) -> None:
+    _add_entity(
+        hass,
+        "sensor.scoped_entity",
+        "scoped_entity",
+        entity_category=entity_category,
+        hidden_by=hidden_by,
+    )
+
+    snapshot = build_snapshot(hass, scope=CHARACTERISTICS_SCOPE)
+
+    assert ("sensor.scoped_entity" in snapshot.states) is expected_visible
+    assert ("sensor.scoped_entity" in snapshot.entities) is expected_visible
+
+
+async def test_build_snapshot_characteristics_keeps_state_only_entity(hass: HomeAssistant) -> None:
+    hass.states.async_set("input_boolean.foo", "on")
+
+    snapshot = build_snapshot(hass, scope=CHARACTERISTICS_SCOPE)
+
+    assert "input_boolean.foo" in snapshot.states
+    assert "input_boolean.foo" not in snapshot.entities
+
+
+async def test_build_snapshot_characteristics_excludes_entity_drops_orphan_device(hass: HomeAssistant) -> None:
+    _floor_id, _area_id, device_id = _add_area_device(hass, "Utility")
+    _add_entity(
+        hass,
+        "sensor.utility_config",
+        "utility_config",
+        device_id=device_id,
+        entity_category=er.EntityCategory.CONFIG,
+    )
+
+    snapshot = build_snapshot(hass, scope=CHARACTERISTICS_SCOPE)
+
+    assert device_id not in snapshot.devices
+    assert device_id not in snapshot.indexes.entity_ids_by_device_id
+    assert all(device_id not in devices for devices in snapshot.indexes.device_ids_by_area_id.values())
+
+
+async def test_build_snapshot_disabled_entity_excluded_in_non_all_modes(hass: HomeAssistant) -> None:
+    _add_entity(
+        hass,
+        "sensor.disabled_value",
+        "disabled_value",
+        disabled_by=er.RegistryEntryDisabler.USER,
+    )
+
+    snapshot = build_snapshot(hass, scope=CHARACTERISTICS_SCOPE)
+
+    assert "sensor.disabled_value" not in snapshot.states
+    assert "sensor.disabled_value" not in snapshot.entities
+
+
+@pytest.mark.parametrize(
+    "anchor_has_only_excluded_entity",
+    [pytest.param(False, id="no-entities"), pytest.param(True, id="only-excluded-entity")],
+)
+async def test_build_snapshot_anchor_device_force_included(
+    hass: HomeAssistant,
+    anchor_has_only_excluded_entity: bool,
+) -> None:
+    floor_id, area_id, device_id = _add_area_device(hass, "Kitchen")
+    if anchor_has_only_excluded_entity:
+        _add_entity(
+            hass,
+            "sensor.kitchen_config",
+            "kitchen_config",
+            device_id=device_id,
+            entity_category=er.EntityCategory.CONFIG,
+        )
+
+    snapshot = build_snapshot(hass, scope=CHARACTERISTICS_SCOPE, anchor_device_id=device_id)
+
+    assert device_id in snapshot.devices
+    assert area_id in snapshot.areas
+    assert floor_id in snapshot.floors
+    assert device_id not in snapshot.indexes.entity_ids_by_device_id
+    assert device_id in snapshot.indexes.device_ids_by_area_id[area_id]
+
+
+async def test_build_snapshot_anchor_unknown_device_id_is_safe(hass: HomeAssistant) -> None:
+    _add_entity(hass, "sensor.visible_value", "visible_value")
+
+    snapshot = build_snapshot(hass, scope=CHARACTERISTICS_SCOPE, anchor_device_id="does-not-exist")
+
+    assert "sensor.visible_value" in snapshot.states
+    assert "does-not-exist" not in snapshot.devices
+
+
+async def test_build_snapshot_filtered_collections_have_no_orphans(hass: HomeAssistant) -> None:
+    floor_id, area_id, device_id = _add_area_device(hass, "Den")
+    _add_entity(hass, "light.den", "den", device_id=device_id)
+    override_area = ar.async_get(hass).async_create("Den Override")
+    _add_entity(hass, "light.den_override", "den_override", device_id=device_id, area_id=override_area.id)
+
+    snapshot = build_snapshot(hass, scope=CHARACTERISTICS_SCOPE)
+
+    assert floor_id in snapshot.floors
+    assert all(device.area_id in snapshot.areas for device in snapshot.devices.values() if device.area_id)
+    assert all(entity.area_id in snapshot.areas for entity in snapshot.entities.values() if entity.area_id)
+    assert all(area.floor_id in snapshot.floors for area in snapshot.areas.values() if area.floor_id)
+    assert all(entity.device_id in snapshot.devices for entity in snapshot.entities.values() if entity.device_id)
+    assert area_id in snapshot.areas
+    assert override_area.id in snapshot.areas
+
+
+async def test_build_snapshot_services_never_filtered(hass: HomeAssistant) -> None:
+    _add_entity(
+        hass,
+        "light.excluded",
+        "excluded",
+        entity_category=er.EntityCategory.CONFIG,
+    )
+    hass.services.async_register("light", "turn_on", lambda call: None)
+    hass.services.async_register("light", "turn_off", lambda call: None)
+    await hass.async_block_till_done()
+
+    snapshot = build_snapshot(hass, scope=CHARACTERISTICS_SCOPE)
+
+    assert "light.excluded" not in snapshot.states
+    assert "turn_on" in snapshot.services["light"]
+    assert "turn_off" in snapshot.services["light"]
+
+
+async def test_build_snapshot_assist_expose_delegates_to_ha_exposure(hass: HomeAssistant) -> None:
+    _add_entity(hass, "light.exposed", "exposed")
+    _add_entity(hass, "light.hidden_from_assist", "hidden_from_assist")
+    exposed_entities = ExposedEntities(hass)
+    hass.data[DATA_EXPOSED_ENTITIES] = exposed_entities
+    await exposed_entities.async_initialize()
+    async_expose_entity(hass, "conversation", "light.exposed", True)
+    async_expose_entity(hass, "conversation", "light.hidden_from_assist", False)
+    scope = SnapshotScope(
+        mode=ScopeMode.ASSIST_EXPOSE,
+        assistant="conversation",
+        excluded_entity_categories=frozenset(),
+        exclude_hidden=False,
+    )
+
+    snapshot = build_snapshot(hass, scope=scope)
+
+    assert "light.exposed" in snapshot.states
+    assert "light.hidden_from_assist" not in snapshot.states

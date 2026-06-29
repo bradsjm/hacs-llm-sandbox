@@ -2,9 +2,13 @@
 
 Runs on the event loop at the start of each ``execute_home_code`` tool call,
 reads all registries and the state machine, and returns an immutable
-``HomeSnapshot``. No exposure filtering or redaction is applied in the MVP.
+``HomeSnapshot``. Optional scope filtering is applied at build time as a
+noise-reduction measure, not a security boundary. Disabled entities are
+excluded in non-ALL modes by using state-machine entity ids as candidates, and
+the service catalog is never filtered.
 """
 
+from homeassistant.components.homeassistant.exposed_entities import async_should_expose
 from homeassistant.core import HomeAssistant, State
 from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import device_registry as dr
@@ -13,6 +17,7 @@ from homeassistant.helpers import floor_registry as fr
 from homeassistant.util import dt as dt_util
 
 from .models import (
+    DEFAULT_SCOPE,
     HomeSnapshot,
     SafeAreaEntry,
     SafeContext,
@@ -20,11 +25,17 @@ from .models import (
     SafeFloorEntry,
     SafeRegistryEntry,
     SafeState,
+    ScopeMode,
     SnapshotIndexes,
+    SnapshotScope,
 )
 
 
-def build_snapshot(hass: HomeAssistant) -> HomeSnapshot:
+def build_snapshot(
+    hass: HomeAssistant,
+    scope: SnapshotScope = DEFAULT_SCOPE,
+    anchor_device_id: str | None = None,
+) -> HomeSnapshot:
     """Build a frozen snapshot of states, registries, and services."""
     entity_registry = er.async_get(hass)
     device_registry = dr.async_get(hass)
@@ -38,6 +49,33 @@ def build_snapshot(hass: HomeAssistant) -> HomeSnapshot:
     floors = {floor.floor_id: _safe_floor(floor) for floor in floor_registry.async_list_floors()}
 
     service_catalog, service_response = _safe_services(hass)
+
+    # Scope ALL is the library fast path: return the full unfiltered snapshot.
+    if scope.mode is ScopeMode.ALL:
+        indexes = _build_indexes(entities, devices, areas)
+        return HomeSnapshot(
+            created_at=dt_util.utcnow().isoformat(),
+            states=states,
+            entities=entities,
+            devices=devices,
+            areas=areas,
+            floors=floors,
+            services=service_catalog,
+            services_supports_response=service_response,
+            indexes=indexes,
+        )
+
+    # Non-ALL modes filter entity-bearing collections and derive references.
+    visible = _visible_entity_ids(hass, states, entities, scope)
+    states, entities, devices, areas, floors = _derive_collections(
+        states,
+        entities,
+        devices,
+        areas,
+        floors,
+        visible,
+        anchor_device_id,
+    )
     indexes = _build_indexes(entities, devices, areas)
 
     return HomeSnapshot(
@@ -51,6 +89,80 @@ def build_snapshot(hass: HomeAssistant) -> HomeSnapshot:
         services_supports_response=service_response,
         indexes=indexes,
     )
+
+
+def _visible_entity_ids(
+    hass: HomeAssistant,
+    states: dict[str, SafeState],
+    entities: dict[str, SafeRegistryEntry],
+    scope: SnapshotScope,
+) -> set[str]:
+    """Return entity_ids visible under ``scope``.
+
+    Candidates are state-bearing entities (``states.keys()``). Disabled
+    entities are absent from the state machine, so they are excluded
+    automatically in both non-ALL modes with no explicit check.
+    """
+    candidates = states.keys()
+    # Assist exposure delegates exactly to HA's exposure logic.
+    if scope.mode is ScopeMode.ASSIST_EXPOSE:
+        # async_should_expose is a sync @callback and may idempotently persist
+        # computed exposure into the entity registry on first evaluation; this
+        # matches HA's own conversation default_agent behavior.
+        return {entity_id for entity_id in candidates if async_should_expose(hass, scope.assistant, entity_id)}
+
+    # CHARACTERISTICS keeps state-bearing entities that pass registry flags.
+    return {entity_id for entity_id in candidates if _passes_characteristics(entities.get(entity_id), scope)}
+
+
+def _passes_characteristics(
+    entry: SafeRegistryEntry | None,
+    scope: SnapshotScope,
+) -> bool:
+    """Whether an entity survives CHARACTERISTICS filtering."""
+    # State-only entities have no category/hidden_by and pass.
+    if entry is None:
+        return True
+    # Hidden entities are excluded only when the option is enabled.
+    if scope.exclude_hidden and entry.hidden_by is not None:
+        return False
+    # Configured entity categories are excluded from characteristics mode.
+    return entry.entity_category not in scope.excluded_entity_categories
+
+
+def _derive_collections(
+    states: dict[str, SafeState],
+    entities: dict[str, SafeRegistryEntry],
+    devices: dict[str, SafeDeviceEntry],
+    areas: dict[str, SafeAreaEntry],
+    floors: dict[str, SafeFloorEntry],
+    visible: set[str],
+    anchor_device_id: str | None,
+) -> tuple[
+    dict[str, SafeState],
+    dict[str, SafeRegistryEntry],
+    dict[str, SafeDeviceEntry],
+    dict[str, SafeAreaEntry],
+    dict[str, SafeFloorEntry],
+]:
+    """Derive filtered collections from the visible entity set."""
+    filtered_states = {entity_id: states[entity_id] for entity_id in visible}
+    filtered_entities = {entity_id: entities[entity_id] for entity_id in visible if entity_id in entities}
+
+    device_ids: set[str] = {entry.device_id for entry in filtered_entities.values() if entry.device_id}
+    # Force-include the initiating device so snapshot-based location works.
+    if anchor_device_id is not None:
+        device_ids.add(anchor_device_id)
+    filtered_devices = {device_id: devices[device_id] for device_id in device_ids if device_id in devices}
+
+    area_ids: set[str] = {device.area_id for device in filtered_devices.values() if device.area_id}
+    area_ids.update(entry.area_id for entry in filtered_entities.values() if entry.area_id)
+    filtered_areas = {area_id: areas[area_id] for area_id in area_ids if area_id in areas}
+
+    floor_ids: set[str] = {area.floor_id for area in filtered_areas.values() if area.floor_id}
+    filtered_floors = {floor_id: floors[floor_id] for floor_id in floor_ids if floor_id in floors}
+
+    return filtered_states, filtered_entities, filtered_devices, filtered_areas, filtered_floors
 
 
 def _safe_state(state: State) -> SafeState:

@@ -116,7 +116,11 @@ async def _execute(
     code = cast(str, data["code"])
 
     # Build a fresh snapshot on the event loop before execution.
-    snapshot = build_snapshot(hass)
+    snapshot = build_snapshot(
+        hass,
+        scope=settings.scope,
+        anchor_device_id=llm_context.device_id,
+    )
 
     # Build the LLM context view from the live request metadata.
     context = llm_context.context if llm_context.context is not None else Context()

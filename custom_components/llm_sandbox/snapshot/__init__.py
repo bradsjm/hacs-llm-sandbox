@@ -2,6 +2,7 @@
 
 from .builder import build_snapshot
 from .models import (
+    DEFAULT_SCOPE,
     HomeSnapshot,
     SafeAreaEntry,
     SafeContext,
@@ -9,10 +10,13 @@ from .models import (
     SafeFloorEntry,
     SafeRegistryEntry,
     SafeState,
+    ScopeMode,
     SnapshotIndexes,
+    SnapshotScope,
 )
 
 __all__ = [
+    "DEFAULT_SCOPE",
     "HomeSnapshot",
     "SafeAreaEntry",
     "SafeContext",
@@ -20,6 +24,8 @@ __all__ = [
     "SafeFloorEntry",
     "SafeRegistryEntry",
     "SafeState",
+    "ScopeMode",
     "SnapshotIndexes",
+    "SnapshotScope",
     "build_snapshot",
 ]
