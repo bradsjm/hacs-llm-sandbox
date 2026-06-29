@@ -24,26 +24,40 @@
         "title": "LLM Sandbox options",
         "description": "Adjust code execution limits, visibility, and action permissions for this assistant.",
         "data": {
-          "action_domains": "Allowed service domains for actions",
-          "actions_enabled": "Enable actions on visible entities",
-          "exclude_config": "Exclude configuration entities",
-          "exclude_diagnostic": "Exclude diagnostic entities",
-          "exclude_hidden": "Exclude hidden entities",
           "execution_timeout_seconds": "Maximum execution time (seconds)",
-          "helper_call_budget": "Maximum service calls per request",
-          "restrict_to_assist_exposed": "Restrict to Assist-exposed entities",
-          "section_actions": "Action restrictions",
-          "section_visibility": "Visibility restrictions"
+          "helper_call_budget": "Maximum service calls per request"
         },
         "data_description": {
-          "action_domains": "Restrict service calls to these domains. Leave empty to allow all domains when actions are enabled.",
-          "actions_enabled": "Master switch for performing service calls. When off, hass.services.async_call is rejected.",
-          "exclude_config": "Drop entities in the configuration category.",
-          "exclude_diagnostic": "Drop entities in the diagnostic category.",
-          "exclude_hidden": "Drop entities hidden in the registry.",
           "execution_timeout_seconds": "Limits execution time to avoid infinite loops or other unresponsive behavior.",
-          "helper_call_budget": "Limits the number of service calls in a single request to avoid unresponsive behavior.",
-          "restrict_to_assist_exposed": "When on, only entities exposed to Assist are visible. Other restrictions below still apply."
+          "helper_call_budget": "Limits the number of service calls in a single request to avoid unresponsive behavior."
+        },
+        "sections": {
+          "section_actions": {
+            "data": {
+              "action_domains": "Allowed service domains for actions",
+              "actions_enabled": "Enable actions on visible entities"
+            },
+            "data_description": {
+              "action_domains": "Restrict service calls to these domains. Leave empty to allow all domains when actions are enabled.",
+              "actions_enabled": "Master switch for performing service calls. When off, hass.services.async_call is rejected."
+            },
+            "name": "Action restrictions"
+          },
+          "section_visibility": {
+            "data": {
+              "exclude_config": "Exclude configuration entities",
+              "exclude_diagnostic": "Exclude diagnostic entities",
+              "exclude_hidden": "Exclude hidden entities",
+              "restrict_to_assist_exposed": "Restrict to Assist-exposed entities"
+            },
+            "data_description": {
+              "exclude_config": "Drop entities in the configuration category.",
+              "exclude_diagnostic": "Drop entities in the diagnostic category.",
+              "exclude_hidden": "Drop entities hidden in the registry.",
+              "restrict_to_assist_exposed": "When on, only entities exposed to Assist are visible. Other restrictions below still apply."
+            },
+            "name": "Visibility restrictions"
+          }
         }
       }
     }
