@@ -24,8 +24,8 @@
           "helper_call_budget": "Maximum service calls per request"
         },
         "data_description": {
-          "execution_timeout_seconds": "Lower values respond faster but may cut off complex requests. Higher values allow more involved requests at the cost of longer waits.",
-          "helper_call_budget": "How many service calls a single request may propose. Higher values allow more complex multi-step reasoning but take longer."
+          "execution_timeout_seconds": "Limits execution time to avoid infinite loops or other unresponsive behavior.",
+          "helper_call_budget": "Limits the number of service calls in a single requests to avoid unresponsive behavior."
         }
       }
     }

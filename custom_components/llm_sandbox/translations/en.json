@@ -33,8 +33,8 @@
         "data_description": {
           "exclude_hidden": "Applies only in By characteristics mode.",
           "excluded_entity_categories": "Applies only in By characteristics mode.",
-          "execution_timeout_seconds": "Lower values respond faster but may cut off complex requests. Higher values allow more involved requests at the cost of longer waits.",
-          "helper_call_budget": "How many service calls a single request may propose. Higher values allow more complex multi-step reasoning but take longer.",
+          "execution_timeout_seconds": "Limits execution time to avoid infinite loops or other unresponsive behavior.",
+          "helper_call_budget": "Limits the number of service calls in a single requests to avoid unresponsive behavior.",
           "scope_mode": "Choose All entities, Assist exposure, or By characteristics to reduce snapshot size. This is not a security boundary."
         }
       }
