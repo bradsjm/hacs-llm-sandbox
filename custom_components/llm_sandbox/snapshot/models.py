@@ -240,6 +240,70 @@ class SafeFloorEntry:
 
 
 @dataclass(frozen=True, slots=True)
+class SafeUnitSystem:
+    """Frozen view of Home Assistant unit-system preferences."""
+
+    temperature_unit: str
+    length_unit: str
+    mass_unit: str
+    pressure_unit: str
+    volume_unit: str
+    area_unit: str
+    wind_speed_unit: str
+    accumulated_precipitation_unit: str
+
+    def __llm_sandbox_json__(self) -> JsonValueType:
+        return cast(
+            JsonValueType,
+            {
+                "temperature_unit": self.temperature_unit,
+                "length_unit": self.length_unit,
+                "mass_unit": self.mass_unit,
+                "pressure_unit": self.pressure_unit,
+                "volume_unit": self.volume_unit,
+                "area_unit": self.area_unit,
+                "wind_speed_unit": self.wind_speed_unit,
+                "accumulated_precipitation_unit": self.accumulated_precipitation_unit,
+            },
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class SafeConfig:
+    """Frozen view of Home Assistant instance configuration metadata."""
+
+    location_name: str
+    latitude: float
+    longitude: float
+    elevation: int
+    time_zone: str
+    language: str
+    country: str | None
+    currency: str
+    internal_url: str | None
+    external_url: str | None
+    units: SafeUnitSystem
+
+    def __llm_sandbox_json__(self) -> JsonValueType:
+        return cast(
+            JsonValueType,
+            {
+                "location_name": self.location_name,
+                "latitude": self.latitude,
+                "longitude": self.longitude,
+                "elevation": self.elevation,
+                "time_zone": self.time_zone,
+                "language": self.language,
+                "country": self.country,
+                "currency": self.currency,
+                "internal_url": self.internal_url,
+                "external_url": self.external_url,
+                "units": self.units,
+            },
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class SnapshotIndexes:
     """Precomputed lookup indexes over the snapshot.
 
@@ -254,6 +318,7 @@ class SnapshotIndexes:
     device_ids_by_area_id: dict[str, tuple[str, ...]]
     entity_ids_by_config_entry_id: dict[str, tuple[str, ...]]
     entity_ids_by_label: dict[str, tuple[str, ...]]
+    device_ids_by_label: dict[str, tuple[str, ...]]
     area_ids_by_floor_id: dict[str, tuple[str, ...]]
 
 
@@ -298,6 +363,7 @@ class HomeSnapshot:
     devices: dict[str, SafeDeviceEntry]
     areas: dict[str, SafeAreaEntry]
     floors: dict[str, SafeFloorEntry]
+    config: SafeConfig
     services: dict[str, tuple[str, ...]]
     services_supports_response: dict[str, dict[str, str]]
     indexes: SnapshotIndexes

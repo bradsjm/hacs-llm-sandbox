@@ -9,11 +9,13 @@ from ..const import DOMAIN
 from ..snapshot.models import (
     HomeSnapshot,
     SafeAreaEntry,
+    SafeConfig,
     SafeContext,
     SafeDeviceEntry,
     SafeFloorEntry,
     SafeRegistryEntry,
     SafeState,
+    SafeUnitSystem,
 )
 from . import await_normalization, result_binding
 from .builtin_normalization import normalize_builtins
@@ -75,6 +77,8 @@ DATACLASS_REGISTRY: list[type] = [
     # Record types returned by facade methods
     SafeContext,
     SafeState,
+    SafeConfig,
+    SafeUnitSystem,
     SafeRegistryEntry,
     SafeDeviceEntry,
     SafeAreaEntry,

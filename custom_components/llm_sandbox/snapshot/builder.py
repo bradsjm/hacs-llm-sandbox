@@ -22,11 +22,13 @@ from .models import (
     DEFAULT_SCOPE,
     HomeSnapshot,
     SafeAreaEntry,
+    SafeConfig,
     SafeContext,
     SafeDeviceEntry,
     SafeFloorEntry,
     SafeRegistryEntry,
     SafeState,
+    SafeUnitSystem,
     ServiceFieldBrief,
     ServiceSchemaBrief,
     SnapshotIndexes,
@@ -76,6 +78,7 @@ def build_snapshot(
         devices=devices,
         areas=areas,
         floors=floors,
+        config=_safe_config(hass),
         services=service_catalog,
         services_supports_response=service_response,
         indexes=indexes,
@@ -258,6 +261,33 @@ def _safe_floor(floor: fr.FloorEntry) -> SafeFloorEntry:
     )
 
 
+def _safe_config(hass: HomeAssistant) -> SafeConfig:
+    """Convert live Home Assistant config into a frozen safe record."""
+    cfg = hass.config
+    return SafeConfig(
+        location_name=cfg.location_name,
+        latitude=cfg.latitude,
+        longitude=cfg.longitude,
+        elevation=cfg.elevation,
+        time_zone=cfg.time_zone,
+        language=cfg.language,
+        country=cfg.country,
+        currency=cfg.currency,
+        internal_url=cfg.internal_url,
+        external_url=cfg.external_url,
+        units=SafeUnitSystem(
+            temperature_unit=cfg.units.temperature_unit,
+            length_unit=cfg.units.length_unit,
+            mass_unit=cfg.units.mass_unit,
+            pressure_unit=cfg.units.pressure_unit,
+            volume_unit=cfg.units.volume_unit,
+            area_unit=cfg.units.area_unit,
+            wind_speed_unit=cfg.units.wind_speed_unit,
+            accumulated_precipitation_unit=cfg.units.accumulated_precipitation_unit,
+        ),
+    )
+
+
 def _safe_services(
     hass: HomeAssistant,
 ) -> tuple[
@@ -362,8 +392,12 @@ def _service_field_name_and_required(key: object) -> tuple[str | None, bool]:
         name = key.schema
         required = False
     else:
+        # Voluptuous treats bare (non-Marker) schema keys as optional by
+        # default; only ``vol.Required`` (or schema-level ``required=True``)
+        # makes a field required. Mark plain keys optional to match the
+        # validation behavior Home Assistant services actually enforce.
         name = key
-        required = True
+        required = False
     return (name, required) if isinstance(name, str) else (None, required)
 
 
@@ -453,6 +487,11 @@ def _build_indexes(
         if device.area_id:
             device_by_area.setdefault(device.area_id, []).append(device_id)
 
+    device_by_label: dict[str, list[str]] = {}
+    for device_id, device in devices.items():
+        for label in device.labels:
+            device_by_label.setdefault(label, []).append(device_id)
+
     area_by_floor: dict[str, list[str]] = {}
     for area_id, area in areas.items():
         if area.floor_id:
@@ -464,6 +503,7 @@ def _build_indexes(
         device_ids_by_area_id=_freeze_index(device_by_area),
         entity_ids_by_config_entry_id=_freeze_index(by_config_entry),
         entity_ids_by_label=_freeze_index(by_label),
+        device_ids_by_label=_freeze_index(device_by_label),
         area_ids_by_floor_id=_freeze_index(area_by_floor),
     )
 

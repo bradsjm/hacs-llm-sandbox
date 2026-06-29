@@ -22,7 +22,14 @@ def test_monty_type_stubs_exclude_private_methods() -> None:
     assert "def async_services_for_domain" in MONTY_TYPE_STUBS
     assert "def supports_response" in MONTY_TYPE_STUBS
     assert "def async_get" in MONTY_TYPE_STUBS
+    assert "def async_entries_for_label" in MONTY_TYPE_STUBS
     assert "def __getitem__" in MONTY_TYPE_STUBS
+
+
+def test_monty_type_stubs_include_safe_config_surface() -> None:
+    """Safe configuration objects are part of the LLM-facing API surface."""
+    assert "class SafeConfig:" in MONTY_TYPE_STUBS
+    assert "class SafeUnitSystem:" in MONTY_TYPE_STUBS
 
 
 def test_monty_type_stubs_include_alias_fields() -> None:

@@ -210,6 +210,54 @@ async def test_snapshot_service_schema_brief(hass: HomeAssistant) -> None:
     assert all(isinstance(field["required"], bool) for field in brief["fields"])
 
 
+async def test_snapshot_service_schema_plain_keys_are_optional(hass: HomeAssistant) -> None:
+    """Bare voluptuous schema keys are optional by default, not required."""
+    hass.services.async_register(
+        "schema_test",
+        "plain_keys",
+        lambda call: None,
+        schema=vol.Schema({"name": str, vol.Required("count"): int}),
+    )
+    await hass.async_block_till_done()
+
+    snapshot = build_snapshot(hass)
+
+    fields = {field["name"]: field for field in snapshot.services_schema["schema_test"]["plain_keys"]["fields"]}
+    assert fields["count"]["required"] is True
+    # A bare key validates as optional in voluptuous, so it must not be
+    # advertised as required to the LLM.
+    assert fields["name"]["required"] is False
+
+
+async def test_snapshot_device_label_index(hass: HomeAssistant) -> None:
+    device_registry = dr.async_get(hass)
+    device = device_registry.async_get_or_create(
+        config_entry_id=_add_device_owner_entry(hass),
+        identifiers={("test", "labelled-device")},
+    )
+    device_registry.async_update_device(device.id, labels={"fav"})
+
+    # Anchor the device so it survives snapshot visibility filtering:
+    # entity-less devices are dropped unless anchored (or linked to a visible entity).
+    snapshot = build_snapshot(hass, anchor_device_id=device.id)
+
+    assert "fav" in snapshot.indexes.device_ids_by_label
+    assert isinstance(snapshot.indexes.device_ids_by_label["fav"], tuple)
+    assert device.id in snapshot.indexes.device_ids_by_label["fav"]
+
+
+async def test_snapshot_config_freezes_hass_config(hass: HomeAssistant) -> None:
+    hass.config.location_name = "Snapshot Home"
+    hass.config.country = "BE"
+
+    snapshot = build_snapshot(hass)
+
+    assert snapshot.config.location_name == hass.config.location_name
+    assert snapshot.config.time_zone == hass.config.time_zone
+    assert snapshot.config.units.temperature_unit == hass.config.units.temperature_unit
+    assert isinstance(snapshot.config.country, str | None)
+
+
 async def test_snapshot_device_identifiers_and_connections_are_json_safe(hass: HomeAssistant) -> None:
     device_registry = dr.async_get(hass)
     device = device_registry.async_get_or_create(

@@ -63,11 +63,13 @@ def _build_monty_type_stubs() -> str:
 
     from ..snapshot.models import (
         SafeAreaEntry,
+        SafeConfig,
         SafeContext,
         SafeDeviceEntry,
         SafeFloorEntry,
         SafeRegistryEntry,
         SafeState,
+        SafeUnitSystem,
     )
     from .facade_views import (
         SafeAreaModule,
@@ -159,6 +161,8 @@ def _build_monty_type_stubs() -> str:
         SafeDeviceEntry,
         SafeAreaEntry,
         SafeFloorEntry,
+        SafeUnitSystem,
+        SafeConfig,
         SafeStateMachine,
         SafeServiceRegistry,
         SafeEntityRegistry,

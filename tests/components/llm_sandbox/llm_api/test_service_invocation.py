@@ -33,8 +33,10 @@ from custom_components.llm_sandbox.runtime import SandboxSettings
 from custom_components.llm_sandbox.snapshot.models import (
     DEFAULT_SCOPE,
     HomeSnapshot,
+    SafeConfig,
     SafeContext,
     SafeState,
+    SafeUnitSystem,
     ServiceSchemaBrief,
     SnapshotIndexes,
 )
@@ -509,6 +511,7 @@ def _snapshot() -> HomeSnapshot:
         devices={},
         areas={},
         floors={},
+        config=_config(),
         services={
             "light": ("get_state", "turn_on"),
             "switch": ("turn_on",),
@@ -531,6 +534,7 @@ def _snapshot() -> HomeSnapshot:
             device_ids_by_area_id={"area-bedroom": ("device-bedroom",)},
             entity_ids_by_config_entry_id={},
             entity_ids_by_label={"label-night": ("light.bedroom",)},
+            device_ids_by_label={},
             area_ids_by_floor_id={"floor-main": ("area-bedroom",)},
         ),
         services_schema={
@@ -544,6 +548,32 @@ def _snapshot() -> HomeSnapshot:
                 "required": TEST_REQUIRED_BRIEF,
             },
         },
+    )
+
+
+def _config() -> SafeConfig:
+    """Build a minimal frozen config record for snapshot helpers."""
+    return SafeConfig(
+        location_name="Home",
+        latitude=0.0,
+        longitude=0.0,
+        elevation=0,
+        time_zone="UTC",
+        language="en",
+        country=None,
+        currency="USD",
+        internal_url=None,
+        external_url=None,
+        units=SafeUnitSystem(
+            temperature_unit="°C",
+            length_unit="m",
+            mass_unit="kg",
+            pressure_unit="Pa",
+            volume_unit="L",
+            area_unit="m²",
+            wind_speed_unit="m/s",
+            accumulated_precipitation_unit="mm",
+        ),
     )
 
 

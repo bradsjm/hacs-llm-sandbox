@@ -28,11 +28,13 @@ from homeassistant.util.json import JsonValueType
 from ..snapshot.models import (
     HomeSnapshot,
     SafeAreaEntry,
+    SafeConfig,
     SafeContext,
     SafeDeviceEntry,
     SafeFloorEntry,
     SafeRegistryEntry,
     SafeState,
+    ServiceSchemaBrief,
     SnapshotIndexes,
 )
 from ..types import ActionRecord, ProposedAction, TranslationPlaceholders
@@ -202,6 +204,24 @@ class SafeEntityModule:
         entity_ids = self.indexes.entity_ids_by_label.get(label_id, ())
         return [self.entities[eid] for eid in entity_ids if eid in self.entities]
 
+    def async_get_entity(
+        self,
+        registry: SafeEntityRegistry,
+        domain: str,
+        platform: str,
+        unique_id: str,
+    ) -> str | None:
+        """Return the entity_id matching (domain, platform, unique_id), or None."""
+        return registry.async_get_entity_id(domain, platform, unique_id)
+
+    def async_entries(
+        self,
+        registry: SafeEntityRegistry,
+    ) -> list[SafeRegistryEntry]:
+        """Return all entity registry entries."""
+        del registry
+        return list(self.entities.values())
+
 
 # ---------------------------------------------------------------------------
 # Device registry (instance facade: device_registry global)
@@ -264,6 +284,16 @@ class SafeDeviceModule:
         """Return all device entries linked to ``config_entry_id``."""
         del registry
         return [d for d in self.devices.values() if config_entry_id in d.config_entries]
+
+    def async_entries_for_label(
+        self,
+        registry: SafeDeviceRegistry,
+        label_id: str,
+    ) -> list[SafeDeviceEntry]:
+        """Return all device entries carrying ``label_id``."""
+        del registry
+        device_ids = self.indexes.device_ids_by_label.get(label_id, ())
+        return [self.devices[did] for did in device_ids if did in self.devices]
 
 
 # ---------------------------------------------------------------------------
@@ -365,19 +395,32 @@ class SafeServiceRegistry:
 
     services: Mapping[str, tuple[str, ...]]
     services_supports_response: Mapping[str, Mapping[str, str]]
+    services_schema: Mapping[str, Mapping[str, ServiceSchemaBrief]]
 
     def __init__(
         self,
         *,
         services: Mapping[str, tuple[str, ...]],
         services_supports_response: Mapping[str, Mapping[str, str]],
+        services_schema: Mapping[str, Mapping[str, ServiceSchemaBrief]],
         snapshot: HomeSnapshot | None = None,
     ) -> None:
-        """Initialize with snapshot data kept outside dataclass fields."""
+        """Initialize with snapshot data kept outside dataclass fields.
+
+        ``services_schema`` is a declared field rather than read from the
+        private ``_snapshot`` stash because the synchronous catalog reads
+        (``async_services`` / ``async_services_for_domain``) run inside the
+        Monty VM, where neither the runtime snapshot contextvar nor the
+        ``_snapshot_value`` stash (dropped when Monty reconstructs inputs from
+        dataclass fields) is available. The async ``async_call`` path still
+        uses ``_snapshot`` because coroutines execute on the host event loop
+        where the runtime contextvar is active.
+        """
         if snapshot is not None:
             object.__setattr__(self, "_snapshot_value", snapshot)
         object.__setattr__(self, "services", services)
         object.__setattr__(self, "services_supports_response", services_supports_response)
+        object.__setattr__(self, "services_schema", services_schema)
 
     @property
     def _snapshot(self) -> HomeSnapshot:
@@ -397,7 +440,14 @@ class SafeServiceRegistry:
     def async_services_for_domain(self, domain: str) -> dict[str, dict[str, object]]:
         """Return JSON-safe service metadata for one domain from the snapshot."""
         response_values = self.services_supports_response.get(domain, {})
-        return {service: {"supports_response": response_values[service]} for service in self.services.get(domain, ())}
+        briefs = self.services_schema.get(domain, {})
+        return {
+            service: {
+                "supports_response": response_values[service],
+                **briefs.get(service, {"fields": [], "dynamic": False}),
+            }
+            for service in self.services.get(domain, ())
+        }
 
     def supports_response(self, domain: str, service: str) -> str:
         """Return the response mode value for ``domain.service`` from the snapshot."""
@@ -664,20 +714,21 @@ class SafeServiceRegistry:
 class SafeHass:
     """Root Home Assistant facade exposed to Monty.
 
-    Exposes only ``states`` and ``services``. The live ``hass`` object's
-    ``bus``, ``config``, ``config_entries``, ``auth``, ``loop``, ``helpers``,
+    Exposes only frozen ``states``, ``services``, and ``config`` snapshots. The
+    live ``hass`` object's ``bus``, ``config_entries``, ``auth``, ``loop``, ``helpers``,
     and ``data`` are intentionally absent — they are never reachable from
     the sandbox.
     """
 
     states: SafeStateMachine
     services: SafeServiceRegistry
+    config: SafeConfig
     type: str = "hass"
 
     def __llm_sandbox_json__(self) -> JsonValueType:
         return cast(
             JsonValueType,
-            {"type": self.type, "states": self.states, "services": self.services},
+            {"type": self.type, "states": self.states, "services": self.services, "config": self.config},
         )
 
 
@@ -749,8 +800,9 @@ def build_facades(
         snapshot=snapshot,
         services=snapshot.services,
         services_supports_response=snapshot.services_supports_response,
+        services_schema=snapshot.services_schema,
     )
-    hass = SafeHass(states=state_machine, services=service_registry)
+    hass = SafeHass(states=state_machine, services=service_registry, config=snapshot.config)
 
     return {
         "hass": hass,

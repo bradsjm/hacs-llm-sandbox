@@ -5,9 +5,12 @@ from collections.abc import Awaitable
 from typing import Any
 
 import pytest
+import voluptuous as vol
 from custom_components.llm_sandbox.llm_api import executor
 from custom_components.llm_sandbox.llm_api.api import _execute
 from homeassistant.core import Context, HomeAssistant, SupportsResponse
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import llm
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -108,12 +111,112 @@ result = {
     assert output["has_missing"] is False
     assert output["domain_count"] >= 1
     assert output["services"]["light"]["turn_on"]["supports_response"] == "none"
+    assert output["services"]["light"]["turn_on"]["fields"] == []
+    assert isinstance(output["services"]["light"]["turn_on"]["fields"], list)
+    assert isinstance(output["services"]["light"]["turn_on"]["dynamic"], bool)
     assert output["services"]["test_response"]["required"]["supports_response"] == "only"
     assert output["light_services"]["turn_on"]["supports_response"] == "none"
+    assert output["light_services"]["turn_on"]["fields"] == []
+    assert isinstance(output["light_services"]["turn_on"]["fields"], list)
+    assert isinstance(output["light_services"]["turn_on"]["dynamic"], bool)
     assert output["missing_services"] == {}
     assert output["turn_on_response"] == "none"
     assert output["required_response"] == "only"
     assert output["missing_response"] == "none"
+
+
+async def test_service_schema_fields_flow_through_read_path(
+    hass: HomeAssistant,
+    loaded_entry: MockConfigEntry,
+) -> None:
+    """Verify service schema fields are visible through the Monty read facade."""
+    hass.services.async_register(
+        "schema_test",
+        "do_thing",
+        lambda call: None,
+        schema=vol.Schema(
+            {
+                vol.Required("count"): vol.Coerce(int),
+                vol.Optional("label"): str,
+            }
+        ),
+    )
+    await hass.async_block_till_done()
+    code = """
+result = hass.services.async_services_for_domain("schema_test")
+"""
+
+    result = await _run_code(hass, loaded_entry, code)
+
+    assert result["execution"]["status"] == "ok"
+    service = result["output"]["do_thing"]
+    assert service["dynamic"] is False
+    assert len(service["fields"]) == 2
+    fields = {field["name"]: field for field in service["fields"]}
+    assert fields["count"]["required"] is True
+    assert fields["label"]["required"] is False
+
+
+async def test_config_read_end_to_end(
+    hass: HomeAssistant,
+    loaded_entry: MockConfigEntry,
+) -> None:
+    """Verify safe hass.config values are readable through the Monty root."""
+    hass.config.location_name = "Test Home"
+    hass.config.elevation = 42
+    hass.config.country = "NL"
+    code = """
+result = {
+    "location_name": hass.config.location_name,
+    "elevation": hass.config.elevation,
+    "time_zone": hass.config.time_zone,
+    "country": hass.config.country,
+    "temperature_unit": hass.config.units.temperature_unit,
+}
+"""
+
+    result = await _run_code(hass, loaded_entry, code)
+
+    assert result["execution"]["status"] == "ok"
+    output = result["output"]
+    assert output["location_name"] == "Test Home"
+    assert output["elevation"] == 42
+    assert output["country"] == "NL"
+    assert isinstance(output["time_zone"], str)
+    assert isinstance(output["temperature_unit"], str)
+
+
+async def test_device_label_and_entity_lookup_end_to_end(
+    hass: HomeAssistant,
+    loaded_entry: MockConfigEntry,
+) -> None:
+    """Verify device label and entity module lookup helpers use the snapshot."""
+    device_registry = dr.async_get(hass)
+    device = device_registry.async_get_or_create(
+        config_entry_id=loaded_entry.entry_id,
+        identifiers={("test", "dev1")},
+        name="Labelled Device",
+    )
+    device_registry.async_update_device(device.id, labels={"fav"})
+    # Link the visible Bedroom light to this device so the device survives the
+    # snapshot's visibility filtering (entity-less devices are dropped unless
+    # they are the anchor device).
+    er.async_get(hass).async_update_entity("light.bedroom", device_id=device.id)
+    code = """
+result = {
+    "device_label_count": len(dr.async_entries_for_label(dr.async_get(hass), "fav")),
+    "entity_by_id": er.async_get_entity(er.async_get(hass), "light", "test", "bedroom"),
+    "entity_entries_count": len(er.async_entries(er.async_get(hass))),
+}
+"""
+
+    result = await _run_code(hass, loaded_entry, code)
+
+    assert result["execution"]["status"] == "ok"
+    output = result["output"]
+    assert output["device_label_count"] == 1
+    assert output["entity_by_id"] == "light.bedroom"
+    assert output["entity_entries_count"] >= 2
 
 
 async def test_service_action_executes_and_records_outcome(
