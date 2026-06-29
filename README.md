@@ -9,7 +9,7 @@ The sandbox never receives the live `hass` object, live registries, the event bu
 - Config flow for one `llm_sandbox` entry scoped to the default `conversation` assistant.
 - One LLM API tool: `execute_home_code`.
 - Fresh per-call snapshot of states, entity/device/area/floor registries, and the service catalog.
-- HA-style read globals in Monty: `hass`, `states`, `er`, `dr`, `ar`, `fr`, `entity_registry`, `device_registry`, `area_registry`, `floor_registry`, and `llm_context`.
+- HA-style read globals in Monty: `hass`, `states`, `er`, `dr`, `ar`, `fr`, `entity_registry`, `device_registry`, `area_registry`, `floor_registry`, `now`, and `llm_context`.
 - Propose-only service calls through `await hass.services.async_call(...)`; calls are recorded in `proposed_actions` and are not executed.
 - Options for execution timeout and helper-call budget.
 

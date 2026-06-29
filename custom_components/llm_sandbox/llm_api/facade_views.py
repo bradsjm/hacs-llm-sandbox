@@ -525,8 +525,8 @@ def build_facades(
 
     Returns the input dict keyed by global name: ``hass``, ``states``,
     ``er``, ``dr``, ``ar``, ``fr``, ``entity_registry``, ``device_registry``,
-    ``area_registry``, ``floor_registry``, and ``llm_context``. ``llm_context``
-    is added separately by the tool caller (it depends on the live request).
+    ``area_registry``, ``floor_registry``, and ``now``. ``llm_context`` is added
+    separately by the tool caller (it depends on the live request).
     """
     entity_registry = SafeEntityRegistry(entities=snapshot.entities)
     device_registry = SafeDeviceRegistry(devices=snapshot.devices)
@@ -559,6 +559,7 @@ def build_facades(
         "device_registry": device_registry,
         "area_registry": area_registry,
         "floor_registry": floor_registry,
+        "now": snapshot.created_at,
     }
 
 
