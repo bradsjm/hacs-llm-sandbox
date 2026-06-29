@@ -1,7 +1,15 @@
 """Shared fixtures for LLM Sandbox component tests."""
 
 import pytest
-from custom_components.llm_sandbox.const import CONF_ASSISTANT, CONF_NAME, DEFAULT_ASSISTANT, DEFAULT_NAME, DOMAIN
+from custom_components.llm_sandbox.const import (
+    CONF_ACTIONS_ENABLED,
+    CONF_ASSISTANT,
+    CONF_NAME,
+    CONF_RESTRICT_TO_ASSIST_EXPOSED,
+    DEFAULT_ASSISTANT,
+    DEFAULT_NAME,
+    DOMAIN,
+)
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -18,6 +26,7 @@ def mock_config_entry() -> MockConfigEntry:
         domain=DOMAIN,
         title=DEFAULT_NAME,
         data={CONF_ASSISTANT: DEFAULT_ASSISTANT, CONF_NAME: DEFAULT_NAME},
+        options={CONF_ACTIONS_ENABLED: True, CONF_RESTRICT_TO_ASSIST_EXPOSED: False},
         unique_id=f"{DOMAIN}:{DEFAULT_ASSISTANT}",
     )
 

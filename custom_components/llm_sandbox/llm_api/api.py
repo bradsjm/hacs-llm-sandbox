@@ -20,7 +20,7 @@ from .errors import setup_error_payload, tool_error_from_exception
 from .executor import MAX_MONTY_CODE_CHARS, async_execute_home_code
 from .executor_support import ExecutionState
 from .facade_views import build_llm_context
-from .prompts import BASE_API_PROMPT, build_execute_home_code_description
+from .prompts import ACTIONS_DISABLED_PROMPT, BASE_API_PROMPT, build_execute_home_code_description
 from .runtime import RuntimeContext
 
 _LOGGER = logging.getLogger(__name__)
@@ -50,9 +50,14 @@ class LlmSandboxAPI(llm.API):
 
     @override
     async def async_get_api_instance(self, llm_context: llm.LLMContext) -> llm.APIInstance:
+        entry = self._hass.config_entries.async_get_entry(self.entry_id)
+        actions_enabled = False
+        # Missing or wrong-domain entries get a conservative prompt.
+        if entry is not None and entry.domain == DOMAIN:
+            actions_enabled = settings_from_entry(cast(SandboxConfigEntry, entry)).actions_enabled
         return llm.APIInstance(
             api=self,
-            api_prompt=_build_api_prompt(self._hass, llm_context),
+            api_prompt=_build_api_prompt(self._hass, llm_context, actions_enabled),
             llm_context=llm_context,
             tools=[ExecuteHomeCodeTool(self.entry_id)],
         )
@@ -101,7 +106,7 @@ async def _execute(
     data: ToolArgs,
     llm_context: llm.LLMContext,
 ) -> JsonObjectType:
-    """Build a snapshot, construct facades, and run the executor."""
+    """Build a Monty view, construct facades, and run the executor."""
     entry = hass.config_entries.async_get_entry(entry_id)
     if entry is None or entry.domain != DOMAIN:
         return cast(JsonObjectType, setup_error_payload("unknown_config_entry", {"config_entry_id": entry_id}))
@@ -115,7 +120,7 @@ async def _execute(
     settings = settings_from_entry(typed_entry)
     code = cast(str, data["code"])
 
-    # Build a fresh snapshot on the event loop before execution.
+    # Build a fresh Monty view on the event loop before execution.
     snapshot = build_snapshot(
         hass,
         scope=settings.scope,
@@ -162,12 +167,16 @@ async def _execute(
     return cast(JsonObjectType, result)
 
 
-def _build_api_prompt(hass: HomeAssistant, llm_context: llm.LLMContext) -> str:
+def _build_api_prompt(hass: HomeAssistant, llm_context: llm.LLMContext, actions_enabled: bool) -> str:
     """Return the base API prompt plus concise initiating-location context."""
+    prompt = BASE_API_PROMPT
+    # Disabled actions add an explicit override section after the general API docs.
+    if not actions_enabled:
+        prompt = f"{prompt}\n\n{ACTIONS_DISABLED_PROMPT}"
     location_prompt = _request_location_prompt(hass, llm_context.device_id)
     if location_prompt is None:
-        return BASE_API_PROMPT
-    return f"{BASE_API_PROMPT}\n\n{location_prompt}"
+        return prompt
+    return f"{prompt}\n\n{location_prompt}"
 
 
 def _request_location_prompt(hass: HomeAssistant, device_id: str | None) -> str | None:
@@ -205,7 +214,7 @@ def _snapshot_location(
     snapshot: HomeSnapshot,
     device_id: str | None,
 ) -> tuple[str | None, str | None, str | None, str | None]:
-    """Resolve initiating-device location from the fresh Monty snapshot."""
+    """Resolve initiating-device location from the fresh Monty view."""
     if device_id is None:
         return None, None, None, None
 

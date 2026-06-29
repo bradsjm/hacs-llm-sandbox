@@ -394,6 +394,22 @@ class SafeServiceRegistry:
 
         def _record() -> dict[str, object] | None:
             runtime = require_runtime(None)
+            settings = runtime.settings
+            # Action master switch: refuse all service calls when disabled.
+            if not settings.actions_enabled:
+                from ..types import TranslationPlaceholders
+                from .executor_support import validation_error
+
+                raise validation_error("actions_disabled", cast(TranslationPlaceholders, {}))
+            # Domain allowlist: empty means all domains allowed.
+            if settings.action_domains and domain not in settings.action_domains:
+                from ..types import TranslationPlaceholders
+                from .executor_support import validation_error
+
+                raise validation_error(
+                    "action_domain_not_allowed",
+                    cast(TranslationPlaceholders, {"domain": domain}),
+                )
             if not self.has_service(domain, service):
                 from ..types import TranslationPlaceholders
                 from .executor_support import validation_error

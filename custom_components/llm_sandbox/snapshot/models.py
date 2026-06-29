@@ -16,7 +16,6 @@ input value, so Python-side mutability is irrelevant from the sandbox).
 # ruff: noqa: D105
 
 from dataclasses import dataclass
-from enum import StrEnum
 from typing import cast
 
 from homeassistant.util.json import JsonValueType
@@ -254,38 +253,29 @@ class SnapshotIndexes:
     area_ids_by_floor_id: dict[str, tuple[str, ...]]
 
 
-class ScopeMode(StrEnum):
-    """Snapshot scope-reduction mode. NOT a security boundary."""
-
-    ALL = "all"
-    ASSIST_EXPOSE = "assist_expose"
-    CHARACTERISTICS = "characteristics"
-
-
 @dataclass(frozen=True, slots=True)
 class SnapshotScope:
     """Optional snapshot scope reduction (noise reduction, NOT security).
 
-    In ALL mode only ``mode`` matters. In ASSIST_EXPOSE only ``assistant`` is
-    used. In CHARACTERISTICS only ``excluded_entity_categories`` and
-    ``exclude_hidden`` are used. Disabled entities are always excluded in
-    non-ALL modes because they are absent from the state machine.
+    Each restriction is independent and applied additively. An entity is
+    visible iff it passes every enabled check. Disabled entities are always
+    excluded in any restricted scope because they are absent from the state
+    machine; when every restriction is off, all state-bearing entities pass.
     """
 
-    mode: ScopeMode
     assistant: str
-    excluded_entity_categories: frozenset[str]
+    restrict_to_assist_exposed: bool
     exclude_hidden: bool
+    excluded_entity_categories: frozenset[str]
 
 
-# No-arg build_snapshot default: the FULL unfiltered snapshot (library
-# primitive for tests/callers that want everything). The product/entry default
-# (characteristics) is applied separately via settings_from_entry.
+# No-arg build_snapshot default: all optional restrictions off for callers that
+# need every state-bearing entity. Product defaults are applied via settings.
 DEFAULT_SCOPE: SnapshotScope = SnapshotScope(
-    mode=ScopeMode.ALL,
     assistant="",
-    excluded_entity_categories=frozenset(),
+    restrict_to_assist_exposed=False,
     exclude_hidden=False,
+    excluded_entity_categories=frozenset(),
 )
 
 
@@ -294,8 +284,8 @@ class HomeSnapshot:
     """Frozen, full snapshot of Home Assistant state and registries.
 
     Built fresh per ``execute_home_code`` tool call on the event loop, then
-    passed to the Monty runtime. Optional scope filtering is a noise-reduction
-    measure, not a security boundary.
+    passed to the Monty runtime. Optional visibility filtering reduces noise;
+    it is not a security boundary.
     """
 
     created_at: str

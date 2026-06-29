@@ -10,7 +10,6 @@ from .models import (
     SafeFloorEntry,
     SafeRegistryEntry,
     SafeState,
-    ScopeMode,
     SnapshotIndexes,
     SnapshotScope,
 )
@@ -24,7 +23,6 @@ __all__ = [
     "SafeFloorEntry",
     "SafeRegistryEntry",
     "SafeState",
-    "ScopeMode",
     "SnapshotIndexes",
     "SnapshotScope",
     "build_snapshot",

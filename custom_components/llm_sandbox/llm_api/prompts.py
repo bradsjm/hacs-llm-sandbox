@@ -8,7 +8,7 @@ stays in ``api.py`` next to the state it renders from.
 BASE_API_PROMPT = (
     "## Tools\n"
     "LLM Sandbox exposes one tool: execute_home_code. It runs bounded "
-    "Python/Monty against a frozen snapshot of your Home Assistant.\n"
+    "Python/Monty against a frozen read-only view of your Home Assistant.\n"
     "\n"
     "## Globals\n"
     "The following globals are pre-bound (no imports needed):\n"
@@ -22,7 +22,7 @@ BASE_API_PROMPT = (
     "already-resolved registry instances. Do not call async_get(hass) on these "
     "globals; their methods take entity IDs, device IDs, area IDs, floor IDs, "
     "or names, not hass.\n"
-    "- now: the frozen snapshot creation time as an ISO string. Use it as the "
+    "- now: the frozen view creation time as an ISO string. Use it as the "
     "reference time for comparisons with State timestamp strings.\n"
     "- llm_context: the current request context (platform, language, assistant, "
     "device_id, area_id, area_name, floor_id, floor_name, context).\n"
@@ -90,12 +90,20 @@ BASE_API_PROMPT = (
     "- Do not import collections. Counter/defaultdict are unavailable; count "
     "with a dict loop like counts[key] = counts.get(key, 0) + 1.\n"
     "- Avoid filesystem, network, OS/process, pathlib/open, and current-time "
-    "calls such as datetime.now() or date.today(). Snapshot timestamps are ISO "
+    "calls such as datetime.now() or date.today(). View timestamps are ISO "
     "strings; compare those strings directly when possible.\n"
     "- Reflection/introspection builtins are partially unavailable: dir, vars, "
     "setattr, and delattr are not available in the sandbox.\n"
     "- The live hass object, event bus, config, auth, filesystem, network, and "
     "OS/process APIs are not exposed.\n"
+)
+
+
+ACTIONS_DISABLED_PROMPT = (
+    "## Service calls (disabled)\n"
+    "Proposed service calls are disabled for this assistant. Do not call "
+    "hass.services.async_call; it will be rejected. Read states and "
+    "registries only.\n"
 )
 
 
@@ -111,7 +119,7 @@ def build_execute_home_code_description() -> str:
     """Return the execute_home_code tool description."""
     return "\n".join(
         [
-            "Execute bounded Python/Monty code against a frozen Home Assistant snapshot.",
+            "Execute bounded Python/Monty code against a frozen read-only Home Assistant view.",
             "Read states and registries using native Home Assistant API patterns.",
             "Propose service calls via hass.services.async_call (recorded, not executed).",
             EXECUTE_HOME_CODE_OUTPUT,

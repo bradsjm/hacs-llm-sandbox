@@ -3,9 +3,9 @@
 Runs on the event loop at the start of each ``execute_home_code`` tool call,
 reads all registries and the state machine, and returns an immutable
 ``HomeSnapshot``. Optional scope filtering is applied at build time as a
-noise-reduction measure, not a security boundary. Disabled entities are
-excluded in non-ALL modes by using state-machine entity ids as candidates, and
-the service catalog is never filtered.
+noise-reduction measure, not a security boundary. Visibility restrictions are
+combined additively over state-bearing entity ids, and the service catalog is
+never filtered.
 """
 
 from homeassistant.components.homeassistant.exposed_entities import async_should_expose
@@ -25,7 +25,6 @@ from .models import (
     SafeFloorEntry,
     SafeRegistryEntry,
     SafeState,
-    ScopeMode,
     SnapshotIndexes,
     SnapshotScope,
 )
@@ -50,22 +49,8 @@ def build_snapshot(
 
     service_catalog, service_response = _safe_services(hass)
 
-    # Scope ALL is the library fast path: return the full unfiltered snapshot.
-    if scope.mode is ScopeMode.ALL:
-        indexes = _build_indexes(entities, devices, areas)
-        return HomeSnapshot(
-            created_at=dt_util.utcnow().isoformat(),
-            states=states,
-            entities=entities,
-            devices=devices,
-            areas=areas,
-            floors=floors,
-            services=service_catalog,
-            services_supports_response=service_response,
-            indexes=indexes,
-        )
-
-    # Non-ALL modes filter entity-bearing collections and derive references.
+    # Visibility restrictions always run through one combined predicate so the
+    # no-restrictions scope still derives from state-bearing entities.
     visible = _visible_entity_ids(hass, states, entities, scope)
     states, entities, devices, areas, floors = _derive_collections(
         states,
@@ -97,36 +82,34 @@ def _visible_entity_ids(
     entities: dict[str, SafeRegistryEntry],
     scope: SnapshotScope,
 ) -> set[str]:
-    """Return entity_ids visible under ``scope``.
+    """Return entity_ids visible under the combined ``scope`` restrictions.
 
-    Candidates are state-bearing entities (``states.keys()``). Disabled
-    entities are absent from the state machine, so they are excluded
-    automatically in both non-ALL modes with no explicit check.
+    Each enabled restriction independently narrows the set: Assist exposure
+    delegates to HA's exposure logic, and the registry-characteristic flags
+    drop hidden or category-excluded entities. State-only entities (no
+    registry entry) pass the registry checks. Candidates are state-bearing
+    entities; disabled entities are absent from the state machine and thus
+    always excluded.
     """
-    candidates = states.keys()
-    # Assist exposure delegates exactly to HA's exposure logic.
-    if scope.mode is ScopeMode.ASSIST_EXPOSE:
-        # async_should_expose is a sync @callback and may idempotently persist
-        # computed exposure into the entity registry on first evaluation; this
-        # matches HA's own conversation default_agent behavior.
-        return {entity_id for entity_id in candidates if async_should_expose(hass, scope.assistant, entity_id)}
-
-    # CHARACTERISTICS keeps state-bearing entities that pass registry flags.
-    return {entity_id for entity_id in candidates if _passes_characteristics(entities.get(entity_id), scope)}
+    return {entity_id for entity_id in states if _passes_visibility(hass, entities.get(entity_id), entity_id, scope)}
 
 
-def _passes_characteristics(
+def _passes_visibility(
+    hass: HomeAssistant,
     entry: SafeRegistryEntry | None,
+    entity_id: str,
     scope: SnapshotScope,
 ) -> bool:
-    """Whether an entity survives CHARACTERISTICS filtering."""
-    # State-only entities have no category/hidden_by and pass.
+    """Whether an entity passes every enabled visibility restriction."""
+    # Assist exposure: delegate to HA's exposure logic (sync @callback; may
+    # idempotently persist computed exposure, matching HA's default_agent).
+    if scope.restrict_to_assist_exposed and not async_should_expose(hass, scope.assistant, entity_id):
+        return False
+    # Registry-characteristic checks do not apply to state-only entities.
     if entry is None:
         return True
-    # Hidden entities are excluded only when the option is enabled.
     if scope.exclude_hidden and entry.hidden_by is not None:
         return False
-    # Configured entity categories are excluded from characteristics mode.
     return entry.entity_category not in scope.excluded_entity_categories
 
 
