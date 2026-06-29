@@ -13,7 +13,7 @@ The sandbox never receives the live `hass` object, live registries, the event bu
 - Propose-only service calls through `await hass.services.async_call(...)`; calls are recorded in `proposed_actions` and are not executed.
 - Options for execution timeout and helper-call budget.
 
-Not included in this MVP: semantic index/query APIs, enrichment, timeseries, a frontend panel, live service execution, exposure filtering, redaction, or non-Home-Assistant helper globals.
+Not included in this MVP: live service execution, exposure filtering, redaction, or non-Home-Assistant helper globals.
 
 ## Tool behavior
 

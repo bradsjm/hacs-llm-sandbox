@@ -5,6 +5,7 @@ docker run --rm \
   --name home-assistant \
   -v ~/config:/config \
   -v ./custom_components/llm_sandbox:/config/custom_components/llm_sandbox \
+  -v ~/Workspaces/hacs-pydantic-ai-agent/custom_components/pydantic_ai_agent:/config/custom_components/pydantic_ai_agent \
   -p 8123:8123 \
   homeassistant/home-assistant:latest \
   "$@"
