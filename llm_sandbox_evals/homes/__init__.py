@@ -7,7 +7,7 @@ recorder rows). Fixtures never touch live Home Assistant.
 
 from types import ModuleType
 
-from . import home_default, home_minimal
+from . import home_default, home_minimal, home_real
 
 
 def get_home(name: str) -> ModuleType:
@@ -15,6 +15,7 @@ def get_home(name: str) -> ModuleType:
     homes: dict[str, ModuleType] = {
         home_minimal.NAME: home_minimal,
         home_default.NAME: home_default,
+        home_real.NAME: home_real,
     }
     # Unknown fixture names are caller errors; surface them without falling back.
     if name not in homes:
