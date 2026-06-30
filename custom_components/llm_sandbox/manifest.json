@@ -1,6 +1,6 @@
 {
   "domain": "llm_sandbox",
-  "name": "LLM Sandbox",
+  "name": "Assist Agent Sandbox",
   "codeowners": ["@bradsjm"],
   "config_flow": true,
   "documentation": "https://github.com/bradsjm/hacs-llm-sandbox",

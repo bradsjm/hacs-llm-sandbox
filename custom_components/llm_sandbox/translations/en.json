@@ -1,7 +1,7 @@
 {
   "config": {
     "abort": {
-      "already_configured": "LLM Sandbox is already configured for this assistant scope."
+      "already_configured": "Assist Sandbox is already configured for this assistant scope."
     },
     "step": {
       "user": {
@@ -10,27 +10,19 @@
           "name": "Name"
         },
         "data_description": {
-          "name": "A friendly name for this LLM Sandbox entry.",
+          "name": "A friendly name for this Assist Sandbox entry.",
           "assistant": "The Assist exposure scope this sandbox runs under."
         },
         "description": "Expose a Monty-sandboxed Home Assistant code execution tool for one Assist exposure scope.",
-        "title": "LLM Sandbox"
+        "title": "Assist Sandbox"
       }
     }
   },
   "options": {
     "step": {
       "init": {
-        "title": "LLM Sandbox options",
+        "title": "Assist Sandbox options",
         "description": "Adjust code execution limits, visibility, and action permissions for this assistant.",
-        "data": {
-          "execution_timeout_seconds": "Maximum execution time (seconds)",
-          "helper_call_budget": "Maximum service calls per request"
-        },
-        "data_description": {
-          "execution_timeout_seconds": "Limits execution time to avoid infinite loops or other unresponsive behavior.",
-          "helper_call_budget": "Limits the number of service calls in a single request to avoid unresponsive behavior."
-        },
         "sections": {
           "section_actions": {
             "data": {
@@ -42,6 +34,17 @@
               "actions_enabled": "Master switch for performing service calls. When off, hass.services.async_call is rejected."
             },
             "name": "Action restrictions"
+          },
+          "section_execution_limits": {
+            "data": {
+              "execution_timeout_seconds": "Maximum execution time (seconds)",
+              "helper_call_budget": "Maximum service calls per request"
+            },
+            "data_description": {
+              "execution_timeout_seconds": "Limits execution time to avoid infinite loops or other unresponsive behavior.",
+              "helper_call_budget": "Limits the number of service calls in a single request to avoid unresponsive behavior."
+            },
+            "name": "Execution limits"
           },
           "section_visibility": {
             "data": {
@@ -103,10 +106,10 @@
       "message": "The helper call budget for this request was exceeded."
     },
     "config_entry_not_loaded": {
-      "message": "LLM Sandbox config entry {config_entry_id} is not loaded."
+      "message": "Assist Sandbox config entry {config_entry_id} is not loaded."
     },
     "unknown_config_entry": {
-      "message": "Unknown or unloaded LLM Sandbox config entry: {config_entry_id}."
+      "message": "Unknown or unloaded Assist Sandbox config entry: {config_entry_id}."
     },
     "invalid_tool_input": {
       "message": "Invalid tool input: {error}."

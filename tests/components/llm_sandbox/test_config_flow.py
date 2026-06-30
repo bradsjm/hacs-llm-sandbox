@@ -25,6 +25,7 @@ from custom_components.llm_sandbox.const import (
     DEFAULT_RESTRICT_TO_ASSIST_EXPOSED,
     DOMAIN,
     SECTION_ACTIONS,
+    SECTION_EXECUTION_LIMITS,
     SECTION_VISIBILITY,
 )
 from custom_components.llm_sandbox.runtime import SandboxSettings, settings_from_entry
@@ -89,8 +90,10 @@ async def test_options_flow_persists_typed_options(
     mock_config_entry.add_to_hass(hass)
     init_result = await hass.config_entries.options.async_init(mock_config_entry.entry_id)
     options = {
-        CONF_EXECUTION_TIMEOUT: 17,
-        CONF_HELPER_CALL_BUDGET: 48,
+        SECTION_EXECUTION_LIMITS: {
+            CONF_EXECUTION_TIMEOUT: 17,
+            CONF_HELPER_CALL_BUDGET: 48,
+        },
         SECTION_VISIBILITY: {
             CONF_RESTRICT_TO_ASSIST_EXPOSED: False,
         },
@@ -230,8 +233,10 @@ async def test_options_flow_section_submission_flattens(
     mock_config_entry.add_to_hass(hass)
     init_result = await hass.config_entries.options.async_init(mock_config_entry.entry_id)
     options = {
-        CONF_EXECUTION_TIMEOUT: 17,
-        CONF_HELPER_CALL_BUDGET: 48,
+        SECTION_EXECUTION_LIMITS: {
+            CONF_EXECUTION_TIMEOUT: 17,
+            CONF_HELPER_CALL_BUDGET: 48,
+        },
         SECTION_VISIBILITY: {
             CONF_RESTRICT_TO_ASSIST_EXPOSED: False,
             CONF_EXCLUDE_HIDDEN: False,

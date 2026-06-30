@@ -46,6 +46,7 @@ from .const import (
     MIN_EXECUTION_TIMEOUT_SECONDS,
     MIN_HELPER_CALL_BUDGET,
     SECTION_ACTIONS,
+    SECTION_EXECUTION_LIMITS,
     SECTION_VISIBILITY,
 )
 from .schema_helpers import flatten_section_data, section_schema_key
@@ -60,7 +61,7 @@ class LlmSandboxOptionsFlow(OptionsFlow):
         """Manage LLM Sandbox entry options."""
         if user_input is not None:
             # HA sections namespace submitted values; options are stored flat.
-            data = flatten_section_data(user_input, [SECTION_VISIBILITY, SECTION_ACTIONS])
+            data = flatten_section_data(user_input, [SECTION_VISIBILITY, SECTION_ACTIONS, SECTION_EXECUTION_LIMITS])
             return self.async_create_entry(data=data)
 
         options = self.config_entry.options
@@ -108,7 +109,7 @@ class LlmSandboxOptionsFlow(OptionsFlow):
                 )
             ),
         }
-        schema = {
+        execution_limits_fields: VolDictType = {
             vol.Required(
                 CONF_EXECUTION_TIMEOUT,
                 default=options.get(CONF_EXECUTION_TIMEOUT, DEFAULT_EXECUTION_TIMEOUT_SECONDS),
@@ -132,12 +133,18 @@ class LlmSandboxOptionsFlow(OptionsFlow):
                     step=1,
                 )
             ),
+        }
+        schema = {
             section_schema_key(SECTION_VISIBILITY, visibility_fields): section(
                 vol.Schema(visibility_fields),
                 {"collapsed": True},
             ),
             section_schema_key(SECTION_ACTIONS, actions_fields): section(
                 vol.Schema(actions_fields),
+                {"collapsed": True},
+            ),
+            section_schema_key(SECTION_EXECUTION_LIMITS, execution_limits_fields): section(
+                vol.Schema(execution_limits_fields),
                 {"collapsed": True},
             ),
         }

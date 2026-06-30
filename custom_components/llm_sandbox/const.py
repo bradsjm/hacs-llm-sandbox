@@ -18,6 +18,7 @@ CONF_ACTIONS_ENABLED: Final = "actions_enabled"
 CONF_ACTION_DOMAINS: Final = "action_domains"
 SECTION_VISIBILITY: Final = "section_visibility"
 SECTION_ACTIONS: Final = "section_actions"
+SECTION_EXECUTION_LIMITS: Final = "section_execution_limits"
 
 DEFAULT_EXECUTION_TIMEOUT_SECONDS: Final = 12
 DEFAULT_HELPER_CALL_BUDGET: Final = 32
