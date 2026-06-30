@@ -107,6 +107,21 @@
     },
     "invalid_tool_input": {
       "message": "Invalid tool input: {error}."
+    },
+    "recorder_unavailable": {
+      "message": "The recorder integration is not available."
+    },
+    "entity_not_visible": {
+      "message": "Entity {entity_id} is not available."
+    },
+    "time_window_too_large": {
+      "message": "The requested time window exceeds the maximum of {max_hours} hours."
+    },
+    "logbook_unavailable": {
+      "message": "The logbook integration is not available."
+    },
+    "query_failed": {
+      "message": "The query failed: {error}"
     }
   }
 }

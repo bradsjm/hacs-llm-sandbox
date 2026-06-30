@@ -7,8 +7,12 @@ stays in ``api.py`` next to the state it renders from.
 
 BASE_API_PROMPT = (
     "## Tools\n"
-    "LLM Sandbox exposes one tool: execute_home_code. It runs bounded "
-    "Python/Monty against a frozen read-only view of your Home Assistant.\n"
+    "LLM Sandbox exposes four tools. `execute_home_code` runs bounded "
+    "Python/Monty against a frozen read-only view of your Home Assistant. "
+    "`get_history`, `get_statistics`, and `get_logbook` run bounded "
+    "recorder queries (entity history, long-term statistics, logbook events) "
+    "over a UTC time window you choose; they require the recorder and reject "
+    "entities that are not visible to the sandbox.\n"
     "\n"
     "## Globals\n"
     "The following globals are pre-bound (no imports needed):\n"
@@ -19,9 +23,10 @@ BASE_API_PROMPT = (
     "internal_url, external_url, and units such as units.temperature_unit and "
     "units.length_unit.\n"
     "- states: hass.states (same object). Read entity state.\n"
-    "- er, dr, ar, fr: module facades. Pass hass only to these facades: "
-    "er.async_get(hass), dr.async_get(hass), ar.async_get(hass), and "
-    "fr.async_get(hass) return registry instances.\n"
+    "- er, dr, ar, fr, lr, cr: module facades. Pass hass only to these "
+    "facades: er.async_get(hass), dr.async_get(hass), ar.async_get(hass), "
+    "fr.async_get(hass), lr.async_get(hass), and cr.async_get(hass) return "
+    "registry instances.\n"
     "- entity_registry, device_registry, area_registry, floor_registry: the "
     "already-resolved registry instances. Do not call async_get(hass) on these "
     "globals; their methods take entity IDs, device IDs, area IDs, floor IDs, "
@@ -54,7 +59,7 @@ BASE_API_PROMPT = (
     "Choose one registry access style and do not mix them:\n"
     "- Instance style (simplest): use the pre-bound registry instances directly, "
     "for example device_registry.async_get('<device_id>').\n"
-    "- Module style: call async_get(hass) only on er/dr/ar/fr, for example "
+    "- Module style: call async_get(hass) only on er/dr/ar/fr/lr/cr, for example "
     "dr.async_get(hass).async_get('<device_id>').\n"
     "- Wrong: device_registry.async_get(hass). The global device_registry is "
     "already an instance, and async_get on it expects a device_id string.\n"
@@ -84,6 +89,57 @@ BASE_API_PROMPT = (
     "- floor_registry.async_list_floors() returns floor entries.\n"
     "- Floor objects expose: floor_id, name, aliases, level, icon, created_at, "
     "modified_at.\n"
+    "- lr, cr: module facades for labels and categories. Pass hass only: "
+    "lr.async_get(hass), cr.async_get(hass).\n"
+    "- label_registry: the already-resolved label registry instance.\n"
+    "- label_registry.async_get_label_by_name('Favourites') returns the matching "
+    "label (normalized-name match: case- and whitespace-insensitive) or None.\n"
+    "- label_registry.async_list_labels() returns label entries.\n"
+    "- Label objects expose: label_id, name, normalized_name, description, color, "
+    "icon, created_at, modified_at.\n"
+    "- Use label.label_id as the label_id argument for er/dr label lookup helpers "
+    "and for service target={'label_id': ...}.\n"
+    "- category_registry: the already-resolved category registry instance. "
+    "Categories are scoped (per integration); pass scope as a keyword: "
+    "category_registry.async_list_categories(scope='<scope>') and "
+    "category_registry.async_get_category(scope='<scope>', category_id='<id>').\n"
+    "- Category objects expose: category_id, scope, name, icon, created_at, "
+    "modified_at.\n"
+    "\n"
+    "## Repairs\n"
+    "- repairs: read-only view of Home Assistant repairs issues (issue registry).\n"
+    "- repairs.async_issues() returns all issues; repairs.async_active_issues() "
+    "returns active ones; repairs.async_dismissed_issues() returns dismissed ones.\n"
+    "- repairs.async_issues_for_domain('light') and "
+    "repairs.async_issues_by_severity('warning') filter the list.\n"
+    "- repairs.async_get_issue('light', 'my_issue') returns one issue or None.\n"
+    "- Issue objects expose: issue_id, domain, severity (critical/error/warning or "
+    "None), active, dismissed_version, translation_key, "
+    "translation_placeholders, created.\n"
+    "- Issue severity and state reflect the frozen snapshot taken before code ran.\n"
+    "\n"
+    "## Config entries\n"
+    "- config_entries: read-only, secret-stripped view of Home Assistant config "
+    "entries.\n"
+    "- config_entries.async_entries() returns all entries; pass a domain string to "
+    "filter, e.g. config_entries.async_entries('light').\n"
+    "- config_entries.async_get_entry('<entry_id>') returns one entry or None.\n"
+    "- Config-entry objects expose ONLY: entry_id, domain, title, source, state "
+    "(loaded/setup_error/not_loaded/...), unique_id, disabled_by, reason. "
+    "Credentials in entry data/options are never exposed.\n"
+    "\n"
+    "## Recorder tools\n"
+    "- get_history requires entity_ids and accepts optional ISO-8601 start/end "
+    "timestamps. Omitted timestamps default to the last 1 hour.\n"
+    "- get_statistics requires statistic_ids, accepts optional ISO-8601 "
+    "start/end timestamps, and accepts period '5minute', 'hour', or 'day' "
+    "(default 'hour'). Omitted timestamps default to the last 24 hours.\n"
+    "- get_logbook requires entity_ids and accepts optional ISO-8601 start/end "
+    "timestamps. Omitted timestamps default to the last 24 hours.\n"
+    "- Recorder windows are UTC and capped at 24 hours for history/logbook "
+    "and 30 days for statistics.\n"
+    "- Recorder results use ISO-8601 UTC timestamps and include a truncated "
+    "boolean when output rows are capped.\n"
     "\n"
     "## Service calls\n"
     "- hass.services.has_service('light', 'turn_on') checks if a service exists.\n"
@@ -167,5 +223,38 @@ def build_execute_home_code_description() -> str:
             "Read states and registries using native Home Assistant API patterns.",
             "Perform service calls via hass.services.async_call with structured action results.",
             EXECUTE_HOME_CODE_OUTPUT,
+        ]
+    )
+
+
+def build_get_history_description() -> str:
+    """Return the get_history tool description."""
+    return "\n".join(
+        [
+            "Return recorded state history for one or more visible entities over a bounded UTC window (default last 1h, max 24h).",
+            "Pass entity_ids and optional ISO-8601 start/end.",
+            "Returns {status, window, entities: {entity_id: [{state, attributes, last_changed, last_updated}]}, truncated}.",
+        ]
+    )
+
+
+def build_get_statistics_description() -> str:
+    """Return the get_statistics tool description."""
+    return "\n".join(
+        [
+            "Return long-term recorder statistics for one or more visible statistic IDs over a bounded UTC window (default last 24h, max 30 days).",
+            "Pass statistic_ids, optional start/end, and period ('5minute'|'hour'|'day', default 'hour').",
+            "Returns {status, window, period, statistics: {statistic_id: [{start, mean, min, max, sum, state, last_reset?}]}, truncated}. Units are raw recorder units.",
+        ]
+    )
+
+
+def build_get_logbook_description() -> str:
+    """Return the get_logbook tool description."""
+    return "\n".join(
+        [
+            "Return logbook events for one or more visible entities over a bounded UTC window (default last 24h, max 24h).",
+            "Pass entity_ids (required) and optional ISO-8601 start/end.",
+            "Returns {status, window, entries: [{when, name, message, entity_id, state, ...}], truncated}.",
         ]
     )

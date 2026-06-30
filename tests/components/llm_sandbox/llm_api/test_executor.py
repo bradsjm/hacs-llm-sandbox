@@ -219,6 +219,116 @@ result = {
     assert output["entity_entries_count"] >= 2
 
 
+async def test_label_registry_read_end_to_end(
+    hass: HomeAssistant,
+    loaded_entry: MockConfigEntry,
+) -> None:
+    from homeassistant.helpers import label_registry as lr
+
+    lr.async_get(hass).async_create("Favourites")
+    code = """
+by_name = label_registry.async_get_label_by_name("FAV OURITES")
+result = {
+    "count": len(label_registry.async_list_labels()),
+    "label_id": by_name.label_id if by_name else None,
+    "module_count": len(lr.async_get(hass).async_list_labels()),
+}
+"""
+
+    result = await _run_code(hass, loaded_entry, code)
+
+    assert result["execution"]["status"] == "ok"
+    output = result["output"]
+    assert output["count"] >= 1
+    assert output["label_id"] is not None
+    assert output["module_count"] == output["count"]
+
+
+async def test_category_registry_read_end_to_end(
+    hass: HomeAssistant,
+    loaded_entry: MockConfigEntry,
+) -> None:
+    from homeassistant.helpers import category_registry as cr_core
+
+    reg = cr_core.async_get(hass)
+    reg.async_create(name="High Priority", scope="todo")
+    code = """
+cats = category_registry.async_list_categories(scope="todo")
+result = {
+    "count": len(cats),
+    "module_count": len(cr.async_get(hass).async_list_categories(scope="todo")),
+    "missing_scope": len(category_registry.async_list_categories(scope="nope")),
+}
+"""
+
+    result = await _run_code(hass, loaded_entry, code)
+
+    assert result["execution"]["status"] == "ok"
+    output = result["output"]
+    assert output["count"] >= 1
+    assert output["module_count"] == output["count"]
+    assert output["missing_scope"] == 0
+
+
+async def test_repairs_read_end_to_end(
+    hass: HomeAssistant,
+    loaded_entry: MockConfigEntry,
+) -> None:
+    from homeassistant.helpers.issue_registry import IssueSeverity, async_create_issue
+
+    async_create_issue(
+        hass,
+        domain="light",
+        issue_id="warn_thing",
+        is_fixable=False,
+        is_persistent=False,
+        severity=IssueSeverity.WARNING,
+        translation_key="warn_thing",
+    )
+    code = """
+result = {
+    "total": len(repairs.async_issues()),
+    "active": len(repairs.async_active_issues()),
+    "by_severity": len(repairs.async_issues_by_severity("warning")),
+    "one": repairs.async_get_issue("light", "warn_thing") is not None,
+}
+"""
+
+    result = await _run_code(hass, loaded_entry, code)
+
+    assert result["execution"]["status"] == "ok"
+    output = result["output"]
+    assert output["total"] >= 1
+    assert output["active"] >= 1
+    assert output["by_severity"] >= 1
+    assert output["one"] is True
+
+
+async def test_config_entries_read_end_to_end(
+    hass: HomeAssistant,
+    loaded_entry: MockConfigEntry,
+) -> None:
+    code = """
+mine = config_entries.async_get_entry("<ENTRY_ID>")
+all_count = len(config_entries.async_entries())
+domain_count = len(config_entries.async_entries("llm_sandbox"))
+result = {
+    "found": mine is not None,
+    "domain": mine.domain if mine else None,
+    "all_count": all_count,
+    "domain_count": domain_count,
+}
+""".replace("<ENTRY_ID>", loaded_entry.entry_id)
+
+    result = await _run_code(hass, loaded_entry, code)
+
+    assert result["execution"]["status"] == "ok"
+    output = result["output"]
+    assert output["found"] is True
+    assert output["domain"] == "llm_sandbox"
+    assert output["domain_count"] >= 1
+
+
 async def test_service_action_executes_and_records_outcome(
     hass: HomeAssistant,
     loaded_entry: MockConfigEntry,

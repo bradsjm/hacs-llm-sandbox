@@ -258,6 +258,104 @@ async def test_snapshot_config_freezes_hass_config(hass: HomeAssistant) -> None:
     assert isinstance(snapshot.config.country, str | None)
 
 
+async def test_snapshot_includes_label_registry(hass: HomeAssistant) -> None:
+    from homeassistant.helpers import label_registry as lr
+
+    lr.async_get(hass).async_create("Favourites", color="red", icon="mdi:star")
+
+    snapshot = build_snapshot(hass)
+
+    assert snapshot.labels
+    label = next(iter(snapshot.labels.values()))
+    assert label.name == "Favourites"
+    assert label.normalized_name == "favourites"
+    assert label.color == "red"
+    assert label.icon == "mdi:star"
+    assert isinstance(label.created_at, str)
+
+
+async def test_snapshot_includes_category_registry(hass: HomeAssistant) -> None:
+    from homeassistant.helpers import category_registry as cr_core
+
+    reg = cr_core.async_get(hass)
+    reg.async_create(name="High Priority", scope="todo", icon="mdi:alert")
+
+    snapshot = build_snapshot(hass)
+
+    assert "todo" in snapshot.categories
+    cat = next(iter(snapshot.categories["todo"].values()))
+    assert cat.scope == "todo"
+    assert cat.name == "High Priority"
+    assert cat.icon == "mdi:alert"
+    assert isinstance(cat.created_at, str)
+
+
+async def test_snapshot_includes_repairs_issues(hass: HomeAssistant) -> None:
+    from homeassistant.helpers.issue_registry import IssueSeverity, async_create_issue
+
+    async_create_issue(
+        hass,
+        domain="light",
+        issue_id="broken_thing",
+        is_fixable=True,
+        is_persistent=False,
+        severity=IssueSeverity.WARNING,
+        translation_key="broken_thing",
+        translation_placeholders={"device": "lamp"},
+    )
+
+    snapshot = build_snapshot(hass)
+
+    matches = [i for i in snapshot.issues if i.issue_id == "broken_thing"]
+    assert matches
+    issue = matches[0]
+    assert issue.domain == "light"
+    assert issue.severity == "warning"
+    assert issue.active is True
+    assert issue.translation_placeholders == {"device": "lamp"}
+    assert isinstance(issue.created, str)
+
+
+async def test_snapshot_includes_config_entries_without_secrets(hass: HomeAssistant) -> None:
+    entry = MockConfigEntry(
+        domain="test_secret",
+        title="Secret Integration",
+        data={"api_key": "super-secret-token"},
+        options={"password": "hunter2"},
+        unique_id="uniq",
+    )
+    entry.add_to_hass(hass)
+
+    snapshot = build_snapshot(hass)
+
+    matches = [e for e in snapshot.config_entries if e.entry_id == entry.entry_id]
+    assert matches
+    safe = matches[0]
+    assert safe.domain == "test_secret"
+    assert safe.title == "Secret Integration"
+    assert safe.unique_id == "uniq"
+    assert isinstance(safe.state, str)
+    # Critical safety: no secret-bearing fields exist on the record.
+    assert not hasattr(safe, "data")
+    assert not hasattr(safe, "options")
+    assert not hasattr(safe, "runtime_data")
+    assert not hasattr(safe, "subentries")
+    # And the serialized JSON form carries only the allowed keys.
+    payload = safe.__llm_sandbox_json__()
+    assert set(payload) == {
+        "entry_id",
+        "domain",
+        "title",
+        "source",
+        "state",
+        "unique_id",
+        "disabled_by",
+        "reason",
+    }
+    assert "api_key" not in str(payload)
+    assert "hunter2" not in str(payload)
+
+
 async def test_snapshot_device_identifiers_and_connections_are_json_safe(hass: HomeAssistant) -> None:
     device_registry = dr.async_get(hass)
     device = device_registry.async_get_or_create(

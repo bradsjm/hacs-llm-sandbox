@@ -11,6 +11,7 @@ from custom_components.llm_sandbox.const import (
     DOMAIN,
 )
 from homeassistant.core import HomeAssistant
+from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 
@@ -76,3 +77,38 @@ async def loaded_entry(
     await hass.config_entries.async_setup(mock_config_entry.entry_id)
     await hass.async_block_till_done()
     return mock_config_entry
+
+
+@pytest.fixture
+async def recorder_entry(
+    hass: HomeAssistant,
+    loaded_entry: MockConfigEntry,
+) -> MockConfigEntry:
+    """Set up recorder + logbook on tmp SQLite for recorder-backed tool tests."""
+    from homeassistant.components.logbook import DOMAIN as LOGBOOK_DOMAIN
+    from homeassistant.components.logbook.models import LogbookConfig
+
+    await _setup_recorder(hass)
+    hass.data[LOGBOOK_DOMAIN] = LogbookConfig({}, None, None)
+    return loaded_entry
+
+
+@pytest.fixture
+async def recorder_without_logbook_entry(
+    hass: HomeAssistant,
+    loaded_entry: MockConfigEntry,
+) -> MockConfigEntry:
+    """Set up recorder without logbook for the unavailable-path test."""
+    await _setup_recorder(hass)
+    return loaded_entry
+
+
+async def _setup_recorder(hass: HomeAssistant) -> None:
+    """Set up recorder on tmp SQLite and wait for startup work to settle."""
+    from homeassistant.components.recorder import get_instance
+    from homeassistant.helpers.recorder import async_initialize_recorder
+
+    async_initialize_recorder(hass)
+    await async_setup_component(hass, "recorder", {"recorder": {}})
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()

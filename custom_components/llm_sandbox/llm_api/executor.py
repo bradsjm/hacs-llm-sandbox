@@ -9,10 +9,14 @@ from ..const import DOMAIN
 from ..snapshot.models import (
     HomeSnapshot,
     SafeAreaEntry,
+    SafeCategoryEntry,
     SafeConfig,
+    SafeConfigEntry,
     SafeContext,
     SafeDeviceEntry,
     SafeFloorEntry,
+    SafeIssueEntry,
+    SafeLabelEntry,
     SafeRegistryEntry,
     SafeState,
     SafeUnitSystem,
@@ -34,6 +38,9 @@ from .executor_support import (
 from .facade_views import (
     SafeAreaModule,
     SafeAreaRegistry,
+    SafeCategoryModule,
+    SafeCategoryRegistry,
+    SafeConfigEntries,
     SafeDate,
     SafeDateFacade,
     SafeDateTime,
@@ -45,6 +52,9 @@ from .facade_views import (
     SafeFloorModule,
     SafeFloorRegistry,
     SafeHass,
+    SafeIssueRegistry,
+    SafeLabelModule,
+    SafeLabelRegistry,
     SafeLLMContext,
     SafeServiceRegistry,
     SafeStateMachine,
@@ -72,11 +82,17 @@ DATACLASS_REGISTRY: list[type] = [
     SafeDeviceRegistry,
     SafeAreaRegistry,
     SafeFloorRegistry,
+    SafeLabelRegistry,
+    SafeCategoryRegistry,
+    SafeIssueRegistry,
+    SafeConfigEntries,
     # Module facades (er/dr/ar/fr)
     SafeEntityModule,
     SafeDeviceModule,
     SafeAreaModule,
     SafeFloorModule,
+    SafeLabelModule,
+    SafeCategoryModule,
     # LLM context
     SafeLLMContext,
     # Date/datetime facades (value types + class facades)
@@ -93,6 +109,10 @@ DATACLASS_REGISTRY: list[type] = [
     SafeDeviceEntry,
     SafeAreaEntry,
     SafeFloorEntry,
+    SafeLabelEntry,
+    SafeCategoryEntry,
+    SafeIssueEntry,
+    SafeConfigEntry,
 ]
 
 

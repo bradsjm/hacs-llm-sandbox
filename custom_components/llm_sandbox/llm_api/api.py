@@ -23,6 +23,7 @@ from .executor import MAX_MONTY_CODE_CHARS, async_execute_home_code
 from .executor_support import ExecutionState
 from .facade_views import build_llm_context
 from .prompts import ACTIONS_DISABLED_PROMPT, BASE_API_PROMPT, build_execute_home_code_description
+from .recorder_tools import GetHistoryTool, GetLogbookTool, GetStatisticsTool
 from .runtime import RuntimeContext
 
 _LOGGER = logging.getLogger(__name__)
@@ -61,7 +62,12 @@ class LlmSandboxAPI(llm.API):
             api=self,
             api_prompt=_build_api_prompt(self._hass, llm_context, actions_enabled),
             llm_context=llm_context,
-            tools=[ExecuteHomeCodeTool(self.entry_id)],
+            tools=[
+                ExecuteHomeCodeTool(self.entry_id),
+                GetHistoryTool(self.entry_id),
+                GetStatisticsTool(self.entry_id),
+                GetLogbookTool(self.entry_id),
+            ],
         )
 
 
@@ -109,15 +115,11 @@ async def _execute(
     llm_context: llm.LLMContext,
 ) -> JsonObjectType:
     """Build a Monty view, construct facades, and run the executor."""
-    entry = hass.config_entries.async_get_entry(entry_id)
-    if entry is None or entry.domain != DOMAIN:
-        return cast(JsonObjectType, setup_error_payload("unknown_config_entry", {"config_entry_id": entry_id}))
-    typed_entry = cast(SandboxConfigEntry, entry)
-    if typed_entry.state is not ConfigEntryState.LOADED or typed_entry.runtime_data is None:
-        return cast(
-            JsonObjectType,
-            setup_error_payload("config_entry_not_loaded", {"config_entry_id": entry_id}),
-        )
+    setup_error = _require_loaded_entry_error(hass, entry_id)
+    if setup_error is not None:
+        key, placeholders = setup_error
+        return cast(JsonObjectType, setup_error_payload(key, placeholders))
+    typed_entry = _require_loaded_entry(hass, entry_id)
 
     settings = settings_from_entry(typed_entry)
     code = cast(str, data["code"])
@@ -181,6 +183,30 @@ async def _execute(
             len(runtime.state.actions),
         )
     return cast(JsonObjectType, result)
+
+
+def _require_loaded_entry(hass: HomeAssistant, entry_id: str) -> SandboxConfigEntry:
+    """Return a loaded LLM Sandbox config entry."""
+    setup_error = _require_loaded_entry_error(hass, entry_id)
+    if setup_error is not None:
+        key, placeholders = setup_error
+        msg = setup_error_payload(key, placeholders)["execution"]["message"]
+        raise RuntimeError(msg)
+    return cast(SandboxConfigEntry, hass.config_entries.async_get_entry(entry_id))
+
+
+def _require_loaded_entry_error(
+    hass: HomeAssistant,
+    entry_id: str,
+) -> tuple[str, dict[str, str]] | None:
+    """Return setup error metadata when the entry cannot be used."""
+    entry = hass.config_entries.async_get_entry(entry_id)
+    if entry is None or entry.domain != DOMAIN:
+        return "unknown_config_entry", {"config_entry_id": entry_id}
+    typed_entry = cast(SandboxConfigEntry, entry)
+    if typed_entry.state is not ConfigEntryState.LOADED or typed_entry.runtime_data is None:
+        return "config_entry_not_loaded", {"config_entry_id": entry_id}
+    return None
 
 
 def _build_api_prompt(hass: HomeAssistant, llm_context: llm.LLMContext, actions_enabled: bool) -> str:

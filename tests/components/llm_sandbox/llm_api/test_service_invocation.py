@@ -537,6 +537,10 @@ def _snapshot() -> HomeSnapshot:
             device_ids_by_label={},
             area_ids_by_floor_id={"floor-main": ("area-bedroom",)},
         ),
+        labels={},
+        categories={},
+        issues=[],
+        config_entries=[],
         services_schema={
             "light": {
                 "get_state": LIGHT_GET_STATE_BRIEF,

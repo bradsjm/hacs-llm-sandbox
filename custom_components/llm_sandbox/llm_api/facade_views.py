@@ -31,10 +31,14 @@ from homeassistant.util.json import JsonValueType
 from ..snapshot.models import (
     HomeSnapshot,
     SafeAreaEntry,
+    SafeCategoryEntry,
     SafeConfig,
+    SafeConfigEntry,
     SafeContext,
     SafeDeviceEntry,
     SafeFloorEntry,
+    SafeIssueEntry,
+    SafeLabelEntry,
     SafeRegistryEntry,
     SafeState,
     ServiceSchemaBrief,
@@ -379,6 +383,140 @@ class SafeFloorModule:
     def async_get(self, _hass: object) -> SafeFloorRegistry:
         """Return the floor registry instance (HA parity: ``fr.async_get(hass)``)."""
         return self.registry
+
+
+# ---------------------------------------------------------------------------
+# Label registry (instance facade: label_registry global)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class SafeLabelRegistry:
+    """Read-only label registry facade mirroring ``LabelRegistry`` instance methods."""
+
+    labels: Mapping[str, SafeLabelEntry]
+
+    def async_get_label(self, label_id: str) -> SafeLabelEntry | None:
+        """Return the label entry for ``label_id``, or None."""
+        return self.labels.get(label_id)
+
+    def async_get_label_by_name(self, name: str) -> SafeLabelEntry | None:
+        """Return the label whose normalized name matches ``name``."""
+        normalized = name.casefold().replace(" ", "")
+        for label in self.labels.values():
+            if label.normalized_name == normalized:
+                return label
+        return None
+
+    def async_list_labels(self) -> list[SafeLabelEntry]:
+        """Return all label entries."""
+        return list(self.labels.values())
+
+
+@dataclass(frozen=True, slots=True)
+class SafeLabelModule:
+    """Module-level label registry facade mirroring ``lr`` (label_registry)."""
+
+    registry: SafeLabelRegistry
+
+    def async_get(self, _hass: object) -> SafeLabelRegistry:
+        """Return the label registry instance (HA parity: ``lr.async_get(hass)``)."""
+        return self.registry
+
+
+# ---------------------------------------------------------------------------
+# Category registry (instance facade: category_registry global)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class SafeCategoryRegistry:
+    """Read-only category registry facade mirroring ``CategoryRegistry`` instance methods."""
+
+    categories: Mapping[str, Mapping[str, SafeCategoryEntry]]
+
+    def async_get_category(self, *, scope: str, category_id: str) -> SafeCategoryEntry | None:
+        """Return the category entry for ``scope``/``category_id``, or None."""
+        return self.categories.get(scope, {}).get(category_id)
+
+    def async_list_categories(self, *, scope: str) -> list[SafeCategoryEntry]:
+        """Return all category entries within ``scope``."""
+        return list(self.categories.get(scope, {}).values())
+
+
+@dataclass(frozen=True, slots=True)
+class SafeCategoryModule:
+    """Module-level category registry facade mirroring ``cr`` (category_registry)."""
+
+    registry: SafeCategoryRegistry
+
+    def async_get(self, _hass: object) -> SafeCategoryRegistry:
+        """Return the category registry instance (HA parity: ``cr.async_get(hass)``)."""
+        return self.registry
+
+
+# ---------------------------------------------------------------------------
+# Repairs issue registry (instance facade: repairs global)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class SafeIssueRegistry:
+    """Read-only repairs facade over the frozen issue registry snapshot."""
+
+    issues: list[SafeIssueEntry]
+
+    def async_issues(self) -> list[SafeIssueEntry]:
+        """Return all repairs issues."""
+        return list(self.issues)
+
+    def async_get_issue(self, domain: str, issue_id: str) -> SafeIssueEntry | None:
+        """Return the issue for ``domain``/``issue_id``, or None."""
+        for issue in self.issues:
+            if issue.domain == domain and issue.issue_id == issue_id:
+                return issue
+        return None
+
+    def async_issues_for_domain(self, domain: str) -> list[SafeIssueEntry]:
+        """Return all issues raised by ``domain``."""
+        return [issue for issue in self.issues if issue.domain == domain]
+
+    def async_issues_by_severity(self, severity: str) -> list[SafeIssueEntry]:
+        """Return issues whose severity value equals ``severity``."""
+        return [issue for issue in self.issues if issue.severity == severity]
+
+    def async_active_issues(self) -> list[SafeIssueEntry]:
+        """Return issues that are currently active."""
+        return [issue for issue in self.issues if issue.active]
+
+    def async_dismissed_issues(self) -> list[SafeIssueEntry]:
+        """Return issues the user has dismissed."""
+        return [issue for issue in self.issues if issue.dismissed_version is not None]
+
+
+# ---------------------------------------------------------------------------
+# Config entries (instance facade: config_entries global)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class SafeConfigEntries:
+    """Read-only config-entries facade mirroring HA list/get methods."""
+
+    entries: list[SafeConfigEntry]
+
+    def async_entries(self, domain: str | None = None) -> list[SafeConfigEntry]:
+        """Return all entries, optionally filtered by ``domain`` (HA parity)."""
+        if domain is None:
+            return list(self.entries)
+        return [entry for entry in self.entries if entry.domain == domain]
+
+    def async_get_entry(self, entry_id: str) -> SafeConfigEntry | None:
+        """Return the entry for ``entry_id``, or None (HA parity)."""
+        for entry in self.entries:
+            if entry.entry_id == entry_id:
+                return entry
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -942,6 +1080,10 @@ def build_facades(
     device_registry = SafeDeviceRegistry(devices=snapshot.devices)
     area_registry = SafeAreaRegistry(areas=snapshot.areas)
     floor_registry = SafeFloorRegistry(floors=snapshot.floors)
+    label_registry = SafeLabelRegistry(labels=snapshot.labels)
+    category_registry = SafeCategoryRegistry(categories=snapshot.categories)
+    repairs = SafeIssueRegistry(issues=list(snapshot.issues))
+    config_entries = SafeConfigEntries(entries=list(snapshot.config_entries))
 
     state_machine = SafeStateMachine(states=snapshot.states)
     service_registry = SafeServiceRegistry(
@@ -980,10 +1122,16 @@ def build_facades(
         ),
         "ar": SafeAreaModule(registry=area_registry),
         "fr": SafeFloorModule(registry=floor_registry),
+        "lr": SafeLabelModule(registry=label_registry),
+        "cr": SafeCategoryModule(registry=category_registry),
         "entity_registry": entity_registry,
         "device_registry": device_registry,
         "area_registry": area_registry,
         "floor_registry": floor_registry,
+        "label_registry": label_registry,
+        "category_registry": category_registry,
+        "repairs": repairs,
+        "config_entries": config_entries,
         "now": snapshot.created_at,
     }
 

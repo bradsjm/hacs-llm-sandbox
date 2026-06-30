@@ -240,6 +240,123 @@ class SafeFloorEntry:
 
 
 @dataclass(frozen=True, slots=True)
+class SafeLabelEntry:
+    """Frozen view of a Home Assistant label registry entry."""
+
+    label_id: str
+    name: str
+    normalized_name: str
+    description: str | None
+    color: str | None
+    icon: str | None
+    created_at: str | None
+    modified_at: str | None
+
+    def __llm_sandbox_json__(self) -> JsonValueType:
+        return cast(
+            JsonValueType,
+            {
+                "label_id": self.label_id,
+                "name": self.name,
+                "normalized_name": self.normalized_name,
+                "description": self.description,
+                "color": self.color,
+                "icon": self.icon,
+                "created_at": self.created_at,
+                "modified_at": self.modified_at,
+            },
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class SafeCategoryEntry:
+    """Frozen view of a Home Assistant category registry entry."""
+
+    category_id: str
+    scope: str
+    name: str
+    icon: str | None
+    created_at: str | None
+    modified_at: str | None
+
+    def __llm_sandbox_json__(self) -> JsonValueType:
+        return cast(
+            JsonValueType,
+            {
+                "category_id": self.category_id,
+                "scope": self.scope,
+                "name": self.name,
+                "icon": self.icon,
+                "created_at": self.created_at,
+                "modified_at": self.modified_at,
+            },
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class SafeIssueEntry:
+    """Frozen view of a Home Assistant repairs issue entry."""
+
+    issue_id: str
+    domain: str
+    severity: str | None
+    active: bool
+    dismissed_version: str | None
+    translation_key: str | None
+    translation_placeholders: dict[str, str] | None
+    created: str | None
+
+    def __llm_sandbox_json__(self) -> JsonValueType:
+        return cast(
+            JsonValueType,
+            {
+                "issue_id": self.issue_id,
+                "domain": self.domain,
+                "severity": self.severity,
+                "active": self.active,
+                "dismissed_version": self.dismissed_version,
+                "translation_key": self.translation_key,
+                "translation_placeholders": self.translation_placeholders,
+                "created": self.created,
+            },
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class SafeConfigEntry:
+    """Frozen, secret-stripped view of a Home Assistant config entry.
+
+    Only non-sensitive metadata is exposed. ``data``, ``options``,
+    ``runtime_data``, and ``subentries`` (which may contain credentials) are
+    intentionally absent and never reach the Monty sandbox.
+    """
+
+    entry_id: str
+    domain: str
+    title: str
+    source: str
+    state: str
+    unique_id: str | None
+    disabled_by: str | None
+    reason: str | None
+
+    def __llm_sandbox_json__(self) -> JsonValueType:
+        return cast(
+            JsonValueType,
+            {
+                "entry_id": self.entry_id,
+                "domain": self.domain,
+                "title": self.title,
+                "source": self.source,
+                "state": self.state,
+                "unique_id": self.unique_id,
+                "disabled_by": self.disabled_by,
+                "reason": self.reason,
+            },
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class SafeUnitSystem:
     """Frozen view of Home Assistant unit-system preferences."""
 
@@ -367,4 +484,8 @@ class HomeSnapshot:
     services: dict[str, tuple[str, ...]]
     services_supports_response: dict[str, dict[str, str]]
     indexes: SnapshotIndexes
+    labels: dict[str, SafeLabelEntry]
+    categories: dict[str, dict[str, SafeCategoryEntry]]
+    issues: list[SafeIssueEntry]
+    config_entries: list[SafeConfigEntry]
     services_schema: Mapping[str, Mapping[str, ServiceSchemaBrief]] = field(default_factory=dict)

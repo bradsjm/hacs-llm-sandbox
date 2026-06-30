@@ -8,13 +8,19 @@ combined additively over state-bearing entity ids, and the service catalog is
 never filtered.
 """
 
+from typing import cast
+
 import voluptuous as vol
 from homeassistant.components.homeassistant.exposed_entities import async_should_expose
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, State
 from homeassistant.helpers import area_registry as ar
+from homeassistant.helpers import category_registry as cr_core
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import floor_registry as fr
+from homeassistant.helpers import issue_registry as ir
+from homeassistant.helpers import label_registry as lr
 from homeassistant.helpers.service import async_get_cached_service_description
 from homeassistant.util import dt as dt_util
 
@@ -22,10 +28,14 @@ from .models import (
     DEFAULT_SCOPE,
     HomeSnapshot,
     SafeAreaEntry,
+    SafeCategoryEntry,
     SafeConfig,
+    SafeConfigEntry,
     SafeContext,
     SafeDeviceEntry,
     SafeFloorEntry,
+    SafeIssueEntry,
+    SafeLabelEntry,
     SafeRegistryEntry,
     SafeState,
     SafeUnitSystem,
@@ -48,12 +58,22 @@ def build_snapshot(
     device_registry = dr.async_get(hass)
     area_registry = ar.async_get(hass)
     floor_registry = fr.async_get(hass)
+    label_registry = lr.async_get(hass)
+    category_registry = cr_core.async_get(hass)
+    issue_registry = ir.async_get(hass)
 
     states = {s.entity_id: _safe_state(s) for s in hass.states.async_all()}
     entities = {entry.entity_id: _safe_entity(entry) for entry in entity_registry.entities.values()}
     devices = {device.id: _safe_device(device) for device in device_registry.devices.values()}
     areas = {area.id: _safe_area(area) for area in area_registry.async_list_areas()}
     floors = {floor.floor_id: _safe_floor(floor) for floor in floor_registry.async_list_floors()}
+    labels = {label.label_id: _safe_label(label) for label in label_registry.async_list_labels()}
+    categories = {
+        scope: {cid: _safe_category(scope, cat) for cid, cat in entries.items()}
+        for scope, entries in category_registry.categories.items()
+    }
+    issues = [_safe_issue(issue) for issue in issue_registry.issues.values()]
+    config_entries = [_safe_config_entry(entry) for entry in hass.config_entries.async_entries()]
 
     service_catalog, service_response, services_schema = _safe_services(hass)
 
@@ -82,6 +102,10 @@ def build_snapshot(
         services=service_catalog,
         services_supports_response=service_response,
         indexes=indexes,
+        labels=labels,
+        categories=categories,
+        issues=issues,
+        config_entries=config_entries,
         services_schema=services_schema,
     )
 
@@ -258,6 +282,60 @@ def _safe_floor(floor: fr.FloorEntry) -> SafeFloorEntry:
         icon=floor.icon,
         created_at=_iso(floor.created_at),
         modified_at=_iso(floor.modified_at),
+    )
+
+
+def _safe_label(label: lr.LabelEntry) -> SafeLabelEntry:
+    """Convert a live label registry entry into a frozen safe record."""
+    return SafeLabelEntry(
+        label_id=label.label_id,
+        name=label.name,
+        normalized_name=label.normalized_name,
+        description=label.description,
+        color=label.color,
+        icon=label.icon,
+        created_at=_iso(label.created_at),
+        modified_at=_iso(label.modified_at),
+    )
+
+
+def _safe_category(scope: str, category: cr_core.CategoryEntry) -> SafeCategoryEntry:
+    """Convert a live scoped category entry into a frozen safe record."""
+    return SafeCategoryEntry(
+        category_id=category.category_id,
+        scope=scope,
+        name=category.name,
+        icon=category.icon,
+        created_at=_iso(category.created_at),
+        modified_at=_iso(category.modified_at),
+    )
+
+
+def _safe_issue(issue: ir.IssueEntry) -> SafeIssueEntry:
+    """Convert a live repairs issue entry into a frozen safe record."""
+    return SafeIssueEntry(
+        issue_id=issue.issue_id,
+        domain=issue.domain,
+        severity=_enum_value(issue.severity),
+        active=issue.active,
+        dismissed_version=issue.dismissed_version,
+        translation_key=issue.translation_key,
+        translation_placeholders=(dict(issue.translation_placeholders) if issue.translation_placeholders else None),
+        created=_iso(issue.created),
+    )
+
+
+def _safe_config_entry(entry: ConfigEntry[object]) -> SafeConfigEntry:
+    """Convert a live config entry into a frozen, secret-stripped record."""
+    return SafeConfigEntry(
+        entry_id=entry.entry_id,
+        domain=entry.domain,
+        title=entry.title,
+        source=entry.source,
+        state=cast(str, _enum_value(entry.state)),
+        unique_id=entry.unique_id,
+        disabled_by=_enum_value(entry.disabled_by),
+        reason=entry.reason,
     )
 
 

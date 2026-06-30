@@ -35,3 +35,21 @@ MAX_HELPER_CALL_BUDGET: Final = 100
 
 # LLM tool name. Mirrors the Home Assistant convention for code execution tools.
 TOOL_EXECUTE_HOME_CODE: Final = "execute_home_code"
+TOOL_GET_HISTORY: Final = "get_history"
+TOOL_GET_STATISTICS: Final = "get_statistics"
+TOOL_GET_LOGBOOK: Final = "get_logbook"
+
+# Recorder-backed tool windowing.
+DEFAULT_HISTORY_WINDOW_HOURS: Final = 1
+DEFAULT_LOGBOOK_WINDOW_HOURS: Final = 24
+MAX_RECORDER_LOOKBACK_HOURS: Final = 24
+DEFAULT_STATISTICS_WINDOW_HOURS: Final = 24
+MAX_STATISTICS_LOOKBACK_HOURS: Final = 24 * 30
+
+# Recorder-backed tool result budgets.
+MAX_HISTORY_STATES: Final = 1000
+MAX_LOGBOOK_ENTRIES: Final = 200
+MAX_STATISTICS_ROWS: Final = 1000
+
+# Recorder-backed tool input caps.
+MAX_RECORDER_ENTITY_IDS: Final = 20
