@@ -41,15 +41,15 @@ AVAILABLE_GLOBALS = [
 def suggested_methods() -> list[str]:
     """Return suggested methods for code-error payloads."""
     return [
-        "hass.states.get('light.bedroom')",
+        "hass.states.get('<entity_id>')",
         "hass.states.async_all('light')",
         "er.async_entries_for_area(er.async_get(hass), '<area_id>')",
         "er.async_entries_for_device(er.async_get(hass), '<device_id>')",
         "list(device_registry.devices.values())",
-        "area_registry.async_get_area_by_name('Bedroom')",
+        "area_registry.async_get_area_by_name('<area_name>')",
         "[(area.name, area.id) for area in area_registry.async_list_areas()]",
         "[(f.name, f.floor_id) for f in floor_registry.async_list_floors()]",
-        "label_registry.async_get_label_by_name('Favourites')",
+        "label_registry.async_get_label_by_name('<label_name>')",
         "[(l.name, l.label_id) for l in label_registry.async_list_labels()]",
         "category_registry.async_list_categories(scope='<scope>')",
         "device_registry.async_get('<device_id>')",
@@ -62,7 +62,7 @@ def suggested_methods() -> list[str]:
         "hass.services.has_service('light', 'turn_on')",
         "hass.services.async_services_for_domain('light')",
         "hass.services.supports_response('light', 'turn_on')",
-        "await hass.services.async_call('light', 'turn_on', {'brightness_pct': 80}, target={'entity_id': 'light.bedroom'})  # performs the call",
+        "await hass.services.async_call('<domain>', '<service>', {'<field>': <value>}, target={'entity_id': '<entity_id>'})  # performs the call",
     ]
 
 

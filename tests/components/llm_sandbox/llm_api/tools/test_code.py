@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 import voluptuous as vol
 from custom_components.llm_sandbox.llm_api import executor
-from custom_components.llm_sandbox.llm_api.api import _execute
+from custom_components.llm_sandbox.llm_api.tools.code import _execute
 from homeassistant.core import Context, HomeAssistant, SupportsResponse
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er

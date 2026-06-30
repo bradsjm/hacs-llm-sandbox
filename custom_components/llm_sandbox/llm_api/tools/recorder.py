@@ -20,7 +20,7 @@ from homeassistant.helpers.recorder import DATA_INSTANCE
 from homeassistant.util import dt as dt_util
 from homeassistant.util.json import JsonObjectType
 
-from ..const import (
+from ...const import (
     DEFAULT_HISTORY_WINDOW_HOURS,
     DEFAULT_LOGBOOK_WINDOW_HOURS,
     DEFAULT_STATISTICS_WINDOW_HOURS,
@@ -34,13 +34,14 @@ from ..const import (
     TOOL_GET_LOGBOOK,
     TOOL_GET_STATISTICS,
 )
-from ..runtime import SandboxSettings
-from ..snapshot import build_snapshot
-from ..snapshot.models import HomeSnapshot
-from ..types import TranslationPlaceholders
-from .errors import tool_error_envelope, tool_error_from_exception
-from .executor_support import json_safe
-from .prompts import build_get_history_description, build_get_logbook_description, build_get_statistics_description
+from ...runtime import SandboxSettings
+from ...snapshot import build_snapshot
+from ...snapshot.models import HomeSnapshot
+from ...types import TranslationPlaceholders
+from ..errors import tool_error_envelope, tool_error_from_exception
+from ..executor_support import json_safe
+from ..prompts import build_get_history_description, build_get_logbook_description, build_get_statistics_description
+from ._support import _require_loaded_entry, _require_loaded_entry_error
 
 RECORDER_UNAVAILABLE = "recorder_unavailable"
 ENTITY_NOT_VISIBLE = "entity_not_visible"
@@ -99,8 +100,6 @@ class _RecorderTool(llm.Tool):
 
         if not _recorder_available(hass):
             return tool_error_envelope(RECORDER_UNAVAILABLE, {})
-
-        from .api import _require_loaded_entry, _require_loaded_entry_error
 
         setup_error = _require_loaded_entry_error(hass, self.entry_id)
         if setup_error is not None:

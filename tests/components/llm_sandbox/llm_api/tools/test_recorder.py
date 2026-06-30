@@ -5,8 +5,8 @@ from typing import cast
 
 import pytest
 from custom_components.llm_sandbox.const import TOOL_GET_HISTORY, TOOL_GET_LOGBOOK, TOOL_GET_STATISTICS
-from custom_components.llm_sandbox.llm_api import recorder_tools
-from custom_components.llm_sandbox.llm_api.recorder_tools import GetHistoryTool, GetLogbookTool, GetStatisticsTool
+from custom_components.llm_sandbox.llm_api.tools import recorder
+from custom_components.llm_sandbox.llm_api.tools.recorder import GetHistoryTool, GetLogbookTool, GetStatisticsTool
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.db_schema import Statistics
 from homeassistant.components.recorder.models import StatisticData, StatisticMeanType, StatisticMetaData
@@ -216,7 +216,7 @@ async def test_history_truncates_large_result(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """History output keeps the newest rows and reports truncation."""
-    monkeypatch.setattr(recorder_tools, "MAX_HISTORY_STATES", 3)
+    monkeypatch.setattr(recorder, "MAX_HISTORY_STATES", 3)
     for index in range(6):
         hass.states.async_set("light.bedroom", str(index), {"friendly_name": "Bedroom Light"})
         await hass.async_block_till_done()
