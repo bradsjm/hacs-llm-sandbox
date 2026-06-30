@@ -6,7 +6,9 @@ This repository contains the `llm_sandbox` Home Assistant custom integration. It
 
 ## North Star
 
-The goal of `execute_home_code` is not to make the language model write perfect python. It must follow Postel's law and always focus on the big picture goal of helping the language model execute the desired functionality ideally in a single call but with a realistic goal of no more than 2 calls. For that reason, the tool should make every reasonable accomodation towards that goal in both success and failure scenarios by providing actionable error messages designed to help the next call be successful and by internally handling the variety of ways the LLM may write code.
+`execute_home_code` should help an LLM complete the user's Home Assistant task, not force the LLM to write perfect Python. Treat the submitted code as short-lived task glue: interpret reasonable intent, accept common LLM coding patterns, and prefer "do what the user likely meant" over strict rejection when it is safe to do so.
+
+Design for success in one call, and recovery in no more than one follow-up call. On success, return the useful result directly. On failure, return actionable feedback that tells the next LLM call exactly what went wrong, what names or APIs are available, and what concrete change is likely to work. Do not require the LLM to learn integration-specific tricks when normal Home Assistant knowledge can be adapted safely inside the tool.
 
 ## Non-Negotiables
 
