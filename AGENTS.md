@@ -4,12 +4,6 @@
 
 This repository contains the `llm_sandbox` Home Assistant custom integration. It exposes Assist LLM API tools — `execute_home_code`, `get_history`, `get_statistics`, and `get_logbook` — that run bounded Python/Monty code and bounded recorder queries against a fresh, frozen, visibility-filtered Home Assistant snapshot. The live `hass` object, registries, event bus, auth, config, filesystem, network, and OS/process APIs never reach Monty; only frozen facade objects built from snapshot records do. Service calls are read-only by default and, when enabled, execute live through a private runtime invoker after snapshot validation.
 
-## North Star
-
-`execute_home_code` should help an LLM complete the user's Home Assistant task, not force the LLM to write perfect Python. Treat the submitted code as short-lived task glue: interpret reasonable intent, accept common LLM coding patterns, and prefer "do what the user likely meant" over strict rejection when it is safe to do so.
-
-Design for success in one call, and recovery in no more than one follow-up call. On success, return the useful result directly. On failure, return actionable feedback that tells the next LLM call exactly what went wrong, what names or APIs are available, and what concrete change is likely to work. Do not require the LLM to learn integration-specific tricks when normal Home Assistant knowledge can be adapted safely inside the tool.
-
 ## Non-Negotiables
 
 - Never pass live Home Assistant objects, live registries, service handles, event bus, config, auth, filesystem, network, or OS/process APIs into Monty.
