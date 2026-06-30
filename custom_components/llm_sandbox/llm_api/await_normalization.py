@@ -21,7 +21,7 @@ REWROTE_SYNC_SUBSCRIPT = "rewrote_sync_subscript"
 
 # Top-level globals exposed to Monty whose attribute access returns a plain
 # (non-coroutine) value. These cover the snapshot-backed facades: state machine,
-# registries, module facades (er/dr/ar/fr), and the hass root.
+# unified registry facades, date/time facades, context, and the hass root.
 _SYNC_SUBSCRIPT_GLOBALS = frozenset(
     {
         "hass",
@@ -30,10 +30,14 @@ _SYNC_SUBSCRIPT_GLOBALS = frozenset(
         "dr",
         "ar",
         "fr",
+        "lr",
+        "cr",
         "entity_registry",
         "device_registry",
         "area_registry",
         "floor_registry",
+        "label_registry",
+        "category_registry",
         "date",
         "datetime",
         "llm_context",

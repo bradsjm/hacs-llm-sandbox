@@ -117,19 +117,30 @@ class SafeStateMachine:
 
 
 # ---------------------------------------------------------------------------
-# Entity registry (instance facade: entity_registry global)
+# Entity registry (er/entity_registry globals)
 # ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True, slots=True)
 class SafeEntityRegistry:
-    """Read-only entity registry facade mirroring ``EntityRegistry`` instance methods."""
+    """Read-only entity registry facade mirroring HA module and instance methods."""
 
     entities: Mapping[str, SafeRegistryEntry]
+    indexes: SnapshotIndexes
 
-    def async_get(self, entity_id: str) -> SafeRegistryEntry | None:
-        """Return the registry entry for ``entity_id``, or None."""
-        return self.entities.get(entity_id)
+    def async_get(self, key: object = None) -> Any:
+        """Return an entry for string IDs, otherwise return this registry.
+
+        This accepts both HA idioms: ``er.async_get(hass)`` resolves the
+        registry, while ``entity_registry.async_get('<entity_id>')`` resolves a
+        single entry. Treating every non-string as registry resolution avoids
+        leaking hash/type errors when LLMs pass the HA ``hass`` facade.
+        """
+        if isinstance(key, str):
+            # String arguments mean the instance lookup idiom.
+            return self.entities.get(key)
+        # Non-string arguments include hass/module ceremony; return the registry.
+        return self
 
     def async_get_entity_id(self, domain: str, platform: str, unique_id: str) -> str | None:
         """Return the entity_id matching (domain, platform, unique_id), or None."""
@@ -141,24 +152,6 @@ class SafeEntityRegistry:
             ):
                 return entry.entity_id
         return None
-
-
-# ---------------------------------------------------------------------------
-# Entity registry (module facade: er global)
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True, slots=True)
-class SafeEntityModule:
-    """Module-level entity registry facade mirroring ``er`` (entity_registry)."""
-
-    registry: SafeEntityRegistry
-    entities: Mapping[str, SafeRegistryEntry]
-    indexes: SnapshotIndexes
-
-    def async_get(self, _hass: object) -> SafeEntityRegistry:
-        """Return the entity registry instance (HA parity: ``er.async_get(hass)``)."""
-        return self.registry
 
     def async_entries_for_area(
         self,
@@ -220,7 +213,8 @@ class SafeEntityModule:
         unique_id: str,
     ) -> str | None:
         """Return the entity_id matching (domain, platform, unique_id), or None."""
-        return registry.async_get_entity_id(domain, platform, unique_id)
+        del registry
+        return self.async_get_entity_id(domain, platform, unique_id)
 
     def async_entries(
         self,
@@ -232,19 +226,24 @@ class SafeEntityModule:
 
 
 # ---------------------------------------------------------------------------
-# Device registry (instance facade: device_registry global)
+# Device registry (dr/device_registry globals)
 # ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True, slots=True)
 class SafeDeviceRegistry:
-    """Read-only device registry facade mirroring ``DeviceRegistry`` instance methods."""
+    """Read-only device registry facade mirroring HA module and instance methods."""
 
     devices: Mapping[str, SafeDeviceEntry]
+    indexes: SnapshotIndexes
 
-    def async_get(self, device_id: str) -> SafeDeviceEntry | None:
-        """Return the device entry for ``device_id``, or None."""
-        return self.devices.get(device_id)
+    def async_get(self, key: object = None) -> Any:
+        """Return an entry for string IDs, otherwise return this registry."""
+        if isinstance(key, str):
+            # String arguments mean the instance lookup idiom.
+            return self.devices.get(key)
+        # Non-string arguments include hass/module ceremony; return the registry.
+        return self
 
     def async_get_device(
         self,
@@ -260,19 +259,6 @@ class SafeDeviceRegistry:
             if conn_set and conn_set.intersection(device.connections):
                 return device
         return None
-
-
-@dataclass(frozen=True, slots=True)
-class SafeDeviceModule:
-    """Module-level device registry facade mirroring ``dr`` (device_registry)."""
-
-    registry: SafeDeviceRegistry
-    devices: Mapping[str, SafeDeviceEntry]
-    indexes: SnapshotIndexes
-
-    def async_get(self, _hass: object) -> SafeDeviceRegistry:
-        """Return the device registry instance (HA parity: ``dr.async_get(hass)``)."""
-        return self.registry
 
     def async_entries_for_area(
         self,
@@ -315,6 +301,10 @@ class SafeAreaRegistry:
 
     areas: Mapping[str, SafeAreaEntry]
 
+    def async_get(self, _key: object = None) -> Any:
+        """Return this registry (HA parity: ``ar.async_get(hass)``)."""
+        return self
+
     def async_get_area(self, area_id: str) -> SafeAreaEntry | None:
         """Return the area entry for ``area_id``, or None."""
         return self.areas.get(area_id)
@@ -334,17 +324,6 @@ class SafeAreaRegistry:
         return list(self.areas.values())
 
 
-@dataclass(frozen=True, slots=True)
-class SafeAreaModule:
-    """Module-level area registry facade mirroring ``ar`` (area_registry)."""
-
-    registry: SafeAreaRegistry
-
-    def async_get(self, _hass: object) -> SafeAreaRegistry:
-        """Return the area registry instance (HA parity: ``ar.async_get(hass)``)."""
-        return self.registry
-
-
 # ---------------------------------------------------------------------------
 # Floor registry (instance facade: floor_registry global)
 # ---------------------------------------------------------------------------
@@ -355,6 +334,10 @@ class SafeFloorRegistry:
     """Read-only floor registry facade mirroring ``FloorRegistry`` instance methods."""
 
     floors: Mapping[str, SafeFloorEntry]
+
+    def async_get(self, _key: object = None) -> Any:
+        """Return this registry (HA parity: ``fr.async_get(hass)``)."""
+        return self
 
     def async_get_floor(self, floor_id: str) -> SafeFloorEntry | None:
         """Return the floor entry for ``floor_id``, or None."""
@@ -375,17 +358,6 @@ class SafeFloorRegistry:
         return list(self.floors.values())
 
 
-@dataclass(frozen=True, slots=True)
-class SafeFloorModule:
-    """Module-level floor registry facade mirroring ``fr`` (floor_registry)."""
-
-    registry: SafeFloorRegistry
-
-    def async_get(self, _hass: object) -> SafeFloorRegistry:
-        """Return the floor registry instance (HA parity: ``fr.async_get(hass)``)."""
-        return self.registry
-
-
 # ---------------------------------------------------------------------------
 # Label registry (instance facade: label_registry global)
 # ---------------------------------------------------------------------------
@@ -396,6 +368,10 @@ class SafeLabelRegistry:
     """Read-only label registry facade mirroring ``LabelRegistry`` instance methods."""
 
     labels: Mapping[str, SafeLabelEntry]
+
+    def async_get(self, _key: object = None) -> Any:
+        """Return this registry (HA parity: ``lr.async_get(hass)``)."""
+        return self
 
     def async_get_label(self, label_id: str) -> SafeLabelEntry | None:
         """Return the label entry for ``label_id``, or None."""
@@ -414,17 +390,6 @@ class SafeLabelRegistry:
         return list(self.labels.values())
 
 
-@dataclass(frozen=True, slots=True)
-class SafeLabelModule:
-    """Module-level label registry facade mirroring ``lr`` (label_registry)."""
-
-    registry: SafeLabelRegistry
-
-    def async_get(self, _hass: object) -> SafeLabelRegistry:
-        """Return the label registry instance (HA parity: ``lr.async_get(hass)``)."""
-        return self.registry
-
-
 # ---------------------------------------------------------------------------
 # Category registry (instance facade: category_registry global)
 # ---------------------------------------------------------------------------
@@ -436,6 +401,10 @@ class SafeCategoryRegistry:
 
     categories: Mapping[str, Mapping[str, SafeCategoryEntry]]
 
+    def async_get(self, _key: object = None) -> Any:
+        """Return this registry (HA parity: ``cr.async_get(hass)``)."""
+        return self
+
     def async_get_category(self, *, scope: str, category_id: str) -> SafeCategoryEntry | None:
         """Return the category entry for ``scope``/``category_id``, or None."""
         return self.categories.get(scope, {}).get(category_id)
@@ -443,17 +412,6 @@ class SafeCategoryRegistry:
     def async_list_categories(self, *, scope: str) -> list[SafeCategoryEntry]:
         """Return all category entries within ``scope``."""
         return list(self.categories.get(scope, {}).values())
-
-
-@dataclass(frozen=True, slots=True)
-class SafeCategoryModule:
-    """Module-level category registry facade mirroring ``cr`` (category_registry)."""
-
-    registry: SafeCategoryRegistry
-
-    def async_get(self, _hass: object) -> SafeCategoryRegistry:
-        """Return the category registry instance (HA parity: ``cr.async_get(hass)``)."""
-        return self.registry
 
 
 # ---------------------------------------------------------------------------
@@ -1065,12 +1023,12 @@ def build_facades(
     """Build all Monty-visible facade globals from a snapshot.
 
     Returns the input dict keyed by global name: ``hass``, ``states``,
-    registry/module facades, ``repairs``, ``persistent_notifications``,
+    registry facades, ``repairs``, ``persistent_notifications``,
     ``config_entries``, date/time facades, and ``now``. ``llm_context`` is
     added separately by the tool caller (it depends on the live request).
     """
-    entity_registry = SafeEntityRegistry(entities=snapshot.entities)
-    device_registry = SafeDeviceRegistry(devices=snapshot.devices)
+    entity_registry = SafeEntityRegistry(entities=snapshot.entities, indexes=snapshot.indexes)
+    device_registry = SafeDeviceRegistry(devices=snapshot.devices, indexes=snapshot.indexes)
     area_registry = SafeAreaRegistry(areas=snapshot.areas)
     floor_registry = SafeFloorRegistry(floors=snapshot.floors)
     label_registry = SafeLabelRegistry(labels=snapshot.labels)
@@ -1103,20 +1061,12 @@ def build_facades(
         "states": state_machine,
         "date": date_facade,
         "datetime": datetime_facade,
-        "er": SafeEntityModule(
-            registry=entity_registry,
-            entities=snapshot.entities,
-            indexes=snapshot.indexes,
-        ),
-        "dr": SafeDeviceModule(
-            registry=device_registry,
-            devices=snapshot.devices,
-            indexes=snapshot.indexes,
-        ),
-        "ar": SafeAreaModule(registry=area_registry),
-        "fr": SafeFloorModule(registry=floor_registry),
-        "lr": SafeLabelModule(registry=label_registry),
-        "cr": SafeCategoryModule(registry=category_registry),
+        "er": entity_registry,
+        "dr": device_registry,
+        "ar": area_registry,
+        "fr": floor_registry,
+        "lr": label_registry,
+        "cr": category_registry,
         "entity_registry": entity_registry,
         "device_registry": device_registry,
         "area_registry": area_registry,

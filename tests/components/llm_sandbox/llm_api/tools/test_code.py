@@ -38,20 +38,33 @@ async def test_read_state_and_registry_end_to_end(
     """Verify Monty can read states and registries through HA-native facades."""
     code = """
 bedroom = area_registry.async_get_area_by_name("Bedroom")
-result = "No match"
+er = entity_registry
+bedroom_states = []
 if bedroom is not None:
-    for entry in er.async_entries_for_area(er.async_get(hass), bedroom.id):
+    bedroom_entries = er.async_entries_for_area(er.async_get(hass), bedroom.id)
+    for entry in bedroom_entries:
         if entry.entity_id.split(".")[0] != "light":
             continue
         st = hass.states.get(entry.entity_id)
-        if st is not None and st.state == "on":
-            result = "Yes"
+        if st is not None:
+            bedroom_states.append({
+                "entity_id": entry.entity_id,
+                "state": st.state,
+                "attributes": {k: v for k, v in st.attributes.items() if k in ("friendly_name", "brightness")},
+            })
+result = bedroom_states
 """
 
     result = await _run_code(hass, loaded_entry, code)
 
     assert result["execution"]["status"] == "ok"
-    assert result["output"] == "Yes"
+    assert result["output"] == [
+        {
+            "entity_id": "light.bedroom",
+            "state": "on",
+            "attributes": {"friendly_name": "Bedroom Light"},
+        }
+    ]
 
 
 async def test_state_machine_sugar_subscript_and_contains(

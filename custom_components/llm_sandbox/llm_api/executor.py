@@ -37,24 +37,18 @@ from .executor_support import (
     validation_error,
 )
 from .facade_views import (
-    SafeAreaModule,
     SafeAreaRegistry,
-    SafeCategoryModule,
     SafeCategoryRegistry,
     SafeConfigEntries,
     SafeDate,
     SafeDateFacade,
     SafeDateTime,
     SafeDateTimeFacade,
-    SafeDeviceModule,
     SafeDeviceRegistry,
-    SafeEntityModule,
     SafeEntityRegistry,
-    SafeFloorModule,
     SafeFloorRegistry,
     SafeHass,
     SafeIssueRegistry,
-    SafeLabelModule,
     SafeLabelRegistry,
     SafeLLMContext,
     SafeNotificationRegistry,
@@ -89,13 +83,6 @@ DATACLASS_REGISTRY: list[type] = [
     SafeIssueRegistry,
     SafeNotificationRegistry,
     SafeConfigEntries,
-    # Module facades (er/dr/ar/fr)
-    SafeEntityModule,
-    SafeDeviceModule,
-    SafeAreaModule,
-    SafeFloorModule,
-    SafeLabelModule,
-    SafeCategoryModule,
     # LLM context
     SafeLLMContext,
     # Date/datetime facades (value types + class facades)

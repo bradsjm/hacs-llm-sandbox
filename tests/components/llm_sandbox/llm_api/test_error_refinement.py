@@ -33,6 +33,7 @@ def test_refine_reclassifies_disabled_discovery_builtin_with_attributes(name: st
 
     assert refined_kind == "NameError"
     assert available_attributes == [
+        "async_get",
         "async_get_floor",
         "async_get_floor_by_name",
         "async_list_floors",
@@ -79,6 +80,7 @@ def test_refine_unknown_name_keeps_message_no_attributes() -> None:
             "SafeFloorRegistry",
             "floor_registry.nope",
             [
+                "async_get",
                 "async_get_floor",
                 "async_get_floor_by_name",
                 "async_list_floors",
