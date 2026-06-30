@@ -316,6 +316,28 @@ async def test_snapshot_includes_repairs_issues(hass: HomeAssistant) -> None:
     assert isinstance(issue.created, str)
 
 
+async def test_snapshot_includes_persistent_notifications(hass: HomeAssistant) -> None:
+    from homeassistant.components.persistent_notification import async_create
+
+    assert build_snapshot(hass).notifications == []
+
+    async_create(
+        hass,
+        "Disk almost full",
+        title="Storage warning",
+        notification_id="disk_full",
+    )
+
+    snapshot = build_snapshot(hass)
+
+    matches = [n for n in snapshot.notifications if n.notification_id == "disk_full"]
+    assert matches
+    notification = matches[0]
+    assert notification.title == "Storage warning"
+    assert notification.message == "Disk almost full"
+    assert isinstance(notification.created_at, str)
+
+
 async def test_snapshot_includes_config_entries_without_secrets(hass: HomeAssistant) -> None:
     entry = MockConfigEntry(
         domain="test_secret",

@@ -14,10 +14,11 @@ Service calls through `hass.services.async_call(...)` are read-only by default. 
 - `get_statistics` reads bounded long-term recorder statistics for visible entity-backed statistic IDs.
 - `get_logbook` reads bounded logbook events for visible entities.
 - Fresh per-call snapshot of states, entity/device/area/floor registries, and the service catalog.
-- HA-style read globals in Monty: `hass`, `states`, `er`, `dr`, `ar`, `fr`, `lr`, `cr`, `entity_registry`, `device_registry`, `area_registry`, `floor_registry`, `label_registry`, `category_registry`, `repairs`, `config_entries`, `date`, `datetime`, `now`, and `llm_context`. The `date` and `datetime` globals are frozen snapshot-backed facades.
+- HA-style read globals in Monty: `hass`, `states`, `er`, `dr`, `ar`, `fr`, `lr`, `cr`, `entity_registry`, `device_registry`, `area_registry`, `floor_registry`, `label_registry`, `category_registry`, `repairs`, `persistent_notifications`, `config_entries`, `date`, `datetime`, `now`, and `llm_context`. The `date` and `datetime` globals are frozen snapshot-backed facades.
 - Label registry snapshot exposed via `lr` / `label_registry` (read-only, list and by-name lookup).
 - Category registry snapshot exposed via `cr` / `category_registry` (read-only, scope-keyed list and id lookup).
 - Repairs issues (issue registry) exposed via `repairs` (read-only list, filtered by domain/severity/active/dismissed).
+- Persistent notifications exposed via `persistent_notifications` (read-only list and lookup by `notification_id`), read from the notification store.
 - Config entries exposed via `config_entries` with credentials (data/options) stripped; lookup by entry_id and filter by domain.
 - `llm_context` includes the initiating `device_id` plus derived `area_id`, `area_name`, `floor_id`, and `floor_name` when Home Assistant provides a satellite device.
 - Live service calls through `await hass.services.async_call(...)` when actions are enabled; per-call outcomes are returned in `actions`.

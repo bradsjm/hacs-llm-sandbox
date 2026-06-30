@@ -12,6 +12,8 @@ from typing import cast
 
 import voluptuous as vol
 from homeassistant.components.homeassistant.exposed_entities import async_should_expose
+from homeassistant.components.persistent_notification import DOMAIN as PERSISTENT_NOTIFICATION_DOMAIN
+from homeassistant.components.persistent_notification import Notification
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, State
 from homeassistant.helpers import area_registry as ar
@@ -36,6 +38,7 @@ from .models import (
     SafeFloorEntry,
     SafeIssueEntry,
     SafeLabelEntry,
+    SafeNotificationEntry,
     SafeRegistryEntry,
     SafeState,
     SafeUnitSystem,
@@ -73,6 +76,12 @@ def build_snapshot(
         for scope, entries in category_registry.categories.items()
     }
     issues = [_safe_issue(issue) for issue in issue_registry.issues.values()]
+    notification_store = hass.data.get(PERSISTENT_NOTIFICATION_DOMAIN)
+    notifications = (
+        [_safe_notification(notification) for notification in notification_store.values()]
+        if isinstance(notification_store, dict)
+        else []
+    )
     config_entries = [_safe_config_entry(entry) for entry in hass.config_entries.async_entries()]
 
     service_catalog, service_response, services_schema = _safe_services(hass)
@@ -105,6 +114,7 @@ def build_snapshot(
         labels=labels,
         categories=categories,
         issues=issues,
+        notifications=notifications,
         config_entries=config_entries,
         services_schema=services_schema,
     )
@@ -322,6 +332,16 @@ def _safe_issue(issue: ir.IssueEntry) -> SafeIssueEntry:
         translation_key=issue.translation_key,
         translation_placeholders=(dict(issue.translation_placeholders) if issue.translation_placeholders else None),
         created=_iso(issue.created),
+    )
+
+
+def _safe_notification(notification: Notification) -> SafeNotificationEntry:
+    """Convert a live persistent notification into a frozen safe record."""
+    return SafeNotificationEntry(
+        notification_id=notification["notification_id"],
+        title=notification["title"],
+        message=notification["message"],
+        created_at=_iso(notification["created_at"]),
     )
 
 

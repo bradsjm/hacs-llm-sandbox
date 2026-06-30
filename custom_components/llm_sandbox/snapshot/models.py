@@ -323,6 +323,27 @@ class SafeIssueEntry:
 
 
 @dataclass(frozen=True, slots=True)
+class SafeNotificationEntry:
+    """Frozen view of a Home Assistant persistent notification."""
+
+    notification_id: str
+    title: str | None
+    message: str
+    created_at: str | None
+
+    def __llm_sandbox_json__(self) -> JsonValueType:
+        return cast(
+            JsonValueType,
+            {
+                "notification_id": self.notification_id,
+                "title": self.title,
+                "message": self.message,
+                "created_at": self.created_at,
+            },
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class SafeConfigEntry:
     """Frozen, secret-stripped view of a Home Assistant config entry.
 
@@ -487,5 +508,6 @@ class HomeSnapshot:
     labels: dict[str, SafeLabelEntry]
     categories: dict[str, dict[str, SafeCategoryEntry]]
     issues: list[SafeIssueEntry]
+    notifications: list[SafeNotificationEntry]
     config_entries: list[SafeConfigEntry]
     services_schema: Mapping[str, Mapping[str, ServiceSchemaBrief]] = field(default_factory=dict)

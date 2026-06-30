@@ -39,6 +39,7 @@ from ..snapshot.models import (
     SafeFloorEntry,
     SafeIssueEntry,
     SafeLabelEntry,
+    SafeNotificationEntry,
     SafeRegistryEntry,
     SafeState,
     ServiceSchemaBrief,
@@ -492,6 +493,29 @@ class SafeIssueRegistry:
     def async_dismissed_issues(self) -> list[SafeIssueEntry]:
         """Return issues the user has dismissed."""
         return [issue for issue in self.issues if issue.dismissed_version is not None]
+
+
+# ---------------------------------------------------------------------------
+# Persistent notifications (instance facade: persistent_notifications global)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class SafeNotificationRegistry:
+    """Read-only facade over the frozen persistent-notification snapshot."""
+
+    notifications: list[SafeNotificationEntry]
+
+    def async_get_notifications(self) -> list[SafeNotificationEntry]:
+        """Return all persistent notifications."""
+        return list(self.notifications)
+
+    def async_get_notification(self, notification_id: str) -> SafeNotificationEntry | None:
+        """Return the persistent notification for ``notification_id``, or None."""
+        for notification in self.notifications:
+            if notification.notification_id == notification_id:
+                return notification
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -1072,9 +1096,9 @@ def build_facades(
     """Build all Monty-visible facade globals from a snapshot.
 
     Returns the input dict keyed by global name: ``hass``, ``states``,
-    ``er``, ``dr``, ``ar``, ``fr``, ``entity_registry``, ``device_registry``,
-    ``area_registry``, ``floor_registry``, and ``now``. ``llm_context`` is added
-    separately by the tool caller (it depends on the live request).
+    registry/module facades, ``repairs``, ``persistent_notifications``,
+    ``config_entries``, date/time facades, and ``now``. ``llm_context`` is
+    added separately by the tool caller (it depends on the live request).
     """
     entity_registry = SafeEntityRegistry(entities=snapshot.entities)
     device_registry = SafeDeviceRegistry(devices=snapshot.devices)
@@ -1083,6 +1107,7 @@ def build_facades(
     label_registry = SafeLabelRegistry(labels=snapshot.labels)
     category_registry = SafeCategoryRegistry(categories=snapshot.categories)
     repairs = SafeIssueRegistry(issues=list(snapshot.issues))
+    persistent_notifications = SafeNotificationRegistry(notifications=list(snapshot.notifications))
     config_entries = SafeConfigEntries(entries=list(snapshot.config_entries))
 
     state_machine = SafeStateMachine(states=snapshot.states)
@@ -1131,6 +1156,7 @@ def build_facades(
         "label_registry": label_registry,
         "category_registry": category_registry,
         "repairs": repairs,
+        "persistent_notifications": persistent_notifications,
         "config_entries": config_entries,
         "now": snapshot.created_at,
     }

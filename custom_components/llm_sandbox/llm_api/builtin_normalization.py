@@ -19,6 +19,7 @@ from ..snapshot.models import (
     SafeFloorEntry,
     SafeIssueEntry,
     SafeLabelEntry,
+    SafeNotificationEntry,
     SafeRegistryEntry,
     SafeState,
 )
@@ -43,6 +44,7 @@ from .facade_views import (
     SafeLabelModule,
     SafeLabelRegistry,
     SafeLLMContext,
+    SafeNotificationRegistry,
     SafeServiceRegistry,
     SafeStateMachine,
 )
@@ -63,6 +65,7 @@ GLOBAL_TYPE_MAP: dict[str, type] = {
     "label_registry": SafeLabelRegistry,
     "category_registry": SafeCategoryRegistry,
     "repairs": SafeIssueRegistry,
+    "persistent_notifications": SafeNotificationRegistry,
     "config_entries": SafeConfigEntries,
     "date": SafeDateFacade,
     "datetime": SafeDateTimeFacade,
@@ -102,6 +105,7 @@ def surface_for_class_name(name: str) -> frozenset[str] | None:
             SafeLabelEntry,
             SafeCategoryEntry,
             SafeIssueEntry,
+            SafeNotificationEntry,
             SafeConfigEntry,
             SafeDate,
             SafeDateTime,

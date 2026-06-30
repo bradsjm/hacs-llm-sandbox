@@ -540,6 +540,7 @@ def _snapshot() -> HomeSnapshot:
         labels={},
         categories={},
         issues=[],
+        notifications=[],
         config_entries=[],
         services_schema={
             "light": {

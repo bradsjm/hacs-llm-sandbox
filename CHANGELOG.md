@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Expose persistent notifications
+
+- Added a `persistent_notifications` Monty global for reading active Home Assistant persistent notifications.
+- Read persistent notifications from the notification store instead of the visibility-filtered state machine.
+
 ### Perform service calls instead of proposing them
 
 - Changed `hass.services.async_call` from propose-only collection to live Home Assistant service invocation when actions are enabled.

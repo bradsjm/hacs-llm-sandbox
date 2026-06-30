@@ -304,6 +304,38 @@ result = {
     assert output["one"] is True
 
 
+async def test_persistent_notifications_read_end_to_end(
+    hass: HomeAssistant,
+    loaded_entry: MockConfigEntry,
+) -> None:
+    from homeassistant.components.persistent_notification import async_create
+
+    async_create(
+        hass,
+        "Disk almost full",
+        title="Storage warning",
+        notification_id="disk_full",
+    )
+    code = """
+notification = persistent_notifications.async_get_notification("disk_full")
+result = {
+    "total": len(persistent_notifications.async_get_notifications()),
+    "one": notification is not None,
+    "title": notification.title if notification else None,
+    "message": notification.message if notification else None,
+}
+"""
+
+    result = await _run_code(hass, loaded_entry, code)
+
+    assert result["execution"]["status"] == "ok"
+    output = result["output"]
+    assert output["total"] >= 1
+    assert output["one"] is True
+    assert output["title"] == "Storage warning"
+    assert output["message"] == "Disk almost full"
+
+
 async def test_config_entries_read_end_to_end(
     hass: HomeAssistant,
     loaded_entry: MockConfigEntry,

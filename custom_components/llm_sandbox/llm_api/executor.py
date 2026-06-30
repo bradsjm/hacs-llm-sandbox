@@ -17,6 +17,7 @@ from ..snapshot.models import (
     SafeFloorEntry,
     SafeIssueEntry,
     SafeLabelEntry,
+    SafeNotificationEntry,
     SafeRegistryEntry,
     SafeState,
     SafeUnitSystem,
@@ -56,6 +57,7 @@ from .facade_views import (
     SafeLabelModule,
     SafeLabelRegistry,
     SafeLLMContext,
+    SafeNotificationRegistry,
     SafeServiceRegistry,
     SafeStateMachine,
     build_facades,
@@ -85,6 +87,7 @@ DATACLASS_REGISTRY: list[type] = [
     SafeLabelRegistry,
     SafeCategoryRegistry,
     SafeIssueRegistry,
+    SafeNotificationRegistry,
     SafeConfigEntries,
     # Module facades (er/dr/ar/fr)
     SafeEntityModule,
@@ -112,6 +115,7 @@ DATACLASS_REGISTRY: list[type] = [
     SafeLabelEntry,
     SafeCategoryEntry,
     SafeIssueEntry,
+    SafeNotificationEntry,
     SafeConfigEntry,
 ]
 
