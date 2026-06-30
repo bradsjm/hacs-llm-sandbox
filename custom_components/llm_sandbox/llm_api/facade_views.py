@@ -548,51 +548,19 @@ class SafeConfigEntries:
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class SafeServiceRegistry:
     """Read-only service catalog + live ``async_call``.
 
-    ``has_service`` and ``async_services`` reflect the frozen service catalog.
-    ``async_call`` validates the service against the catalog and visible target
-    indexes, records an action outcome, and invokes live Home Assistant through
-    the private runtime callable.
+    Sync catalog reads use the declared frozen catalog fields. ``async_call``
+    resolves the active runtime snapshot for target validation, records an
+    action outcome, and invokes live Home Assistant through the private runtime
+    callable.
     """
 
     services: Mapping[str, tuple[str, ...]]
     services_supports_response: Mapping[str, Mapping[str, str]]
     services_schema: Mapping[str, Mapping[str, ServiceSchemaBrief]]
-
-    def __init__(
-        self,
-        *,
-        services: Mapping[str, tuple[str, ...]],
-        services_supports_response: Mapping[str, Mapping[str, str]],
-        services_schema: Mapping[str, Mapping[str, ServiceSchemaBrief]],
-        snapshot: HomeSnapshot | None = None,
-    ) -> None:
-        """Initialize with snapshot data kept outside dataclass fields.
-
-        ``services_schema`` is a declared field rather than read from the
-        private ``_snapshot`` stash because the synchronous catalog reads
-        (``async_services`` / ``async_services_for_domain``) run inside the
-        Monty VM, where neither the runtime snapshot contextvar nor the
-        ``_snapshot_value`` stash (dropped when Monty reconstructs inputs from
-        dataclass fields) is available. The async ``async_call`` path still
-        uses ``_snapshot`` because coroutines execute on the host event loop
-        where the runtime contextvar is active.
-        """
-        if snapshot is not None:
-            object.__setattr__(self, "_snapshot_value", snapshot)
-        object.__setattr__(self, "services", services)
-        object.__setattr__(self, "services_supports_response", services_supports_response)
-        object.__setattr__(self, "services_schema", services_schema)
-
-    @property
-    def _snapshot(self) -> HomeSnapshot:
-        """Return the private source snapshot for validation helpers."""
-        if "_snapshot_value" in self.__dict__:
-            return cast(HomeSnapshot, self.__dict__["_snapshot_value"])
-        return require_snapshot()
 
     def has_service(self, domain: str, service: str) -> bool:
         """Return True if ``domain.service`` exists in the service catalog."""
@@ -682,7 +650,7 @@ class SafeServiceRegistry:
                 _raise_validation(
                     "service_not_found",
                     cast(TranslationPlaceholders, {"domain": domain, "service": service}),
-                    hints={"available_services": self._snapshot.services_schema.get(domain, {})},
+                    hints={"available_services": self.services_schema.get(domain, {})},
                 )
             supports_response = self.services_supports_response[domain][service]
             if return_response and not blocking:
@@ -768,10 +736,11 @@ class SafeServiceRegistry:
 
     def _visible_target(self, target: Mapping[str, object] | None) -> dict[str, object] | None:
         """Resolve supported HA target selectors to visible entity IDs."""
+        snapshot = require_snapshot()
         if not target:
             return cast(dict[str, object] | None, json_safe(target))
 
-        indexes = self._snapshot.indexes
+        indexes = snapshot.indexes
         entity_ids: set[str] = set()
         supported_values: list[str] = []
         supported_keys: list[str] = []
@@ -780,7 +749,7 @@ class SafeServiceRegistry:
             supported_keys.append("entity_id")
             for entity_id in _target_values(target["entity_id"]):
                 supported_values.append(entity_id)
-                if entity_id not in self._snapshot.states:
+                if entity_id not in snapshot.states:
                     raise HelperExecutionError(
                         "services.async_call",
                         "service_target_not_visible",
@@ -853,7 +822,7 @@ class SafeServiceRegistry:
             else:
                 placeholders = {"domain": domain, "service": service, "reason": key}
         hints = None
-        if (brief := self._snapshot.services_schema.get(domain, {}).get(service)) is not None:
+        if (brief := self.services_schema.get(domain, {}).get(service)) is not None:
             hints = {"available_services": {service: brief}}
         return HelperExecutionError("services.async_call", key, placeholders, hints=hints)
 
@@ -1112,7 +1081,6 @@ def build_facades(
 
     state_machine = SafeStateMachine(states=snapshot.states)
     service_registry = SafeServiceRegistry(
-        snapshot=snapshot,
         services=snapshot.services,
         services_supports_response=snapshot.services_supports_response,
         services_schema=snapshot.services_schema,

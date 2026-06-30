@@ -61,6 +61,15 @@
     "service_not_found": {
       "message": "Service {domain}.{service} is not available."
     },
+    "service_target_not_visible": {
+      "message": "Entity {entity_id} is not available to control."
+    },
+    "service_call_timeout": {
+      "message": "Service call to {domain}.{service} timed out."
+    },
+    "service_call_failed": {
+      "message": "Service call to {domain}.{service} failed: {reason}."
+    },
     "service_response_requires_blocking": {
       "message": "Service responses require {blocking}."
     },
@@ -75,6 +84,9 @@
     },
     "action_domain_not_allowed": {
       "message": "Service domain {domain} is not allowed for this assistant."
+    },
+    "call_budget_exceeded": {
+      "message": "The helper call budget for this request was exceeded."
     },
     "config_entry_not_loaded": {
       "message": "LLM Sandbox config entry {config_entry_id} is not loaded."

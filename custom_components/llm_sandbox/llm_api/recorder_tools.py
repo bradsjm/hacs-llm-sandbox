@@ -1,6 +1,7 @@
 """Recorder-backed read-only LLM tools."""
 
 import asyncio
+import functools
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -33,7 +34,7 @@ from ..const import (
     TOOL_GET_LOGBOOK,
     TOOL_GET_STATISTICS,
 )
-from ..runtime import SandboxSettings, settings_from_entry
+from ..runtime import SandboxSettings
 from ..snapshot import build_snapshot
 from ..snapshot.models import HomeSnapshot
 from ..types import TranslationPlaceholders
@@ -106,7 +107,9 @@ class _RecorderTool(llm.Tool):
             key, placeholders = setup_error
             return tool_error_envelope(key, placeholders)
         entry = _require_loaded_entry(hass, self.entry_id)
-        settings = settings_from_entry(entry)
+        runtime_data = entry.runtime_data
+        assert runtime_data is not None
+        settings = runtime_data.settings
         # Build a fresh visible snapshot for every recorder tool call.
         snapshot = build_snapshot(
             hass,
@@ -170,13 +173,11 @@ def _clamp_window(
 async def _run_query[T](
     hass: HomeAssistant,
     deadline: float,
-    fn: Callable[..., T],
-    /,
-    *args: object,
+    fn: Callable[[], T],
 ) -> T:
     """Run a blocking recorder query on the recorder executor with the tool deadline."""
     remaining = max(0.1, deadline - time.monotonic())
-    return await asyncio.wait_for(get_instance(hass).async_add_executor_job(fn, *args), timeout=remaining)
+    return await asyncio.wait_for(get_instance(hass).async_add_executor_job(fn), timeout=remaining)
 
 
 def _truncate[T](values: list[T], limit: int) -> tuple[list[T], bool]:
@@ -258,17 +259,19 @@ class GetHistoryTool(_RecorderTool):
         result = await _run_query(
             hass,
             deadline,
-            history.get_significant_states,
-            hass,
-            start,
-            end,
-            entity_ids,
-            None,
-            True,
-            True,
-            False,
-            False,
-            False,
+            functools.partial(
+                history.get_significant_states,
+                hass=hass,
+                start_time=start,
+                end_time=end,
+                entity_ids=entity_ids,
+                filters=None,
+                include_start_time_state=True,
+                significant_changes_only=True,
+                minimal_response=False,
+                no_attributes=False,
+                compressed_state_format=False,
+            ),
         )
 
         budget = max(1, MAX_HISTORY_STATES // len(entity_ids))
@@ -338,14 +341,16 @@ class GetStatisticsTool(_RecorderTool):
         result = await _run_query(
             hass,
             deadline,
-            statistics.statistics_during_period,
-            hass,
-            start,
-            end,
-            set(statistic_ids),
-            period,
-            None,
-            {"last_reset", "max", "mean", "min", "state", "sum"},
+            functools.partial(
+                statistics.statistics_during_period,
+                hass=hass,
+                start_time=start,
+                end_time=end,
+                statistic_ids=set(statistic_ids),
+                period=period,
+                units=None,
+                types={"last_reset", "max", "mean", "min", "state", "sum"},
+            ),
         )
 
         budget = max(1, MAX_STATISTICS_ROWS // len(statistic_ids))
@@ -413,7 +418,11 @@ class GetLogbookTool(_RecorderTool):
         processor = EventProcessor(
             hass, event_types, entity_ids, None, None, timestamp=False, include_entity_name=True
         )
-        entries = await _run_query(hass, deadline, processor.get_events, start, end)
+        entries = await _run_query(
+            hass,
+            deadline,
+            functools.partial(processor.get_events, start_day=start, end_day=end),
+        )
         entries, truncated = _truncate(entries, MAX_LOGBOOK_ENTRIES)
 
         return cast(

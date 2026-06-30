@@ -14,7 +14,7 @@ from homeassistant.helpers import llm
 from homeassistant.util.json import JsonObjectType
 
 from ..const import DOMAIN, TOOL_EXECUTE_HOME_CODE
-from ..runtime import SandboxConfigEntry, settings_from_entry
+from ..runtime import SandboxConfigEntry
 from ..snapshot import build_snapshot
 from ..snapshot.models import HomeSnapshot
 from ..types import ProposedAction
@@ -55,9 +55,17 @@ class LlmSandboxAPI(llm.API):
     async def async_get_api_instance(self, llm_context: llm.LLMContext) -> llm.APIInstance:
         entry = self._hass.config_entries.async_get_entry(self.entry_id)
         actions_enabled = False
-        # Missing or wrong-domain entries get a conservative prompt.
-        if entry is not None and entry.domain == DOMAIN:
-            actions_enabled = settings_from_entry(cast(SandboxConfigEntry, entry)).actions_enabled
+        # Missing, wrong-domain, unloaded, or uninitialized entries get a conservative prompt.
+        if (
+            entry is not None
+            and entry.domain == DOMAIN
+            and entry.state is ConfigEntryState.LOADED
+            and entry.runtime_data is not None
+        ):
+            typed_entry = cast(SandboxConfigEntry, entry)
+            runtime_data = typed_entry.runtime_data
+            assert runtime_data is not None
+            actions_enabled = runtime_data.settings.actions_enabled
         return llm.APIInstance(
             api=self,
             api_prompt=_build_api_prompt(self._hass, llm_context, actions_enabled),
@@ -121,7 +129,9 @@ async def _execute(
         return cast(JsonObjectType, setup_error_payload(key, placeholders))
     typed_entry = _require_loaded_entry(hass, entry_id)
 
-    settings = settings_from_entry(typed_entry)
+    runtime_data = typed_entry.runtime_data
+    assert runtime_data is not None
+    settings = runtime_data.settings
     code = cast(str, data["code"])
     deadline = time.monotonic() + settings.execution_timeout_seconds
 
