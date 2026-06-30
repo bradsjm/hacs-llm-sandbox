@@ -24,6 +24,8 @@ AVAILABLE_GLOBALS = [
     "device_registry",
     "area_registry",
     "floor_registry",
+    "date",
+    "datetime",
     "now",
     "llm_context",
 ]
@@ -74,6 +76,10 @@ def _build_monty_type_stubs() -> str:
     from .facade_views import (
         SafeAreaModule,
         SafeAreaRegistry,
+        SafeDate,
+        SafeDateFacade,
+        SafeDateTime,
+        SafeDateTimeFacade,
         SafeDeviceModule,
         SafeDeviceRegistry,
         SafeEntityModule,
@@ -174,6 +180,10 @@ def _build_monty_type_stubs() -> str:
         SafeAreaModule,
         SafeFloorModule,
         SafeHass,
+        SafeDate,
+        SafeDateTime,
+        SafeDateFacade,
+        SafeDateTimeFacade,
         SafeLLMContext,
     ]
 

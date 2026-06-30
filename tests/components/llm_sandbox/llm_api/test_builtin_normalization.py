@@ -43,6 +43,36 @@ from custom_components.llm_sandbox.llm_api.builtin_normalization import (
             id="type-name-resolved",
         ),
         pytest.param(
+            "result = hasattr(date, 'today')",
+            "result = True",
+            {HASATTR_RESOLVED},
+            id="hasattr-date-today",
+        ),
+        pytest.param(
+            "result = hasattr(datetime, 'now')",
+            "result = True",
+            {HASATTR_RESOLVED},
+            id="hasattr-datetime-now",
+        ),
+        pytest.param(
+            "result = type(date).__name__",
+            "result = 'SafeDateFacade'",
+            {TYPE_NAME_RESOLVED},
+            id="type-name-date",
+        ),
+        pytest.param(
+            "result = type(datetime).__name__",
+            "result = 'SafeDateTimeFacade'",
+            {TYPE_NAME_RESOLVED},
+            id="type-name-datetime",
+        ),
+        pytest.param(
+            "result = getattr(date, 'fromisoformat')",
+            "result = date.fromisoformat",
+            {GETATTR_RESOLVED},
+            id="getattr-date-fromisoformat",
+        ),
+        pytest.param(
             "result = type(floor_registry)",
             "result = type(floor_registry)",
             set(),

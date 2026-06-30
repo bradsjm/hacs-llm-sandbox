@@ -9,6 +9,10 @@ from custom_components.llm_sandbox.llm_api.await_normalization import (
 from custom_components.llm_sandbox.llm_api.facade_views import (
     SafeAreaModule,
     SafeAreaRegistry,
+    SafeDate,
+    SafeDateFacade,
+    SafeDateTime,
+    SafeDateTimeFacade,
     SafeDeviceModule,
     SafeDeviceRegistry,
     SafeEntityModule,
@@ -33,6 +37,10 @@ VIEW_CLASSES = [
     SafeDeviceModule,
     SafeAreaModule,
     SafeFloorModule,
+    SafeDate,
+    SafeDateTime,
+    SafeDateFacade,
+    SafeDateTimeFacade,
     SafeLLMContext,
 ]
 
@@ -87,6 +95,24 @@ VIEW_CLASSES = [
             "result = area_registry.async_get_area_by_name('Bedroom')",
             {STRIPPED_AWAIT_FROM_SYNC},
             id="strip-await-from-sync-area-lookup",
+        ),
+        pytest.param(
+            "result = await date.today()",
+            "result = date.today()",
+            {STRIPPED_AWAIT_FROM_SYNC},
+            id="strip-await-from-date-today",
+        ),
+        pytest.param(
+            "result = await datetime.now()",
+            "result = datetime.now()",
+            {STRIPPED_AWAIT_FROM_SYNC},
+            id="strip-await-from-datetime-now",
+        ),
+        pytest.param(
+            "result = await datetime.utcnow().isoformat()",
+            "result = datetime.utcnow().isoformat()",
+            {STRIPPED_AWAIT_FROM_SYNC},
+            id="strip-await-from-datetime-utcnow-chain",
         ),
         pytest.param(
             "state = await hass.states.get('light.bedroom')\nresult = hass.services.async_call('light', 'turn_on')",

@@ -38,3 +38,22 @@ def test_monty_type_stubs_include_alias_fields() -> None:
     assert "floor_id: str\n    id: str" in MONTY_TYPE_STUBS
     # SafeAreaEntry: id followed by the area_id alias.
     assert "id: str\n    area_id: str" in MONTY_TYPE_STUBS
+
+
+def test_monty_type_stubs_include_datetime_facades() -> None:
+    """Date/datetime facade and value classes are part of the LLM-facing API surface."""
+    assert "class SafeDate:" in MONTY_TYPE_STUBS
+    assert "class SafeDateTime:" in MONTY_TYPE_STUBS
+    assert "class SafeDateFacade:" in MONTY_TYPE_STUBS
+    assert "class SafeDateTimeFacade:" in MONTY_TYPE_STUBS
+    assert "def today" in MONTY_TYPE_STUBS
+    assert "def now" in MONTY_TYPE_STUBS
+    assert "def utcnow" in MONTY_TYPE_STUBS
+    assert "def fromisoformat" in MONTY_TYPE_STUBS
+    assert "def isoformat" in MONTY_TYPE_STUBS
+
+
+def test_monty_type_stubs_include_datetime_globals() -> None:
+    """date and datetime appear as declared globals in the type stubs."""
+    assert "\ndate: Any" in MONTY_TYPE_STUBS
+    assert "\ndatetime: Any" in MONTY_TYPE_STUBS

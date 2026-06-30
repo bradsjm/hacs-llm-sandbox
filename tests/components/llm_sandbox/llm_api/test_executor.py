@@ -564,3 +564,185 @@ result = {
     assert "hasattr_resolved" in normalizations
     assert "getattr_resolved" in normalizations
     assert "type_name_resolved" in normalizations
+
+
+async def test_datetime_now_isoformat(
+    hass: HomeAssistant,
+    loaded_entry: MockConfigEntry,
+) -> None:
+    """datetime.now() returns a frozen snapshot datetime in HA timezone."""
+    code = "result = datetime.now().isoformat()"
+    result = await _run_code(hass, loaded_entry, code)
+    assert result["execution"]["status"] == "ok"
+    output = result["output"]
+    assert isinstance(output, str)
+    assert "T" in output
+
+
+async def test_datetime_utcnow_isoformat(
+    hass: HomeAssistant,
+    loaded_entry: MockConfigEntry,
+) -> None:
+    """datetime.utcnow() returns a frozen UTC snapshot datetime."""
+    code = "result = datetime.utcnow().isoformat()"
+    result = await _run_code(hass, loaded_entry, code)
+    assert result["execution"]["status"] == "ok"
+    assert isinstance(result["output"], str)
+    assert "T" in result["output"]
+
+
+async def test_date_today_isoformat(
+    hass: HomeAssistant,
+    loaded_entry: MockConfigEntry,
+) -> None:
+    """date.today() returns the frozen snapshot date."""
+    code = "result = date.today().isoformat()"
+    result = await _run_code(hass, loaded_entry, code)
+    assert result["execution"]["status"] == "ok"
+    output = result["output"]
+    assert isinstance(output, str)
+    assert len(output) == 10  # YYYY-MM-DD format
+
+
+async def test_date_today_fields(
+    hass: HomeAssistant,
+    loaded_entry: MockConfigEntry,
+) -> None:
+    """date.today() exposes year, month, day, weekday fields."""
+    code = """
+d = date.today()
+result = {
+    "year": d.year,
+    "month": d.month,
+    "day": d.day,
+    "weekday": d.weekday,
+    "year_matches_snapshot": d.year == int(now[:4]),
+}
+"""
+    result = await _run_code(hass, loaded_entry, code)
+    assert result["execution"]["status"] == "ok"
+    output = result["output"]
+    assert output["year_matches_snapshot"] is True
+    assert isinstance(output["month"], int)
+    assert isinstance(output["day"], int)
+    assert isinstance(output["weekday"], int)
+
+
+async def test_datetime_fromisoformat(
+    hass: HomeAssistant,
+    loaded_entry: MockConfigEntry,
+) -> None:
+    """datetime.fromisoformat parses an ISO string and exposes fields."""
+    code = "result = datetime.fromisoformat('2025-01-15T08:30:00+00:00').year"
+    result = await _run_code(hass, loaded_entry, code)
+    assert result["execution"]["status"] == "ok"
+    assert result["output"] == 2025
+
+
+async def test_date_fromisoformat(
+    hass: HomeAssistant,
+    loaded_entry: MockConfigEntry,
+) -> None:
+    """date.fromisoformat parses an ISO date string and exposes fields."""
+    code = "result = date.fromisoformat('2025-03-20').month"
+    result = await _run_code(hass, loaded_entry, code)
+    assert result["execution"]["status"] == "ok"
+    assert result["output"] == 3
+
+
+async def test_datetime_now_date_method(
+    hass: HomeAssistant,
+    loaded_entry: MockConfigEntry,
+) -> None:
+    """datetime.now().date() returns a SafeDate value."""
+    code = "result = datetime.now().date().isoformat()"
+    result = await _run_code(hass, loaded_entry, code)
+    assert result["execution"]["status"] == "ok"
+    assert isinstance(result["output"], str)
+    assert len(result["output"]) == 10
+
+
+async def test_return_date_object_directly(
+    hass: HomeAssistant,
+    loaded_entry: MockConfigEntry,
+) -> None:
+    """Returning a SafeDate directly produces an ISO string."""
+    code = "result = date.today()"
+    result = await _run_code(hass, loaded_entry, code)
+    assert result["execution"]["status"] == "ok"
+    assert isinstance(result["output"], str)
+    assert len(result["output"]) == 10
+
+
+async def test_return_datetime_object_directly(
+    hass: HomeAssistant,
+    loaded_entry: MockConfigEntry,
+) -> None:
+    """Returning a SafeDateTime directly produces an ISO string."""
+    code = "result = datetime.now()"
+    result = await _run_code(hass, loaded_entry, code)
+    assert result["execution"]["status"] == "ok"
+    assert isinstance(result["output"], str)
+    assert "T" in result["output"]
+
+
+async def test_from_datetime_import_normalized(
+    hass: HomeAssistant,
+    loaded_entry: MockConfigEntry,
+) -> None:
+    """from datetime import datetime is normalized to the sandbox facade."""
+    code = "from datetime import datetime\nresult = datetime.now().isoformat()[:4] == now[:4]"
+    result = await _run_code(hass, loaded_entry, code)
+    assert result["execution"]["status"] == "ok"
+    assert result["output"] is True
+    assert "datetime_imports_resolved" in result["execution"]["normalizations"]
+
+
+async def test_import_datetime_as_dt_normalized(
+    hass: HomeAssistant,
+    loaded_entry: MockConfigEntry,
+) -> None:
+    """import datetime as dt is normalized with attribute rewriting."""
+    code = "import datetime as dt\nresult = dt.datetime.now().year == int(now[:4])"
+    result = await _run_code(hass, loaded_entry, code)
+    assert result["execution"]["status"] == "ok"
+    assert result["output"] is True
+    assert "datetime_imports_resolved" in result["execution"]["normalizations"]
+
+
+async def test_from_datetime_import_date_as_d_normalized(
+    hass: HomeAssistant,
+    loaded_entry: MockConfigEntry,
+) -> None:
+    """from datetime import date as d is normalized to the sandbox facade."""
+    code = "from datetime import date as d\nresult = d.today().isoformat()"
+    result = await _run_code(hass, loaded_entry, code)
+    assert result["execution"]["status"] == "ok"
+    assert isinstance(result["output"], str)
+    assert len(result["output"]) == 10
+
+
+async def test_parse_state_timestamp_with_fromisoformat(
+    hass: HomeAssistant,
+    loaded_entry: MockConfigEntry,
+) -> None:
+    """datetime.fromisoformat parses State timestamp strings."""
+    code = """
+s = hass.states.get('light.bedroom')
+result = datetime.fromisoformat(s.last_changed).year == int(now[:4])
+"""
+    result = await _run_code(hass, loaded_entry, code)
+    assert result["execution"]["status"] == "ok"
+    assert result["output"] is True
+
+
+async def test_now_global_unchanged(
+    hass: HomeAssistant,
+    loaded_entry: MockConfigEntry,
+) -> None:
+    """The now global remains an ISO string, not a facade object."""
+    code = "result = now"
+    result = await _run_code(hass, loaded_entry, code)
+    assert result["execution"]["status"] == "ok"
+    assert isinstance(result["output"], str)
+    assert "T" in result["output"]

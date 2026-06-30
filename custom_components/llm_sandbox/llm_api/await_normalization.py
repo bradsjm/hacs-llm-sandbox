@@ -34,6 +34,8 @@ _SYNC_SUBSCRIPT_GLOBALS = frozenset(
         "device_registry",
         "area_registry",
         "floor_registry",
+        "date",
+        "datetime",
         "llm_context",
     }
 )

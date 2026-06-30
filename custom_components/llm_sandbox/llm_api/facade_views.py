@@ -18,7 +18,10 @@ import asyncio
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import date as _date
+from datetime import datetime as _datetime
 from typing import Any, cast
+from zoneinfo import ZoneInfo
 
 import voluptuous as vol
 from homeassistant.core import SupportsResponse
@@ -776,6 +779,151 @@ class SafeLLMContext:
 
 
 # ---------------------------------------------------------------------------
+# Date/datetime value objects and facades
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class SafeDate:
+    """Frozen date value returned by the ``date`` facade.
+
+    Stores parsed calendar components from a single datetime. All fields are
+    JSON-safe primitives.
+    """
+
+    iso: str
+    year: int
+    month: int
+    day: int
+    weekday: int
+
+    def isoformat(self) -> str:
+        """Return the date as an ISO 8601 string (YYYY-MM-DD)."""
+        return self.iso
+
+    def __llm_sandbox_json__(self) -> JsonValueType:
+        return cast(JsonValueType, self.iso)
+
+
+@dataclass(frozen=True, slots=True)
+class SafeDateTime:
+    """Frozen datetime value returned by the ``datetime`` facade.
+
+    Stores parsed datetime components from a single datetime. All fields are
+    JSON-safe primitives.
+    """
+
+    iso: str
+    year: int
+    month: int
+    day: int
+    hour: int
+    minute: int
+    second: int
+    microsecond: int
+    weekday: int
+
+    def date(self) -> SafeDate:
+        """Return the calendar-date portion as a SafeDate."""
+        return SafeDate(
+            iso=self.iso[:10],
+            year=self.year,
+            month=self.month,
+            day=self.day,
+            weekday=self.weekday,
+        )
+
+    def isoformat(self) -> str:
+        """Return the datetime as an ISO 8601 string."""
+        return self.iso
+
+    def __llm_sandbox_json__(self) -> JsonValueType:
+        return cast(JsonValueType, self.iso)
+
+
+@dataclass(frozen=True, slots=True)
+class SafeDateFacade:
+    """Frozen date class facade exposed as the ``date`` Monty global.
+
+    ``today()`` returns the frozen snapshot date. ``fromisoformat()`` parses
+    a caller-supplied ISO date string. No live wall-clock access.
+    """
+
+    today_value: SafeDate
+
+    def today(self) -> SafeDate:
+        """Return the frozen snapshot date in the configured HA timezone."""
+        return self.today_value
+
+    def fromisoformat(self, date_string: str) -> SafeDate:
+        """Parse an ISO 8601 date string into a SafeDate.
+
+        Mirrors stdlib date.fromisoformat: a datetime string (containing a time
+        component) is rejected rather than silently truncated.
+        """
+        parsed = _date.fromisoformat(date_string)
+        return SafeDate(
+            iso=parsed.isoformat(),
+            year=parsed.year,
+            month=parsed.month,
+            day=parsed.day,
+            weekday=parsed.weekday(),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class SafeDateTimeFacade:
+    """Frozen datetime class facade exposed as the ``datetime`` Monty global.
+
+    ``now()`` returns the frozen snapshot datetime in the HA timezone.
+    ``utcnow()`` returns the UTC snapshot datetime. ``fromisoformat()`` parses
+    a caller-supplied ISO datetime string. No live wall-clock access.
+    """
+
+    now_value: SafeDateTime
+    utcnow_value: SafeDateTime
+
+    def now(self, tz: object = None) -> SafeDateTime:
+        """Return the frozen snapshot datetime in the configured HA timezone."""
+        del tz  # API parity; frozen time cannot honor a caller-supplied timezone.
+        return self.now_value
+
+    def utcnow(self) -> SafeDateTime:
+        """Return the frozen snapshot datetime in UTC."""
+        return self.utcnow_value
+
+    def fromisoformat(self, date_string: str) -> SafeDateTime:
+        """Parse an ISO 8601 datetime string into a SafeDateTime."""
+        return _datetime_from_dt(_datetime.fromisoformat(date_string))
+
+
+def _date_from_datetime(dt: _datetime) -> SafeDate:
+    """Build a SafeDate from a parsed datetime, preserving the calendar date."""
+    return SafeDate(
+        iso=dt.strftime("%Y-%m-%d"),
+        year=dt.year,
+        month=dt.month,
+        day=dt.day,
+        weekday=dt.weekday(),
+    )
+
+
+def _datetime_from_dt(dt: _datetime) -> SafeDateTime:
+    """Build a SafeDateTime from a parsed datetime, preserving all components."""
+    return SafeDateTime(
+        iso=dt.isoformat(),
+        year=dt.year,
+        month=dt.month,
+        day=dt.day,
+        hour=dt.hour,
+        minute=dt.minute,
+        second=dt.second,
+        microsecond=dt.microsecond,
+        weekday=dt.weekday(),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Builder
 # ---------------------------------------------------------------------------
 
@@ -804,9 +952,22 @@ def build_facades(
     )
     hass = SafeHass(states=state_machine, services=service_registry, config=snapshot.config)
 
+    created = _datetime.fromisoformat(snapshot.created_at)
+    # hass.config.time_zone is validated by Home Assistant; trust it directly so
+    # an invalid timezone surfaces as an error instead of silently falling back.
+    local = created.astimezone(ZoneInfo(snapshot.config.time_zone))
+
+    date_facade = SafeDateFacade(today_value=_date_from_datetime(local))
+    datetime_facade = SafeDateTimeFacade(
+        now_value=_datetime_from_dt(local),
+        utcnow_value=_datetime_from_dt(created),
+    )
+
     return {
         "hass": hass,
         "states": state_machine,
+        "date": date_facade,
+        "datetime": datetime_facade,
         "er": SafeEntityModule(
             registry=entity_registry,
             entities=snapshot.entities,

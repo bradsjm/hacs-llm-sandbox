@@ -9,7 +9,7 @@ The sandbox never receives the live `hass` object, live registries, the event bu
 - Config flow for one `llm_sandbox` entry scoped to the default `conversation` assistant.
 - One LLM API tool: `execute_home_code`.
 - Fresh per-call snapshot of states, entity/device/area/floor registries, and the service catalog.
-- HA-style read globals in Monty: `hass`, `states`, `er`, `dr`, `ar`, `fr`, `entity_registry`, `device_registry`, `area_registry`, `floor_registry`, `now`, and `llm_context`.
+- HA-style read globals in Monty: `hass`, `states`, `er`, `dr`, `ar`, `fr`, `entity_registry`, `device_registry`, `area_registry`, `floor_registry`, `date`, `datetime`, `now`, and `llm_context`. The `date` and `datetime` globals are frozen snapshot-backed facades.
 - `llm_context` includes the initiating `device_id` plus derived `area_id`, `area_name`, `floor_id`, and `floor_name` when Home Assistant provides a satellite device.
 - Live service calls through `await hass.services.async_call(...)` when actions are enabled; per-call outcomes are returned in `actions`.
 - Action safety controls: `actions_enabled` gates all service calls, `action_domains` restricts controllable domains, targets must be visible to the sandbox, and real Home Assistant context is used for attribution.

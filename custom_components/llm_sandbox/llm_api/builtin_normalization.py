@@ -21,6 +21,10 @@ from ..snapshot.models import (
 from .facade_views import (
     SafeAreaModule,
     SafeAreaRegistry,
+    SafeDate,
+    SafeDateFacade,
+    SafeDateTime,
+    SafeDateTimeFacade,
     SafeDeviceModule,
     SafeDeviceRegistry,
     SafeEntityModule,
@@ -44,6 +48,8 @@ GLOBAL_TYPE_MAP: dict[str, type] = {
     "device_registry": SafeDeviceRegistry,
     "area_registry": SafeAreaRegistry,
     "floor_registry": SafeFloorRegistry,
+    "date": SafeDateFacade,
+    "datetime": SafeDateTimeFacade,
     "llm_context": SafeLLMContext,
 }
 
@@ -77,6 +83,8 @@ def surface_for_class_name(name: str) -> frozenset[str] | None:
             SafeDeviceEntry,
             SafeAreaEntry,
             SafeFloorEntry,
+            SafeDate,
+            SafeDateTime,
         )
     }
     if (cls := classes_by_name.get(name)) is None:

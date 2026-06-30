@@ -20,6 +20,7 @@ from ..snapshot.models import (
 from . import await_normalization, result_binding
 from .builtin_normalization import normalize_builtins
 from .contracts import MONTY_TYPE_STUBS
+from .datetime_normalization import normalize_datetime_imports
 from .errors import CodeErrorPayload, HelperErrorPayload, HelperExecutionError, helper_error_from_exception
 from .executor_support import (
     code_error_payload_for_state,
@@ -33,6 +34,10 @@ from .executor_support import (
 from .facade_views import (
     SafeAreaModule,
     SafeAreaRegistry,
+    SafeDate,
+    SafeDateFacade,
+    SafeDateTime,
+    SafeDateTimeFacade,
     SafeDeviceModule,
     SafeDeviceRegistry,
     SafeEntityModule,
@@ -74,6 +79,11 @@ DATACLASS_REGISTRY: list[type] = [
     SafeFloorModule,
     # LLM context
     SafeLLMContext,
+    # Date/datetime facades (value types + class facades)
+    SafeDate,
+    SafeDateTime,
+    SafeDateFacade,
+    SafeDateTimeFacade,
     # Record types returned by facade methods
     SafeContext,
     SafeState,
@@ -109,14 +119,17 @@ async def async_execute_home_code(
         ) from err
 
     # Forgiveness pipeline (Postel's law): each pass is independent and
-    # fails open. Order matters: builtin normalization first resolves safe
-    # reflection syntax, then await normalization, then last-expression
-    # promotion before append_result_expression checks explicit ``result``.
-    builtin_code, builtin_labels = normalize_builtins(code)
+    # fails open. Order matters: datetime import normalization first resolves
+    # supported datetime/date imports to sandbox facades, then builtin
+    # normalization resolves safe reflection syntax, then await normalization,
+    # then last-expression promotion before append_result_expression checks
+    # explicit ``result``.
+    datetime_code, datetime_labels = normalize_datetime_imports(code)
+    builtin_code, builtin_labels = normalize_builtins(datetime_code)
     normalized_code, await_labels = await_normalization.normalize_awaits(builtin_code, DATACLASS_REGISTRY)
     promoted_code, promote_labels = result_binding.promote_last_expression_to_result(normalized_code)
     executable_code = result_binding.append_result_expression(promoted_code)
-    runtime.state.normalizations = [*builtin_labels, *await_labels, *promote_labels]
+    runtime.state.normalizations = [*datetime_labels, *builtin_labels, *await_labels, *promote_labels]
 
     # Build facade globals from the snapshot.
     facade_inputs = build_facades(snapshot)
