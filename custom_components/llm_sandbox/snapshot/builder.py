@@ -389,9 +389,6 @@ def _safe_services(
         schema_values: dict[str, ServiceSchemaBrief] = {}
         for service_name, service in domain_services.items():
             names.append(service_name)
-            # Preserve the HA enum value instead of collapsing optional/only
-            # services into a bool; the facade uses the value for HA-parity
-            # propose-only validation.
             response_values[service_name] = service.supports_response.value
             schema_values[service_name] = _service_schema_brief(hass, domain, service_name, service.schema)
         services[domain] = tuple(sorted(names))
