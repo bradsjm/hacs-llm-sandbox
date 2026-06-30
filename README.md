@@ -1,6 +1,6 @@
 # LLM Sandbox
 
-LLM Sandbox is a Home Assistant custom integration that exposes Assist LLM API tools for running bounded Python/Monty code and bounded recorder history, long-term statistics, and logbook queries against fresh visibility-filtered Home Assistant snapshots.
+Assist Sandbox (LLM Sandbox) is a Home Assistant custom integration that gives Assist bounded LLM tools for reading visible home context, querying recorder history, running sandboxed Python/Monty code, and optionally performing validated Home Assistant actions.
 
 The sandbox never receives the live `hass` object, live registries, the event bus, auth, config, filesystem, network, or OS/process APIs. It receives safe facade objects built from snapshot records.
 
