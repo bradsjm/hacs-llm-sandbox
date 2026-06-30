@@ -220,3 +220,12 @@ def build_get_logbook_description() -> str:
         "size the window with hours=<n> or ISO start/end. "
         "Returns {status, window, entries, truncated}."
     )
+
+
+def build_get_camera_image_description() -> str:
+    """Return the get_camera_image tool description."""
+    return (
+        "Capture a single live frame from a visible camera or image entity and return it as an "
+        "inline image for visual analysis. Use this to answer questions about what is currently "
+        "visible. Only entities visible under the configured scope can be captured."
+    )

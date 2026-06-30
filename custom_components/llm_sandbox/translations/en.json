@@ -120,6 +120,15 @@
     "entity_not_visible": {
       "message": "Entity {entity_id} is not available."
     },
+    "capture_failed": {
+      "message": "Unable to capture image from {entity_id}."
+    },
+    "image_too_large": {
+      "message": "Captured image from {entity_id} exceeds the size budget."
+    },
+    "unsupported_image_domain": {
+      "message": "Entity {entity_id} is not a camera or image entity."
+    },
     "time_window_too_large": {
       "message": "The requested time window exceeds the maximum of {max_hours} hours."
     },

@@ -39,6 +39,7 @@ TOOL_EXECUTE_HOME_CODE: Final = "execute_home_code"
 TOOL_GET_HISTORY: Final = "get_history"
 TOOL_GET_STATISTICS: Final = "get_statistics"
 TOOL_GET_LOGBOOK: Final = "get_logbook"
+TOOL_GET_CAMERA_IMAGE: Final = "get_camera_image"
 
 # Recorder-backed tool windowing.
 DEFAULT_HISTORY_WINDOW_HOURS: Final = 1
@@ -54,3 +55,12 @@ MAX_STATISTICS_ROWS: Final = 1000
 
 # Recorder-backed tool input caps.
 MAX_RECORDER_ENTITY_IDS: Final = 20
+
+# Vision tool image budget and downscale defaults.
+DEFAULT_IMAGE_TARGET_WIDTH: Final = 1280
+MIN_IMAGE_TARGET_WIDTH: Final = 512
+MAX_IMAGE_TARGET_WIDTH: Final = 1920
+MAX_IMAGE_ATTACHMENTS: Final = 4
+MAX_IMAGE_ATTACHMENT_BYTES: Final = 5 * 1024 * 1024
+MAX_IMAGE_TOTAL_BYTES: Final = 10 * 1024 * 1024
+ALLOWED_IMAGE_MIME_TYPES: Final = frozenset({"image/jpeg", "image/png", "image/webp"})

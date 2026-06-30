@@ -12,7 +12,7 @@ from homeassistant.helpers import llm
 from ..const import DOMAIN
 from ..runtime import SandboxConfigEntry
 from .prompts import ACTIONS_DISABLED_PROMPT, ACTIONS_ENABLED_PROMPT, BASE_API_PROMPT
-from .tools import ExecuteHomeCodeTool, GetHistoryTool, GetLogbookTool, GetStatisticsTool
+from .tools import ExecuteHomeCodeTool, GetCameraImageTool, GetHistoryTool, GetLogbookTool, GetStatisticsTool
 
 
 def async_register_llm_api(hass: HomeAssistant, entry: SandboxConfigEntry) -> None:
@@ -59,6 +59,7 @@ class LlmSandboxAPI(llm.API):
                 GetHistoryTool(self.entry_id),
                 GetStatisticsTool(self.entry_id),
                 GetLogbookTool(self.entry_id),
+                GetCameraImageTool(self.entry_id),
             ],
         )
 
