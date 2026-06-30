@@ -2,7 +2,7 @@
 
 ## Project Identity
 
-This repository contains the `llm_sandbox` Home Assistant custom integration. It provides a Monty-backed LLM API tool for read-only Home Assistant inspection and propose-only service-call collection.
+This repository contains the `llm_sandbox` Home Assistant custom integration. It exposes Assist LLM API tools — `execute_home_code`, `get_history`, `get_statistics`, and `get_logbook` — that run bounded Python/Monty code and bounded recorder queries against a fresh, frozen, visibility-filtered Home Assistant snapshot. The live `hass` object, registries, event bus, auth, config, filesystem, network, and OS/process APIs never reach Monty; only frozen facade objects built from snapshot records do. Service calls are read-only by default and, when enabled, execute live through a private runtime invoker after snapshot validation.
 
 ## Non-Negotiables
 
@@ -10,7 +10,8 @@ This repository contains the `llm_sandbox` Home Assistant custom integration. It
 - Build a fresh snapshot for every `execute_home_code` call.
 - Keep Monty-visible objects safe, JSON-compatible, and derived from snapshot records.
 - Preserve HA-native read API shapes where practical (`hass.states`, `er.async_get(hass)`, registry instance methods).
-- Keep service calls propose-only unless a future task explicitly designs and tests a live-action boundary.
+- Keep `hass.services.async_call` gated behind the per-entry action settings. When enabled, validate every call against the fresh snapshot (action master switch, domain allowlist, service catalog, target visibility, response mode) and dispatch only through the private `RuntimeContext.invoke` callable — never expose the live callable, the live `hass`, or live registries to Monty.
+- Keep the AST forgiveness layer (datetime, builtin, await, and result-binding normalization) fail-open: on any failure it returns the original code so Monty surfaces the natural error, and it derives async/sync classification plus the builtin surface from the facade dataclasses and snapshot records rather than a hand-maintained allowlist.
 - Store per-entry runtime state on typed `entry.runtime_data`.
 - Register LLM APIs and unload callbacks through Home Assistant lifecycle helpers.
 
