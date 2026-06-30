@@ -20,3 +20,6 @@ dist/
 htmlcov/
 node_modules/
 opencode.json
+
+# Eval run artifacts (outputs only; fixtures/cases/config are committed)
+eval_data/

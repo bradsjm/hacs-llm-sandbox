@@ -26,6 +26,9 @@ dev = [
   "ruff>=0.15.20",
   "yamllint>=1.37.1",
 ]
+evals = [
+  "litellm>=1.0",
+]
 
 [tool.ruff]
 required-version = ">=0.15.20"
