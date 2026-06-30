@@ -40,6 +40,9 @@ def _build_parser() -> argparse.ArgumentParser:
     eval_parser.add_argument("--candidates", help="comma-separated prompt candidate ids")
     eval_parser.add_argument("--cases", help="comma-separated case ids or categories")
     eval_parser.add_argument("--runs-dir", type=Path, help="directory for run artifacts")
+    eval_parser.add_argument(
+        "--concurrency", type=int, help="max concurrent model calls per candidate/model (default 5)"
+    )
 
     report_parser = subparsers.add_parser("report", help="render a saved run leaderboard")
     report_parser.add_argument("run_id", nargs="?", help="run id under the runs directory")
@@ -57,6 +60,7 @@ def _run_eval(args: argparse.Namespace) -> int:
         cases=_csv_arg(args.cases) if args.cases is not None else base_config.cases,
         homes=base_config.homes,
         runs_dir=args.runs_dir or base_config.runs_dir,
+        concurrency=args.concurrency if args.concurrency else base_config.concurrency,
     )
     result = asyncio.run(run_matrix(config))
     run_dir = write_run(result, config.runs_dir)

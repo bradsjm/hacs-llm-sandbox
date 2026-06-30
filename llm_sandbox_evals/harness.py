@@ -1,5 +1,7 @@
 """Matrix orchestration for dev-only eval runs."""
 
+import asyncio
+import sys
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -66,8 +68,14 @@ async def run_matrix(config: EvalConfig) -> RunResult:
     for candidate in candidates:
         for model_id in model_ids:
             adapter = get_adapter(model_id)
-            for case in selected_cases:
-                traces.append(await _run_one_case(candidate, model_id, case, adapter))
+            _progress(
+                f"[{candidate.id}/{model_id}] {len(selected_cases)} cases "
+                f"(concurrency={config.concurrency})"
+            )
+            pair_traces = await _run_cases_for_pair(
+                candidate, model_id, selected_cases, adapter, config.concurrency
+            )
+            traces.extend(pair_traces)
 
     return RunResult(
         run_id=run_id,
@@ -129,6 +137,38 @@ async def _run_one_case(
                 ),
             ),
         )
+
+
+async def _run_cases_for_pair(
+    candidate: PromptCandidate,
+    model_id: str,
+    selected_cases: list[EvalCase],
+    adapter: ModelAdapter,
+    concurrency: int,
+) -> list[CaseTrace]:
+    """Run all cases for one candidate/model pair with bounded concurrency.
+
+    Each case runs in its own asyncio task, so the executor's runtime
+    contextvars stay isolated per task. A semaphore caps concurrent model calls
+    (the slow I/O). Progress is written to stderr as cases complete; results are
+    returned in input case order.
+    """
+    semaphore = asyncio.Semaphore(max(1, concurrency))
+    total = len(selected_cases)
+
+    async def _one(index: int, case: EvalCase) -> CaseTrace:
+        async with semaphore:
+            trace = await _run_one_case(candidate, model_id, case, adapter)
+        _progress(f"  [{index + 1}/{total}] {case.id} score={trace.score:.2f}")
+        return trace
+
+    return await asyncio.gather(*[_one(i, case) for i, case in enumerate(selected_cases)])
+
+
+def _progress(message: str) -> None:
+    """Write a progress line to stderr (ruff T201 forbids the print builtin)."""
+    sys.stderr.write(message + "\n")
+    sys.stderr.flush()
 
 
 def _select_cases(case_filters: list[str] | None, home_filters: list[str] | None) -> list[EvalCase]:

@@ -13,6 +13,7 @@ class EvalConfig:
     cases: list[str] | None
     homes: list[str] | None
     runs_dir: Path
+    concurrency: int = 5
 
 
 def load_config() -> EvalConfig:
@@ -28,4 +29,5 @@ def load_config() -> EvalConfig:
         cases=None,
         homes=None,
         runs_dir=Path("eval_data/runs"),
+        concurrency=5,
     )

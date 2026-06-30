@@ -1,5 +1,6 @@
 """Model adapters for eval prompt completion."""
 
+import asyncio
 import importlib
 import json
 import re
@@ -41,14 +42,26 @@ class LiteLLMAdapter:
     """Adapter for real models routed through LiteLLM."""
 
     async def complete(self, model_id: str, prompt: str) -> ModelResult:
-        """Call LiteLLM and parse the returned JSON tool call."""
+        """Call LiteLLM and parse the returned JSON tool call.
+
+        The blocking LiteLLM call runs in a worker thread so the event loop
+        stays free for concurrent matrix cells. Provider timeout plus a hard
+        ``wait_for`` bound hung or rate-limited requests so a single call cannot
+        stall the whole run; any failure becomes a ``ModelResult.error``.
+        """
         try:
             litellm = importlib.import_module("litellm")
             completion = cast(Callable[..., object], litellm.__dict__["completion"])
-            response = completion(
-                model=model_id,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.0,
+            response = await asyncio.wait_for(
+                asyncio.to_thread(
+                    completion,
+                    model=model_id,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.0,
+                    timeout=60,
+                    num_retries=1,
+                ),
+                timeout=90,
             )
             content = _extract_litellm_content(response)
         except Exception as err:  # noqa: BLE001 - adapter boundary converts provider/runtime failures into data.
