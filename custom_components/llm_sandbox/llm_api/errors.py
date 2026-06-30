@@ -188,16 +188,27 @@ def helper_error_from_exception(err: Exception) -> HelperExecutionError | None:
     return None
 
 
-def tool_error_envelope(key: str, placeholders: TranslationPlaceholders) -> JsonObjectType:
+def tool_error_envelope(
+    key: str,
+    placeholders: TranslationPlaceholders,
+    *,
+    message: str | None = None,
+    hints: list[str] | None = None,
+) -> JsonObjectType:
     """Return a JSON-safe recoverable error envelope for LLM tool callers."""
+    error: dict[str, Any] = {
+        "key": key,
+        "placeholders": _string_placeholders(placeholders),
+    }
+    if message is not None:
+        error["message"] = message
+    if hints:
+        error["hints"] = hints
     return cast(
         JsonObjectType,
         {
             "status": "error",
-            "error": {
-                "key": key,
-                "placeholders": _string_placeholders(placeholders),
-            },
+            "error": error,
         },
     )
 

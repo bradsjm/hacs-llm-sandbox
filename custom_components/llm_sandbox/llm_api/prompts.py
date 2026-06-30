@@ -69,13 +69,14 @@ BASE_API_PROMPT = (
     "category_registry.async_get_category(scope='<scope>', category_id='<id>').\n"
     "- Listing: list(entity_registry.entities.values()); "
     "list(device_registry.devices.values()).\n"
-    "- Traversal: er.async_entries_for_area(er.async_get(hass), '<area_id>'); "
-    "er.async_entries_for_device(er.async_get(hass), '<device_id>'); "
-    "er.async_entries_for_label(er.async_get(hass), '<label_id>'); "
+    "- Traversal: er.async_entries_for_area('<area_id>'); "
+    "er.async_entries_for_device('<device_id>'); "
+    "er.async_entries_for_label('<label_id>'); "
     "er.async_get_entity(er.async_get(hass), '<domain>', '<platform>', "
-    "'<unique_id>'); er.async_entries(er.async_get(hass)); "
-    "dr.async_entries_for_area(dr.async_get(hass), '<area_id>'); "
-    "dr.async_entries_for_label(dr.async_get(hass), '<label_id>').\n"
+    "'<unique_id>'); er.async_entries(); "
+    "dr.async_entries_for_area('<area_id>'); "
+    "dr.async_entries_for_label('<label_id>'). The HA two-arg form "
+    "(passing er.async_get(hass) first) is also accepted.\n"
     "- Effective area = entity.area_id or device.area_id. Use area.id, "
     "label.label_id, floor.floor_id as the id arguments.\n"
     "\n"
@@ -133,10 +134,10 @@ BASE_API_PROMPT = (
     "instead of importing helpers.\n"
     "- Builtins available: len, sum, min, max, sorted, dict, list, set, tuple, "
     "enumerate, zip, round, range, abs, any, all, map, filter, int, float, str, "
-    "bool, bytes.\n"
-    "- Imports limited to json, math, re. Do not import collections "
-    "(Counter/defaultdict unavailable); count with a dict loop: "
-    "counts[k] = counts.get(k, 0) + 1.\n"
+    "bool. map()/filter() are rewritten to list comprehensions automatically.\n"
+    "- Imports limited to json, math, re. Other modules (collections, "
+    "statistics, itertools) are not available; use built-ins instead (e.g. "
+    "sum()/len() for an average, a dict loop for counting).\n"
     "- No filesystem, network, OS/process, or pathlib/open calls.\n"
     "- dir, vars, setattr, delattr are not available.\n"
     "- Timestamps (State.last_changed, etc.) are ISO strings; compare directly or "
@@ -194,6 +195,8 @@ def build_get_history_description() -> str:
     """Return the get_history tool description."""
     return (
         "Return recorded state history for visible entities over a bounded UTC window. "
+        "Scope with entity_ids or HA-native selectors (area_id/device_id/floor_id/label_id/domain); "
+        "size the window with hours=<n> or ISO start/end. "
         "Returns {status, window, entities, truncated}."
     )
 
@@ -203,7 +206,8 @@ def build_get_statistics_description() -> str:
     return (
         "Return long-term recorder statistics for visible statistic IDs over a bounded UTC window. "
         "Each statistic ID must be a currently-visible entity ID; external or non-entity "
-        "statistic IDs are rejected. "
+        "statistic IDs are rejected. Scope with statistic_ids or HA-native selectors "
+        "(area_id/device_id/floor_id/label_id/domain); size the window with hours=<n> or ISO start/end. "
         "Returns {status, window, period, statistics, truncated}. Units are raw recorder units."
     )
 
@@ -212,5 +216,7 @@ def build_get_logbook_description() -> str:
     """Return the get_logbook tool description."""
     return (
         "Return logbook events for visible entities over a bounded UTC window. "
+        "Scope with entity_ids or HA-native selectors (area_id/device_id/floor_id/label_id/domain); "
+        "size the window with hours=<n> or ISO start/end. "
         "Returns {status, window, entries, truncated}."
     )

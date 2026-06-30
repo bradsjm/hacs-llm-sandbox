@@ -204,14 +204,90 @@ def refine_code_error(kind: str, message: str, code: str) -> tuple[str, str, lis
             cleaned_message = f"`{name}` is not available in the sandbox; use direct local values instead of mutating facade objects."
         return "NameError", cleaned_message, available_attributes
 
+    if (module_name := _extract_unresolved_import(cleaned_message)) is not None:
+        # Only json/math/re are importable; guide toward built-in equivalents.
+        return (
+            "ImportError",
+            f"`{module_name}` is not available in the sandbox; only json, math, re are importable. "
+            "Use built-ins instead (e.g. sum()/len() for an average, a dict loop for counting).",
+            None,
+        )
+
+    if "unsupported operand type(s) for %" in cleaned_message:
+        return (
+            "TypeError",
+            'Percent (%) string formatting is not available in the sandbox; use an f-string (e.g. f"{x}") instead.',
+            None,
+        )
+
     if (attr_match := re.search(r"'(\w+)' object has no attribute '(\w+)'", cleaned_message)) is not None:
-        # Surface the known public attributes for safe facade/record objects.
         class_name = attr_match.group(1)
+        attr = attr_match.group(2)
+        if class_name == "str" and attr == "format":
+            return (
+                "AttributeError",
+                'str.format() is not available in the sandbox; use an f-string (e.g. f"{x}") instead.',
+                None,
+            )
+        # Surface the known public attributes for safe facade/record objects.
         if (surface := surface_for_class_name(class_name)) is not None:
-            return "AttributeError", cleaned_message, sorted(surface)
+            return "AttributeError", _scrub_class_name(cleaned_message, class_name), sorted(surface)
         return "AttributeError", cleaned_message, None
 
     return kind, cleaned_message, None
+
+
+def _extract_unresolved_import(message: str) -> str | None:
+    """Return the module name from a Monty unresolved-import / ModuleNotFoundError message."""
+    if "unresolved-import" not in message and "No module named" not in message:
+        return None
+    if match := re.search(
+        r"Cannot resolve imported module ['`]([^'`]+)['`]|No module named ['\"]([^'\"]+)['\"]", message
+    ):
+        return str(match.group(1) or match.group(2))
+    return "<module>"
+
+
+def _scrub_class_name(message: str, class_name: str) -> str:
+    """Replace an internal facade/record class name with its friendly global reference."""
+    if (friendly := _friendly_class_name(class_name)) is not None:
+        return message.replace(f"'{class_name}'", f"'{friendly}'")
+    return message
+
+
+def _friendly_class_name(class_name: str) -> str | None:
+    """Map an internal class name to the LLM-visible name it was accessed through."""
+    if class_name in _RECORD_FRIENDLY_NAMES:
+        return _RECORD_FRIENDLY_NAMES[class_name]
+    from .builtin_normalization import GLOBAL_TYPE_MAP
+
+    # Facades: prefer the longest global alias (long names read clearer than er/dr).
+    aliases = [name for name, cls in GLOBAL_TYPE_MAP.items() if cls.__name__ == class_name]
+    return max(aliases, key=len) if aliases else None
+
+
+# Friendly references for types reached via attribute access or iteration rather
+# than a bare global. Facade registry classes are derived from GLOBAL_TYPE_MAP.
+_RECORD_FRIENDLY_NAMES: dict[str, str] = {
+    "SafeHass": "hass",
+    "SafeStateMachine": "states",
+    "SafeServiceRegistry": "hass.services",
+    "SafeConfig": "hass.config",
+    "SafeLLMContext": "llm_context",
+    "SafeState": "state",
+    "SafeRegistryEntry": "entity entry",
+    "SafeDeviceEntry": "device",
+    "SafeAreaEntry": "area",
+    "SafeFloorEntry": "floor",
+    "SafeLabelEntry": "label",
+    "SafeCategoryEntry": "category",
+    "SafeIssueEntry": "issue",
+    "SafeNotificationEntry": "notification",
+    "SafeConfigEntry": "config entry",
+    "SafeContext": "context",
+    "SafeDate": "date value",
+    "SafeDateTime": "datetime value",
+}
 
 
 def _attributes_for_first_discovery_call(

@@ -3,7 +3,7 @@
 import asyncio
 import functools
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Literal, cast, final, override
@@ -47,6 +47,63 @@ RECORDER_UNAVAILABLE = "recorder_unavailable"
 ENTITY_NOT_VISIBLE = "entity_not_visible"
 TIME_WINDOW_TOO_LARGE = "time_window_too_large"
 QUERY_FAILED = "query_failed"
+
+# Relative window size in hours, accepted by every recorder tool as an
+# alternative to absolute ISO start/end (the sandbox forbids timedelta math).
+_HOURS_ARG = vol.All(vol.Coerce(float), vol.Range(min=0))
+
+# Actionable guidance keyed by the recoverable error key. Message/hints are
+# surfaced inline to the LLM so a follow-up call can succeed; stable keys stay
+# translated in en.json for the human-facing contract.
+_RECORDER_GUIDANCE: dict[str, tuple[str, list[str]]] = {
+    ENTITY_NOT_VISIBLE: (
+        "Only snapshot-visible entities are queryable.",
+        ["List visible entities via execute_home_code (hass.states.async_all()) and retry with visible IDs."],
+    ),
+    TIME_WINDOW_TOO_LARGE: (
+        "The requested time window is too large.",
+        ["Reduce the window to at most {max_hours} hours.", "Pass hours=<n> or a smaller start/end range."],
+    ),
+    RECORDER_UNAVAILABLE: (
+        "The recorder integration is not available.",
+        ["Ask the user to enable the recorder integration, or query live state via execute_home_code instead."],
+    ),
+    "logbook_unavailable": (
+        "The logbook integration is not available.",
+        ["Ask the user to enable the logbook integration, or query history via get_history instead."],
+    ),
+    QUERY_FAILED: (
+        "The recorder query failed.",
+        ["Check the argument values; the recorder error was: {error}."],
+    ),
+    "invalid_tool_input": (
+        "Invalid tool input.",
+        ["Check argument names and types; the validation error was: {error}."],
+    ),
+}
+
+
+class _SafeHintDict(dict[str, str]):
+    """dict that keeps unknown ``{placeholder}`` tokens verbatim instead of raising."""
+
+    def __missing__(self, key: str) -> str:
+        return "{" + key + "}"
+
+
+def _error_guidance(key: str, placeholders: Mapping[str, str]) -> tuple[str | None, list[str] | None]:
+    """Return (message, hints) for a recorder error key, formatting placeholders into hints."""
+    entry = _RECORDER_GUIDANCE.get(key)
+    if entry is None:
+        return None, None
+    message, templates = entry
+    values = _SafeHintDict({str(k): str(v) for k, v in placeholders.items()})
+    return message, [template.format_map(values) for template in templates]
+
+
+def _envelope(key: str, placeholders: TranslationPlaceholders) -> JsonObjectType:
+    """Build a recoverable recorder error envelope with actionable guidance."""
+    message, hints = _error_guidance(key, placeholders)
+    return tool_error_envelope(key, placeholders, message=message, hints=hints)
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,15 +153,15 @@ class _RecorderTool(llm.Tool):
             mapped = tool_error_from_exception(err)
             if mapped is None:
                 raise
-            return tool_error_envelope(*mapped)
+            return _envelope(*mapped)
 
         if not _recorder_available(hass):
-            return tool_error_envelope(RECORDER_UNAVAILABLE, {})
+            return _envelope(RECORDER_UNAVAILABLE, {})
 
         setup_error = _require_loaded_entry_error(hass, self.entry_id)
         if setup_error is not None:
             key, placeholders = setup_error
-            return tool_error_envelope(key, placeholders)
+            return _envelope(key, placeholders)
         entry = _require_loaded_entry(hass, self.entry_id)
         runtime_data = entry.runtime_data
         assert runtime_data is not None
@@ -120,12 +177,12 @@ class _RecorderTool(llm.Tool):
         try:
             return await self._query(hass, snapshot, settings, deadline, data)
         except _RecoverableToolError as err:
-            return tool_error_envelope(err.key, err.placeholders)
+            return _envelope(err.key, err.placeholders)
         except Exception as err:  # noqa: BLE001 - recorder tools map unexpected query failures to envelopes
             mapped = tool_error_from_exception(err)
             if mapped is None:
-                return tool_error_envelope(QUERY_FAILED, {"error": type(err).__name__})
-            return tool_error_envelope(*mapped)
+                return _envelope(QUERY_FAILED, {"error": type(err).__name__})
+            return _envelope(*mapped)
 
     async def _query(
         self,
@@ -151,17 +208,111 @@ def _validate_visibility(snapshot: HomeSnapshot, ids: list[str]) -> None:
             raise _RecoverableToolError(ENTITY_NOT_VISIBLE, {"entity_id": entity_id})
 
 
+def _as_list(value: object) -> list[str]:
+    """Normalize a scalar/list selector value to a list of strings."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list | tuple):
+        return [str(item) for item in value]
+    return [str(value)]
+
+
+# HA-native target selectors accepted as an alternative to enumerated IDs.
+_SELECTOR_FIELDS: dict[vol.Optional, object] = {
+    vol.Optional("area_id", description="Area ID(s) to scope the query."): vol.All(cv.ensure_list, [str]),
+    vol.Optional("device_id", description="Device ID(s) to scope the query."): vol.All(cv.ensure_list, [str]),
+    vol.Optional("floor_id", description="Floor ID(s) to scope the query."): vol.All(cv.ensure_list, [str]),
+    vol.Optional("label_id", description="Label ID(s) to scope the query."): vol.All(cv.ensure_list, [str]),
+    vol.Optional("domain", description="Domain(s) (e.g. light) to keep from the resolved set."): vol.All(
+        cv.ensure_list, [str]
+    ),
+}
+
+
+def _resolve_entity_ids(snapshot: HomeSnapshot, data: dict[str, object], id_key: str) -> list[str]:
+    """Resolve explicit IDs plus HA-native selectors to visible entity IDs.
+
+    Explicit IDs are validated for visibility (an invisible one names itself in
+    the error). Selector expansion (area/device/floor/label) keeps only
+    snapshot-visible entities; ``domain`` filters the selector expansion and,
+    when no IDs are given, expands across all visible states of that domain.
+    """
+    indexes = snapshot.indexes
+    explicit = [entity_id.lower() for entity_id in _as_list(data.get(id_key))]
+    # Explicit IDs must each be visible (named in the error so the LLM can correct).
+    _validate_visibility(snapshot, explicit)
+    domains = {domain.lower() for domain in _as_list(data.get("domain"))}
+
+    selector_ids: list[str] = []
+    for area_id in _as_list(data.get("area_id")):
+        selector_ids.extend(indexes.entity_ids_by_area_id.get(area_id, ()))
+    for device_id in _as_list(data.get("device_id")):
+        selector_ids.extend(indexes.entity_ids_by_device_id.get(device_id, ()))
+    for label_id in _as_list(data.get("label_id")):
+        selector_ids.extend(indexes.entity_ids_by_label.get(label_id, ()))
+    for floor_id in _as_list(data.get("floor_id")):
+        for area_id in indexes.area_ids_by_floor_id.get(floor_id, ()):
+            selector_ids.extend(indexes.entity_ids_by_area_id.get(area_id, ()))
+
+    def _domain_matches(entity_id: str) -> bool:
+        return not domains or entity_id.split(".", 1)[0].lower() in domains
+
+    seen: set[str] = set()
+    resolved: list[str] = []
+    # Explicit IDs are kept as-is (visibility already validated).
+    for entity_id in explicit:
+        if entity_id not in seen:
+            seen.add(entity_id)
+            resolved.append(entity_id)
+    # Selector expansion keeps only visible entities honoring the domain filter.
+    for entity_id in selector_ids:
+        if entity_id in seen or entity_id not in snapshot.states or not _domain_matches(entity_id):
+            continue
+        seen.add(entity_id)
+        resolved.append(entity_id)
+    # Pure-domain scope with no IDs expands across all visible matching states.
+    if not resolved and domains:
+        for entity_id in snapshot.states:
+            if _domain_matches(entity_id):
+                resolved.append(entity_id)
+
+    if not resolved:
+        raise _RecoverableToolError(
+            "invalid_tool_input",
+            {"error": "no visible entity IDs or scope selectors resolved"},
+        )
+    if len(resolved) > MAX_RECORDER_ENTITY_IDS:
+        raise _RecoverableToolError(
+            "invalid_tool_input",
+            {"error": f"scope resolves to {len(resolved)} entities; narrow it to at most {MAX_RECORDER_ENTITY_IDS}"},
+        )
+    return resolved
+
+
 def _clamp_window(
     start_in: datetime | None,
     end_in: datetime | None,
     *,
+    hours: float | None = None,
     default_hours: int,
     max_hours: int,
 ) -> tuple[datetime, datetime]:
-    """Resolve optional start/end values and enforce the recorder lookback cap."""
+    """Resolve start/end values, honoring an explicit window or a relative ``hours`` size.
+
+    Precedence: explicit ``start``/``end`` win; otherwise a relative ``hours``
+    size is applied against ``end``; otherwise the tool default window is used.
+    The recorder lookback cap is always enforced.
+    """
     now = dt_util.utcnow()
     end = dt_util.as_utc(end_in or now)
-    start = dt_util.as_utc(start_in or (end - timedelta(hours=default_hours)))
+    if start_in is not None:
+        start = dt_util.as_utc(start_in)
+    elif hours is not None:
+        start = end - timedelta(hours=hours)
+    else:
+        start = end - timedelta(hours=default_hours)
     if start > end:
         raise _RecoverableToolError("invalid_tool_input", {"error": "start after end"})
     if end - start > timedelta(hours=max_hours):
@@ -228,11 +379,15 @@ class GetHistoryTool(_RecorderTool):
     description = build_get_history_description()
     parameters: vol.Schema = vol.Schema(
         {
-            vol.Required("entity_ids", description="One or up to 20 entity IDs."): vol.All(
+            vol.Optional("entity_ids", description="One or up to 20 entity IDs."): vol.All(
                 cv.ensure_list,
                 [cv.entity_id],
                 vol.Length(min=1, max=MAX_RECORDER_ENTITY_IDS),
             ),
+            **_SELECTOR_FIELDS,
+            vol.Optional(
+                "hours", description="Relative window size in hours; used when start/end are omitted."
+            ): _HOURS_ARG,
             vol.Optional("start", description="Window start (ISO-8601). Default now-1h."): _iso_datetime,
             vol.Optional("end", description="Window end (ISO-8601). Default now."): _iso_datetime,
         }
@@ -247,11 +402,11 @@ class GetHistoryTool(_RecorderTool):
         deadline: float,
         data: dict[str, object],
     ) -> JsonObjectType:
-        entity_ids = [entity_id.lower() for entity_id in cast(list[str], data["entity_ids"])]
-        _validate_visibility(snapshot, entity_ids)
+        entity_ids = _resolve_entity_ids(snapshot, data, "entity_ids")
         start, end = _clamp_window(
             cast(datetime | None, data.get("start")),
             cast(datetime | None, data.get("end")),
+            hours=cast(float | None, data.get("hours")),
             default_hours=DEFAULT_HISTORY_WINDOW_HOURS,
             max_hours=MAX_RECORDER_LOOKBACK_HOURS,
         )
@@ -303,7 +458,7 @@ class GetStatisticsTool(_RecorderTool):
     description = build_get_statistics_description()
     parameters: vol.Schema = vol.Schema(
         {
-            vol.Required(
+            vol.Optional(
                 "statistic_ids",
                 description="One or up to 20 statistic IDs (usually entity IDs).",
             ): vol.All(
@@ -311,6 +466,10 @@ class GetStatisticsTool(_RecorderTool):
                 [str],
                 vol.Length(min=1, max=MAX_RECORDER_ENTITY_IDS),
             ),
+            **_SELECTOR_FIELDS,
+            vol.Optional(
+                "hours", description="Relative window size in hours; used when start/end are omitted."
+            ): _HOURS_ARG,
             vol.Optional("start", description="Window start (ISO-8601). Default now-24h."): _iso_datetime,
             vol.Optional("end", description="Window end (ISO-8601). Default now."): _iso_datetime,
             vol.Optional("period", default="hour", description="Aggregation bucket."): vol.In(
@@ -328,12 +487,12 @@ class GetStatisticsTool(_RecorderTool):
         deadline: float,
         data: dict[str, object],
     ) -> JsonObjectType:
-        statistic_ids = [statistic_id.lower() for statistic_id in cast(list[str], data["statistic_ids"])]
-        _validate_visibility(snapshot, statistic_ids)
+        statistic_ids = _resolve_entity_ids(snapshot, data, "statistic_ids")
         period = cast(Literal["5minute", "hour", "day"], data["period"])
         start, end = _clamp_window(
             cast(datetime | None, data.get("start")),
             cast(datetime | None, data.get("end")),
+            hours=cast(float | None, data.get("hours")),
             default_hours=DEFAULT_STATISTICS_WINDOW_HOURS,
             max_hours=MAX_STATISTICS_LOOKBACK_HOURS,
         )
@@ -383,11 +542,15 @@ class GetLogbookTool(_RecorderTool):
     description = build_get_logbook_description()
     parameters: vol.Schema = vol.Schema(
         {
-            vol.Required("entity_ids", description="One or up to 20 entity IDs to scope the logbook."): vol.All(
+            vol.Optional("entity_ids", description="One or up to 20 entity IDs to scope the logbook."): vol.All(
                 cv.ensure_list,
                 [cv.entity_id],
                 vol.Length(min=1, max=MAX_RECORDER_ENTITY_IDS),
             ),
+            **_SELECTOR_FIELDS,
+            vol.Optional(
+                "hours", description="Relative window size in hours; used when start/end are omitted."
+            ): _HOURS_ARG,
             vol.Optional("start", description="Window start (ISO-8601). Default now-24h."): _iso_datetime,
             vol.Optional("end", description="Window end (ISO-8601). Default now."): _iso_datetime,
         }
@@ -402,11 +565,11 @@ class GetLogbookTool(_RecorderTool):
         deadline: float,
         data: dict[str, object],
     ) -> JsonObjectType:
-        entity_ids = [entity_id.lower() for entity_id in cast(list[str], data["entity_ids"])]
-        _validate_visibility(snapshot, entity_ids)
+        entity_ids = _resolve_entity_ids(snapshot, data, "entity_ids")
         start, end = _clamp_window(
             cast(datetime | None, data.get("start")),
             cast(datetime | None, data.get("end")),
+            hours=cast(float | None, data.get("hours")),
             default_hours=DEFAULT_LOGBOOK_WINDOW_HOURS,
             max_hours=MAX_RECORDER_LOOKBACK_HOURS,
         )

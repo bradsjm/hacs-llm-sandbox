@@ -70,6 +70,7 @@ _SUPPORTED_OPERATOR_DUNDERS = frozenset({"__getitem__", "__contains__", "__len__
 HASATTR_RESOLVED = "hasattr_resolved"
 GETATTR_RESOLVED = "getattr_resolved"
 TYPE_NAME_RESOLVED = "type_name_resolved"
+REWROTE_MAP_FILTER = "rewrote_map_filter"
 
 
 def public_surface(cls: type) -> frozenset[str]:
@@ -111,19 +112,23 @@ def surface_for_class_name(name: str) -> frozenset[str] | None:
 
 
 def normalize_builtins(code: str) -> tuple[str, list[str]]:
-    """Resolve safe builtin reflection over known facade globals."""
+    """Resolve safe builtin reflection and rewrite ``map``/``filter`` over known globals."""
     try:
         module = ast.parse(code)
     except SyntaxError:
         return code, []
 
     resolver = _BuiltinResolver()
-    resolved_module = resolver.visit(module)
-    if not resolver.applied:
+    module = resolver.visit(module)
+    map_filter = _MapFilterRewriter()
+    module = map_filter.visit(module)
+
+    applied = resolver.applied | map_filter.applied
+    if not applied:
         return code, []
 
-    ast.fix_missing_locations(resolved_module)
-    return ast.unparse(resolved_module), sorted(resolver.applied)
+    ast.fix_missing_locations(module)
+    return ast.unparse(module), sorted(applied)
 
 
 class _BuiltinResolver(ast.NodeTransformer):
@@ -193,3 +198,106 @@ def _qualifying_global_type(node: ast.AST) -> type | None:
     if not isinstance(node, ast.Name):
         return None
     return GLOBAL_TYPE_MAP.get(node.id)
+
+
+class _MapFilterRewriter(ast.NodeTransformer):
+    """Rewrite ``map``/``filter`` calls into equivalent list comprehensions.
+
+    Monty does not provide ``map``/``filter`` as builtins, but they are common
+    in LLM-generated code. Only shapes whose evaluation semantics are preserved
+    are rewritten; anything ambiguous is left untouched so Monty surfaces the
+    natural error. The callable must be a plain name or lambda (so call timing
+    and arity are unchanged); multi-iterable ``map`` is driven through ``zip``.
+    """
+
+    def __init__(self) -> None:
+        self.applied: set[str] = set()
+        self._counter = 0
+
+    def _target(self) -> str:
+        name = f"_lsbx_{self._counter}"
+        self._counter += 1
+        return name
+
+    def visit_Call(self, node: ast.Call) -> ast.AST:
+        # Recurse first so nested map/filter settle before this call.
+        self.generic_visit(node)
+        if not isinstance(node.func, ast.Name) or node.keywords:
+            return node
+        name = node.func.id
+        if name == "map" and len(node.args) >= 2:
+            return self._rewrite_map(node)
+        if name == "filter" and len(node.args) == 2:
+            return self._rewrite_filter(node)
+        return node
+
+    def _rewrite_map(self, node: ast.Call) -> ast.AST:
+        func = node.args[0]
+        iterables = node.args[1:]
+        # Reject callable expressions whose call timing/side effects could differ.
+        if not isinstance(func, ast.Name | ast.Lambda):
+            return node
+        targets = [self._target() for _ in iterables]
+        if len(iterables) == 1:
+            iter_expr: ast.expr = iterables[0]
+        else:
+            # Multi-iterable map pairs elements like Python's eager map via zip.
+            iter_expr = ast.Call(
+                func=ast.Name(id="zip", ctx=ast.Load()),
+                args=list(iterables),
+                keywords=[],
+            )
+        elt = ast.Call(
+            func=func,
+            args=[ast.Name(id=target, ctx=ast.Load()) for target in targets],
+            keywords=[],
+        )
+        target_node = self._comprehension_target(targets)
+        self.applied.add(REWROTE_MAP_FILTER)
+        return ast.copy_location(
+            ast.ListComp(
+                elt=elt,
+                generators=[ast.comprehension(target=target_node, iter=iter_expr, ifs=[], is_async=0)],
+            ),
+            node,
+        )
+
+    def _rewrite_filter(self, node: ast.Call) -> ast.AST:
+        func = node.args[0]
+        iterable = node.args[1]
+        target = self._target()
+        if isinstance(func, ast.Constant) and func.value is None:
+            # filter(None, xs) keeps truthy elements.
+            condition: ast.expr = ast.Name(id=target, ctx=ast.Load())
+        elif isinstance(func, ast.Name | ast.Lambda):
+            condition = ast.Call(
+                func=func,
+                args=[ast.Name(id=target, ctx=ast.Load())],
+                keywords=[],
+            )
+        else:
+            return node
+        self.applied.add(REWROTE_MAP_FILTER)
+        return ast.copy_location(
+            ast.ListComp(
+                elt=ast.Name(id=target, ctx=ast.Load()),
+                generators=[
+                    ast.comprehension(
+                        target=ast.Name(id=target, ctx=ast.Store()),
+                        iter=iterable,
+                        ifs=[condition],
+                        is_async=0,
+                    )
+                ],
+            ),
+            node,
+        )
+
+    @staticmethod
+    def _comprehension_target(targets: list[str]) -> ast.expr:
+        if len(targets) == 1:
+            return ast.Name(id=targets[0], ctx=ast.Store())
+        return ast.Tuple(
+            elts=[ast.Name(id=target, ctx=ast.Store()) for target in targets],
+            ctx=ast.Store(),
+        )

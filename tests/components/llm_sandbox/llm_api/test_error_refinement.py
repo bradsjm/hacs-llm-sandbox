@@ -146,6 +146,66 @@ def test_refine_attribute_error_unknown_class_has_no_surface() -> None:
     assert available_attributes is None
 
 
+@pytest.mark.parametrize(
+    "message",
+    [
+        pytest.param("error[unresolved-import]: Cannot resolve imported module `statistics`", id="statistics"),
+        pytest.param("ModuleNotFoundError: No module named 'collections'", id="collections"),
+        pytest.param("error[unresolved-import]: Cannot resolve imported module 'itertools'", id="itertools"),
+    ],
+)
+def test_refine_unresolved_import_guides_to_builtins(message: str) -> None:
+    refined_kind, refined_message, available_attributes = refine_code_error("Exception", message, "import x")
+
+    assert refined_kind == "ImportError"
+    assert available_attributes is None
+    assert "json, math, re" in refined_message
+
+
+def test_refine_percent_format_guides_to_fstring() -> None:
+    refined_kind, refined_message, _available_attributes = refine_code_error(
+        "TypeError",
+        "unsupported operand type(s) for %: 'str' and 'int'",
+        "x = '%d' % 5",
+    )
+
+    assert refined_kind == "TypeError"
+    assert "f-string" in refined_message
+
+
+def test_refine_str_format_guides_to_fstring() -> None:
+    refined_kind, refined_message, available_attributes = refine_code_error(
+        "AttributeError",
+        "'str' object has no attribute 'format'",
+        "'{}'.format(1)",
+    )
+
+    assert refined_kind == "AttributeError"
+    assert "f-string" in refined_message
+    assert available_attributes is None
+
+
+@pytest.mark.parametrize(
+    ("class_name", "friendly"),
+    [
+        pytest.param("SafeFloorRegistry", "floor_registry", id="floor-registry"),
+        pytest.param("SafeState", "state", id="state-record"),
+        pytest.param("SafeServiceRegistry", "hass.services", id="services"),
+        pytest.param("SafeEntityRegistry", "entity_registry", id="entity-registry"),
+    ],
+)
+def test_refine_scrubs_internal_facade_class_names(class_name: str, friendly: str) -> None:
+    refined_kind, refined_message, _available_attributes = refine_code_error(
+        "Exception",
+        f"'{class_name}' object has no attribute 'nope'",
+        "x.nope",
+    )
+
+    assert refined_kind == "AttributeError"
+    assert class_name not in refined_message
+    assert friendly in refined_message
+
+
 def test_refine_parse_miss_returns_inputs_unchanged() -> None:
     refined_kind, refined_message, available_attributes = refine_code_error(
         "Exception",

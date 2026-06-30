@@ -91,6 +91,50 @@ result = {
     assert output["len"] >= 2
 
 
+async def test_map_filter_normalize_and_run(
+    hass: HomeAssistant,
+    loaded_entry: MockConfigEntry,
+) -> None:
+    """map()/filter() are rewritten to comprehensions and run end-to-end."""
+    code = """
+result = {
+    "map": list(map(lambda x: x * 2, [1, 2, 3])),
+    "filter": list(filter(lambda x: x > 1, [1, 2, 3])),
+    "filter_none": list(filter(None, [0, 1, 2])),
+    "map_multi": list(map(lambda a, b: a + b, [1, 2], [10, 20])),
+}
+"""
+
+    result = await _run_code(hass, loaded_entry, code)
+
+    assert result["execution"]["status"] == "ok"
+    output = result["output"]
+    assert output["map"] == [2, 4, 6]
+    assert output["filter"] == [2, 3]
+    assert output["filter_none"] == [1, 2]
+    assert output["map_multi"] == [11, 22]
+
+
+async def test_registry_traversal_accepts_one_arg(
+    hass: HomeAssistant,
+    loaded_entry: MockConfigEntry,
+) -> None:
+    """One-arg traversal (no registry ceremony) resolves like the two-arg form."""
+    code = """
+bedroom = area_registry.async_get_area_by_name("Bedroom")
+one_arg = [e.entity_id for e in er.async_entries_for_area(bedroom.id)]
+two_arg = [e.entity_id for e in er.async_entries_for_area(er.async_get(hass), bedroom.id)]
+result = {"one_arg": one_arg, "two_arg": two_arg}
+"""
+
+    result = await _run_code(hass, loaded_entry, code)
+
+    assert result["execution"]["status"] == "ok"
+    output = result["output"]
+    assert output["one_arg"] == output["two_arg"]
+    assert output["one_arg"] == ["light.bedroom"]
+
+
 async def test_service_catalog_reads(
     hass: HomeAssistant,
     loaded_entry: MockConfigEntry,

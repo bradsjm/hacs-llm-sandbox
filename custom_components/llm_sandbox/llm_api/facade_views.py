@@ -155,25 +155,29 @@ class SafeEntityRegistry:
 
     def async_entries_for_area(
         self,
-        registry: SafeEntityRegistry,
-        area_id: str,
+        registry_or_area_id: Any,
+        area_id: str | None = None,
     ) -> list[SafeRegistryEntry]:
         """Return all entity entries whose effective area is ``area_id``.
 
         Effective area = ``entity.area_id or device.area_id`` (entity override wins).
+        The HA-native two-arg form passes the registry first; the one-arg form
+        omits it. Either is accepted.
         """
-        del registry  # HA parity: the registry argument is the first parameter.
+        if area_id is None:
+            area_id = registry_or_area_id
         entity_ids = self.indexes.entity_ids_by_area_id.get(area_id, ())
         return [self.entities[eid] for eid in entity_ids if eid in self.entities]
 
     def async_entries_for_device(
         self,
-        registry: SafeEntityRegistry,
-        device_id: str,
+        registry_or_device_id: Any,
+        device_id: str | None = None,
         include_disabled_entities: bool = False,
     ) -> list[SafeRegistryEntry]:
         """Return all entity entries linked to ``device_id``."""
-        del registry
+        if device_id is None:
+            device_id = registry_or_device_id
         entity_ids = self.indexes.entity_ids_by_device_id.get(device_id, ())
         results: list[SafeRegistryEntry] = []
         for eid in entity_ids:
@@ -187,21 +191,23 @@ class SafeEntityRegistry:
 
     def async_entries_for_config_entry(
         self,
-        registry: SafeEntityRegistry,
-        config_entry_id: str,
+        registry_or_config_entry_id: Any,
+        config_entry_id: str | None = None,
     ) -> list[SafeRegistryEntry]:
         """Return all entity entries created by ``config_entry_id``."""
-        del registry
+        if config_entry_id is None:
+            config_entry_id = registry_or_config_entry_id
         entity_ids = self.indexes.entity_ids_by_config_entry_id.get(config_entry_id, ())
         return [self.entities[eid] for eid in entity_ids if eid in self.entities]
 
     def async_entries_for_label(
         self,
-        registry: SafeEntityRegistry,
-        label_id: str,
+        registry_or_label_id: Any,
+        label_id: str | None = None,
     ) -> list[SafeRegistryEntry]:
         """Return all entity entries carrying ``label_id``."""
-        del registry
+        if label_id is None:
+            label_id = registry_or_label_id
         entity_ids = self.indexes.entity_ids_by_label.get(label_id, ())
         return [self.entities[eid] for eid in entity_ids if eid in self.entities]
 
@@ -216,10 +222,7 @@ class SafeEntityRegistry:
         del registry
         return self.async_get_entity_id(domain, platform, unique_id)
 
-    def async_entries(
-        self,
-        registry: SafeEntityRegistry,
-    ) -> list[SafeRegistryEntry]:
+    def async_entries(self, registry: Any = None) -> list[SafeRegistryEntry]:
         """Return all entity registry entries."""
         del registry
         return list(self.entities.values())
@@ -262,30 +265,33 @@ class SafeDeviceRegistry:
 
     def async_entries_for_area(
         self,
-        registry: SafeDeviceRegistry,
-        area_id: str,
+        registry_or_area_id: Any,
+        area_id: str | None = None,
     ) -> list[SafeDeviceEntry]:
         """Return all device entries assigned to ``area_id``."""
-        del registry
+        if area_id is None:
+            area_id = registry_or_area_id
         device_ids = self.indexes.device_ids_by_area_id.get(area_id, ())
         return [self.devices[did] for did in device_ids if did in self.devices]
 
     def async_entries_for_config_entry(
         self,
-        registry: SafeDeviceRegistry,
-        config_entry_id: str,
+        registry_or_config_entry_id: Any,
+        config_entry_id: str | None = None,
     ) -> list[SafeDeviceEntry]:
         """Return all device entries linked to ``config_entry_id``."""
-        del registry
+        if config_entry_id is None:
+            config_entry_id = registry_or_config_entry_id
         return [d for d in self.devices.values() if config_entry_id in d.config_entries]
 
     def async_entries_for_label(
         self,
-        registry: SafeDeviceRegistry,
-        label_id: str,
+        registry_or_label_id: Any,
+        label_id: str | None = None,
     ) -> list[SafeDeviceEntry]:
         """Return all device entries carrying ``label_id``."""
-        del registry
+        if label_id is None:
+            label_id = registry_or_label_id
         device_ids = self.indexes.device_ids_by_label.get(label_id, ())
         return [self.devices[did] for did in device_ids if did in self.devices]
 

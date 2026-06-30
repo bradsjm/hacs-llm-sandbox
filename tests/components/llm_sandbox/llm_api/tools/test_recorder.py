@@ -160,6 +160,7 @@ async def test_non_visible_entity_rejected(
     assert result["status"] == "error"
     assert result["error"]["key"] == "entity_not_visible"
     assert result["error"]["placeholders"]["entity_id"] == "light.living_room"
+    assert result["error"]["hints"]
 
 
 @pytest.mark.parametrize(
@@ -194,6 +195,7 @@ async def test_window_too_large_rejected(
 
     assert result["status"] == "error"
     assert result["error"]["key"] == "time_window_too_large"
+    assert result["error"]["hints"]
 
 
 async def test_history_window_clamped_to_default_when_omitted(
@@ -208,6 +210,48 @@ async def test_history_window_clamped_to_default_when_omitted(
     assert start is not None
     assert end is not None
     assert timedelta(hours=1) - timedelta(seconds=5) <= end - start <= timedelta(hours=1) + timedelta(seconds=5)
+
+
+async def test_history_hours_sizes_window(
+    hass: HomeAssistant,
+    recorder_entry: MockConfigEntry,
+) -> None:
+    """The hours argument sizes the window without ISO/timedelta math."""
+    hass.states.async_set("light.bedroom", "on", {"friendly_name": "Bedroom Light"})
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    result = await _call_history(hass, recorder_entry, {"entity_ids": ["light.bedroom"], "hours": 2})
+
+    assert result["status"] == "ok"
+    start = dt_util.parse_datetime(cast(str, result["window"]["start"]))
+    end = dt_util.parse_datetime(cast(str, result["window"]["end"]))
+    assert start is not None
+    assert end is not None
+    assert timedelta(hours=2) - timedelta(seconds=5) <= end - start <= timedelta(hours=2) + timedelta(seconds=5)
+
+
+async def test_history_area_and_domain_selectors(
+    hass: HomeAssistant,
+    recorder_entry: MockConfigEntry,
+) -> None:
+    """HA-native selectors resolve to visible entities without enumerating IDs."""
+    from homeassistant.helpers import area_registry as ar
+
+    hass.states.async_set("light.bedroom", "on", {"friendly_name": "Bedroom Light"})
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    bedroom = ar.async_get(hass).async_get_area_by_name("Bedroom")
+    assert bedroom is not None
+
+    by_area = await _call_history(hass, recorder_entry, {"area_id": bedroom.id})
+    assert by_area["status"] == "ok"
+    assert "light.bedroom" in by_area["entities"]
+
+    by_domain = await _call_history(hass, recorder_entry, {"domain": "light"})
+    assert by_domain["status"] == "ok"
+    assert "light.bedroom" in by_domain["entities"]
 
 
 async def test_history_truncates_large_result(
