@@ -1103,6 +1103,7 @@ dev = [
 ]
 evals = [
     { name = "litellm" },
+    { name = "python-dotenv" },
 ]
 
 [package.metadata]
@@ -1123,7 +1124,10 @@ dev = [
     { name = "ruff", specifier = ">=0.15.20" },
     { name = "yamllint", specifier = ">=1.37.1" },
 ]
-evals = [{ name = "litellm", specifier = ">=1.0" }]
+evals = [
+    { name = "litellm", specifier = ">=1.0" },
+    { name = "python-dotenv", specifier = ">=1.0" },
+]
 
 [[package]]
 name = "hass-nabucasa"

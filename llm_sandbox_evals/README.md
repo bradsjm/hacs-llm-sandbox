@@ -23,10 +23,13 @@ eval_data/runs/20260630-164326-318981
 
 ## Running real models
 
-Any [LiteLLM](https://github.com/BerriAI/litellm) model id works; API keys are read from the environment (e.g. `OPENAI_API_KEY`).
+Any [LiteLLM](https://github.com/BerriAI/litellm) model id works; API keys are read from the environment (e.g. `OPENAI_API_KEY`). A `.env` file in the repo root is auto-loaded by the CLI (shell exports take precedence over `.env`), and `.env` is gitignored.
 
 ```bash
-export OPENAI_API_KEY=sk-...
+cat > .env <<'EOF'
+OPENAI_API_KEY=sk-...
+ANTHROPIC_API_KEY=sk-ant-...
+EOF
 uv run --group dev --group evals python -m llm_sandbox_evals eval --models gpt-4o-mini,claude-haiku-4-5,stub
 ```
 

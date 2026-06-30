@@ -5,6 +5,8 @@ import asyncio
 import sys
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 from llm_sandbox_evals.config import EvalConfig, load_config
 from llm_sandbox_evals.harness import run_matrix
 from llm_sandbox_evals.reports import load_run_json, render_leaderboard_from_scores, write_run
@@ -12,6 +14,9 @@ from llm_sandbox_evals.reports import load_run_json, render_leaderboard_from_sco
 
 def main(argv: list[str] | None = None) -> int:
     """Run the eval CLI."""
+    # Load a .env file (if present) before any model adapter runs. Existing
+    # environment variables take precedence, so explicit exports still win.
+    load_dotenv()
     parser = _build_parser()
     args = parser.parse_args(argv)
 
