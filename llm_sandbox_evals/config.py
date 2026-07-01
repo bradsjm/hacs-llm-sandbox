@@ -14,6 +14,7 @@ class EvalConfig:
     homes: list[str] | None
     runs_dir: Path
     concurrency: int = 5
+    reasoning_effort: str | None = None
 
 
 def load_config() -> EvalConfig:

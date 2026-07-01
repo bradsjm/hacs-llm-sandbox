@@ -43,6 +43,10 @@ def _build_parser() -> argparse.ArgumentParser:
     eval_parser.add_argument(
         "--concurrency", type=int, help="max concurrent model calls per candidate/model (default 5)"
     )
+    eval_parser.add_argument(
+        "--reasoning",
+        help="litellm reasoning effort level passed to real models (e.g. minimal/low/medium/high)",
+    )
 
     report_parser = subparsers.add_parser("report", help="render a saved run leaderboard")
     report_parser.add_argument("run_id", nargs="?", help="run id under the runs directory")
@@ -61,6 +65,7 @@ def _run_eval(args: argparse.Namespace) -> int:
         homes=base_config.homes,
         runs_dir=args.runs_dir or base_config.runs_dir,
         concurrency=args.concurrency if args.concurrency else base_config.concurrency,
+        reasoning_effort=args.reasoning,
     )
     result = asyncio.run(run_matrix(config))
     run_dir = write_run(result, config.runs_dir)

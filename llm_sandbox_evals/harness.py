@@ -67,7 +67,7 @@ async def run_matrix(config: EvalConfig) -> RunResult:
 
     for candidate in candidates:
         for model_id in model_ids:
-            adapter = get_adapter(model_id)
+            adapter = get_adapter(model_id, config.reasoning_effort)
             _progress(
                 f"[{candidate.id}/{model_id}] {len(selected_cases)} cases "
                 f"(concurrency={config.concurrency})"

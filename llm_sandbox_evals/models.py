@@ -41,6 +41,10 @@ class StubAdapter:
 class LiteLLMAdapter:
     """Adapter for real models routed through LiteLLM."""
 
+    def __init__(self, reasoning_effort: str | None = None) -> None:
+        """Store the optional reasoning effort level forwarded to LiteLLM."""
+        self._reasoning_effort = reasoning_effort
+
     async def complete(self, model_id: str, prompt: str) -> ModelResult:
         """Call LiteLLM and parse the returned JSON tool call.
 
@@ -52,15 +56,20 @@ class LiteLLMAdapter:
         try:
             litellm = importlib.import_module("litellm")
             completion = cast(Callable[..., object], litellm.__dict__["completion"])
+            # Reasoning models generally ignore or reject an explicit temperature,
+            # so let the provider default it when a reasoning effort is requested.
+            kwargs: dict[str, object] = {
+                "model": model_id,
+                "messages": [{"role": "user", "content": prompt}],
+                "timeout": 60,
+                "num_retries": 1,
+            }
+            if self._reasoning_effort:
+                kwargs["reasoning_effort"] = self._reasoning_effort
+            else:
+                kwargs["temperature"] = 0.0
             response = await asyncio.wait_for(
-                asyncio.to_thread(
-                    completion,
-                    model=model_id,
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=0.0,
-                    timeout=60,
-                    num_retries=1,
-                ),
+                asyncio.to_thread(completion, **kwargs),
                 timeout=90,
             )
             content = _extract_litellm_content(response)
@@ -70,12 +79,12 @@ class LiteLLMAdapter:
         return ModelResult(raw_text=content, tool_call=parse_tool_call(content), error=None)
 
 
-def get_adapter(model_id: str) -> ModelAdapter:
+def get_adapter(model_id: str, reasoning_effort: str | None = None) -> ModelAdapter:
     """Return the adapter for a model identifier."""
     # The stub adapter is a first-class offline model for keyless verification.
     if model_id == "stub":
         return StubAdapter()
-    return LiteLLMAdapter()
+    return LiteLLMAdapter(reasoning_effort=reasoning_effort)
 
 
 def parse_tool_call(raw_text: str) -> dict[str, object] | None:
