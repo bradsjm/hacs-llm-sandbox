@@ -16,7 +16,9 @@ Design for success in one call, and recovery in no more than one follow-up call.
 
 On success, return the useful result directly. On failure, return actionable feedback that tells the next LLM call exactly what went wrong, what names or APIs are available, and what concrete change is likely to work.
 
-Do not require the LLM to learn integration-specific tricks when normal Home Assistant knowledge can be adapted safely inside the tool.
+Do not require the LLM to learn integration-specific details when normal Home Assistant knowledge can be adapted safely inside the tool.
+
+Prioritize improving accomdating reasonable intent over increasing prompting length.
 
 ## Non-Negotiables
 
