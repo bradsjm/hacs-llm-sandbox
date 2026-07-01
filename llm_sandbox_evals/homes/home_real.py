@@ -334,7 +334,10 @@ def _floor(floor: FloorData) -> SafeFloorEntry:
 
 def _services_supports_response(services: Mapping[str, tuple[str, ...]]) -> dict[str, dict[str, str]]:
     """Build service response metadata for every listed service."""
-    return {domain: dict.fromkeys(domain_services, SupportsResponse.NONE.value) for domain, domain_services in services.items()}
+    return {
+        domain: dict.fromkeys(domain_services, SupportsResponse.NONE.value)
+        for domain, domain_services in services.items()
+    }
 
 
 def _indexes(

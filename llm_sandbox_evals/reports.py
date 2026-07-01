@@ -13,9 +13,7 @@ from pathlib import Path
 from llm_sandbox_evals.harness import CandidateModelScore, CaseTrace, RunResult
 
 _SAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9_.-]")
-_INTEGRATION_MANIFEST = (
-    Path(__file__).resolve().parent.parent / "custom_components" / "llm_sandbox" / "manifest.json"
-)
+_INTEGRATION_MANIFEST = Path(__file__).resolve().parent.parent / "custom_components" / "llm_sandbox" / "manifest.json"
 
 
 def write_run(result: RunResult, runs_dir: Path) -> Path:
