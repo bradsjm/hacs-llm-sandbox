@@ -65,7 +65,9 @@ class LiteLLMAdapter:
                 "num_retries": 1,
             }
             if self._reasoning_effort:
-                kwargs["reasoning_effort"] = self._reasoning_effort
+                # Route via extra_body: some providers (e.g. OpenRouter) reject a
+                # top-level reasoning_effort param, but accept it in the raw body.
+                kwargs["extra_body"] = {"reasoning_effort": self._reasoning_effort}
             else:
                 kwargs["temperature"] = 0.0
             response = await asyncio.wait_for(

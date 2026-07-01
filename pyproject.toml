@@ -29,6 +29,7 @@ dev = [
 evals = [
   "litellm>=1.0",
   "python-dotenv>=1.0",
+  "tenacity>=8.0",
 ]
 
 [tool.ruff]
