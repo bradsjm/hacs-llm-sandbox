@@ -25,6 +25,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_eval(args)
     if args.command == "report":
         return _run_report(args)
+    if args.command == "optimize":
+        return _run_optimize(args)
 
     parser.print_help(sys.stderr)
     return 2
@@ -52,6 +54,19 @@ def _build_parser() -> argparse.ArgumentParser:
     report_parser.add_argument("run_id", nargs="?", help="run id under the runs directory")
     report_parser.add_argument("--run-id", dest="run_id_option", help="run id under the runs directory")
     report_parser.add_argument("--runs-dir", type=Path, help="directory containing run artifacts")
+
+    optimize_parser = subparsers.add_parser("optimize", help="optimize the API prompt with DSPy COPRO")
+    optimize_parser.add_argument("--target-model", help="model id to optimize against")
+    optimize_parser.add_argument("--proposer-model", help="model id used to propose prompt rewrites")
+    optimize_parser.add_argument("--breadth", type=int, help="COPRO breadth (default 5)")
+    optimize_parser.add_argument("--depth", type=int, help="COPRO depth (default 2)")
+    optimize_parser.add_argument("--cases", help="comma-separated case ids or categories")
+    optimize_parser.add_argument(
+        "--reasoning",
+        help="reasoning effort level passed to cross-eval harness models (e.g. minimal/low/medium/high)",
+    )
+    optimize_parser.add_argument("--cross-eval-models", help="comma-separated model ids for baseline vs optimized eval")
+    optimize_parser.add_argument("--runs-dir", type=Path, help="directory for run artifacts")
     return parser
 
 
@@ -100,6 +115,50 @@ def _run_report(args: argparse.Namespace) -> int:
             model_ids=model_ids,
         )
     )
+    return 0
+
+
+def _run_optimize(args: argparse.Namespace) -> int:
+    """Run DSPy optimization and print the exported candidate summary."""
+    # Lazy import keeps the offline eval/report paths usable without importing DSPy.
+    from llm_sandbox_evals import optimize_dspy
+
+    base_config = load_config()
+    config = EvalConfig(
+        models=base_config.models,
+        candidates=base_config.candidates,
+        cases=_csv_arg(args.cases) if args.cases is not None else base_config.cases,
+        homes=None,
+        runs_dir=args.runs_dir or base_config.runs_dir,
+        reasoning_effort=args.reasoning,
+        target_model=args.target_model,
+        proposer_model=args.proposer_model,
+        breadth=args.breadth or 5,
+        depth=args.depth or 2,
+        cross_eval_models=_csv_arg(args.cross_eval_models),
+    )
+    try:
+        result = optimize_dspy.run_optimize(config)
+    except ValueError as err:
+        sys.stderr.write(f"error: {err}\n")
+        return 2
+
+    run_dir = result.candidate_path.parent
+    sys.stdout.write(
+        "\n".join(
+            (
+                f"run_dir: {run_dir}",
+                f"target_model: {result.target_model}",
+                f"baseline_mean: {result.baseline_mean:.3f}",
+                f"optimized_mean: {result.optimized_mean:.3f}",
+                f"optimized_candidate: {result.candidate_path}",
+            )
+        )
+        + "\n"
+    )
+    # Branch boundary: cross-eval artifacts exist only when explicitly requested.
+    if result.cross_eval_run_dir is not None:
+        sys.stdout.write(f"cross_eval_run_dir: {result.cross_eval_run_dir}\n")
     return 0
 
 

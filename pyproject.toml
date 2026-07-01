@@ -30,6 +30,7 @@ evals = [
   "litellm>=1.0",
   "python-dotenv>=1.0",
   "tenacity>=8.0",
+  "dspy>=2.6",
 ]
 
 [tool.ruff]

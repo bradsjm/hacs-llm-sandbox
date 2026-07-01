@@ -23,9 +23,9 @@ Do not require the LLM to learn integration-specific tricks when normal Home Ass
 - **Never** pass a live `HomeAssistant` object, live registries, event bus, auth, config, filesystem, network, or OS/process API into the tool runner. The only service seam is `RecordingInvoker` (`tools.py`), which records the `ProposedAction` and returns `None` — it never calls `hass.services.async_call`.
 - Build a **fresh** `HomeSnapshot` per case evaluation; never cache or mutate fixtures.
 - The recorder tools are **emulated** from fixture `recorder()` data, never a live database.
-- Keep eval dependencies **isolated**: `litellm` lives only in `[dependency-groups] evals`. Never add to `[project] dependencies`, `manifest.json`, or any `custom_components/**` import. `custom_components/**` is read-only.
+- Keep eval dependencies **isolated**: `litellm` and `dspy` live only in `[dependency-groups] evals`. Never add them to `[project] dependencies`, `manifest.json`, or any `custom_components/**` import. `custom_components/**` is read-only.
 - Keep `scripts/check` (the integration check) untouched; this package has its own `scripts/*-evals`.
-- The DSPy optimizer is **deferred** — do not add `dspy` or optimizer logic yet; extend through the existing `ModelAdapter` / `PromptCandidate` seam when that phase lands.
+- The DSPy optimizer is dev-only. Keep `dspy` imports inside `optimize_dspy.py` and the lazy CLI optimize handler so eval/report/stub paths import without DSPy.
 - No fallbacks unless explicitly approved.
 
 ## Commands
@@ -34,6 +34,7 @@ Do not require the LLM to learn integration-specific tricks when normal Home Ass
 - Check: `scripts/check-evals` (ruff + mypy + offline stub eval)
 - Format: `scripts/format-evals`
 - Run: `uv run --group dev --group evals python -m llm_sandbox_evals eval --models stub`
+- Optimize: `uv run --group dev --group evals python -m llm_sandbox_evals optimize --target-model <real-model>`
 - Report: `uv run --group dev --group evals python -m llm_sandbox_evals report <run_id>`
 
 Note: eval runs need **both** groups (`dev` provides `homeassistant`, `evals` provides `litellm`). Artifacts go to the gitignored `eval_data/runs/`.
@@ -65,7 +66,8 @@ The harness owns the snapshot lifecycle (build once per evaluation, pass to rend
 - `scoring.py` — `check_case(...)`, `score_case(...)`, `mean_score(...)`. Required gates + optional checks.
 - `harness.py` — `run_matrix(config) -> RunResult`; `CaseTrace`, `CandidateModelScore`, `RunResult`.
 - `reports.py` — `write_run(...)`, `render_leaderboard(...)`, `load_run_json(...)` (for `report`).
-- `cli.py` / `__main__.py` — `eval` and `report` subcommands.
+- `optimize_dspy.py` — DSPy COPRO prompt optimizer that exports optimized `PromptCandidate` artifacts and reuses the real harness metric path.
+- `cli.py` / `__main__.py` — `eval`, `report`, and `optimize` subcommands.
 
 ### Key contracts
 

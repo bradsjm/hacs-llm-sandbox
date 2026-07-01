@@ -15,6 +15,11 @@ class EvalConfig:
     runs_dir: Path
     concurrency: int = 5
     reasoning_effort: str | None = None
+    target_model: str | None = None
+    proposer_model: str | None = None
+    breadth: int = 5
+    depth: int = 2
+    cross_eval_models: list[str] | None = None
 
 
 def load_config() -> EvalConfig:

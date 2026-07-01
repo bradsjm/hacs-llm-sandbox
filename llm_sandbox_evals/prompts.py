@@ -6,6 +6,9 @@ module adds only eval-harness framing: tool-spec presentation, JSON response
 contract, and the concrete user request.
 """
 
+import json
+from pathlib import Path
+
 from custom_components.llm_sandbox.const import (
     TOOL_EXECUTE_HOME_CODE,
     TOOL_GET_HISTORY,
@@ -42,18 +45,29 @@ def baseline_candidate() -> PromptCandidate:
 
 def load_candidates(candidate_ids: list[str]) -> list[PromptCandidate]:
     """Load supported prompt candidates, rejecting unknown candidate ids."""
-    unknown_ids = sorted(set(candidate_ids) - {_BASELINE_ID})
-    # Candidate ids are configuration errors when unknown; do not silently fall back.
-    if unknown_ids:
-        raise ValueError(f"unknown prompt candidate id(s): {', '.join(unknown_ids)}")
-    if _BASELINE_ID not in candidate_ids:
-        return []
-    return [baseline_candidate()]
+    candidates: list[PromptCandidate] = []
+    for candidate_id in candidate_ids:
+        # Branch boundary: the production baseline is the built-in candidate.
+        if candidate_id == _BASELINE_ID:
+            candidates.append(baseline_candidate())
+            continue
+        # Branch boundary: optimizer artifacts are explicitly loaded from JSON.
+        if candidate_id.startswith("optimized:"):
+            candidates.append(_load_optimized(candidate_id.removeprefix("optimized:")))
+            continue
+        # Candidate ids are configuration errors when unknown; do not silently fall back.
+        raise ValueError(f"unknown prompt candidate id(s): {candidate_id}")
+    return candidates
 
 
 def render_prompt(candidate: PromptCandidate, case: EvalCase, snapshot: HomeSnapshot) -> str:
     """Render the complete single-message prompt sent to the model adapter."""
-    sections = [candidate.api_prompt, ACTIONS_ENABLED_PROMPT if case.actions_enabled else ACTIONS_DISABLED_PROMPT]
+    return f"{candidate.api_prompt}\n\n{render_context(candidate, case, snapshot)}"
+
+
+def render_context(candidate: PromptCandidate, case: EvalCase, snapshot: HomeSnapshot) -> str:
+    """Render the production-like prompt context without the leading API prompt."""
+    sections = [ACTIONS_ENABLED_PROMPT if case.actions_enabled else ACTIONS_DISABLED_PROMPT]
     location_section = _request_location_section(case.llm_context.device_id, snapshot)
     # The production API omits the location section when there is no initiating device.
     if location_section is not None:
@@ -147,3 +161,26 @@ def _response_contract_section() -> str:
 def _user_request_section(case: EvalCase) -> str:
     """Render the concrete user request being evaluated."""
     return f"## User request\n{case.user_request}"
+
+
+def _load_optimized(path: str) -> PromptCandidate:
+    """Load an optimized prompt candidate from a JSON artifact."""
+    decoded = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(decoded, dict):
+        raise ValueError("optimized candidate JSON must contain an object")
+    return PromptCandidate(
+        id=_string_field(decoded, "id"),
+        api_prompt=_string_field(decoded, "api_prompt"),
+        execute_home_code_description=_string_field(decoded, "execute_home_code_description"),
+        get_history_description=_string_field(decoded, "get_history_description"),
+        get_statistics_description=_string_field(decoded, "get_statistics_description"),
+        get_logbook_description=_string_field(decoded, "get_logbook_description"),
+    )
+
+
+def _string_field(data: dict[object, object], key: str) -> str:
+    """Return a required string field from an optimizer candidate artifact."""
+    value = data.get(key)
+    if not isinstance(value, str):
+        raise ValueError(f"optimized candidate field {key!r} must be a string")
+    return value
