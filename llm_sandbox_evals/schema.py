@@ -69,15 +69,35 @@ class EvalCase:
     actions_enabled: bool
     llm_context: CaseContext
     expected: Expected
+    par_turns: int
+    max_turns: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
-class ModelResult:
-    """A model adapter's raw and parsed response."""
+class ToolCall:
+    """One native provider tool call selected by the model."""
 
-    raw_text: str
-    tool_call: dict[str, object] | None
-    error: str | None
+    id: str
+    tool_name: str
+    tool_args: dict[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class AgentStep:
+    """One assistant message in the agent loop."""
+
+    tool_calls: tuple[ToolCall, ...]
+    text: str
+    assistant_message: dict[str, object]
+    raw: str
+
+
+@dataclass(frozen=True, slots=True)
+class StepTrace:
+    """Persisted trace of one tool-turn."""
+
+    tool_calls: tuple[ToolCall, ...]
+    tool_results: tuple[dict[str, object] | None, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,3 +135,52 @@ class ToolSpec:
     name: str
     description: str
     args: tuple[str, ...]
+    parameters: dict[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class CaseTrace:
+    """Full trace for one candidate/model/case execution."""
+
+    case_id: str
+    category: str
+    candidate_id: str
+    model_id: str
+    score: float
+    prompt: str
+    raw_output: str
+    tool_call: dict[str, object] | None
+    tool_result: dict[str, object] | None
+    recorded_actions: tuple[dict[str, object], ...]
+    checks: tuple[CheckResult, ...]
+    turns: int
+    par_turns: int
+    efficiency: float
+    final_answer: str
+    steps: tuple[StepTrace, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class CandidateModelScore:
+    """Aggregated scores for one candidate/model pair."""
+
+    candidate_id: str
+    model_id: str
+    mean: float
+    mean_turns: float
+    mean_efficiency: float
+    per_category: dict[str, float]
+    case_scores: dict[str, float]
+
+
+@dataclass(frozen=True, slots=True)
+class RunResult:
+    """Complete result for one eval matrix run."""
+
+    run_id: str
+    created_at: str
+    candidate_ids: list[str]
+    model_ids: list[str]
+    case_ids: list[str]
+    traces: list[CaseTrace]
+    scores: list[CandidateModelScore]

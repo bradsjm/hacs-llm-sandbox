@@ -88,8 +88,8 @@ def _add_eval_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPar
         help="run the candidate x model x case eval matrix",
         description=(
             "Run the eval matrix: for every (prompt candidate x language model x test case),\n"
-            "ask the model to pick a tool, run that tool against a frozen Home Assistant\n"
-            "snapshot, and score the result in 0.0-1.0. Artifacts are written under the\n"
+            "ask the model to use the available tools over one or more turns against a\n"
+            "frozen Home Assistant snapshot, and score the result in 0.0-1.0. Artifacts are written under the\n"
             "runs directory; the leaderboard is printed to stdout."
         ),
         epilog=(
@@ -140,6 +140,12 @@ def _add_eval_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPar
         type=int,
         metavar="N",
         help="max concurrent model calls per candidate/model (default: 5).",
+    )
+    eval_parser.add_argument(
+        "--max-turns",
+        type=int,
+        metavar="N",
+        help="max tool-calling turns per case before forcing a final answer (default: 5).",
     )
     eval_parser.add_argument(
         "--reasoning",
@@ -273,6 +279,9 @@ def _run_eval(args: argparse.Namespace) -> int:
         homes=base_config.homes,
         runs_dir=args.runs_dir or base_config.runs_dir,
         concurrency=args.concurrency if args.concurrency else base_config.concurrency,
+        max_turns=args.max_turns if args.max_turns else base_config.max_turns,
+        efficiency_k=base_config.efficiency_k,
+        efficiency_floor=base_config.efficiency_floor,
         reasoning_effort=args.reasoning,
     )
     selected_cases = _select_cases(config.cases, config.homes)
@@ -388,9 +397,9 @@ def _eval_banner(config: EvalConfig, case_count: int) -> str:
     return (
         "llm_sandbox evals - running the eval matrix\n\n"
         "For every (prompt candidate x language model x test case), this harness:\n"
-        "  1. renders the prompt and asks the model to choose a tool,\n"
-        "  2. runs that tool against a FROZEN Home Assistant snapshot, and\n"
-        "  3. scores the result deterministically in 0.0-1.0.\n\n"
+        "  1. renders native tool-calling messages and function schemas,\n"
+        "  2. lets the model use available tools over one or more bounded turns, and\n"
+        "  3. scores the final outcome plus turn efficiency in 0.0-1.0.\n\n"
         "Candidates rank by mean score; ties break toward the candidate that holds up\n"
         'best on the worst model (the "MinModel" column). A higher mean is better.\n\n'
         "Config:\n"
@@ -400,6 +409,7 @@ def _eval_banner(config: EvalConfig, case_count: int) -> str:
         f"  cases       : {cases_field}\n"
         f"  runs dir    : {config.runs_dir}\n"
         f"  concurrency : {config.concurrency}\n"
+        f"  max turns   : {config.max_turns}\n"
         f"  reasoning   : {reasoning}\n\n"
         f"{_STUB_NOTE}\n"
     )

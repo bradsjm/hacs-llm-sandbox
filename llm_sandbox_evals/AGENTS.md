@@ -2,7 +2,7 @@
 
 ## Project Identity
 
-`llm_sandbox_evals/` is a **development-only** package at repo root that evaluates the `llm_sandbox` LLM tools (`execute_home_code`, `get_history`, `get_statistics`, `get_logbook`). It runs the **real** `async_execute_home_code` against **frozen** `HomeSnapshot` fixtures (hand-built in Python — no JSON deserializer exists), scores each operation deterministically, and ranks prompt candidates across a matrix of language models.
+`llm_sandbox_evals/` is a **development-only** package at repo root that evaluates the `llm_sandbox` LLM tools (`execute_home_code`, `get_history`, `get_statistics`, `get_logbook`). It runs a bounded, multi-turn native tool-calling agent loop against **frozen** `HomeSnapshot` fixtures (hand-built in Python — no JSON deserializer exists), executes the **real** `async_execute_home_code` for code cases, scores final outcomes with turn efficiency, and ranks prompt candidates across a matrix of language models.
 
 It is **not** part of the integration runtime. See `README.md` for usage.
 
@@ -46,49 +46,56 @@ Note: eval runs need **both** groups (`dev` provides `homeassistant`, `evals` pr
 The harness (`harness.run_matrix`) runs, per `(candidate, model, case)`:
 
 ```
-profile  = resolve_profile(config.prompt_profile)        # selected production prompt profile
-snapshot = homes.get_home(case.home).snapshot()          # fresh frozen snapshot
-prompt   = prompts.render_prompt(candidate, case, snapshot)
-result   = await models.get_adapter(model).complete(model, prompt)
-outcome  = await tools.run_tool(result.tool_call, case, snapshot, profile)
-checks   = scoring.check_case(case, result.tool_call, outcome, snapshot)
-score    = scoring.score_case(checks)
+profile  = resolve_profile(config.prompt_profile)         # selected production prompt profile
+snapshot = homes.get_home(case.home).snapshot()           # fresh frozen snapshot
+messages = prompts.render_messages(candidate, case, snapshot)
+schemas  = prompts.function_schemas(candidate)            # provider-native tool definitions
+while turns < (case.max_turns or config.max_turns):
+    step = await models.get_adapter(model).respond(model, messages, schemas)
+    if not step.tool_calls:
+        final_answer = step.text
+        break
+    for call in step.tool_calls:
+        outcome = await tools.run_tool(call, case, snapshot, profile, invoker=invoker)
+        messages.append(tools.tool_result_message(call.id, outcome.result))
+checks = scoring.check_case(case, final_answer, recorded_actions, statuses, referenced_ids, snapshot)
+score  = scoring.score_case(checks, turns, case.par_turns, config.efficiency_k, config.efficiency_floor)
 ```
 
-The harness owns the snapshot lifecycle (build once per evaluation, pass to render/run/score). The real executor activates/clears its own runtime contextvars internally — the harness does **not** call `activate_runtime`/`clear_runtime`.
+The harness owns the snapshot lifecycle (build once per case evaluation, pass to render/run/score). Tool turns may contain one or more native tool calls. Correct outcomes score `1.0` at or under the case's `par_turns`, then decay by `efficiency_k` per extra tool-turn down to `efficiency_floor`; failed required outcome gates score `0.0`. The real executor activates/clears its own runtime contextvars internally — the harness does **not** call `activate_runtime`/`clear_runtime`.
 
 ### Module map
 
-- `schema.py` — **stable shared contracts** (`PromptCandidate`, `EvalCase`, `Expected`, `ExpectedAction`, `CaseContext`, `ModelResult`, `ToolOutcome`, `CheckResult`, `ToolSpec`). Do not rename fields without updating all consumers.
+- `schema.py` — **stable shared contracts** (`PromptCandidate`, `EvalCase`, `Expected`, `ExpectedAction`, `CaseContext`, `ToolCall`, `AgentStep`, `StepTrace`, `ToolOutcome`, `CheckResult`, `ToolSpec`). Do not rename fields without updating all consumers.
 - `config.py` — `EvalConfig` + `load_config()` (defaults: `models=["stub"]`, `candidates=["baseline"]`).
 - `cases.py` — `CASES: list[EvalCase]`, the predefined suite (simple -> complex, all categories).
 - `homes/` — frozen fixture modules (`snapshot() -> HomeSnapshot`, `recorder() -> dict`) + `get_home(name)` registry.
-- `prompts.py` — `baseline_candidate()` (from production builders), `load_candidates(ids, prompt_profile_id)`, `render_prompt(...)`, `tool_specs(...)`. Reuses the selected production prompt profile / `ACTIONS_*_PROMPT` / tool-description builders; derives the request-location section from the frozen snapshot.
-- `models.py` — `ModelAdapter` protocol, `StubAdapter` (offline, deterministic), `LiteLLMAdapter` (any provider, lazy import), `get_adapter(id)`, `parse_tool_call(text)`.
-- `tools.py` — `run_tool(tool_call, case, snapshot, prompt_profile) -> ToolOutcome`. Real executor path + fixture-backed recorder emulators matching production response shapes + `RecordingInvoker`.
-- `scoring.py` — `check_case(...)`, `score_case(...)`, `mean_score(...)`. Required gates + optional checks.
-- `harness.py` — `run_matrix(config) -> RunResult`; `CaseTrace`, `CandidateModelScore`, `RunResult`.
+- `prompts.py` — `baseline_candidate()` (from production builders), `load_candidates(ids, prompt_profile_id)`, `render_messages(...)`, `function_schemas(...)`, `tool_specs(...)`. Reuses the selected production prompt profile / `ACTIONS_*_PROMPT` / tool-description builders; derives the request-location section from the frozen snapshot.
+- `models.py` — `ModelAdapter` protocol, `StubAdapter` (offline, deterministic multi-turn validator), `LiteLLMAdapter` (any provider, lazy import), `get_adapter(id)`.
+- `tools.py` — `run_tool(tool_call, case, snapshot, prompt_profile, invoker=...) -> ToolOutcome`. Real executor path + fixture-backed recorder emulators matching production response shapes + `RecordingInvoker`; `tool_result_message(...)` serializes bounded tool results for the next model turn.
+- `scoring.py` — `check_case(...)`, `score_case(...)`, `mean_score(...)`. Outcome gates + turn-efficiency scoring.
+- `harness.py` — `run_case(...) -> CaseTrace`, `run_matrix(config) -> RunResult`; `CaseTrace`, `CandidateModelScore`, `RunResult`.
 - `reports.py` — `write_run(...)`, `render_leaderboard(...)`, `load_run_json(...)` (for `report`).
 - `optimize_dspy.py` — DSPy COPRO prompt optimizer that exports optimized `PromptCandidate` artifacts and reuses the real harness metric path.
 - `cli.py` / `__main__.py` — `eval`, `report`, and `optimize` subcommands.
 
 ### Key contracts
 
-- Tool call dict shape: `{"tool_name": str, "tool_args": dict}`. Tool names are the production constants from `custom_components.llm_sandbox.const`.
+- Tool call shape: `ToolCall(id: str, tool_name: str, tool_args: dict)`, parsed from provider-native function calls. Tool names are the production constants from `custom_components.llm_sandbox.const`.
 - `execute_home_code` `tool_args` = `{"code": str}`; the result dict carries `execution.status` (`ok|code_error|helper_error|setup_error`), `output`, `printed`, `actions`.
 - Recorder `ToolOutcome.result` matches production: history `"entities": {id: [rows]}`, statistics `"statistics": {id: [rows]}`, logbook `"entries": [rows]`. Empty/missing ids -> `{"status":"error","error":{"key":"invalid_tool_input"}}`; invisible ids -> `entity_not_visible`.
 - `ToolOutcome.recorded_actions` for the execute path comes from `result["actions"]` (the facade's `ActionRecord` list), not the invoker's captured calls.
 
 ## How To Extend
 
-- **Add a case:** append to `cases.CASES`. Reference a real fixture `home`; keep `expected` deterministic. For recorder cases, put the resolved entity id in `user_request` (models get no entity list).
+- **Add a case:** append to `cases.CASES`. Reference a real fixture `home`; keep `expected` deterministic; set `par_turns` to the expected efficient tool-turn count. Recorder cases may use entity ids or supported selectors such as area/domain/device/floor/label in native tool args.
 - **Add a fixture:** add `homes/<name>.py` with `snapshot()`/`recorder()` and `NAME`, then register in `homes/__init__.py`. Mirror `home_default.py`'s helpers (effective-area rule, sorted tuple `SnapshotIndexes`, nested `SafeContext`).
 - **Add a candidate:** add a `PromptCandidate` and expose via `prompts.load_candidates`. `baseline` is auto-built; unknown ids currently raise.
 - **Add a model:** no code needed — pass any litellm id to `--models`. To add a non-litellm backend, implement the `ModelAdapter` protocol and branch in `get_adapter`.
 
 ## The Stub Adapter
 
-`StubAdapter` is a **pipeline validator**, not a scoring benchmark. It keyword-detects the tool from the **user request only** (not the whole prompt, which lists every tool name) and emits runnable, minimally-valid calls. Recorder cases score meaningfully only when the entity id appears in the request. A low stub score in a category is expected and honest; use real models for prompt-quality signal.
+`StubAdapter` is a **pipeline validator**, not a scoring benchmark. It keyword-detects the tool from the **user request only** (not the whole prompt, which lists every tool name), emits one runnable native tool call, then returns a terminal answer echoing the latest tool result. Recorder cases without explicit ids use broad selectors to exercise resolver support. A low stub score in a category is expected and honest; use real models for prompt-quality signal.
 
 ## Safety Verification
 

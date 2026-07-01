@@ -1,4 +1,4 @@
-"""Model adapters for eval prompt completion."""
+"""Model adapters for native tool-calling eval turns."""
 
 import asyncio
 import importlib
@@ -7,31 +7,27 @@ import re
 from collections.abc import Callable
 from typing import Protocol, cast
 
-from llm_sandbox_evals.schema import ModelResult
+from custom_components.llm_sandbox.const import (
+    TOOL_EXECUTE_HOME_CODE,
+    TOOL_GET_HISTORY,
+    TOOL_GET_LOGBOOK,
+    TOOL_GET_STATISTICS,
+)
 
-_ENTITY_ID_RE = re.compile(r"\b[a-z_]+\.[a-z_]+\b")
-_FENCED_JSON_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL | re.IGNORECASE)
+from llm_sandbox_evals.schema import AgentStep, ToolCall
+
+_ENTITY_ID_RE = re.compile(r"\b[a-z_]+\.[a-z0-9_]+\b")
 _FIXED_END = "2026-06-29T12:00:00+00:00"
 _FIXED_START = "2026-06-28T12:00:00+00:00"
 
 
 def litellm_reasoning_kwargs(*, temperature: float, reasoning_effort: str | None) -> dict[str, object]:
-    """Map decoding intent onto litellm kwargs honoring the reasoning contract.
-
-    Reasoning models generally ignore or reject an explicit temperature, so a
-    real effort level (minimal/low/medium/high/max) lets the provider default
-    it. ``"none"`` disables reasoning while keeping deterministic decoding, and
-    ``None`` sends no reasoning body at all. The result is valid for both
-    ``litellm.completion`` and ``dspy.LM`` (which forwards to it).
-    """
+    """Map decoding intent onto litellm kwargs honoring the reasoning contract."""
     # Branch boundary: no reasoning requested -> deterministic temperature only.
     if reasoning_effort is None:
         return {"temperature": temperature}
-    # Route via extra_body: some providers (e.g. OpenRouter) reject a top-level
-    # reasoning_effort param, but accept it in the raw body.
     kwargs: dict[str, object] = {"extra_body": {"reasoning_effort": reasoning_effort}}
-    # "none" disables reasoning but deterministic decoding is still wanted, so
-    # the explicit temperature is kept; real effort levels defer to the provider.
+    # Branch boundary: explicit no-reasoning keeps deterministic decoding.
     if reasoning_effort == "none":
         kwargs["temperature"] = temperature
     return kwargs
@@ -40,24 +36,56 @@ def litellm_reasoning_kwargs(*, temperature: float, reasoning_effort: str | None
 class ModelAdapter(Protocol):
     """Protocol implemented by all model completion adapters."""
 
-    async def complete(self, model_id: str, prompt: str) -> ModelResult:
-        """Complete a rendered eval prompt and return the normalized tool call."""
+    async def respond(
+        self,
+        model_id: str,
+        messages: list[dict[str, object]],
+        tools: list[dict[str, object]],
+        *,
+        force_text: bool = False,
+    ) -> AgentStep:
+        """Return one assistant step using native provider tool calling."""
 
 
 class StubAdapter:
     """Deterministic offline adapter used to validate the eval pipeline."""
 
-    async def complete(self, model_id: str, prompt: str) -> ModelResult:
-        """Return a deterministic tool call derived from the user request."""
-        _ = model_id
-        # Keyword detection must inspect only the user request: the full prompt
-        # always lists every tool name/description, which would otherwise match
-        # recorder keywords (e.g. "logbook") on every case.
-        user_request = _extract_user_request(prompt)
+    async def respond(
+        self,
+        model_id: str,
+        messages: list[dict[str, object]],
+        tools: list[dict[str, object]],
+        *,
+        force_text: bool = False,
+    ) -> AgentStep:
+        """Emit one tool call, then a terminal answer that echoes the last tool result."""
+        _ = (model_id, tools)
+        last_tool_content = _last_tool_content(messages)
+        # Branch boundary: forced text or existing tool output terminates the stub loop.
+        if force_text or last_tool_content is not None:
+            text = last_tool_content or ""
+            return AgentStep(
+                tool_calls=(), text=text, assistant_message={"role": "assistant", "content": text}, raw=text
+            )
+
+        user_request = _first_user_content(messages)
         tool_name = _select_stub_tool(user_request)
         tool_args = _build_stub_tool_args(tool_name, user_request)
-        tool_call: dict[str, object] = {"tool_name": tool_name, "tool_args": tool_args}
-        return ModelResult(raw_text=json.dumps(tool_call, sort_keys=True), tool_call=tool_call, error=None)
+        call = ToolCall(id="stub-call-1", tool_name=tool_name, tool_args=tool_args)
+        message: dict[str, object] = {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": call.id,
+                    "type": "function",
+                    "function": {"name": call.tool_name, "arguments": json.dumps(call.tool_args, sort_keys=True)},
+                }
+            ],
+        }
+        return AgentStep(
+            tool_calls=(call,), text="", assistant_message=message, raw=json.dumps(message, sort_keys=True)
+        )
 
 
 class LiteLLMAdapter:
@@ -67,157 +95,151 @@ class LiteLLMAdapter:
         """Store the optional reasoning effort level forwarded to LiteLLM."""
         self._reasoning_effort = reasoning_effort
 
-    async def complete(self, model_id: str, prompt: str) -> ModelResult:
-        """Call LiteLLM and parse the returned JSON tool call.
-
-        The blocking LiteLLM call runs in a worker thread so the event loop
-        stays free for concurrent matrix cells. Provider timeout plus a hard
-        ``wait_for`` bound hung or rate-limited requests so a single call cannot
-        stall the whole run; any failure becomes a ``ModelResult.error``.
-        """
+    async def respond(
+        self,
+        model_id: str,
+        messages: list[dict[str, object]],
+        tools: list[dict[str, object]],
+        *,
+        force_text: bool = False,
+    ) -> AgentStep:
+        """Call LiteLLM and normalize one assistant message into an AgentStep."""
         try:
             litellm = importlib.import_module("litellm")
             completion = cast(Callable[..., object], litellm.__dict__["completion"])
             kwargs: dict[str, object] = {
                 "model": model_id,
-                "messages": [{"role": "user", "content": prompt}],
+                "messages": messages,
+                "tools": tools,
+                "tool_choice": "none" if force_text else "auto",
                 "timeout": 60,
                 "num_retries": 1,
             }
             kwargs.update(litellm_reasoning_kwargs(temperature=0.0, reasoning_effort=self._reasoning_effort))
-            response = await asyncio.wait_for(
-                asyncio.to_thread(completion, **kwargs),
-                timeout=90,
-            )
-            content = _extract_litellm_content(response)
-        except Exception as err:  # noqa: BLE001 - adapter boundary converts provider/runtime failures into data.
-            return ModelResult(raw_text="", tool_call=None, error=f"{type(err).__name__}: {err}")
-
-        return ModelResult(raw_text=content, tool_call=parse_tool_call(content), error=None)
+            response = await asyncio.wait_for(asyncio.to_thread(completion, **kwargs), timeout=90)
+            return _step_from_litellm_response(response)
+        except Exception as err:  # noqa: BLE001 - provider/runtime failures become a terminal empty answer.
+            raw = f"{type(err).__name__}: {err}"
+            return AgentStep(tool_calls=(), text="", assistant_message={"role": "assistant", "content": ""}, raw=raw)
 
 
 def get_adapter(model_id: str, reasoning_effort: str | None = None) -> ModelAdapter:
     """Return the adapter for a model identifier."""
-    # The stub adapter is a first-class offline model for keyless verification.
+    # Branch boundary: the stub adapter is a first-class offline model for keyless verification.
     if model_id == "stub":
         return StubAdapter()
     return LiteLLMAdapter(reasoning_effort=reasoning_effort)
 
 
-def parse_tool_call(raw_text: str) -> dict[str, object] | None:
-    """Extract and validate a JSON tool call from model text."""
-    # Prefer fenced JSON because many models wrap their final answer in Markdown.
-    for match in _FENCED_JSON_RE.finditer(raw_text):
-        parsed = _loads_tool_call(match.group(1))
-        if parsed is not None:
-            return parsed
-
-    json_object = _first_json_object(raw_text)
-    if json_object is None:
-        return None
-    return _loads_tool_call(json_object)
-
-
-def _extract_user_request(prompt: str) -> str:
-    """Isolate the user request from the rendered eval prompt.
-
-    The render places the request in a trailing ``## User request`` section; the
-    stub analyzes only that text so tool names in the prompt body do not pollute
-    keyword detection.
-    """
-    marker = "## User request\n"
-    index = prompt.rfind(marker)
-    if index == -1:
-        return prompt
-    return prompt[index + len(marker) :].strip()
-
-
-def _select_stub_tool(user_request: str) -> str:
-    """Choose a tool name with deterministic keyword matching."""
-    lowered = user_request.lower()
-    # Recorder keywords are ordered by the requested priority.
-    if "logbook" in lowered or "happened" in lowered:
-        return "get_logbook"
-    if "statistic" in lowered or "hourly" in lowered or "average over" in lowered:
-        return "get_statistics"
-    if "history" in lowered or "last 24" in lowered or "over the last" in lowered:
-        return "get_history"
-    return "execute_home_code"
-
-
-def _build_stub_tool_args(tool_name: str, user_request: str) -> dict[str, object]:
-    """Build deterministic, runnable tool arguments for the selected stub tool."""
-    # Execute code is intentionally read-only and only inspects the frozen facade.
-    # ``SafeStateMachine`` exposes ``entity_ids()`` (HA parity), not ``.keys()``.
-    if tool_name == "execute_home_code":
-        return {"code": "states.entity_ids()"}
-
-    entity_ids = _ENTITY_ID_RE.findall(user_request)
-    ids: list[str] = entity_ids[:1]
-    if tool_name == "get_statistics":
-        return {"statistic_ids": ids, "start": _FIXED_START, "end": _FIXED_END, "period": "hour"}
-    return {"entity_ids": ids, "start": _FIXED_START, "end": _FIXED_END}
-
-
-def _loads_tool_call(raw_json: str) -> dict[str, object] | None:
-    """Parse and validate the provider-neutral tool-call contract."""
-    try:
-        decoded = json.loads(raw_json)
-    except json.JSONDecodeError:
-        return None
-
-    # Only a JSON object with the expected fields is a valid tool call.
-    if not isinstance(decoded, dict):
-        return None
-
-    tool_name = decoded.get("tool_name")
-    tool_args = decoded.get("tool_args")
-    if not isinstance(tool_name, str) or not isinstance(tool_args, dict):
-        return None
-
-    return {"tool_name": tool_name, "tool_args": dict(tool_args)}
-
-
-def _first_json_object(raw_text: str) -> str | None:
-    """Return the first balanced JSON-object-looking substring."""
-    start = raw_text.find("{")
-    if start == -1:
-        return None
-
-    depth = 0
-    in_string = False
-    escaped = False
-    for index, char in enumerate(raw_text[start:], start=start):
-        if in_string:
-            # JSON strings can contain escaped quotes and brace characters.
-            if escaped:
-                escaped = False
-            elif char == "\\":
-                escaped = True
-            elif char == '"':
-                in_string = False
-            continue
-
-        if char == '"':
-            in_string = True
-        elif char == "{":
-            depth += 1
-        elif char == "}":
-            depth -= 1
-            if depth == 0:
-                return raw_text[start : index + 1]
-
-    return None
-
-
-def _extract_litellm_content(response: object) -> str:
-    """Extract ``choices[0].message.content`` from a LiteLLM response object."""
+def _step_from_litellm_response(response: object) -> AgentStep:
+    """Extract ``choices[0].message`` from a LiteLLM response object."""
     choices = getattr(response, "choices", None)
     if not isinstance(choices, list) or not choices:
         raise ValueError("LiteLLM response did not include choices")
 
     message = getattr(choices[0], "message", None)
-    content = getattr(message, "content", None)
-    if not isinstance(content, str):
-        raise ValueError("LiteLLM response did not include message content")
-    return content
+    content = _message_value(message, "content")
+    text = content if isinstance(content, str) else ""
+    raw_tool_calls = _message_value(message, "tool_calls")
+    tool_calls = _parse_tool_calls(raw_tool_calls)
+    assistant_message: dict[str, object] = {"role": "assistant", "content": text}
+    # Branch boundary: replay tool_calls verbatim enough for provider continuation.
+    if isinstance(raw_tool_calls, list):
+        assistant_message["tool_calls"] = [_plain_tool_call(item) for item in raw_tool_calls]
+    return AgentStep(
+        tool_calls=tool_calls, text=text, assistant_message=assistant_message, raw=json.dumps(assistant_message)
+    )
+
+
+def _parse_tool_calls(raw_tool_calls: object) -> tuple[ToolCall, ...]:
+    """Parse provider tool calls into the eval harness contract."""
+    if not isinstance(raw_tool_calls, list):
+        return ()
+    parsed: list[ToolCall] = []
+    for index, item in enumerate(raw_tool_calls):
+        function = _message_value(item, "function")
+        name = _message_value(function, "name")
+        arguments = _message_value(function, "arguments")
+        if not isinstance(name, str):
+            continue
+        try:
+            decoded = json.loads(arguments) if isinstance(arguments, str) and arguments else {}
+        except json.JSONDecodeError:
+            decoded = {}
+        tool_args = dict(decoded) if isinstance(decoded, dict) else {}
+        call_id = _message_value(item, "id")
+        parsed.append(ToolCall(id=str(call_id or f"call-{index}"), tool_name=name, tool_args=tool_args))
+    return tuple(parsed)
+
+
+def _plain_tool_call(item: object) -> dict[str, object]:
+    """Convert one LiteLLM tool-call object to a replayable plain dict."""
+    function = _message_value(item, "function")
+    return {
+        "id": str(_message_value(item, "id") or ""),
+        "type": str(_message_value(item, "type") or "function"),
+        "function": {
+            "name": str(_message_value(function, "name") or ""),
+            "arguments": str(_message_value(function, "arguments") or "{}"),
+        },
+    }
+
+
+def _message_value(message: object, key: str) -> object:
+    """Read a key from either provider dicts or LiteLLM message objects."""
+    if isinstance(message, dict):
+        return message.get(key)
+    return getattr(message, key, None)
+
+
+def _first_user_content(messages: list[dict[str, object]]) -> str:
+    """Return the first user message content for deterministic stub routing."""
+    for message in messages:
+        if message.get("role") == "user":
+            content = message.get("content")
+            return content if isinstance(content, str) else ""
+    return ""
+
+
+def _last_tool_content(messages: list[dict[str, object]]) -> str | None:
+    """Return the latest tool-result content if the loop has run a tool."""
+    for message in reversed(messages):
+        if message.get("role") == "tool":
+            content = message.get("content")
+            return content if isinstance(content, str) else ""
+    return None
+
+
+def _select_stub_tool(user_request: str) -> str:
+    """Choose a tool name with deterministic keyword matching."""
+    lowered = user_request.lower()
+    if "logbook" in lowered or "happened" in lowered:
+        return TOOL_GET_LOGBOOK
+    if "statistic" in lowered or "hourly" in lowered or "average over" in lowered:
+        return TOOL_GET_STATISTICS
+    if "history" in lowered or "last 24" in lowered or "over the last" in lowered:
+        return TOOL_GET_HISTORY
+    return TOOL_EXECUTE_HOME_CODE
+
+
+def _build_stub_tool_args(tool_name: str, user_request: str) -> dict[str, object]:
+    """Build deterministic, runnable tool arguments for the selected stub tool."""
+    if tool_name == TOOL_EXECUTE_HOME_CODE:
+        return {"code": "states.entity_ids()"}
+
+    entity_ids = _ENTITY_ID_RE.findall(user_request)
+    # Branch boundary: explicit ids exercise direct visibility; otherwise selectors exercise resolver logic.
+    if tool_name == TOOL_GET_STATISTICS:
+        args: dict[str, object] = {"start": _FIXED_START, "end": _FIXED_END, "period": "hour"}
+        if entity_ids:
+            args["statistic_ids"] = entity_ids[:1]
+        else:
+            args["domain"] = "sensor"
+        return args
+
+    args = {"start": _FIXED_START, "end": _FIXED_END}
+    if entity_ids:
+        args["entity_ids"] = entity_ids[:1]
+    else:
+        args["domain"] = "light" if tool_name == TOOL_GET_LOGBOOK else "sensor"
+    return args

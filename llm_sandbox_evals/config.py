@@ -17,6 +17,9 @@ class EvalConfig:
     homes: list[str] | None
     runs_dir: Path
     concurrency: int = 5
+    max_turns: int = 5
+    efficiency_k: float = 0.25
+    efficiency_floor: float = 0.1
     reasoning_effort: str | None = None
     target_model: str | None = None
     proposer_model: str | None = None

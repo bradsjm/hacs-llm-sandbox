@@ -1,6 +1,6 @@
 # LLM Sandbox Evals
 
-Development-only eval harness for the `llm_sandbox` Home Assistant integration. It runs the integration's real LLM tools against a set of **frozen Home Assistant fixtures**, scores each operation deterministically, and ranks **prompt candidates** across a **matrix of language models** (the production model is unknown).
+Development-only eval harness for the `llm_sandbox` Home Assistant integration. It runs a bounded, multi-turn native tool-calling agent loop against **frozen Home Assistant fixtures**, scores final task outcomes plus turn efficiency, and ranks **prompt candidates** across a **matrix of language models** (the production model is unknown).
 
 This package is not part of the integration runtime. It never adds dependencies to `custom_components/` or `manifest.json`, and it never touches a live Home Assistant instance.
 
@@ -11,14 +11,14 @@ scripts/setup-evals                      # uv sync --group dev --group evals
 uv run --group dev --group evals python -m llm_sandbox_evals eval --models stub
 ```
 
-The `stub` adapter is deterministic and keyless — it validates the full pipeline (prompt render -> tool call -> real execution -> scoring -> report) end to end. It prints the run directory and a leaderboard:
+The `stub` adapter is deterministic and keyless — it validates the full pipeline (message render -> native tool call -> tool result -> terminal answer -> scoring -> report) end to end. It prints the run directory and a leaderboard:
 
 ```
 eval_data/runs/20260630-164326-318981
 
-| Candidate | Mean | MinModel | state_read | registry_read | recorder_read | action_allowed | action_blocked | complex |
-| --------- | ---- | -------- | ---------- | ------------- | ------------- | -------------- | -------------- | ------- |
-| baseline  | 0.858| 0.858    | 1.000      | 1.000         | 0.889         | 0.500          | 1.000          | 0.750   |
+| Candidate | Mean | MinModel | Turns | Eff | state_read | registry_read | recorder_read | action_allowed | action_blocked | complex |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| baseline | 0.858 | 0.858 | 1.000 | 0.858 | 1.000 | 1.000 | 0.889 | 0.500 | 1.000 | 0.750 |
 ```
 
 ## Running real models
@@ -37,7 +37,7 @@ Every candidate is evaluated against every model. The `Candidate x model means` 
 
 ## Optimizing the prompt (DSPy COPRO)
 
-The `optimize` command uses [DSPy](https://dspy.ai/)'s COPRO instruction optimizer to rewrite the `execute_home_code` instruction (`api_prompt`, seeded from the selected production prompt profile) and **keeps the real harness as the metric**: COPRO proposes instruction variants, and each is scored by the existing pipeline (`parse_tool_call` → `run_tool` → `check_case` → `score_case`) against one target model. The winner is then cross-evaluated against the model matrix.
+The `optimize` command uses [DSPy](https://dspy.ai/)'s COPRO instruction optimizer to rewrite the API instruction (`api_prompt`, seeded from the selected production prompt profile) and **keeps the real multi-turn harness as the metric**: COPRO proposes instruction variants, and each is scored by `run_case(...)` against one target model using native tool calls, fixture tool results, final-answer outcome checks, and turn-efficiency scoring. The winner is then optionally cross-evaluated against the model matrix.
 
 ```bash
 uv run --group dev --group evals python -m llm_sandbox_evals optimize \
@@ -50,7 +50,7 @@ uv run --group dev --group evals python -m llm_sandbox_evals optimize \
 Flags:
 - `--target-model` — model to optimize against (required; must be a real model, not `stub`).
 - `--proposer-model` — model COPRO uses to propose rewrites (defaults to the target model).
-- `--breadth` / `--depth` — COPRO search breadth/depth (defaults 5/2). Cost scales as `breadth × depth × trainset`.
+- `--breadth` / `--depth` — COPRO search breadth/depth (defaults 5/2). COPRO requires breadth greater than 1. Cost scales as `breadth × depth × trainset`.
 - `--cases` — case ids/categories used as the optimization trainset (keep small to bound cost).
 - `--cross-eval-models` — models for the baseline-vs-optimized leaderboard.
 - `--prompt-profile PROFILE_ID` — selects one production prompt profile for the baseline candidate and runtime settings (default: `standard`). This is separate from `--candidates`, which selects eval prompt candidates.
@@ -97,11 +97,11 @@ The integration's `scripts/check` is unaffected by this package. `optimize-evals
 
 ## How scoring works
 
-Each `(candidate, model, case)` produces a score in `[0.0, 1.0]`:
+Each `(candidate, model, case)` runs until the assistant emits a terminal natural-language answer with no tool calls, or until `case.max_turns or config.max_turns` is reached and the harness forces a final answer. It then produces a score in `[0.0, 1.0]`:
 
-- **Required gates** (any failure caps the case at `0.0`): valid JSON tool call, correct tool name, expected execution status, no action when actions are disabled, no invisible target, recorder tool produced an `ok` result.
-- **Optional checks** (contribute to the ratio): output contains/excludes the expected entities, actions match expectations, a bounded recorder window was supplied, concise output.
-- Case score = `0.0` if any required gate fails, else `passed_optional / total_optional`.
+- **Required outcome gates** (any failure caps the case at `0.0`): expected final-answer entity references are present/absent, expected actions were recorded, disabled-action cases did not execute actions, expected execution status was observed, and invisible targets were not referenced.
+- **Efficiency** applies only after required gates pass: `1.0` when tool-turns are at or below `par_turns`, otherwise `max(efficiency_floor, 1 - efficiency_k * (turns - par_turns))`.
+- Default efficiency settings are `efficiency_k=0.25`, `efficiency_floor=0.1`, `max_turns=5`.
 
 ## Adding cases
 
@@ -119,10 +119,11 @@ EvalCase(
         tool_name="execute_home_code",
         output_contains_entities=("sensor.living_temp",),
     ),
+    par_turns=1,
 ),
 ```
 
-Categories: `state_read`, `registry_read`, `recorder_read`, `action_allowed`, `action_blocked`, `complex`. The `expected.tool_name` must match a production tool constant (`execute_home_code`, `get_history`, `get_statistics`, `get_logbook`). For recorder cases, include the resolved entity id in `user_request` (e.g. `"...(sensor.living_temp)..."`) since models do not receive an entity list in the prompt.
+Categories: `state_read`, `registry_read`, `recorder_read`, `action_allowed`, `action_blocked`, `complex`. The `expected.tool_name` must match a production tool constant (`execute_home_code`, `get_history`, `get_statistics`, `get_logbook`). Set `par_turns` to the efficient tool-turn target for the case. Recorder cases can be solved with explicit ids or supported selectors (`entity_ids`/`statistic_ids`, `area_id`, `device_id`, `floor_id`, `label_id`, `domain`, bounded time window args) through native function calling.
 
 ## Adding fixtures
 
@@ -142,10 +143,10 @@ Add a module under `homes/` exposing `snapshot() -> HomeSnapshot` and `recorder(
 - `leaderboard.md` — candidate ranking + candidate-by-model matrix.
 - `results.jsonl` — one line per case/candidate/model with scores and check outcomes.
 - `failures.jsonl` — cases that scored `0.0` or failed a required gate.
-- `traces/<case>.<model>.<candidate>.json` — full prompt, raw model output, parsed tool call, tool result, recorded actions, and per-check results.
+- `traces/<case>.<model>.<candidate>.json` — full messages, raw model output, final answer, turns/par/efficiency, per-turn tool calls/results, recorded actions, and per-check results.
 
 ## Scope
 
-**In:** deterministic scoring, multi-model matrix, offline stub validation, real `execute_home_code` against frozen snapshots, fixture-backed recorder emulation, artifact reports, and DSPy COPRO instruction optimization (export-only; never auto-patches production `prompts.py`).
+**In:** deterministic outcome + efficiency scoring, multi-model matrix, native provider tool-calling, offline stub validation, real `execute_home_code` against frozen snapshots, fixture-backed recorder emulation, artifact reports, and DSPy COPRO instruction optimization (export-only; never auto-patches production `prompts.py`).
 
-**Out of scope:** native provider function-calling, LLM-as-judge scoring, live Home Assistant or recorder DB, CI jobs that call paid models, and auto-editing production `prompts.py`. GEPA/MIPROv2 (richer feedback-driven or joint demo+instruction search) are not yet wired; COPRO is the implemented optimizer.
+**Out of scope:** LLM-as-judge scoring, live Home Assistant or recorder DB, CI jobs that call paid models, mutable cross-turn fixture state, and auto-editing production `prompts.py`. GEPA/MIPROv2 (richer feedback-driven or joint demo+instruction search) are not yet wired; COPRO is the implemented optimizer.

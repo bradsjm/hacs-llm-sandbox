@@ -1,61 +1,32 @@
-"""Matrix orchestration for dev-only eval runs."""
+"""Matrix orchestration for dev-only multi-turn eval runs."""
 
 import asyncio
+import json
 import sys
-from dataclasses import dataclass
+from collections.abc import Mapping
 from datetime import UTC, datetime
 
+from custom_components.llm_sandbox.const import TOOL_EXECUTE_HOME_CODE
 from custom_components.llm_sandbox.llm_api.prompts import PromptProfile, resolve_profile
+from custom_components.llm_sandbox.snapshot.models import HomeSnapshot
 
-from llm_sandbox_evals import cases
+from llm_sandbox_evals import cases, prompts
 from llm_sandbox_evals.config import EvalConfig
 from llm_sandbox_evals.homes import get_home
 from llm_sandbox_evals.models import ModelAdapter, get_adapter
-from llm_sandbox_evals.prompts import load_candidates, render_prompt
-from llm_sandbox_evals.schema import CheckResult, EvalCase, PromptCandidate
+from llm_sandbox_evals.prompts import load_candidates
+from llm_sandbox_evals.schema import (
+    CandidateModelScore,
+    CaseTrace,
+    CheckResult,
+    EvalCase,
+    PromptCandidate,
+    RunResult,
+    StepTrace,
+    ToolCall,
+)
 from llm_sandbox_evals.scoring import check_case, mean_score, score_case
-from llm_sandbox_evals.tools import run_tool
-
-
-@dataclass(frozen=True, slots=True)
-class CaseTrace:
-    """Full trace for one candidate/model/case execution."""
-
-    case_id: str
-    category: str
-    candidate_id: str
-    model_id: str
-    score: float
-    prompt: str
-    raw_output: str
-    tool_call: dict[str, object] | None
-    tool_result: dict[str, object] | None
-    recorded_actions: tuple[dict[str, object], ...]
-    checks: tuple[CheckResult, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class CandidateModelScore:
-    """Aggregated scores for one candidate/model pair."""
-
-    candidate_id: str
-    model_id: str
-    mean: float
-    per_category: dict[str, float]
-    case_scores: dict[str, float]
-
-
-@dataclass(frozen=True, slots=True)
-class RunResult:
-    """Complete result for one eval matrix run."""
-
-    run_id: str
-    created_at: str
-    candidate_ids: list[str]
-    model_ids: list[str]
-    case_ids: list[str]
-    traces: list[CaseTrace]
-    scores: list[CandidateModelScore]
+from llm_sandbox_evals.tools import RecordingInvoker, run_tool, tool_result_message
 
 
 async def run_matrix(config: EvalConfig) -> RunResult:
@@ -72,14 +43,7 @@ async def run_matrix(config: EvalConfig) -> RunResult:
         for model_id in model_ids:
             adapter = get_adapter(model_id, config.reasoning_effort)
             _progress(f"[{candidate.id}/{model_id}] {len(selected_cases)} cases (concurrency={config.concurrency})")
-            pair_traces = await _run_cases_for_pair(
-                candidate,
-                model_id,
-                selected_cases,
-                adapter,
-                config.concurrency,
-                profile,
-            )
+            pair_traces = await _run_cases_for_pair(candidate, model_id, selected_cases, adapter, config, profile)
             traces.extend(pair_traces)
 
     return RunResult(
@@ -93,34 +57,87 @@ async def run_matrix(config: EvalConfig) -> RunResult:
     )
 
 
-async def _run_one_case(
+async def run_case(
     candidate: PromptCandidate,
     model_id: str,
     case: EvalCase,
     adapter: ModelAdapter,
-    prompt_profile: PromptProfile,
+    profile: PromptProfile,
+    config: EvalConfig,
 ) -> CaseTrace:
-    """Run one matrix cell, converting all failures into a zero-score trace."""
+    """Run one matrix cell through the bounded native tool-calling agent loop."""
     prompt = ""
     try:
         fixture = get_home(case.home)
         snapshot = fixture.snapshot()
-        prompt = render_prompt(candidate, case, snapshot)
-        model_result = await adapter.complete(model_id, prompt)
-        outcome = await run_tool(model_result.tool_call, case, snapshot, prompt_profile)
-        checks = check_case(case, model_result.tool_call, outcome, snapshot)
+        messages = prompts.render_messages(candidate, case, snapshot)
+        prompt = json.dumps(messages, indent=2)
+        tools = prompts.function_schemas(candidate)
+        invoker = RecordingInvoker()
+        turns = 0
+        recorded_actions: list[dict[str, object]] = []
+        execute_statuses: set[str] = set()
+        referenced_entity_ids: set[str] = set()
+        steps: list[StepTrace] = []
+        final_answer = ""
+        raw_output = ""
+        tool_call: dict[str, object] | None = None
+        tool_result: dict[str, object] | None = None
+        cap = case.max_turns or config.max_turns
+
+        while turns < cap:
+            step = await adapter.respond(model_id, messages, tools)
+            raw_output = step.raw
+            messages.append(step.assistant_message)
+            # Branch boundary: a message with no tool calls is the terminal natural-language answer.
+            if not step.tool_calls:
+                final_answer = step.text
+                break
+
+            results: list[dict[str, object] | None] = []
+            for call in step.tool_calls:
+                referenced_entity_ids.update(_referenced_ids_from_call(call))
+                outcome = await run_tool(call, case, snapshot, profile, invoker=invoker)
+                messages.append(tool_result_message(call.id, outcome.result))
+                recorded_actions.extend(outcome.recorded_actions)
+                referenced_entity_ids.update(_referenced_ids_from_result(outcome.result))
+                for action in outcome.recorded_actions:
+                    referenced_entity_ids.update(_entity_ids_from_action(action, snapshot))
+                status = _execution_status(outcome.result)
+                if call.tool_name == TOOL_EXECUTE_HOME_CODE and status is not None:
+                    execute_statuses.add(status)
+                results.append(outcome.result)
+                tool_call = {"id": call.id, "tool_name": call.tool_name, "tool_args": call.tool_args}
+                tool_result = outcome.result
+            steps.append(StepTrace(tool_calls=step.tool_calls, tool_results=tuple(results)))
+            turns += 1
+        else:
+            forced_step = await adapter.respond(model_id, messages, tools, force_text=True)
+            raw_output = forced_step.raw
+            final_answer = forced_step.text
+
+        checks = check_case(
+            case, final_answer, tuple(recorded_actions), execute_statuses, referenced_entity_ids, snapshot
+        )
+        score = score_case(checks, turns, case.par_turns, config.efficiency_k, config.efficiency_floor)
+        efficiency = 0.0 if score == 0.0 else score
         return CaseTrace(
             case_id=case.id,
             category=case.category,
             candidate_id=candidate.id,
             model_id=model_id,
-            score=score_case(checks),
+            score=score,
             prompt=prompt,
-            raw_output=model_result.raw_text,
-            tool_call=model_result.tool_call,
-            tool_result=outcome.result,
-            recorded_actions=outcome.recorded_actions,
+            raw_output=raw_output,
+            tool_call=tool_call,
+            tool_result=tool_result,
+            recorded_actions=tuple(recorded_actions),
             checks=tuple(checks),
+            turns=turns,
+            par_turns=case.par_turns,
+            efficiency=efficiency,
+            final_answer=final_answer,
+            steps=tuple(steps),
         )
     except Exception as err:  # noqa: BLE001 - harness isolates failures to the current matrix cell.
         return CaseTrace(
@@ -142,6 +159,11 @@ async def _run_one_case(
                     feedback=f"{type(err).__name__}: {err}",
                 ),
             ),
+            turns=0,
+            par_turns=case.par_turns,
+            efficiency=0.0,
+            final_answer="",
+            steps=(),
         )
 
 
@@ -150,23 +172,17 @@ async def _run_cases_for_pair(
     model_id: str,
     selected_cases: list[EvalCase],
     adapter: ModelAdapter,
-    concurrency: int,
+    config: EvalConfig,
     prompt_profile: PromptProfile,
 ) -> list[CaseTrace]:
-    """Run all cases for one candidate/model pair with bounded concurrency.
-
-    Each case runs in its own asyncio task, so the executor's runtime
-    contextvars stay isolated per task. A semaphore caps concurrent model calls
-    (the slow I/O). Progress is written to stderr as cases complete; results are
-    returned in input case order.
-    """
-    semaphore = asyncio.Semaphore(max(1, concurrency))
+    """Run all cases for one candidate/model pair with bounded concurrency."""
+    semaphore = asyncio.Semaphore(max(1, config.concurrency))
     total = len(selected_cases)
 
     async def _one(index: int, case: EvalCase) -> CaseTrace:
         async with semaphore:
-            trace = await _run_one_case(candidate, model_id, case, adapter, prompt_profile)
-        _progress(f"  [{index + 1}/{total}] {case.id} score={trace.score:.2f}")
+            trace = await run_case(candidate, model_id, case, adapter, prompt_profile, config)
+        _progress(f"  [{index + 1}/{total}] {case.id} score={trace.score:.2f} turns={trace.turns}")
         return trace
 
     return await asyncio.gather(*[_one(i, case) for i, case in enumerate(selected_cases)])
@@ -208,9 +224,12 @@ def _score_matrix(
         for model_id in model_ids:
             case_scores: dict[str, float] = {}
             per_category: dict[str, float] = {}
+            pair_traces: list[CaseTrace] = []
             for case in selected_cases:
                 trace = traces_by_pair.get((candidate.id, model_id, case.id))
                 case_scores[case.id] = 0.0 if trace is None else trace.score
+                if trace is not None:
+                    pair_traces.append(trace)
             for category in categories:
                 category_scores = [case_scores[case.id] for case in selected_cases if case.category == category]
                 per_category[category] = mean_score(category_scores)
@@ -219,8 +238,66 @@ def _score_matrix(
                     candidate_id=candidate.id,
                     model_id=model_id,
                     mean=mean_score(list(case_scores.values())),
+                    mean_turns=mean_score([float(trace.turns) for trace in pair_traces]),
+                    mean_efficiency=mean_score([trace.efficiency for trace in pair_traces]),
                     per_category=per_category,
                     case_scores=case_scores,
                 )
             )
     return scores
+
+
+def _execution_status(result: dict[str, object] | None) -> str | None:
+    """Return nested execute_home_code execution.status from a tool result."""
+    if result is None:
+        return None
+    execution = result.get("execution")
+    if not isinstance(execution, dict):
+        return None
+    status = execution.get("status")
+    return status if isinstance(status, str) else None
+
+
+def _referenced_ids_from_call(call: ToolCall) -> set[str]:
+    """Return explicit entity/statistic ids present in native tool arguments."""
+    ids = set(_strings_from_value(call.tool_args.get("entity_ids")))
+    ids.update(_strings_from_value(call.tool_args.get("statistic_ids")))
+    return ids
+
+
+def _referenced_ids_from_result(result: dict[str, object] | None) -> set[str]:
+    """Return recorder entity/statistic ids surfaced by fixture result envelopes."""
+    if result is None:
+        return set()
+    ids: set[str] = set()
+    entities = result.get("entities")
+    if isinstance(entities, dict):
+        ids.update(str(entity_id) for entity_id in entities)
+    statistics = result.get("statistics")
+    if isinstance(statistics, dict):
+        ids.update(str(statistic_id) for statistic_id in statistics)
+    return ids
+
+
+def _entity_ids_from_action(action: Mapping[str, object], snapshot: HomeSnapshot) -> set[str]:
+    """Resolve entity ids named directly or via simple HA target selectors in a recorded action."""
+    entity_ids: set[str] = set()
+    for key in ("target", "service_data"):
+        value = action.get(key)
+        if isinstance(value, Mapping):
+            entity_ids.update(_strings_from_value(value.get("entity_id")))
+            entity_ids.update(_strings_from_value(value.get("entity_ids")))
+            for device_id in _strings_from_value(value.get("device_id")):
+                entity_ids.update(snapshot.indexes.entity_ids_by_device_id.get(device_id, ()))
+            for area_id in _strings_from_value(value.get("area_id")):
+                entity_ids.update(snapshot.indexes.entity_ids_by_area_id.get(area_id, ()))
+    return entity_ids
+
+
+def _strings_from_value(value: object) -> list[str]:
+    """Return string(s) from scalar/list-like JSON values."""
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list | tuple):
+        return [item for item in value if isinstance(item, str)]
+    return []

@@ -1,10 +1,4 @@
-"""Prompt assembly for the dev-only eval harness.
-
-The baseline candidate reuses production prompt text and tool descriptions so
-model evaluations see the same static instructions the integration sends. This
-module adds only eval-harness framing: tool-spec presentation, JSON response
-contract, and the concrete user request.
-"""
+"""Prompt and function-schema assembly for the dev-only eval harness."""
 
 import json
 from pathlib import Path
@@ -62,20 +56,26 @@ def load_candidates(candidate_ids: list[str], prompt_profile_id: str) -> list[Pr
     return candidates
 
 
-def render_prompt(candidate: PromptCandidate, case: EvalCase, snapshot: HomeSnapshot) -> str:
-    """Render the complete single-message prompt sent to the model adapter."""
-    return f"{candidate.api_prompt}\n\n{render_context(candidate, case, snapshot)}"
-
-
-def render_context(candidate: PromptCandidate, case: EvalCase, snapshot: HomeSnapshot) -> str:
-    """Render the production-like prompt context without the leading API prompt."""
+def render_messages(candidate: PromptCandidate, case: EvalCase, snapshot: HomeSnapshot) -> list[dict[str, object]]:
+    """Render provider messages for the native tool-calling agent loop."""
     sections = [ACTIONS_ENABLED_PROMPT if case.actions_enabled else ACTIONS_DISABLED_PROMPT]
     location_section = _request_location_section(case.llm_context.device_id, snapshot)
     # The production API omits the location section when there is no initiating device.
     if location_section is not None:
         sections.append(location_section)
-    sections.extend((_tools_section(candidate), _response_contract_section(), _user_request_section(case)))
-    return "\n\n".join(sections)
+    system = f"{candidate.api_prompt}\n\n{'\n\n'.join(sections)}"
+    return [{"role": "system", "content": system}, {"role": "user", "content": case.user_request}]
+
+
+def function_schemas(candidate: PromptCandidate) -> list[dict[str, object]]:
+    """Return OpenAI-compatible function tool schemas from the candidate specs."""
+    return [
+        {
+            "type": "function",
+            "function": {"name": spec.name, "description": spec.description, "parameters": spec.parameters},
+        }
+        for spec in tool_specs(candidate)
+    ]
 
 
 def tool_specs(candidate: PromptCandidate) -> list[ToolSpec]:
@@ -85,23 +85,61 @@ def tool_specs(candidate: PromptCandidate) -> list[ToolSpec]:
             name=TOOL_EXECUTE_HOME_CODE,
             description=candidate.execute_home_code_description,
             args=("code",),
+            parameters={
+                "type": "object",
+                "properties": {"code": {"type": "string"}},
+                "additionalProperties": False,
+            },
         ),
         ToolSpec(
             name=TOOL_GET_HISTORY,
             description=candidate.get_history_description,
-            args=("entity_ids", "start", "end"),
+            args=("entity_ids", "area_id", "device_id", "floor_id", "label_id", "domain", "hours", "start", "end"),
+            parameters=_recorder_parameters(id_key="entity_ids"),
         ),
         ToolSpec(
             name=TOOL_GET_STATISTICS,
             description=candidate.get_statistics_description,
-            args=("statistic_ids", "start", "end", "period"),
+            args=(
+                "statistic_ids",
+                "area_id",
+                "device_id",
+                "floor_id",
+                "label_id",
+                "domain",
+                "hours",
+                "start",
+                "end",
+                "period",
+            ),
+            parameters=_recorder_parameters(id_key="statistic_ids", include_period=True),
         ),
         ToolSpec(
             name=TOOL_GET_LOGBOOK,
             description=candidate.get_logbook_description,
-            args=("entity_ids", "start", "end"),
+            args=("entity_ids", "area_id", "device_id", "floor_id", "label_id", "domain", "hours", "start", "end"),
+            parameters=_recorder_parameters(id_key="entity_ids"),
         ),
     ]
+
+
+def _recorder_parameters(*, id_key: str, include_period: bool = False) -> dict[str, object]:
+    """Build the shared recorder JSON Schema accepted by native function calling."""
+    properties: dict[str, object] = {
+        id_key: {"type": "array", "items": {"type": "string"}},
+        "area_id": {"type": "string"},
+        "device_id": {"type": "string"},
+        "floor_id": {"type": "string"},
+        "label_id": {"type": "string"},
+        "domain": {"type": "string"},
+        "hours": {"type": "number"},
+        "start": {"type": "string"},
+        "end": {"type": "string"},
+    }
+    # Branch boundary: statistics adds one aggregation-period enum.
+    if include_period:
+        properties["period"] = {"type": "string", "enum": ["5minute", "hour", "day"]}
+    return {"type": "object", "properties": properties, "additionalProperties": False}
 
 
 def _request_location_section(device_id: str | None, snapshot: HomeSnapshot) -> str | None:
@@ -130,39 +168,6 @@ def _request_location_section(device_id: str | None, snapshot: HomeSnapshot) -> 
             "If the user asks for the whole home or names another area/floor, follow that explicit scope."
         )
     return "\n".join(lines)
-
-
-def _tools_section(candidate: PromptCandidate) -> str:
-    """Render the eval adapter's plain-text tool list."""
-    lines = ["## Available tools"]
-    for spec in tool_specs(candidate):
-        lines.extend(
-            (
-                f"### {spec.name}",
-                spec.description,
-                f"Arguments: {', '.join(spec.args)}",
-            )
-        )
-    return "\n".join(lines)
-
-
-def _response_contract_section() -> str:
-    """Render the JSON-only model response contract."""
-    tool_names = ", ".join(spec.name for spec in tool_specs(baseline_candidate()))
-    return (
-        "## Response contract\n"
-        "Reply with ONLY a single JSON object of the form "
-        '{"tool_name": "<one of the tool names>", "tool_args": {...}} '
-        "and nothing else: no prose, no code fences. "
-        f"tool_name must be one of: {tool_names}. "
-        'For execute_home_code, tool_args must be {"code": "<python>"}. '
-        "For recorder tools, entity_ids/statistic_ids must reference currently-visible entities."
-    )
-
-
-def _user_request_section(case: EvalCase) -> str:
-    """Render the concrete user request being evaluated."""
-    return f"## User request\n{case.user_request}"
 
 
 def _load_optimized(path: str) -> PromptCandidate:

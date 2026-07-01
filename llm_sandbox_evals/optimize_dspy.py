@@ -1,9 +1,11 @@
 """DSPy COPRO prompt optimization for the dev-only eval harness."""
 
+# mypy: disable-error-code="misc"
+
 import asyncio
 import json
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -11,13 +13,12 @@ from typing import Any
 import dspy
 from custom_components.llm_sandbox.llm_api.prompts import PromptProfile, resolve_profile
 
-from llm_sandbox_evals import prompts, reports, tools
+from llm_sandbox_evals import prompts, reports
 from llm_sandbox_evals.config import EvalConfig
-from llm_sandbox_evals.harness import _select_cases, run_matrix
-from llm_sandbox_evals.homes import get_home
-from llm_sandbox_evals.models import litellm_reasoning_kwargs, parse_tool_call
-from llm_sandbox_evals.schema import PromptCandidate
-from llm_sandbox_evals.scoring import check_case, mean_score, score_case
+from llm_sandbox_evals.harness import _select_cases, run_case, run_matrix
+from llm_sandbox_evals.models import get_adapter, litellm_reasoning_kwargs
+from llm_sandbox_evals.schema import EvalCase, PromptCandidate
+from llm_sandbox_evals.scoring import mean_score
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,47 +42,42 @@ def run_optimize(config: EvalConfig) -> OptimizerResult:
     # Branch boundary: DSPy optimization requires a real provider-backed LM, not the offline stub adapter.
     if target is None or target == "stub":
         raise ValueError("optimize requires a real --target-model; 'stub' is not supported")
+    # Branch boundary: DSPy COPRO rejects breadth <= 1 ("Breadth must be greater than 1"); surface it clearly.
+    if config.breadth < 2:
+        raise ValueError("optimize requires --breadth >= 2 (DSPy COPRO needs breadth > 1)")
 
     proposer = config.proposer_model or target
     profile = resolve_profile(config.prompt_profile)
     baseline = prompts.baseline_candidate(config.prompt_profile)
-    # Per-role reasoning: COPRO scores candidate instructions against the target
-    # LM and proposes rewrites with the proposer LM. Reasoning is forwarded to
-    # each dspy.LM via the same provider contract the eval adapter uses.
     target_lm = dspy.LM(
         model=target,
         **litellm_reasoning_kwargs(temperature=0.0, reasoning_effort=config.target_reasoning_effort),
     )
+    # Configure the global default LM as a defensive default; actual scoring runs through the real
+    # adapter in run_case (get_adapter(target_model)), not through dspy's configured LM.
     dspy.configure(lm=target_lm)
     prompt_lm = dspy.LM(
         model=proposer,
         **litellm_reasoning_kwargs(temperature=1.0, reasoning_effort=config.proposer_reasoning_effort),
     )
 
-    trainset = []
-    for case in _select_cases(config.cases, config.homes):
-        snapshot = get_home(case.home).snapshot()
-        context = prompts.render_context(baseline, case, snapshot)
-        trainset.append(dspy.Example(context=context, _case=case, _snapshot=snapshot).with_inputs("context"))
-
-    sig = dspy.Signature("context -> tool_call_json", instructions=baseline.api_prompt)
-    student = dspy.Predict(sig)
+    selected_cases = _select_cases(config.cases, config.homes)
+    trainset = [
+        dspy.Example(context=case.user_request, case=case).with_inputs("context", "case") for case in selected_cases
+    ]
+    student = _PromptInstructionStudent(baseline, target, profile, config)
     copro = dspy.COPRO(
-        prompt_model=prompt_lm, metric=_make_metric(profile), breadth=config.breadth, depth=config.depth
+        prompt_model=prompt_lm,
+        metric=_make_metric(),
+        breadth=config.breadth,
+        depth=config.depth,
     )
     # eval_kwargs forwards to dspy.Evaluate for candidate scoring. num_threads=1
-    # keeps the sync metric's asyncio.run loop single (the executor is async).
-    # display_progress=True so the long optimization reports its own activity.
+    # keeps the sync metric's asyncio.run loop single. display_progress=True so
+    # the long optimization reports its own activity.
     compiled = copro.compile(student, trainset=trainset, eval_kwargs={"num_threads": 1, "display_progress": True})
-    optimized_instruction = str(compiled.signature.instructions)
-    optimized_candidate = PromptCandidate(
-        id="optimized",
-        api_prompt=optimized_instruction,
-        execute_home_code_description=baseline.execute_home_code_description,
-        get_history_description=baseline.get_history_description,
-        get_statistics_description=baseline.get_statistics_description,
-        get_logbook_description=baseline.get_logbook_description,
-    )
+    optimized_instruction = str(compiled.predictor.signature.instructions)
+    optimized_candidate = replace(baseline, id="optimized", api_prompt=optimized_instruction)
 
     run_id = datetime.now(UTC).strftime("%Y%m%d-%H%M%S-%f")
     created_at = datetime.now(UTC).isoformat()
@@ -99,6 +95,9 @@ def run_optimize(config: EvalConfig) -> OptimizerResult:
             cases=config.cases,
             homes=config.homes,
             runs_dir=config.runs_dir,
+            max_turns=config.max_turns,
+            efficiency_k=config.efficiency_k,
+            efficiency_floor=config.efficiency_floor,
             reasoning_effort=config.target_reasoning_effort,
         )
     )
@@ -110,6 +109,9 @@ def run_optimize(config: EvalConfig) -> OptimizerResult:
             cases=config.cases,
             homes=config.homes,
             runs_dir=config.runs_dir,
+            max_turns=config.max_turns,
+            efficiency_k=config.efficiency_k,
+            efficiency_floor=config.efficiency_floor,
             reasoning_effort=config.target_reasoning_effort,
         )
     )
@@ -126,6 +128,9 @@ def run_optimize(config: EvalConfig) -> OptimizerResult:
                     cases=config.cases,
                     homes=config.homes,
                     runs_dir=config.runs_dir,
+                    max_turns=config.max_turns,
+                    efficiency_k=config.efficiency_k,
+                    efficiency_floor=config.efficiency_floor,
                     reasoning_effort=config.reasoning_effort,
                 )
             )
@@ -145,17 +150,48 @@ def run_optimize(config: EvalConfig) -> OptimizerResult:
     )
 
 
-def _make_metric(profile: PromptProfile) -> Callable[..., float]:
-    """Build the sync COPRO metric backed by the real eval tool runner and scorer."""
+class _PromptInstructionStudent(dspy.Module):
+    """DSPy program whose optimized predictor instruction becomes ``PromptCandidate.api_prompt``."""
+
+    def __init__(
+        self,
+        baseline: PromptCandidate,
+        target_model: str,
+        profile: PromptProfile,
+        config: EvalConfig,
+    ) -> None:
+        super().__init__()
+        self.baseline = baseline
+        self.target_model = target_model
+        self.profile = profile
+        self.config = config
+        self.predictor = dspy.Predict(dspy.Signature("context, case -> score", instructions=baseline.api_prompt))
+
+    def forward(self, context: str, case: EvalCase) -> object:
+        """Score the current COPRO-mutated instruction through the real multi-turn runner."""
+        _ = context
+        instruction = str(self.predictor.signature.instructions)
+        candidate = replace(self.baseline, id="optimized", api_prompt=instruction)
+        trace = asyncio.run(
+            run_case(
+                candidate,
+                self.target_model,
+                case,
+                get_adapter(self.target_model, self.config.target_reasoning_effort),
+                self.profile,
+                self.config,
+            )
+        )
+        return dspy.Prediction(score=trace.score)
+
+
+def _make_metric() -> Callable[..., float]:
+    """Build the sync COPRO metric; the program already ran the real multi-turn loop."""
 
     def metric(example: Any, prediction: Any, trace: Any = None) -> float:  # noqa: ANN401, ARG001
         try:
-            tool_call = parse_tool_call(getattr(prediction, "tool_call_json", "") or "")
-            case = example._case
-            snapshot = example._snapshot
-            outcome = asyncio.run(tools.run_tool(tool_call, case, snapshot, profile))
-            checks = check_case(case, tool_call, outcome, snapshot)
-            return score_case(checks)
+            score = getattr(prediction, "score", 0.0)
+            return float(score) if isinstance(score, int | float) else 0.0
         except Exception:  # noqa: BLE001 - optimizer metrics must not abort COPRO.
             return 0.0
 

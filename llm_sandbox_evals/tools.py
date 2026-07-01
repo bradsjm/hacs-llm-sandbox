@@ -1,5 +1,6 @@
 """Tool runner for the dev-only eval harness."""
 
+import json
 import math
 from collections.abc import Callable
 from types import ModuleType
@@ -16,11 +17,12 @@ from custom_components.llm_sandbox.llm_api.executor_support import ExecutionStat
 from custom_components.llm_sandbox.llm_api.facade_views import build_llm_context
 from custom_components.llm_sandbox.llm_api.prompts import PromptProfile
 from custom_components.llm_sandbox.llm_api.runtime import RuntimeContext
+from custom_components.llm_sandbox.llm_api.tools.recorder import _RecoverableToolError, _resolve_entity_ids
 from custom_components.llm_sandbox.runtime import SandboxSettings
 from custom_components.llm_sandbox.snapshot.models import HomeSnapshot, SnapshotScope
 
 from llm_sandbox_evals.homes import get_home
-from llm_sandbox_evals.schema import EvalCase, ToolOutcome
+from llm_sandbox_evals.schema import EvalCase, ToolCall, ToolOutcome
 
 EVAL_SCOPE: SnapshotScope = SnapshotScope(
     assistant="conversation",
@@ -48,22 +50,20 @@ class RecordingInvoker:
 
 
 async def run_tool(
-    tool_call: dict[str, object] | None,
+    call: ToolCall,
     case: EvalCase,
     snapshot: HomeSnapshot,
     prompt_profile: PromptProfile,
+    *,
+    invoker: RecordingInvoker,
 ) -> ToolOutcome:
     """Run a selected eval tool against the caller-provided fresh snapshot."""
-    # Branch boundary: model failed to produce a tool call.
-    if tool_call is None:
-        return ToolOutcome(ok=False, tool_name="", result=None, recorded_actions=(), error="no_tool_call")
-
-    tool_name = str(tool_call.get("tool_name", ""))
-    tool_args = _tool_args(tool_call.get("tool_args") or {})
+    tool_name = call.tool_name
+    tool_args = _tool_args(call.tool_args)
 
     # Branch boundary: execute_home_code uses the real production executor with a non-live invoker.
     if tool_name == TOOL_EXECUTE_HOME_CODE:
-        return await _run_execute(str(tool_args.get("code", "")), case, snapshot, prompt_profile)
+        return await _run_execute(str(tool_args.get("code", "")), case, snapshot, prompt_profile, invoker)
     # Branch boundary: recorder tools are fixture-backed and never touch a database.
     if tool_name == TOOL_GET_HISTORY:
         return _run_history(tool_args, case, snapshot)
@@ -79,7 +79,11 @@ async def run_tool(
 
 
 async def _run_execute(
-    code: str, case: EvalCase, snapshot: HomeSnapshot, prompt_profile: PromptProfile
+    code: str,
+    case: EvalCase,
+    snapshot: HomeSnapshot,
+    prompt_profile: PromptProfile,
+    invoker: RecordingInvoker,
 ) -> ToolOutcome:
     """Run execute_home_code through the production executor against a frozen snapshot."""
     area_id: str | None = None
@@ -121,7 +125,6 @@ async def _run_execute(
         action_domains=frozenset(),
         prompt_profile=prompt_profile,
     )
-    invoker = RecordingInvoker()
     runtime = RuntimeContext(
         state=ExecutionState(helper_call_limit=20),
         settings=settings,
@@ -154,16 +157,12 @@ async def _run_execute(
 
 def _run_history(tool_args: dict[str, object], case: EvalCase, snapshot: HomeSnapshot) -> ToolOutcome:
     """Return fixture-backed history rows in the production response envelope."""
-    entity_ids = _string_list(tool_args.get("entity_ids"))
+    try:
+        entity_ids = _resolve_entity_ids(snapshot, tool_args, "entity_ids")
+    except _RecoverableToolError as err:
+        return _recoverable_recorder_error(TOOL_GET_HISTORY, err)
     start = _optional_string(tool_args.get("start"))
     end = _optional_string(tool_args.get("end"))
-    # Branch boundary: malformed or empty id inputs mirror production schema rejection.
-    if not entity_ids:
-        return _invalid_tool_input(TOOL_GET_HISTORY)
-
-    # Safety constraint: recorder emulation rejects ids outside the visible frozen snapshot.
-    if not _all_visible(entity_ids, snapshot):
-        return _entity_not_visible(TOOL_GET_HISTORY)
 
     fixture = get_home(case.home)
     history = _recorder_section(fixture, "history")
@@ -181,17 +180,13 @@ def _run_history(tool_args: dict[str, object], case: EvalCase, snapshot: HomeSna
 
 def _run_statistics(tool_args: dict[str, object], case: EvalCase, snapshot: HomeSnapshot) -> ToolOutcome:
     """Return fixture-backed statistics rows in the production response envelope."""
-    statistic_ids = _string_list(tool_args.get("statistic_ids"))
+    try:
+        statistic_ids = _resolve_entity_ids(snapshot, tool_args, "statistic_ids")
+    except _RecoverableToolError as err:
+        return _recoverable_recorder_error(TOOL_GET_STATISTICS, err)
     start = _optional_string(tool_args.get("start"))
     end = _optional_string(tool_args.get("end"))
     period = str(tool_args.get("period", "hour"))
-    # Branch boundary: malformed or empty id inputs mirror production schema rejection.
-    if not statistic_ids:
-        return _invalid_tool_input(TOOL_GET_STATISTICS)
-
-    # Safety constraint: recorder emulation rejects ids outside the visible frozen snapshot.
-    if not _all_visible(statistic_ids, snapshot):
-        return _entity_not_visible(TOOL_GET_STATISTICS)
 
     fixture = get_home(case.home)
     statistics = _recorder_section(fixture, "statistics")
@@ -213,16 +208,12 @@ def _run_statistics(tool_args: dict[str, object], case: EvalCase, snapshot: Home
 
 def _run_logbook(tool_args: dict[str, object], case: EvalCase, snapshot: HomeSnapshot) -> ToolOutcome:
     """Return fixture-backed logbook rows in the production response envelope."""
-    entity_ids = _string_list(tool_args.get("entity_ids"))
+    try:
+        entity_ids = _resolve_entity_ids(snapshot, tool_args, "entity_ids")
+    except _RecoverableToolError as err:
+        return _recoverable_recorder_error(TOOL_GET_LOGBOOK, err)
     start = _optional_string(tool_args.get("start"))
     end = _optional_string(tool_args.get("end"))
-    # Branch boundary: malformed or empty id inputs mirror production schema rejection.
-    if not entity_ids:
-        return _invalid_tool_input(TOOL_GET_LOGBOOK)
-
-    # Safety constraint: recorder emulation rejects ids outside the visible frozen snapshot.
-    if not _all_visible(entity_ids, snapshot):
-        return _entity_not_visible(TOOL_GET_LOGBOOK)
 
     fixture = get_home(case.home)
     logbook = _recorder_section(fixture, "logbook")
@@ -244,25 +235,12 @@ def _tool_args(value: object) -> dict[str, object]:
     return cast(dict[str, object], value)
 
 
-def _string_list(value: object) -> list[str]:
-    """Coerce a model-provided list value to list[str]."""
-    # Branch boundary: non-list recorder id inputs are treated as an empty request.
-    if not isinstance(value, list):
-        return []
-    return [str(item) for item in value]
-
-
 def _optional_string(value: object) -> str | None:
     """Return an ISO string argument or None for omitted/null windows."""
     # Branch boundary: recorder windows may be omitted.
     if value is None:
         return None
     return str(value)
-
-
-def _all_visible(entity_ids: list[str], snapshot: HomeSnapshot) -> bool:
-    """Return whether every requested id exists in the visible snapshot state map."""
-    return all(entity_id in snapshot.states for entity_id in entity_ids)
 
 
 def _entity_not_visible(tool_name: str) -> ToolOutcome:
@@ -285,6 +263,19 @@ def _invalid_tool_input(tool_name: str) -> ToolOutcome:
         recorded_actions=(),
         error=None,
     )
+
+
+def _recoverable_recorder_error(tool_name: str, err: _RecoverableToolError) -> ToolOutcome:
+    """Map production recoverable recorder errors to eval response envelopes."""
+    # Branch boundary: preserve visibility failures; all other recoverable errors are invalid input.
+    if err.key == "entity_not_visible":
+        return _entity_not_visible(tool_name)
+    return _invalid_tool_input(tool_name)
+
+
+def tool_result_message(tool_call_id: str, result: dict[str, object] | None) -> dict[str, object]:
+    """Build the provider tool-result message, bounded for replay."""
+    return {"role": "tool", "tool_call_id": tool_call_id, "content": json.dumps(result)[:8000]}
 
 
 def _recorder_section(fixture: ModuleType, section: str) -> dict[str, list[dict[str, object]]]:

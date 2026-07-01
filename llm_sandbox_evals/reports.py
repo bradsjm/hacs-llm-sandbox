@@ -10,7 +10,7 @@ import re
 from dataclasses import asdict
 from pathlib import Path
 
-from llm_sandbox_evals.harness import CandidateModelScore, CaseTrace, RunResult
+from llm_sandbox_evals.schema import CandidateModelScore, CaseTrace, RunResult
 
 _SAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9_.-]")
 _INTEGRATION_MANIFEST = Path(__file__).resolve().parent.parent / "custom_components" / "llm_sandbox" / "manifest.json"
@@ -135,6 +135,8 @@ def _result_line(trace: CaseTrace) -> dict[str, object]:
         "candidate_id": trace.candidate_id,
         "model_id": trace.model_id,
         "score": trace.score,
+        "turns": trace.turns,
+        "efficiency": trace.efficiency,
         "checks": [{"name": check.name, "passed": check.passed, "required": check.required} for check in trace.checks],
     }
 
@@ -147,10 +149,15 @@ def _trace_json(trace: CaseTrace) -> dict[str, object]:
         "candidate_id": trace.candidate_id,
         "model_id": trace.model_id,
         "score": trace.score,
+        "turns": trace.turns,
+        "par_turns": trace.par_turns,
+        "efficiency": trace.efficiency,
+        "final_answer": trace.final_answer,
         "prompt": trace.prompt,
         "raw_output": trace.raw_output,
         "tool_call": trace.tool_call,
         "tool_result": trace.tool_result,
+        "steps": [asdict(step) for step in trace.steps],
         "recorded_actions": list(trace.recorded_actions),
         "checks": [asdict(check) for check in trace.checks],
     }
@@ -190,31 +197,44 @@ def _candidate_table(
 ) -> list[str]:
     """Render candidate ranking rows."""
     score_map = {(score.candidate_id, score.model_id): score for score in scores}
-    ranked_rows: list[tuple[str, float, float, dict[str, float]]] = []
+    ranked_rows: list[tuple[str, float, float, float, float, dict[str, float]]] = []
     for candidate_id in candidate_ids:
         candidate_scores = [
             score_map[(candidate_id, model_id)] for model_id in model_ids if (candidate_id, model_id) in score_map
         ]
         all_case_scores = [case_score for score in candidate_scores for case_score in score.case_scores.values()]
         model_means = [score.mean for score in candidate_scores]
+        turns = [score.mean_turns for score in candidate_scores]
+        efficiencies = [score.mean_efficiency for score in candidate_scores]
         category_means: dict[str, float] = {}
         for category in categories:
             category_values = [
                 score.per_category[category] for score in candidate_scores if category in score.per_category
             ]
             category_means[category] = _mean(category_values)
-        ranked_rows.append((candidate_id, _mean(all_case_scores), min(model_means, default=0.0), category_means))
+        ranked_rows.append(
+            (
+                candidate_id,
+                _mean(all_case_scores),
+                min(model_means, default=0.0),
+                _mean(turns),
+                _mean(efficiencies),
+                category_means,
+            )
+        )
 
     ranked_rows.sort(key=lambda row: (row[1], row[2]), reverse=True)
-    header = ["Candidate", "Mean", "MinModel", *categories]
+    header = ["Candidate", "Mean", "MinModel", "Turns", "Eff", *categories]
     lines = [_markdown_row(header), _markdown_separator(len(header))]
-    for candidate_id, mean, min_model, category_means in ranked_rows:
+    for candidate_id, mean, min_model, mean_turns, efficiency, category_means in ranked_rows:
         lines.append(
             _markdown_row(
                 [
                     candidate_id,
                     _format_score(mean),
                     _format_score(min_model),
+                    _format_score(mean_turns),
+                    _format_score(efficiency),
                     *[_format_score(category_means[cat]) for cat in categories],
                 ]
             )
@@ -225,19 +245,24 @@ def _candidate_table(
 def _model_matrix_table(
     scores: list[CandidateModelScore], candidate_ids: list[str], model_ids: list[str]
 ) -> list[str]:
-    """Render per-candidate/per-model mean score table."""
-    score_map = {(score.candidate_id, score.model_id): score.mean for score in scores}
-    header = ["Candidate", *model_ids]
+    """Render per-candidate/per-model mean, turns, and efficiency rows."""
+    score_map = {(score.candidate_id, score.model_id): score for score in scores}
+    header = ["Candidate", "Model", "Mean", "Turns", "Eff"]
     lines = [_markdown_row(header), _markdown_separator(len(header))]
     for candidate_id in candidate_ids:
-        lines.append(
-            _markdown_row(
-                [
-                    candidate_id,
-                    *[_format_score(score_map.get((candidate_id, model_id), 0.0)) for model_id in model_ids],
-                ]
+        for model_id in model_ids:
+            score = score_map.get((candidate_id, model_id))
+            lines.append(
+                _markdown_row(
+                    [
+                        candidate_id,
+                        model_id,
+                        _format_score(0.0 if score is None else score.mean),
+                        _format_score(0.0 if score is None else score.mean_turns),
+                        _format_score(0.0 if score is None else score.mean_efficiency),
+                    ]
+                )
             )
-        )
     return lines
 
 
@@ -295,6 +320,8 @@ def _scores_field(value: object) -> list[CandidateModelScore]:
                 candidate_id=_string_field(item, "candidate_id"),
                 model_id=_string_field(item, "model_id"),
                 mean=float(item.get("mean", 0.0)),
+                mean_turns=float(item.get("mean_turns", 0.0)),
+                mean_efficiency=float(item.get("mean_efficiency", 0.0)),
                 per_category=_float_map(item.get("per_category")),
                 case_scores=_float_map(item.get("case_scores")),
             )
