@@ -23,9 +23,7 @@ from datetime import datetime as _datetime
 from typing import Any, cast
 from zoneinfo import ZoneInfo
 
-import voluptuous as vol
 from homeassistant.core import SupportsResponse
-from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.util.json import JsonValueType
 
 from ..runtime import SandboxSettings
@@ -688,7 +686,7 @@ class SafeServiceRegistry:
                     "service_call_timeout",
                     {"domain": domain, "service": service},
                 ) from err
-            except (ServiceValidationError, vol.Invalid, HomeAssistantError, Exception) as err:
+            except Exception as err:
                 helper_err = self._service_call_error(err, domain, service)
                 record["status"] = "error"
                 record["error"] = _action_error(helper_err.key, helper_err.placeholders, str(err))

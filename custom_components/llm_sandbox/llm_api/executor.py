@@ -139,6 +139,8 @@ def _build_monty(
         message = str(err)
         # Reference errors (undefined names) and non-diagnostic construction
         # failures (e.g. SyntaxError) must surface, not be silently relaxed.
+        # Diagnostic tokens track pydantic-monty==0.0.18; this branch is
+        # fail-open for other type-check diagnostics the runtime can tolerate.
         if any(token in message for token in _REFERENCE_TYPE_ERRORS) or "error[" not in message:
             raise
         # Type-check strictness the runtime tolerates (e.g. invalid-assignment

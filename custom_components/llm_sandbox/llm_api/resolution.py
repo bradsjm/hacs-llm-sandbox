@@ -1,16 +1,19 @@
 """Pure snapshot-aware resolution for service-call targets.
 
-Exact entity-id matches win. Otherwise, target resolution uses a deterministic
-same-domain fuzzy match over snapshot-derived ``object_id`` and ``name`` token
-overlap. A unique match auto-resolves; ambiguous matches return candidates so
-the caller can self-describe available targets. This module never touches live
-Home Assistant objects and performs no I/O.
+Exact entity-id matches win. Otherwise, target resolution uses deterministic
+same-domain token containment (one token set is a subset of the other) over
+snapshot-derived ``object_id`` and ``name`` tokens. A unique match
+auto-resolves; ambiguous matches return candidates so the caller can
+self-describe available targets. This module never touches live Home Assistant
+objects and performs no I/O.
 """
 
 import re
 from dataclasses import dataclass
 
 from ..snapshot.models import HomeSnapshot
+
+_DISCOVERY_LIMIT = 8
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,59 +56,60 @@ def resolve_target_entity(
     requested_entity_id: str,
     domain: str,
 ) -> TargetResolution:
-    """Resolve a requested target entity id or name against visible snapshot states."""
+    """Resolve by exact id or same-domain token containment over visible states."""
     # Exact visible entity ids are authoritative and bypass fuzzy matching.
     if requested_entity_id in snapshot.states:
         return TargetResolution(resolved=requested_entity_id)
 
     query_tokens = _tokens(requested_entity_id)
-    scored_candidates: list[tuple[int, CandidateTarget]] = []
+    if not query_tokens:
+        return TargetResolution(candidates=())
+
+    matches: list[CandidateTarget] = []
 
     for state in snapshot.states.values():
-        # Fuzzy alternatives are intentionally constrained to the service domain.
+        # Alternatives are intentionally constrained to the service domain.
         if state.domain != domain:
             continue
 
         candidate_tokens = _tokens(state.object_id)
         if state.name is not None:
             candidate_tokens |= _tokens(state.name)
+        if not candidate_tokens:
+            continue
 
-        score = len(candidate_tokens & query_tokens)
-        if score >= 1:
-            scored_candidates.append(
-                (
-                    score,
-                    CandidateTarget(
-                        entity_id=state.entity_id,
-                        name=state.name,
-                        object_id=state.object_id,
-                    ),
+        if query_tokens <= candidate_tokens or candidate_tokens <= query_tokens:
+            matches.append(
+                CandidateTarget(
+                    entity_id=state.entity_id,
+                    name=state.name,
+                    object_id=state.object_id,
                 )
             )
 
-    # No shared tokens means the caller should treat the request as not found.
-    if not scored_candidates:
+    # No containment match means the caller should treat the request as not found.
+    if not matches:
         return TargetResolution(candidates=())
 
     candidates = tuple(
         sorted(
-            (candidate for _score, candidate in scored_candidates),
+            matches,
             key=lambda candidate: candidate.entity_id,
         )
     )
 
-    # A unique fuzzy match is safe to auto-resolve deterministically.
+    # A unique containment match is safe to auto-resolve deterministically.
     if len(candidates) == 1:
         return TargetResolution(resolved=candidates[0].entity_id)
 
-    # Multiple token-overlap matches are ambiguous, so surface deterministic hints.
+    # Multiple containment matches are ambiguous, so surface deterministic hints.
     return TargetResolution(candidates=candidates)
 
 
 def candidates_for_domain(
     snapshot: HomeSnapshot,
     domain: str,
-    limit: int = 10,
+    limit: int = _DISCOVERY_LIMIT,
 ) -> tuple[CandidateTarget, ...]:
     """Return visible candidate targets for a domain, ordered for discovery hints."""
     candidates = sorted(
@@ -125,11 +129,11 @@ def candidates_for_domain(
 
 def available_hint(snapshot: HomeSnapshot, domain: str) -> str:
     """Return a short hint describing visible entity ids in a domain."""
-    candidates = candidates_for_domain(snapshot, domain)
+    candidates = candidates_for_domain(snapshot, domain, limit=_DISCOVERY_LIMIT + 1)
     ids = [candidate.entity_id for candidate in candidates]
     if ids:
-        suffix = " ..." if len(ids) > 8 else ""
-        return f"Visible entities in the '{domain}' domain: {', '.join(ids[:8])}{suffix}"
+        suffix = " ..." if len(ids) > _DISCOVERY_LIMIT else ""
+        return f"Visible entities in the '{domain}' domain: {', '.join(ids[:_DISCOVERY_LIMIT])}{suffix}"
 
     return f"No visible entities in the '{domain}' domain."
 

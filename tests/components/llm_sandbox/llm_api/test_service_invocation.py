@@ -260,7 +260,7 @@ async def test_explicit_hidden_entity_target_resolves_to_unique_visible_entity()
         harness,
         "light",
         "turn_on",
-        target={"entity_id": "light.hidden"},
+        target={"entity_id": "bedroom"},
     )
 
     assert result is None
@@ -286,7 +286,7 @@ async def test_service_data_entity_selector_bypass_is_cleaned_and_resolved() -> 
         harness,
         "light",
         "turn_on",
-        service_data={"brightness_pct": 25, "entity_id": "light.hidden"},
+        service_data={"brightness_pct": 25, "entity_id": "bedroom"},
     )
 
     assert result is None
@@ -360,6 +360,47 @@ async def test_ambiguous_entity_target_blocks_with_candidates() -> None:
     action_error = cast(dict[str, object], harness.runtime.state.actions[0]["error"])
     hints = cast(dict[str, object], action_error["hints"])
     assert set(cast(list[str], hints["candidates"])) == {"switch.outlet", "switch.kitchen"}
+    assert harness.invoker.calls == []
+
+
+async def test_shared_token_without_containment_blocks_before_invocation() -> None:
+    """A partial cross-guess that is not containment never invokes live HA."""
+    snapshot = HomeSnapshot(
+        created_at="2026-06-29T00:00:00+00:00",
+        states={
+            "light.kitchen_ceiling": _state("light.kitchen_ceiling", "off", "Kitchen Ceiling"),
+            "light.kitchen_sink": _state("light.kitchen_sink", "off", "Kitchen Sink"),
+        },
+        entities={},
+        devices={},
+        areas={},
+        floors={},
+        config=_config(),
+        services={"light": ("turn_on",)},
+        services_supports_response={"light": {"turn_on": SupportsResponse.NONE.value}},
+        indexes=SnapshotIndexes(
+            entity_ids_by_device_id={},
+            entity_ids_by_area_id={},
+            device_ids_by_area_id={},
+            entity_ids_by_config_entry_id={},
+            entity_ids_by_label={},
+            device_ids_by_label={},
+            area_ids_by_floor_id={},
+        ),
+        labels={},
+        categories={},
+        issues=[],
+        notifications=[],
+        config_entries=[],
+        services_schema={"light": {"turn_on": LIGHT_TURN_ON_BRIEF}},
+    )
+    harness = _service_harness(snapshot=snapshot)
+
+    result = await _ok_call(harness, "light", "turn_on", target={"entity_id": "light.kitchen_cabinets"})
+
+    assert result is None
+    assert _action_statuses_via_state(harness) == ["error"]
+    assert _action_keys_via_state(harness) == ["service_target_not_visible"]
     assert harness.invoker.calls == []
 
 
@@ -502,9 +543,10 @@ def _service_harness(
     action_domains: frozenset[str] = frozenset(),
     invoker: RecordingInvoker | None = None,
     deadline: float = math.inf,
+    snapshot: HomeSnapshot | None = None,
 ) -> ServiceHarness:
     """Build a snapshot-backed services facade with an active runtime."""
-    snapshot = _snapshot()
+    snapshot = snapshot or _snapshot()
     active_invoker = invoker or RecordingInvoker()
     runtime = RuntimeContext(
         state=ExecutionState(helper_call_limit=20),
