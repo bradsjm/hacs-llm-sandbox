@@ -237,8 +237,10 @@ CASES: list[EvalCase] = [
         llm_context=CaseContext(device_id="device_assist_living"),
         expected=Expected(
             tool_name="execute_home_code",
-            output_contains_entities=("light.living", "light.bedroom"),
-            output_excludes_entities=("light.office_desk",),
+            # light.living is the only Evening-labeled light that is on; light.bedroom
+            # is Evening-labeled but off, light.office_desk is Work-labeled.
+            output_contains_entities=("light.living",),
+            output_excludes_entities=("light.bedroom", "light.office_desk"),
         ),
     ),
     # --- real-home cases (home-assistant-prod snapshot) ---

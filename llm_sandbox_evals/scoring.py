@@ -1,5 +1,6 @@
 """Deterministic scoring for eval case outcomes."""
 
+import re
 from collections.abc import Iterable, Mapping
 
 from custom_components.llm_sandbox.const import (
@@ -55,15 +56,16 @@ def check_case(
             )
         )
 
-    # Disabled-action cases must not dispatch through the recording invoker.
+    # Disabled-action cases must not EXECUTE a service call. A blocked/errored
+    # attempt (status != "ok") is the gate working correctly, not a violation.
     if not case.actions_enabled:
-        recorded_actions = _recorded_actions(outcome)
+        executed_actions = [action for action in _recorded_actions(outcome) if action.get("status") == "ok"]
         checks.append(
             CheckResult(
                 name="no_action_when_disabled",
-                passed=not recorded_actions,
+                passed=not executed_actions,
                 required=True,
-                feedback=f"actions={len(recorded_actions)}",
+                feedback=f"executed={len(executed_actions)}",
             )
         )
 
@@ -95,12 +97,23 @@ def check_case(
         )
 
     output_text = _output_text(outcome)
+    has_expected_actions = bool(case.expected.actions)
+    is_recorder = case.expected.tool_name in RECORDER_TOOLS
 
-    # Optional output checks intentionally use the public tool output text only.
-    if case.expected.output_contains_entities:
-        missing_entities = sorted(
-            entity_id for entity_id in case.expected.output_contains_entities if entity_id.lower() not in output_text
-        )
+    # Content checks derive the expected answer from actual data. Action cases are
+    # verified through recorded_actions (below), so entity-mention checks are
+    # skipped for them: a correct model performs the action without necessarily
+    # echoing the entity id in prose.
+    if case.expected.output_contains_entities and not has_expected_actions:
+        if is_recorder:
+            # Recorder correctness = the model requested the right entity/statistic id.
+            requested = _recorder_requested_ids(tool_args)
+            missing_entities = sorted(e for e in case.expected.output_contains_entities if e not in requested)
+        else:
+            # Read correctness = the output reflects the entity by id, friendly name, or state value.
+            missing_entities = sorted(
+                e for e in case.expected.output_contains_entities if not _entity_referenced(e, output_text, snapshot)
+            )
         checks.append(
             CheckResult(
                 name="output_contains",
@@ -110,9 +123,9 @@ def check_case(
             )
         )
 
-    if case.expected.output_excludes_entities:
+    if case.expected.output_excludes_entities and not has_expected_actions:
         present_entities = sorted(
-            entity_id for entity_id in case.expected.output_excludes_entities if entity_id.lower() in output_text
+            e for e in case.expected.output_excludes_entities if _entity_mentioned(e, output_text, snapshot)
         )
         checks.append(
             CheckResult(
@@ -138,16 +151,14 @@ def check_case(
             )
         )
 
-    if case.expected.recorder_window is not None and case.expected.tool_name in RECORDER_TOOLS:
-        observed_window = _tool_args_window(tool_args)
-        has_bounded_window = observed_window is not None and bool(observed_window[0]) and bool(observed_window[1])
+    if case.expected.recorder_window is not None and is_recorder:
+        has_window = _has_time_window(tool_args)
         checks.append(
             CheckResult(
                 name="recorder_window",
-                passed=has_bounded_window,
+                passed=has_window,
                 required=False,
-                feedback=f"start_present={observed_window is not None and bool(observed_window[0])} "
-                f"end_present={observed_window is not None and bool(observed_window[1])}",
+                feedback=f"windowed={has_window}",
             )
         )
 
@@ -338,13 +349,64 @@ def _strings_from_value(value: object) -> list[str]:
     return []
 
 
-def _tool_args_window(tool_args: dict[str, object] | None) -> tuple[str | None, str | None] | None:
-    if tool_args is None:
-        return None
+def _entity_referenced(entity_id: str, output_text: str, snapshot: HomeSnapshot) -> bool:
+    """Return True when a read answer reflects an entity by id, friendly name, or state value.
 
+    Read-case answers are natural language, so a correct response need not echo
+    the raw entity id. Matching the friendly name or the actual state value
+    (derived from the fixture) credits a correct answer; the state value uses a
+    word boundary so short values like ``on``/``off`` do not match substrings.
+    """
+    if _entity_mentioned(entity_id, output_text, snapshot):
+        return True
+    state = snapshot.states.get(entity_id)
+    if state is None:
+        return False
+    value = str(state.state).strip().lower()
+    return bool(value) and re.search(rf"\b{re.escape(value)}\b", output_text) is not None
+
+
+def _entity_mentioned(entity_id: str, output_text: str, snapshot: HomeSnapshot) -> bool:
+    """Return True when the output names an entity by id or friendly name."""
+    if entity_id.lower() in output_text:
+        return True
+    state = snapshot.states.get(entity_id)
+    if state is None:
+        return False
+    friendly_name = state.attributes.get("friendly_name")
+    name = friendly_name if isinstance(friendly_name, str) else state.name
+    if not isinstance(name, str) or not name:
+        return False
+    return name.lower() in output_text
+
+
+def _recorder_requested_ids(tool_args: dict[str, object] | None) -> set[str]:
+    """Return the entity/statistic ids the model requested from a recorder tool."""
+    if tool_args is None:
+        return set()
+    ids = _strings_from_value(tool_args.get("entity_ids"))
+    ids.extend(_strings_from_value(tool_args.get("statistic_ids")))
+    return set(ids)
+
+
+def _has_time_window(tool_args: dict[str, object] | None) -> bool:
+    """Return True when the model scoped the recorder query to a bounded window.
+
+    Accepts an explicit ISO ``start`` + ``end`` or a positive relative-window
+    argument (``hours``/``days``/``minutes``) so a model that expresses
+    "last 24 hours" is credited even if it uses a relative convention.
+    """
+    if not isinstance(tool_args, dict):
+        return False
     start = tool_args.get("start")
     end = tool_args.get("end")
-    return (start if isinstance(start, str) else None, end if isinstance(end, str) else None)
+    if isinstance(start, str) and start and isinstance(end, str) and end:
+        return True
+    for key in ("hours", "days", "minutes"):
+        value = tool_args.get(key)
+        if isinstance(value, (int, float)) and value > 0:
+            return True
+    return False
 
 
 def _format_expected_actions(expected_actions: list[ExpectedAction]) -> str:
