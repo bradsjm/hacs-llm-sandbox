@@ -1160,6 +1160,7 @@ name = "hacs-llm-sandbox"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "pillow" },
     { name = "pydantic-monty" },
 ]
 
@@ -1186,7 +1187,10 @@ evals = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "pydantic-monty", specifier = "==0.0.18" }]
+requires-dist = [
+    { name = "pillow", specifier = "==12.2.0" },
+    { name = "pydantic-monty", specifier = "==0.0.18" },
+]
 
 [package.metadata.requires-dev]
 dev = [
