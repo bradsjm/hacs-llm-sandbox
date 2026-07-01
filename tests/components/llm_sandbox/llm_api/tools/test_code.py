@@ -9,6 +9,7 @@ import voluptuous as vol
 from custom_components.llm_sandbox.llm_api import executor
 from custom_components.llm_sandbox.llm_api.tools.code import _execute
 from homeassistant.core import Context, HomeAssistant, SupportsResponse
+from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import llm
@@ -115,16 +116,33 @@ result = {
     assert output["map_multi"] == [11, 22]
 
 
-async def test_registry_traversal_accepts_one_arg(
+@pytest.mark.parametrize(
+    ("method", "id_expr"),
+    [
+        pytest.param("async_entries_for_area", "bedroom_id", id="area"),
+        pytest.param("async_entries_for_device", "device_id", id="device"),
+    ],
+)
+async def test_registry_traversal_one_and_two_arg_forms_match(
     hass: HomeAssistant,
     loaded_entry: MockConfigEntry,
+    method: str,
+    id_expr: str,
 ) -> None:
-    """One-arg traversal (no registry ceremony) resolves like the two-arg form."""
-    code = """
-bedroom = area_registry.async_get_area_by_name("Bedroom")
-one_arg = [e.entity_id for e in er.async_entries_for_area(bedroom.id)]
-two_arg = [e.entity_id for e in er.async_entries_for_area(er.async_get(hass), bedroom.id)]
-result = {"one_arg": one_arg, "two_arg": two_arg}
+    """One-arg and two-arg registry traversal forms resolve identically."""
+    device = dr.async_get(hass).async_get_or_create(
+        config_entry_id=loaded_entry.entry_id,
+        identifiers={("test", "traversal-device")},
+    )
+    er.async_get(hass).async_update_entity("light.bedroom", device_id=device.id)
+    bedroom = ar.async_get(hass).async_get_area_by_name("Bedroom")
+
+    code = f"""
+bedroom_id = "{bedroom.id}"
+device_id = "{device.id}"
+one_arg = [e.entity_id for e in er.{method}({id_expr})]
+two_arg = [e.entity_id for e in er.{method}(er.async_get(hass), {id_expr})]
+result = {{"one_arg": one_arg, "two_arg": two_arg}}
 """
 
     result = await _run_code(hass, loaded_entry, code)
@@ -133,6 +151,21 @@ result = {"one_arg": one_arg, "two_arg": two_arg}
     output = result["output"]
     assert output["one_arg"] == output["two_arg"]
     assert output["one_arg"] == ["light.bedroom"]
+
+
+async def test_entity_entry_domain_field_end_to_end(
+    hass: HomeAssistant,
+    loaded_entry: MockConfigEntry,
+) -> None:
+    """The derived domain field is readable through the entity registry facade."""
+    code = """
+entry = entity_registry.async_get("light.bedroom")
+result = entry.domain
+"""
+    result = await _run_code(hass, loaded_entry, code)
+
+    assert result["execution"]["status"] == "ok"
+    assert result["output"] == "light"
 
 
 async def test_service_catalog_reads(

@@ -218,6 +218,7 @@ def _safe_entity(entry: er.RegistryEntry) -> SafeRegistryEntry:
     """Convert a live entity registry entry into a frozen safe record."""
     return SafeRegistryEntry(
         entity_id=entry.entity_id,
+        domain=entry.entity_id.split(".", 1)[0],
         unique_id=entry.unique_id,
         platform=entry.platform,
         config_entry_id=entry.config_entry_id,

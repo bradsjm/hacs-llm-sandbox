@@ -202,6 +202,11 @@ def refine_code_error(kind: str, message: str, code: str) -> tuple[str, str, lis
             available_attributes = _attributes_for_first_discovery_call(code, name, GLOBAL_TYPE_MAP, public_surface)
         elif name in {"setattr", "delattr"}:
             cleaned_message = f"`{name}` is not available in the sandbox; use direct local values instead of mutating facade objects."
+        elif name == "next":
+            cleaned_message = (
+                "`next` is not available in the sandbox; get the first item with an explicit loop "
+                "(`for item in items: ...; break`) or index the list (`items[0]`)."
+            )
         return "NameError", cleaned_message, available_attributes
 
     if (module_name := _extract_unresolved_import(cleaned_message)) is not None:

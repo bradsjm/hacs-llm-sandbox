@@ -89,7 +89,7 @@ BASE_API_PROMPT = (
     "- Device: id, name, name_by_user, manufacturer, model, model_id, sw_version, "
     "hw_version, serial_number, area_id, labels, identifiers, connections, "
     "configuration_url, entry_type, config_entries, via_device_id, disabled_by.\n"
-    "- Entity entry: entity_id, unique_id, platform, config_entry_id, device_id, "
+    "- Entity entry: domain, entity_id, unique_id, platform, config_entry_id, device_id, "
     "area_id, name, original_name, aliases, labels, disabled_by, hidden_by, "
     "entity_category, device_class, original_device_class, capabilities, "
     "supported_features, translation_key, has_entity_name.\n"

@@ -118,6 +118,33 @@ def test_refine_unknown_name_keeps_message_no_attributes() -> None:
             ],
             id="service-registry-facade",
         ),
+        pytest.param(
+            "SafeRegistryEntry",
+            "entry.zzz",
+            [
+                "aliases",
+                "area_id",
+                "capabilities",
+                "config_entry_id",
+                "device_class",
+                "device_id",
+                "disabled_by",
+                "domain",
+                "entity_category",
+                "entity_id",
+                "has_entity_name",
+                "hidden_by",
+                "labels",
+                "name",
+                "original_device_class",
+                "original_name",
+                "platform",
+                "supported_features",
+                "translation_key",
+                "unique_id",
+            ],
+            id="entity-entry-record-includes-domain",
+        ),
     ],
 )
 def test_refine_attribute_error_surfaces_known_class_attributes(
@@ -216,3 +243,16 @@ def test_refine_parse_miss_returns_inputs_unchanged() -> None:
     assert refined_kind == "Exception"
     assert available_attributes is None
     assert refined_message == "something completely unrelated"
+
+
+def test_refine_reclassifies_next_with_iteration_hint() -> None:
+    refined_kind, refined_message, available_attributes = refine_code_error(
+        "MontyTypingError",
+        "unresolved-reference: name `next` is used when not defined",
+        "first = next(iter(items))",
+    )
+
+    assert refined_kind == "NameError"
+    assert available_attributes is None
+    assert "next" in refined_message
+    assert "items[0]" in refined_message

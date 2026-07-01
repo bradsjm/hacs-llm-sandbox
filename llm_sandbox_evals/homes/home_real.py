@@ -251,6 +251,7 @@ def _entity(
     device_class = _string_attr(entity["attributes"], "device_class")
     return SafeRegistryEntry(
         entity_id=entity_id,
+        domain=entity_id.split(".", 1)[0],
         unique_id=entity_id,
         platform=entity["platform"],
         config_entry_id=ENTRY_ID,

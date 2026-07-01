@@ -57,3 +57,8 @@ def test_monty_type_stubs_include_datetime_globals() -> None:
     """date and datetime appear as declared globals in the type stubs."""
     assert "\ndate: Any" in MONTY_TYPE_STUBS
     assert "\ndatetime: Any" in MONTY_TYPE_STUBS
+
+
+def test_monty_type_stubs_include_entity_entry_domain() -> None:
+    """The derived domain field appears on the entity entry record in stubs."""
+    assert "class SafeRegistryEntry:\n    entity_id: str\n    domain: str" in MONTY_TYPE_STUBS

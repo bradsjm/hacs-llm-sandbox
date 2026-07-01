@@ -380,6 +380,7 @@ def _entity(
     domain, _ = entity_id.split(".", 1)
     return SafeRegistryEntry(
         entity_id=entity_id,
+        domain=domain,
         unique_id=unique_id,
         platform=domain,
         config_entry_id="entry_default",

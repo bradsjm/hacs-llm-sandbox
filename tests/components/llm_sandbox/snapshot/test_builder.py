@@ -90,6 +90,7 @@ async def test_snapshot_captures_states_and_registry_entries(hass: HomeAssistant
     entry = snapshot.entities["light.bedroom"]
     assert entry.platform == "test"
     assert entry.unique_id == "bedroom"
+    assert entry.domain == "light"
 
 
 async def test_snapshot_area_and_floor_alias_fields_match_canonical(hass: HomeAssistant) -> None:

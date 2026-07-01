@@ -78,6 +78,7 @@ class SafeRegistryEntry:
     """Frozen view of a Home Assistant entity registry entry."""
 
     entity_id: str
+    domain: str
     unique_id: str | None
     platform: str
     config_entry_id: str | None
@@ -102,6 +103,7 @@ class SafeRegistryEntry:
             JsonValueType,
             {
                 "entity_id": self.entity_id,
+                "domain": self.domain,
                 "unique_id": self.unique_id,
                 "platform": self.platform,
                 "config_entry_id": self.config_entry_id,
