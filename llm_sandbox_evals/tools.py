@@ -14,6 +14,7 @@ from custom_components.llm_sandbox.const import (
 from custom_components.llm_sandbox.llm_api.executor import async_execute_home_code
 from custom_components.llm_sandbox.llm_api.executor_support import ExecutionState
 from custom_components.llm_sandbox.llm_api.facade_views import build_llm_context
+from custom_components.llm_sandbox.llm_api.prompts import PromptProfile
 from custom_components.llm_sandbox.llm_api.runtime import RuntimeContext
 from custom_components.llm_sandbox.runtime import SandboxSettings
 from custom_components.llm_sandbox.snapshot.models import HomeSnapshot, SnapshotScope
@@ -46,7 +47,12 @@ class RecordingInvoker:
         return None
 
 
-async def run_tool(tool_call: dict[str, object] | None, case: EvalCase, snapshot: HomeSnapshot) -> ToolOutcome:
+async def run_tool(
+    tool_call: dict[str, object] | None,
+    case: EvalCase,
+    snapshot: HomeSnapshot,
+    prompt_profile: PromptProfile,
+) -> ToolOutcome:
     """Run a selected eval tool against the caller-provided fresh snapshot."""
     # Branch boundary: model failed to produce a tool call.
     if tool_call is None:
@@ -57,7 +63,7 @@ async def run_tool(tool_call: dict[str, object] | None, case: EvalCase, snapshot
 
     # Branch boundary: execute_home_code uses the real production executor with a non-live invoker.
     if tool_name == TOOL_EXECUTE_HOME_CODE:
-        return await _run_execute(str(tool_args.get("code", "")), case, snapshot)
+        return await _run_execute(str(tool_args.get("code", "")), case, snapshot, prompt_profile)
     # Branch boundary: recorder tools are fixture-backed and never touch a database.
     if tool_name == TOOL_GET_HISTORY:
         return _run_history(tool_args, case, snapshot)
@@ -72,7 +78,9 @@ async def run_tool(tool_call: dict[str, object] | None, case: EvalCase, snapshot
     return ToolOutcome(ok=False, tool_name=tool_name, result=None, recorded_actions=(), error="unknown_tool")
 
 
-async def _run_execute(code: str, case: EvalCase, snapshot: HomeSnapshot) -> ToolOutcome:
+async def _run_execute(
+    code: str, case: EvalCase, snapshot: HomeSnapshot, prompt_profile: PromptProfile
+) -> ToolOutcome:
     """Run execute_home_code through the production executor against a frozen snapshot."""
     area_id: str | None = None
     area_name: str | None = None
@@ -111,6 +119,7 @@ async def _run_execute(code: str, case: EvalCase, snapshot: HomeSnapshot) -> Too
         scope=EVAL_SCOPE,
         actions_enabled=case.actions_enabled,
         action_domains=frozenset(),
+        prompt_profile=prompt_profile,
     )
     invoker = RecordingInvoker()
     runtime = RuntimeContext(

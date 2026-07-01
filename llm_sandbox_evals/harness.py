@@ -5,6 +5,8 @@ import sys
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
+from custom_components.llm_sandbox.llm_api.prompts import PromptProfile, resolve_profile
+
 from llm_sandbox_evals import cases
 from llm_sandbox_evals.config import EvalConfig
 from llm_sandbox_evals.homes import get_home
@@ -60,7 +62,8 @@ async def run_matrix(config: EvalConfig) -> RunResult:
     """Run the candidate x model x case matrix and return all traces/scores."""
     run_id = datetime.now(UTC).strftime("%Y%m%d-%H%M%S-%f")
     created_at = datetime.now(UTC).isoformat()
-    candidates = load_candidates(config.candidates)
+    profile = resolve_profile(config.prompt_profile)
+    candidates = load_candidates(config.candidates, config.prompt_profile)
     selected_cases = _select_cases(config.cases, config.homes)
     model_ids = list(config.models)
     traces: list[CaseTrace] = []
@@ -69,7 +72,14 @@ async def run_matrix(config: EvalConfig) -> RunResult:
         for model_id in model_ids:
             adapter = get_adapter(model_id, config.reasoning_effort)
             _progress(f"[{candidate.id}/{model_id}] {len(selected_cases)} cases (concurrency={config.concurrency})")
-            pair_traces = await _run_cases_for_pair(candidate, model_id, selected_cases, adapter, config.concurrency)
+            pair_traces = await _run_cases_for_pair(
+                candidate,
+                model_id,
+                selected_cases,
+                adapter,
+                config.concurrency,
+                profile,
+            )
             traces.extend(pair_traces)
 
     return RunResult(
@@ -88,6 +98,7 @@ async def _run_one_case(
     model_id: str,
     case: EvalCase,
     adapter: ModelAdapter,
+    prompt_profile: PromptProfile,
 ) -> CaseTrace:
     """Run one matrix cell, converting all failures into a zero-score trace."""
     prompt = ""
@@ -96,7 +107,7 @@ async def _run_one_case(
         snapshot = fixture.snapshot()
         prompt = render_prompt(candidate, case, snapshot)
         model_result = await adapter.complete(model_id, prompt)
-        outcome = await run_tool(model_result.tool_call, case, snapshot)
+        outcome = await run_tool(model_result.tool_call, case, snapshot, prompt_profile)
         checks = check_case(case, model_result.tool_call, outcome, snapshot)
         return CaseTrace(
             case_id=case.id,
@@ -140,6 +151,7 @@ async def _run_cases_for_pair(
     selected_cases: list[EvalCase],
     adapter: ModelAdapter,
     concurrency: int,
+    prompt_profile: PromptProfile,
 ) -> list[CaseTrace]:
     """Run all cases for one candidate/model pair with bounded concurrency.
 
@@ -153,7 +165,7 @@ async def _run_cases_for_pair(
 
     async def _one(index: int, case: EvalCase) -> CaseTrace:
         async with semaphore:
-            trace = await _run_one_case(candidate, model_id, case, adapter)
+            trace = await _run_one_case(candidate, model_id, case, adapter, prompt_profile)
         _progress(f"  [{index + 1}/{total}] {case.id} score={trace.score:.2f}")
         return trace
 

@@ -8,6 +8,7 @@ from typing import cast
 
 import pytest
 import voluptuous as vol
+from custom_components.llm_sandbox.const import DEFAULT_PROMPT_PROFILE
 from custom_components.llm_sandbox.llm_api.errors import (
     CodeErrorPayload,
     HelperErrorPayload,
@@ -24,6 +25,7 @@ from custom_components.llm_sandbox.llm_api.facade_views import (
     SafeServiceRegistry,
     build_facades,
 )
+from custom_components.llm_sandbox.llm_api.prompts import resolve_profile
 from custom_components.llm_sandbox.llm_api.runtime import (
     RuntimeContext,
     activate_runtime,
@@ -483,6 +485,7 @@ def _service_harness(
             scope=DEFAULT_SCOPE,
             actions_enabled=actions_enabled,
             action_domains=action_domains,
+            prompt_profile=resolve_profile(DEFAULT_PROMPT_PROFILE),
         ),
         invoke=active_invoker,
         deadline=deadline,

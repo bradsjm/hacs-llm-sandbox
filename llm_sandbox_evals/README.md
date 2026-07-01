@@ -37,7 +37,7 @@ Every candidate is evaluated against every model. The `Candidate x model means` 
 
 ## Optimizing the prompt (DSPy COPRO)
 
-The `optimize` command uses [DSPy](https://dspy.ai/)'s COPRO instruction optimizer to rewrite the `execute_home_code` instruction (`api_prompt`, seeded from production `BASE_API_PROMPT`) and **keeps the real harness as the metric**: COPRO proposes instruction variants, and each is scored by the existing pipeline (`parse_tool_call` → `run_tool` → `check_case` → `score_case`) against one target model. The winner is then cross-evaluated against the model matrix.
+The `optimize` command uses [DSPy](https://dspy.ai/)'s COPRO instruction optimizer to rewrite the `execute_home_code` instruction (`api_prompt`, seeded from the selected production prompt profile) and **keeps the real harness as the metric**: COPRO proposes instruction variants, and each is scored by the existing pipeline (`parse_tool_call` → `run_tool` → `check_case` → `score_case`) against one target model. The winner is then cross-evaluated against the model matrix.
 
 ```bash
 uv run --group dev --group evals python -m llm_sandbox_evals optimize \
@@ -53,6 +53,7 @@ Flags:
 - `--breadth` / `--depth` — COPRO search breadth/depth (defaults 5/2). Cost scales as `breadth × depth × trainset`.
 - `--cases` — case ids/categories used as the optimization trainset (keep small to bound cost).
 - `--cross-eval-models` — models for the baseline-vs-optimized leaderboard.
+- `--prompt-profile PROFILE_ID` — selects one production prompt profile for the baseline candidate and runtime settings (default: `standard`). This is separate from `--candidates`, which selects eval prompt candidates.
 - `--target-reasoning` — reasoning effort for the target model during DSPy scoring and the baseline/optimized eval (e.g. `none` to disable a reasoning model that defaults to high).
 - `--proposer-reasoning` — reasoning effort for the proposer model during DSPy.
 - `--reasoning` — reasoning effort forwarded to the cross-eval harness models.
@@ -61,6 +62,7 @@ It writes `optimized_candidate.json` + `optimized_prompt.md` and prints a baseli
 
 ```bash
 uv run --group dev --group evals python -m llm_sandbox_evals eval \
+  --prompt-profile standard \
   --candidates baseline,optimized:eval_data/runs/<run_id>/optimized_candidate.json \
   --models openrouter/deepseek/deepseek-v4-flash,stub
 ```
@@ -68,8 +70,8 @@ uv run --group dev --group evals python -m llm_sandbox_evals eval \
 ## Commands
 
 ```
-python -m llm_sandbox_evals eval [--models id,...] [--candidates id,...] [--cases id,...|category,...] [--concurrency N] [--reasoning LEVEL] [--runs-dir PATH]
-python -m llm_sandbox_evals optimize --target-model ID [--proposer-model ID] [--breadth N] [--depth N] [--cases ...] [--cross-eval-models ...] [--target-reasoning LEVEL] [--proposer-reasoning LEVEL] [--reasoning LEVEL] [--runs-dir PATH]
+python -m llm_sandbox_evals eval [--models id,...] [--candidates id,...] [--prompt-profile ID] [--cases id,...|category,...] [--concurrency N] [--reasoning LEVEL] [--runs-dir PATH]
+python -m llm_sandbox_evals optimize --target-model ID [--proposer-model ID] [--prompt-profile ID] [--breadth N] [--depth N] [--cases ...] [--cross-eval-models ...] [--target-reasoning LEVEL] [--proposer-reasoning LEVEL] [--reasoning LEVEL] [--runs-dir PATH]
 python -m llm_sandbox_evals report <run_id> [--runs-dir PATH]
 ```
 
@@ -78,8 +80,9 @@ python -m llm_sandbox_evals report <run_id> [--runs-dir PATH]
 - `report <run_id>` re-renders a saved run's leaderboard from its `run.json` without re-running.
 - `--cases` accepts case ids **or** category names (`state_read`, `registry_read`, `recorder_read`, `action_allowed`, `action_blocked`, `complex`).
 - `--candidates` accepts `baseline` and `optimized:<path>` (a saved `optimized_candidate.json`).
+- `--prompt-profile PROFILE_ID` selects one production base prompt profile for the whole run (default: `standard`); it is not comma-separated and is separate from `--candidates`.
 - `--reasoning LEVEL` forwards a reasoning effort (e.g. `medium`/`high`, or `none` to disable a reasoning model) to real models via litellm. `optimize` adds `--target-reasoning` and `--proposer-reasoning` to control the target and proposer models independently (e.g. `--target-reasoning none --proposer-reasoning high`).
-- Defaults: `--models stub`, `--candidates baseline`, all cases.
+- Defaults: `--models stub`, `--candidates baseline`, `--prompt-profile standard`, all cases.
 
 ## Checks
 

@@ -29,6 +29,7 @@ from .const import (
     CONF_EXECUTION_TIMEOUT,
     CONF_HELPER_CALL_BUDGET,
     CONF_NAME,
+    CONF_PROMPT_PROFILE,
     CONF_RESTRICT_TO_ASSIST_EXPOSED,
     DEFAULT_ACTION_DOMAINS,
     DEFAULT_ACTIONS_ENABLED,
@@ -39,6 +40,7 @@ from .const import (
     DEFAULT_EXECUTION_TIMEOUT_SECONDS,
     DEFAULT_HELPER_CALL_BUDGET,
     DEFAULT_NAME,
+    DEFAULT_PROMPT_PROFILE,
     DEFAULT_RESTRICT_TO_ASSIST_EXPOSED,
     DOMAIN,
     MAX_EXECUTION_TIMEOUT_SECONDS,
@@ -47,8 +49,10 @@ from .const import (
     MIN_HELPER_CALL_BUDGET,
     SECTION_ACTIONS,
     SECTION_EXECUTION_LIMITS,
+    SECTION_PROMPT,
     SECTION_VISIBILITY,
 )
+from .llm_api.prompts import PROFILE_OPTIONS
 from .schema_helpers import flatten_section_data, section_schema_key
 
 type UserInput = dict[str, Any]
@@ -61,7 +65,10 @@ class LlmSandboxOptionsFlow(OptionsFlow):
         """Manage LLM Sandbox entry options."""
         if user_input is not None:
             # HA sections namespace submitted values; options are stored flat.
-            data = flatten_section_data(user_input, [SECTION_VISIBILITY, SECTION_ACTIONS, SECTION_EXECUTION_LIMITS])
+            data = flatten_section_data(
+                user_input,
+                [SECTION_PROMPT, SECTION_VISIBILITY, SECTION_ACTIONS, SECTION_EXECUTION_LIMITS],
+            )
             return self.async_create_entry(data=data)
 
         options = self.config_entry.options
@@ -73,6 +80,20 @@ class LlmSandboxOptionsFlow(OptionsFlow):
             # Preserve previously selected custom domains even when no entity currently exposes them.
             if domain not in live_domain_set:
                 action_domain_options.insert(0, SelectOptionDict(value=domain, label=domain))
+
+        prompt_fields: VolDictType = {
+            vol.Required(
+                CONF_PROMPT_PROFILE,
+                default=options.get(CONF_PROMPT_PROFILE, DEFAULT_PROMPT_PROFILE),
+            ): SelectSelector(
+                SelectSelectorConfig(
+                    options=[SelectOptionDict(value=p.id, label=p.label) for p in PROFILE_OPTIONS],
+                    multiple=False,
+                    mode=SelectSelectorMode.DROPDOWN,
+                    custom_value=False,
+                )
+            ),
+        }
 
         visibility_fields: VolDictType = {
             vol.Required(
@@ -135,6 +156,10 @@ class LlmSandboxOptionsFlow(OptionsFlow):
             ),
         }
         schema = {
+            section_schema_key(SECTION_PROMPT, prompt_fields): section(
+                vol.Schema(prompt_fields),
+                {"collapsed": True},
+            ),
             section_schema_key(SECTION_VISIBILITY, visibility_fields): section(
                 vol.Schema(visibility_fields),
                 {"collapsed": True},

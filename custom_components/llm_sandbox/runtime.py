@@ -13,6 +13,7 @@ from .const import (
     CONF_EXCLUDE_HIDDEN,
     CONF_EXECUTION_TIMEOUT,
     CONF_HELPER_CALL_BUDGET,
+    CONF_PROMPT_PROFILE,
     CONF_RESTRICT_TO_ASSIST_EXPOSED,
     DEFAULT_ACTION_DOMAINS,
     DEFAULT_ACTIONS_ENABLED,
@@ -21,8 +22,10 @@ from .const import (
     DEFAULT_EXCLUDE_HIDDEN,
     DEFAULT_EXECUTION_TIMEOUT_SECONDS,
     DEFAULT_HELPER_CALL_BUDGET,
+    DEFAULT_PROMPT_PROFILE,
     DEFAULT_RESTRICT_TO_ASSIST_EXPOSED,
 )
+from .llm_api.prompts import PromptProfile, resolve_profile
 from .snapshot import SnapshotScope
 
 type SandboxConfigEntry = ConfigEntry[SandboxRuntime]
@@ -37,6 +40,7 @@ class SandboxSettings:
     scope: SnapshotScope
     actions_enabled: bool
     action_domains: frozenset[str]
+    prompt_profile: PromptProfile
 
 
 def settings_from_entry(entry: SandboxConfigEntry) -> SandboxSettings:
@@ -60,12 +64,14 @@ def settings_from_entry(entry: SandboxConfigEntry) -> SandboxSettings:
         exclude_hidden=bool(options.get(CONF_EXCLUDE_HIDDEN, DEFAULT_EXCLUDE_HIDDEN)),
         excluded_entity_categories=frozenset(excluded_categories),
     )
+    prompt_profile = resolve_profile(str(options.get(CONF_PROMPT_PROFILE, DEFAULT_PROMPT_PROFILE)))
     return SandboxSettings(
         execution_timeout_seconds=int(options.get(CONF_EXECUTION_TIMEOUT, DEFAULT_EXECUTION_TIMEOUT_SECONDS)),
         helper_call_budget=int(options.get(CONF_HELPER_CALL_BUDGET, DEFAULT_HELPER_CALL_BUDGET)),
         scope=scope,
         actions_enabled=bool(options.get(CONF_ACTIONS_ENABLED, DEFAULT_ACTIONS_ENABLED)),
         action_domains=frozenset(options.get(CONF_ACTION_DOMAINS, DEFAULT_ACTION_DOMAINS)),
+        prompt_profile=prompt_profile,
     )
 
 

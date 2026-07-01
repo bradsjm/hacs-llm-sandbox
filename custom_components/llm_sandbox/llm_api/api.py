@@ -9,9 +9,9 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import floor_registry as fr
 from homeassistant.helpers import llm
 
-from ..const import DOMAIN
+from ..const import DEFAULT_PROMPT_PROFILE, DOMAIN
 from ..runtime import SandboxConfigEntry
-from .prompts import ACTIONS_DISABLED_PROMPT, ACTIONS_ENABLED_PROMPT, BASE_API_PROMPT
+from .prompts import ACTIONS_DISABLED_PROMPT, ACTIONS_ENABLED_PROMPT, resolve_profile
 from .tools import ExecuteHomeCodeTool, GetCameraImageTool, GetHistoryTool, GetLogbookTool, GetStatisticsTool
 
 
@@ -39,6 +39,7 @@ class LlmSandboxAPI(llm.API):
     async def async_get_api_instance(self, llm_context: llm.LLMContext) -> llm.APIInstance:
         entry = self._hass.config_entries.async_get_entry(self.entry_id)
         actions_enabled = False
+        base_prompt = resolve_profile(DEFAULT_PROMPT_PROFILE).base_prompt
         # Missing, wrong-domain, unloaded, or uninitialized entries get a conservative prompt.
         if (
             entry is not None
@@ -50,9 +51,10 @@ class LlmSandboxAPI(llm.API):
             runtime_data = typed_entry.runtime_data
             assert runtime_data is not None
             actions_enabled = runtime_data.settings.actions_enabled
+            base_prompt = runtime_data.settings.prompt_profile.base_prompt
         return llm.APIInstance(
             api=self,
-            api_prompt=_build_api_prompt(self._hass, llm_context, actions_enabled),
+            api_prompt=_build_api_prompt(self._hass, llm_context, base_prompt, actions_enabled),
             llm_context=llm_context,
             tools=[
                 ExecuteHomeCodeTool(self.entry_id),
@@ -64,13 +66,15 @@ class LlmSandboxAPI(llm.API):
         )
 
 
-def _build_api_prompt(hass: HomeAssistant, llm_context: llm.LLMContext, actions_enabled: bool) -> str:
+def _build_api_prompt(
+    hass: HomeAssistant, llm_context: llm.LLMContext, base_prompt: str, actions_enabled: bool
+) -> str:
     """Return the base API prompt plus concise initiating-location context."""
     # Exactly one service-call section per instance: live-call guidance when
     # actions are enabled, the rejection notice otherwise. The static tool
     # descriptions stay action-neutral.
     section = ACTIONS_ENABLED_PROMPT if actions_enabled else ACTIONS_DISABLED_PROMPT
-    prompt = f"{BASE_API_PROMPT}\n\n{section}"
+    prompt = f"{base_prompt}\n\n{section}"
     location_prompt = _request_location_prompt(hass, llm_context.device_id)
     if location_prompt is None:
         return prompt

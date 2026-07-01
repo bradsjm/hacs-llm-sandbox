@@ -3,6 +3,8 @@
 from dataclasses import dataclass
 from pathlib import Path
 
+from custom_components.llm_sandbox.const import DEFAULT_PROMPT_PROFILE
+
 
 @dataclass(frozen=True, slots=True)
 class EvalConfig:
@@ -10,6 +12,7 @@ class EvalConfig:
 
     models: list[str]
     candidates: list[str]
+    prompt_profile: str
     cases: list[str] | None
     homes: list[str] | None
     runs_dir: Path
@@ -34,6 +37,7 @@ def load_config() -> EvalConfig:
     return EvalConfig(
         models=["stub"],
         candidates=["baseline"],
+        prompt_profile=DEFAULT_PROMPT_PROFILE,
         cases=None,
         homes=None,
         runs_dir=Path("eval_data/runs"),

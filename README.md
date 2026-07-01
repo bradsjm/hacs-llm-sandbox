@@ -23,6 +23,7 @@ Service calls through `hass.services.async_call(...)` are read-only by default. 
 - `llm_context` includes the initiating `device_id` plus derived `area_id`, `area_name`, `floor_id`, and `floor_name` when Home Assistant provides a satellite device.
 - Live service calls through `await hass.services.async_call(...)` when actions are enabled; per-call outcomes are returned in `actions`.
 - Action safety controls: `actions_enabled` gates all service calls, `action_domains` restricts controllable domains, targets must be visible to the sandbox, and real Home Assistant context is used for attribution.
+- Selectable base prompt profile for the model-facing API instructions (source-controlled; ships with a Standard profile).
 - Options for execution timeout and helper-call budget.
 
 ## Recorder tools

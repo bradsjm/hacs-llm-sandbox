@@ -14,6 +14,7 @@ from custom_components.llm_sandbox.const import (
     CONF_EXECUTION_TIMEOUT,
     CONF_HELPER_CALL_BUDGET,
     CONF_NAME,
+    CONF_PROMPT_PROFILE,
     CONF_RESTRICT_TO_ASSIST_EXPOSED,
     DEFAULT_ACTIONS_ENABLED,
     DEFAULT_ASSISTANT,
@@ -22,12 +23,15 @@ from custom_components.llm_sandbox.const import (
     DEFAULT_EXCLUDE_HIDDEN,
     DEFAULT_EXECUTION_TIMEOUT_SECONDS,
     DEFAULT_HELPER_CALL_BUDGET,
+    DEFAULT_PROMPT_PROFILE,
     DEFAULT_RESTRICT_TO_ASSIST_EXPOSED,
     DOMAIN,
     SECTION_ACTIONS,
     SECTION_EXECUTION_LIMITS,
+    SECTION_PROMPT,
     SECTION_VISIBILITY,
 )
+from custom_components.llm_sandbox.llm_api.prompts import resolve_profile
 from custom_components.llm_sandbox.runtime import SandboxSettings, settings_from_entry
 from custom_components.llm_sandbox.snapshot import SnapshotScope
 from homeassistant.config_entries import ConfigFlowResult
@@ -90,6 +94,7 @@ async def test_options_flow_persists_typed_options(
     mock_config_entry.add_to_hass(hass)
     init_result = await hass.config_entries.options.async_init(mock_config_entry.entry_id)
     options = {
+        SECTION_PROMPT: {CONF_PROMPT_PROFILE: DEFAULT_PROMPT_PROFILE},
         SECTION_EXECUTION_LIMITS: {
             CONF_EXECUTION_TIMEOUT: 17,
             CONF_HELPER_CALL_BUDGET: 48,
@@ -107,6 +112,7 @@ async def test_options_flow_persists_typed_options(
 
     assert result["type"] == "create_entry"
     assert mock_config_entry.options == {
+        CONF_PROMPT_PROFILE: DEFAULT_PROMPT_PROFILE,
         CONF_EXECUTION_TIMEOUT: 17.0,
         CONF_HELPER_CALL_BUDGET: 48.0,
         CONF_RESTRICT_TO_ASSIST_EXPOSED: False,
@@ -138,7 +144,19 @@ def test_settings_from_entry_defaults() -> None:
         ),
         actions_enabled=DEFAULT_ACTIONS_ENABLED,
         action_domains=frozenset(),
+        prompt_profile=resolve_profile(DEFAULT_PROMPT_PROFILE),
     )
+
+
+def test_settings_from_entry_rejects_unknown_prompt_profile() -> None:
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_ASSISTANT: DEFAULT_ASSISTANT, CONF_NAME: "LLM Sandbox"},
+        options={CONF_PROMPT_PROFILE: "nonexistent"},
+    )
+
+    with pytest.raises(ValueError, match="unknown prompt profile"):
+        settings_from_entry(entry)
 
 
 @pytest.mark.parametrize(
@@ -233,6 +251,7 @@ async def test_options_flow_section_submission_flattens(
     mock_config_entry.add_to_hass(hass)
     init_result = await hass.config_entries.options.async_init(mock_config_entry.entry_id)
     options = {
+        SECTION_PROMPT: {CONF_PROMPT_PROFILE: DEFAULT_PROMPT_PROFILE},
         SECTION_EXECUTION_LIMITS: {
             CONF_EXECUTION_TIMEOUT: 17,
             CONF_HELPER_CALL_BUDGET: 48,
@@ -253,6 +272,7 @@ async def test_options_flow_section_submission_flattens(
 
     assert result["type"] == "create_entry"
     assert mock_config_entry.options == {
+        CONF_PROMPT_PROFILE: DEFAULT_PROMPT_PROFILE,
         CONF_EXECUTION_TIMEOUT: 17.0,
         CONF_HELPER_CALL_BUDGET: 48.0,
         CONF_RESTRICT_TO_ASSIST_EXPOSED: False,

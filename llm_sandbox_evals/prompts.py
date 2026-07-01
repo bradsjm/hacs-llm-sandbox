@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 
 from custom_components.llm_sandbox.const import (
+    DEFAULT_PROMPT_PROFILE,
     TOOL_EXECUTE_HOME_CODE,
     TOOL_GET_HISTORY,
     TOOL_GET_LOGBOOK,
@@ -18,11 +19,11 @@ from custom_components.llm_sandbox.const import (
 from custom_components.llm_sandbox.llm_api.prompts import (
     ACTIONS_DISABLED_PROMPT,
     ACTIONS_ENABLED_PROMPT,
-    BASE_API_PROMPT,
     build_execute_home_code_description,
     build_get_history_description,
     build_get_logbook_description,
     build_get_statistics_description,
+    resolve_profile,
 )
 from custom_components.llm_sandbox.snapshot.models import HomeSnapshot
 
@@ -31,11 +32,12 @@ from llm_sandbox_evals.schema import EvalCase, PromptCandidate, ToolSpec
 _BASELINE_ID = "baseline"
 
 
-def baseline_candidate() -> PromptCandidate:
+def baseline_candidate(prompt_profile_id: str = DEFAULT_PROMPT_PROFILE) -> PromptCandidate:
     """Return the production-baseline prompt candidate."""
+    profile = resolve_profile(prompt_profile_id)
     return PromptCandidate(
         id=_BASELINE_ID,
-        api_prompt=BASE_API_PROMPT,
+        api_prompt=profile.base_prompt,
         execute_home_code_description=build_execute_home_code_description(),
         get_history_description=build_get_history_description(),
         get_statistics_description=build_get_statistics_description(),
@@ -43,13 +45,13 @@ def baseline_candidate() -> PromptCandidate:
     )
 
 
-def load_candidates(candidate_ids: list[str]) -> list[PromptCandidate]:
+def load_candidates(candidate_ids: list[str], prompt_profile_id: str) -> list[PromptCandidate]:
     """Load supported prompt candidates, rejecting unknown candidate ids."""
     candidates: list[PromptCandidate] = []
     for candidate_id in candidate_ids:
         # Branch boundary: the production baseline is the built-in candidate.
         if candidate_id == _BASELINE_ID:
-            candidates.append(baseline_candidate())
+            candidates.append(baseline_candidate(prompt_profile_id))
             continue
         # Branch boundary: optimizer artifacts are explicitly loaded from JSON.
         if candidate_id.startswith("optimized:"):

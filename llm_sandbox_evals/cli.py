@@ -12,6 +12,7 @@ import asyncio
 import sys
 from pathlib import Path
 
+from custom_components.llm_sandbox.llm_api.prompts import resolve_profile
 from dotenv import load_dotenv
 
 from llm_sandbox_evals.config import EvalConfig, load_config
@@ -20,7 +21,7 @@ from llm_sandbox_evals.reports import load_run_json, render_leaderboard_from_sco
 
 _STUB_NOTE = (
     '"stub" is a keyless, deterministic pipeline-checker: great for verifying the\n'
-    'harness end to end, but low stub scores are expected and are not a quality\n'
+    "harness end to end, but low stub scores are expected and are not a quality\n"
     "signal. Pass real model ids (e.g. gpt-4o-mini) to measure prompt quality."
 )
 
@@ -97,6 +98,8 @@ def _add_eval_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPar
             "    recorder_read, action_allowed, action_blocked, complex.\n"
             "  - --candidates accepts `baseline` and `optimized:<path>` (a saved\n"
             "    optimized_candidate.json from `optimize`).\n"
+            "  - --prompt-profile selects one production base prompt profile for\n"
+            "    the whole run; it is separate from --candidates.\n"
             "  - A failing model call (bad key, network) scores 0.0 for that cell and\n"
             "    never aborts the run."
         ),
@@ -116,6 +119,11 @@ def _add_eval_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPar
         metavar="ID,ID,...",
         help="comma-separated prompt candidate ids (default: baseline). Use optimized:<path> "
         "to load a saved optimized_candidate.json.",
+    )
+    eval_parser.add_argument(
+        "--prompt-profile",
+        metavar="PROFILE_ID",
+        help="production prompt profile id to use for the baseline candidate and runtime settings (default: standard).",
     )
     eval_parser.add_argument(
         "--cases",
@@ -227,6 +235,11 @@ def _add_optimize_parser(subparsers: argparse._SubParsersAction[argparse.Argumen
         "Keep small to bound cost.",
     )
     optimize_parser.add_argument(
+        "--prompt-profile",
+        metavar="PROFILE_ID",
+        help="production prompt profile id to use for the baseline candidate and runtime settings (default: standard).",
+    )
+    optimize_parser.add_argument(
         "--reasoning",
         metavar="LEVEL",
         help="reasoning effort forwarded to cross-eval harness models.",
@@ -234,8 +247,7 @@ def _add_optimize_parser(subparsers: argparse._SubParsersAction[argparse.Argumen
     optimize_parser.add_argument(
         "--cross-eval-models",
         metavar="ID,ID,...",
-        help="comma-separated model ids for a baseline-vs-optimized leaderboard "
-        "(default: off; no cross-eval is run).",
+        help="comma-separated model ids for a baseline-vs-optimized leaderboard (default: off; no cross-eval is run).",
     )
     optimize_parser.add_argument(
         "--runs-dir",
@@ -247,9 +259,16 @@ def _add_optimize_parser(subparsers: argparse._SubParsersAction[argparse.Argumen
 def _run_eval(args: argparse.Namespace) -> int:
     """Run the matrix and write artifacts."""
     base_config = load_config()
+    prompt_profile = args.prompt_profile or base_config.prompt_profile
+    try:
+        resolve_profile(prompt_profile)
+    except ValueError as err:
+        sys.stderr.write(f"error: {err}\n")
+        return 2
     config = EvalConfig(
         models=_csv_arg(args.models) or base_config.models,
         candidates=_csv_arg(args.candidates) or base_config.candidates,
+        prompt_profile=prompt_profile,
         cases=_csv_arg(args.cases) if args.cases is not None else base_config.cases,
         homes=base_config.homes,
         runs_dir=args.runs_dir or base_config.runs_dir,
@@ -305,9 +324,16 @@ def _run_optimize(args: argparse.Namespace) -> int:
     from llm_sandbox_evals import optimize_dspy
 
     base_config = load_config()
+    prompt_profile = args.prompt_profile or base_config.prompt_profile
+    try:
+        resolve_profile(prompt_profile)
+    except ValueError as err:
+        sys.stderr.write(f"error: {err}\n")
+        return 2
     config = EvalConfig(
         models=base_config.models,
         candidates=base_config.candidates,
+        prompt_profile=prompt_profile,
         cases=_csv_arg(args.cases) if args.cases is not None else base_config.cases,
         homes=None,
         runs_dir=args.runs_dir or base_config.runs_dir,
@@ -333,6 +359,7 @@ def _run_optimize(args: argparse.Namespace) -> int:
             optimized_mean=result.optimized_mean,
             candidate_path=result.candidate_path,
             cross_eval_run_dir=result.cross_eval_run_dir,
+            prompt_profile=config.prompt_profile,
         )
     )
 
@@ -356,11 +383,7 @@ def _run_optimize(args: argparse.Namespace) -> int:
 
 def _eval_banner(config: EvalConfig, case_count: int) -> str:
     """Build the pre-run orientation banner for `eval`."""
-    cases_field = (
-        f"all ({case_count})"
-        if config.cases is None
-        else f"{', '.join(config.cases)} ({case_count})"
-    )
+    cases_field = f"all ({case_count})" if config.cases is None else f"{', '.join(config.cases)} ({case_count})"
     reasoning = config.reasoning_effort or "(none)"
     return (
         "llm_sandbox evals - running the eval matrix\n\n"
@@ -373,6 +396,7 @@ def _eval_banner(config: EvalConfig, case_count: int) -> str:
         "Config:\n"
         f"  models      : {', '.join(config.models)}\n"
         f"  candidates  : {', '.join(config.candidates)}\n"
+        f"  prompt profile: {config.prompt_profile}\n"
         f"  cases       : {cases_field}\n"
         f"  runs dir    : {config.runs_dir}\n"
         f"  concurrency : {config.concurrency}\n"
@@ -415,6 +439,7 @@ def _optimize_banner(config: EvalConfig) -> str:
         "Config:\n"
         f"  target model    : {config.target_model}   (optimized against; must be real)\n"
         f"  proposer model  : {config.proposer_model or '(same as target)'}   (proposes rewrites)\n"
+        f"  prompt profile  : {config.prompt_profile}\n"
         f"  breadth / depth : {config.breadth} / {config.depth}   (COPRO search shape)\n"
         f"  trainset        : {trainset_count} case(s)   (--cases to shrink cost)\n"
         f"  cross-eval      : {cross_eval}\n"
@@ -429,6 +454,7 @@ def _optimize_footer(
     optimized_mean: float,
     candidate_path: Path,
     cross_eval_run_dir: Path | None,
+    prompt_profile: str,
 ) -> str:
     """Build the post-run interpretation + next-steps footer for `optimize`."""
     prompt_path = candidate_path.parent / "optimized_prompt.md"
@@ -443,7 +469,7 @@ def _optimize_footer(
         )
     return (
         "\nOptimization complete.\n\n"
-        f"  baseline_mean   : {baseline_mean:.3f}   (current production prompt, on the target model)\n"
+        f"  baseline_mean   : {baseline_mean:.3f}   (production profile {prompt_profile!r}, on the target model)\n"
         f"  optimized_mean  : {optimized_mean:.3f}   (best COPRO rewrite)   delta {delta_str}\n"
         f"  optimized prompt: {prompt_path}   (the ONLY text COPRO changed - review this)\n"
         f"{cross_eval_line}\n\n"
@@ -451,6 +477,7 @@ def _optimize_footer(
         "  - Review optimized_prompt.md before trusting it.\n"
         "  - Compare baseline vs optimized across more models:\n"
         "      python -m llm_sandbox_evals eval \\\n"
+        f"        --prompt-profile {prompt_profile} \\\n"
         f"        --candidates baseline,optimized:{candidate_path} \\\n"
         "        --models <model-a>,<model-b>,stub\n"
         "  - To ship it, copy the approved text into\n"

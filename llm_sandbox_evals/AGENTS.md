@@ -35,7 +35,7 @@ Prioritize improving accomdating reasonable intent over increasing prompting len
 - Setup: `scripts/setup-evals` (`uv sync --group dev --group evals`)
 - Check: `scripts/check-evals` (ruff + mypy + offline stub eval)
 - Format: `scripts/format-evals`
-- Run: `uv run --group dev --group evals python -m llm_sandbox_evals eval --models stub`
+- Run: `uv run --group dev --group evals python -m llm_sandbox_evals eval --models stub --prompt-profile standard`
 - Optimize: `uv run --group dev --group evals python -m llm_sandbox_evals optimize --target-model <real-model>`
 - Report: `uv run --group dev --group evals python -m llm_sandbox_evals report <run_id>`
 
@@ -46,10 +46,11 @@ Note: eval runs need **both** groups (`dev` provides `homeassistant`, `evals` pr
 The harness (`harness.run_matrix`) runs, per `(candidate, model, case)`:
 
 ```
+profile  = resolve_profile(config.prompt_profile)        # selected production prompt profile
 snapshot = homes.get_home(case.home).snapshot()          # fresh frozen snapshot
 prompt   = prompts.render_prompt(candidate, case, snapshot)
 result   = await models.get_adapter(model).complete(model, prompt)
-outcome  = await tools.run_tool(result.tool_call, case, snapshot)
+outcome  = await tools.run_tool(result.tool_call, case, snapshot, profile)
 checks   = scoring.check_case(case, result.tool_call, outcome, snapshot)
 score    = scoring.score_case(checks)
 ```
@@ -62,9 +63,9 @@ The harness owns the snapshot lifecycle (build once per evaluation, pass to rend
 - `config.py` — `EvalConfig` + `load_config()` (defaults: `models=["stub"]`, `candidates=["baseline"]`).
 - `cases.py` — `CASES: list[EvalCase]`, the predefined suite (simple -> complex, all categories).
 - `homes/` — frozen fixture modules (`snapshot() -> HomeSnapshot`, `recorder() -> dict`) + `get_home(name)` registry.
-- `prompts.py` — `baseline_candidate()` (from production builders), `load_candidates(ids)`, `render_prompt(...)`, `tool_specs(...)`. Reuses production `BASE_API_PROMPT` / `ACTIONS_*_PROMPT` / tool-description builders; derives the request-location section from the frozen snapshot.
+- `prompts.py` — `baseline_candidate()` (from production builders), `load_candidates(ids, prompt_profile_id)`, `render_prompt(...)`, `tool_specs(...)`. Reuses the selected production prompt profile / `ACTIONS_*_PROMPT` / tool-description builders; derives the request-location section from the frozen snapshot.
 - `models.py` — `ModelAdapter` protocol, `StubAdapter` (offline, deterministic), `LiteLLMAdapter` (any provider, lazy import), `get_adapter(id)`, `parse_tool_call(text)`.
-- `tools.py` — `run_tool(tool_call, case, snapshot) -> ToolOutcome`. Real executor path + fixture-backed recorder emulators matching production response shapes + `RecordingInvoker`.
+- `tools.py` — `run_tool(tool_call, case, snapshot, prompt_profile) -> ToolOutcome`. Real executor path + fixture-backed recorder emulators matching production response shapes + `RecordingInvoker`.
 - `scoring.py` — `check_case(...)`, `score_case(...)`, `mean_score(...)`. Required gates + optional checks.
 - `harness.py` — `run_matrix(config) -> RunResult`; `CaseTrace`, `CandidateModelScore`, `RunResult`.
 - `reports.py` — `write_run(...)`, `render_leaderboard(...)`, `load_run_json(...)` (for `report`).

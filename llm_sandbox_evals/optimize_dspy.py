@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import dspy
+from custom_components.llm_sandbox.llm_api.prompts import PromptProfile, resolve_profile
 
 from llm_sandbox_evals import prompts, reports, tools
 from llm_sandbox_evals.config import EvalConfig
@@ -42,7 +43,8 @@ def run_optimize(config: EvalConfig) -> OptimizerResult:
         raise ValueError("optimize requires a real --target-model; 'stub' is not supported")
 
     proposer = config.proposer_model or target
-    baseline = prompts.baseline_candidate()
+    profile = resolve_profile(config.prompt_profile)
+    baseline = prompts.baseline_candidate(config.prompt_profile)
     # Per-role reasoning: COPRO scores candidate instructions against the target
     # LM and proposes rewrites with the proposer LM. Reasoning is forwarded to
     # each dspy.LM via the same provider contract the eval adapter uses.
@@ -64,7 +66,9 @@ def run_optimize(config: EvalConfig) -> OptimizerResult:
 
     sig = dspy.Signature("context -> tool_call_json", instructions=baseline.api_prompt)
     student = dspy.Predict(sig)
-    copro = dspy.COPRO(prompt_model=prompt_lm, metric=_make_metric(), breadth=config.breadth, depth=config.depth)
+    copro = dspy.COPRO(
+        prompt_model=prompt_lm, metric=_make_metric(profile), breadth=config.breadth, depth=config.depth
+    )
     # eval_kwargs forwards to dspy.Evaluate for candidate scoring. num_threads=1
     # keeps the sync metric's asyncio.run loop single (the executor is async).
     # display_progress=True so the long optimization reports its own activity.
@@ -91,6 +95,7 @@ def run_optimize(config: EvalConfig) -> OptimizerResult:
         EvalConfig(
             models=[target],
             candidates=["baseline"],
+            prompt_profile=config.prompt_profile,
             cases=config.cases,
             homes=config.homes,
             runs_dir=config.runs_dir,
@@ -101,6 +106,7 @@ def run_optimize(config: EvalConfig) -> OptimizerResult:
         EvalConfig(
             models=[target],
             candidates=[f"optimized:{candidate_path}"],
+            prompt_profile=config.prompt_profile,
             cases=config.cases,
             homes=config.homes,
             runs_dir=config.runs_dir,
@@ -116,6 +122,7 @@ def run_optimize(config: EvalConfig) -> OptimizerResult:
                 EvalConfig(
                     models=config.cross_eval_models,
                     candidates=["baseline", f"optimized:{candidate_path}"],
+                    prompt_profile=config.prompt_profile,
                     cases=config.cases,
                     homes=config.homes,
                     runs_dir=config.runs_dir,
@@ -138,7 +145,7 @@ def run_optimize(config: EvalConfig) -> OptimizerResult:
     )
 
 
-def _make_metric() -> Callable[..., float]:
+def _make_metric(profile: PromptProfile) -> Callable[..., float]:
     """Build the sync COPRO metric backed by the real eval tool runner and scorer."""
 
     def metric(example: Any, prediction: Any, trace: Any = None) -> float:  # noqa: ANN401, ARG001
@@ -146,7 +153,7 @@ def _make_metric() -> Callable[..., float]:
             tool_call = parse_tool_call(getattr(prediction, "tool_call_json", "") or "")
             case = example._case
             snapshot = example._snapshot
-            outcome = asyncio.run(tools.run_tool(tool_call, case, snapshot))
+            outcome = asyncio.run(tools.run_tool(tool_call, case, snapshot, profile))
             checks = check_case(case, tool_call, outcome, snapshot)
             return score_case(checks)
         except Exception:  # noqa: BLE001 - optimizer metrics must not abort COPRO.
