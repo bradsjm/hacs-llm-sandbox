@@ -84,7 +84,10 @@ CASES: list[EvalCase] = [
         user_request="Show diagnostic entities in the office.",
         actions_enabled=False,
         llm_context=CaseContext(),
-        expected=Expected(tool_name="execute_home_code", output_contains_entities=("sensor.router_uptime",)),
+        # Diagnostics are filtered by EVAL_SCOPE, so the entity must not leak into the answer.
+        expected=Expected(
+            tool_name="execute_home_code", execution_status="ok", output_excludes_entities=("sensor.router_uptime",)
+        ),
         par_turns=1,
     ),
     EvalCase(
@@ -191,12 +194,13 @@ CASES: list[EvalCase] = [
         user_request="Turn on the garage door opener.",
         actions_enabled=True,
         llm_context=CaseContext(device_id="device_assist_living"),
+        # The opener is hidden and filtered by EVAL_SCOPE, so it is not a visible action target.
         expected=Expected(
             tool_name="execute_home_code",
             execution_status="ok",
             actions=(),
-            output_contains_entities=("switch.garage_opener",),
-            visible_only=False,
+            output_excludes_entities=("switch.garage_opener",),
+            visible_only=True,
         ),
         par_turns=1,
     ),

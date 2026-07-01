@@ -136,7 +136,6 @@ def _result_line(trace: CaseTrace) -> dict[str, object]:
         "model_id": trace.model_id,
         "score": trace.score,
         "turns": trace.turns,
-        "efficiency": trace.efficiency,
         "checks": [{"name": check.name, "passed": check.passed, "required": check.required} for check in trace.checks],
     }
 
@@ -151,7 +150,6 @@ def _trace_json(trace: CaseTrace) -> dict[str, object]:
         "score": trace.score,
         "turns": trace.turns,
         "par_turns": trace.par_turns,
-        "efficiency": trace.efficiency,
         "final_answer": trace.final_answer,
         "prompt": trace.prompt,
         "raw_output": trace.raw_output,
@@ -197,7 +195,7 @@ def _candidate_table(
 ) -> list[str]:
     """Render candidate ranking rows."""
     score_map = {(score.candidate_id, score.model_id): score for score in scores}
-    ranked_rows: list[tuple[str, float, float, float, float, dict[str, float]]] = []
+    ranked_rows: list[tuple[str, float, float, float, dict[str, float]]] = []
     for candidate_id in candidate_ids:
         candidate_scores = [
             score_map[(candidate_id, model_id)] for model_id in model_ids if (candidate_id, model_id) in score_map
@@ -205,7 +203,6 @@ def _candidate_table(
         all_case_scores = [case_score for score in candidate_scores for case_score in score.case_scores.values()]
         model_means = [score.mean for score in candidate_scores]
         turns = [score.mean_turns for score in candidate_scores]
-        efficiencies = [score.mean_efficiency for score in candidate_scores]
         category_means: dict[str, float] = {}
         for category in categories:
             category_values = [
@@ -218,15 +215,14 @@ def _candidate_table(
                 _mean(all_case_scores),
                 min(model_means, default=0.0),
                 _mean(turns),
-                _mean(efficiencies),
                 category_means,
             )
         )
 
     ranked_rows.sort(key=lambda row: (row[1], row[2]), reverse=True)
-    header = ["Candidate", "Mean", "MinModel", "Turns", "Eff", *categories]
+    header = ["Candidate", "Mean", "MinModel", "Turns", *categories]
     lines = [_markdown_row(header), _markdown_separator(len(header))]
-    for candidate_id, mean, min_model, mean_turns, efficiency, category_means in ranked_rows:
+    for candidate_id, mean, min_model, mean_turns, category_means in ranked_rows:
         lines.append(
             _markdown_row(
                 [
@@ -234,7 +230,6 @@ def _candidate_table(
                     _format_score(mean),
                     _format_score(min_model),
                     _format_score(mean_turns),
-                    _format_score(efficiency),
                     *[_format_score(category_means[cat]) for cat in categories],
                 ]
             )
@@ -245,9 +240,9 @@ def _candidate_table(
 def _model_matrix_table(
     scores: list[CandidateModelScore], candidate_ids: list[str], model_ids: list[str]
 ) -> list[str]:
-    """Render per-candidate/per-model mean, turns, and efficiency rows."""
+    """Render per-candidate/per-model mean and turns rows."""
     score_map = {(score.candidate_id, score.model_id): score for score in scores}
-    header = ["Candidate", "Model", "Mean", "Turns", "Eff"]
+    header = ["Candidate", "Model", "Mean", "Turns"]
     lines = [_markdown_row(header), _markdown_separator(len(header))]
     for candidate_id in candidate_ids:
         for model_id in model_ids:
@@ -259,7 +254,6 @@ def _model_matrix_table(
                         model_id,
                         _format_score(0.0 if score is None else score.mean),
                         _format_score(0.0 if score is None else score.mean_turns),
-                        _format_score(0.0 if score is None else score.mean_efficiency),
                     ]
                 )
             )
@@ -321,7 +315,6 @@ def _scores_field(value: object) -> list[CandidateModelScore]:
                 model_id=_string_field(item, "model_id"),
                 mean=float(item.get("mean", 0.0)),
                 mean_turns=float(item.get("mean_turns", 0.0)),
-                mean_efficiency=float(item.get("mean_efficiency", 0.0)),
                 per_category=_float_map(item.get("per_category")),
                 case_scores=_float_map(item.get("case_scores")),
             )

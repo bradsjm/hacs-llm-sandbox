@@ -1,5 +1,6 @@
 """Tool runner for the dev-only eval harness."""
 
+import dataclasses
 import json
 import math
 from collections.abc import Callable
@@ -30,6 +31,89 @@ EVAL_SCOPE: SnapshotScope = SnapshotScope(
     exclude_hidden=True,
     excluded_entity_categories=frozenset({"config", "diagnostic"}),
 )
+
+
+def apply_scope(
+    snapshot: HomeSnapshot,
+    scope: SnapshotScope,
+    *,
+    anchor_device_id: str | None = None,
+) -> HomeSnapshot:
+    """Return a new snapshot with entities failing the offline scope checks removed.
+
+    Mirrors production ``_passes_visibility`` for the offline-applicable fields only
+    (``exclude_hidden`` + ``excluded_entity_categories``). Assist-exposure filtering
+    needs live HA and stays a ``build_snapshot`` concern; the eval scope disables it.
+    Collection pruning mirrors production ``_derive_collections`` and then restricts
+    every snapshot index by intersection with the retained ids.
+    """
+    visible: set[str] = set()
+    for entity_id in snapshot.states:
+        entry = snapshot.entities.get(entity_id)
+        # Branch boundary: state-only entities skip registry-characteristic visibility checks.
+        if entry is None:
+            visible.add(entity_id)
+            continue
+        # Branch boundary: hidden registry entities are excluded when the eval scope asks for it.
+        if scope.exclude_hidden and entry.hidden_by is not None:
+            continue
+        # Branch boundary: config/diagnostic registry entities are excluded by the eval scope.
+        if entry.entity_category in scope.excluded_entity_categories:
+            continue
+        visible.add(entity_id)
+
+    new_states = {entity_id: snapshot.states[entity_id] for entity_id in visible}
+    new_entities = {entity_id: snapshot.entities[entity_id] for entity_id in visible if entity_id in snapshot.entities}
+    device_ids = {entry.device_id for entry in new_entities.values() if entry.device_id}
+    # Branch boundary: production force-includes the initiating device for request-location context.
+    if anchor_device_id is not None:
+        device_ids.add(anchor_device_id)
+    new_devices = {device_id: snapshot.devices[device_id] for device_id in device_ids if device_id in snapshot.devices}
+    area_ids = {device.area_id for device in new_devices.values() if device.area_id}
+    area_ids.update(entry.area_id for entry in new_entities.values() if entry.area_id)
+    new_areas = {area_id: snapshot.areas[area_id] for area_id in area_ids if area_id in snapshot.areas}
+    floor_ids = {area.floor_id for area in new_areas.values() if area.floor_id}
+    new_floors = {floor_id: snapshot.floors[floor_id] for floor_id in floor_ids if floor_id in snapshot.floors}
+    new_indexes = dataclasses.replace(
+        snapshot.indexes,
+        entity_ids_by_device_id={
+            key: tuple(entity_id for entity_id in value if entity_id in visible)
+            for key, value in snapshot.indexes.entity_ids_by_device_id.items()
+        },
+        entity_ids_by_area_id={
+            key: tuple(entity_id for entity_id in value if entity_id in visible)
+            for key, value in snapshot.indexes.entity_ids_by_area_id.items()
+        },
+        entity_ids_by_config_entry_id={
+            key: tuple(entity_id for entity_id in value if entity_id in visible)
+            for key, value in snapshot.indexes.entity_ids_by_config_entry_id.items()
+        },
+        entity_ids_by_label={
+            key: tuple(entity_id for entity_id in value if entity_id in visible)
+            for key, value in snapshot.indexes.entity_ids_by_label.items()
+        },
+        device_ids_by_area_id={
+            key: tuple(device_id for device_id in value if device_id in new_devices)
+            for key, value in snapshot.indexes.device_ids_by_area_id.items()
+        },
+        device_ids_by_label={
+            key: tuple(device_id for device_id in value if device_id in new_devices)
+            for key, value in snapshot.indexes.device_ids_by_label.items()
+        },
+        area_ids_by_floor_id={
+            key: tuple(area_id for area_id in value if area_id in new_areas)
+            for key, value in snapshot.indexes.area_ids_by_floor_id.items()
+        },
+    )
+    return dataclasses.replace(
+        snapshot,
+        states=new_states,
+        entities=new_entities,
+        devices=new_devices,
+        areas=new_areas,
+        floors=new_floors,
+        indexes=new_indexes,
+    )
 
 
 class RecordingInvoker:

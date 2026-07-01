@@ -155,7 +155,6 @@ class CaseTrace:
     checks: tuple[CheckResult, ...]
     turns: int
     par_turns: int
-    efficiency: float
     final_answer: str
     steps: tuple[StepTrace, ...]
 
@@ -168,7 +167,6 @@ class CandidateModelScore:
     model_id: str
     mean: float
     mean_turns: float
-    mean_efficiency: float
     per_category: dict[str, float]
     case_scores: dict[str, float]
 

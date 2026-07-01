@@ -26,7 +26,7 @@ from llm_sandbox_evals.schema import (
     ToolCall,
 )
 from llm_sandbox_evals.scoring import check_case, mean_score, score_case
-from llm_sandbox_evals.tools import RecordingInvoker, run_tool, tool_result_message
+from llm_sandbox_evals.tools import EVAL_SCOPE, RecordingInvoker, apply_scope, run_tool, tool_result_message
 
 
 async def run_matrix(config: EvalConfig) -> RunResult:
@@ -69,7 +69,7 @@ async def run_case(
     prompt = ""
     try:
         fixture = get_home(case.home)
-        snapshot = fixture.snapshot()
+        snapshot = apply_scope(fixture.snapshot(), EVAL_SCOPE, anchor_device_id=case.llm_context.device_id)
         messages = prompts.render_messages(candidate, case, snapshot)
         prompt = json.dumps(messages, indent=2)
         tools = prompts.function_schemas(candidate)
@@ -120,7 +120,6 @@ async def run_case(
             case, final_answer, tuple(recorded_actions), execute_statuses, referenced_entity_ids, snapshot
         )
         score = score_case(checks, turns, case.par_turns, config.efficiency_k, config.efficiency_floor)
-        efficiency = 0.0 if score == 0.0 else score
         return CaseTrace(
             case_id=case.id,
             category=case.category,
@@ -135,7 +134,6 @@ async def run_case(
             checks=tuple(checks),
             turns=turns,
             par_turns=case.par_turns,
-            efficiency=efficiency,
             final_answer=final_answer,
             steps=tuple(steps),
         )
@@ -161,7 +159,6 @@ async def run_case(
             ),
             turns=0,
             par_turns=case.par_turns,
-            efficiency=0.0,
             final_answer="",
             steps=(),
         )
@@ -239,7 +236,6 @@ def _score_matrix(
                     model_id=model_id,
                     mean=mean_score(list(case_scores.values())),
                     mean_turns=mean_score([float(trace.turns) for trace in pair_traces]),
-                    mean_efficiency=mean_score([trace.efficiency for trace in pair_traces]),
                     per_category=per_category,
                     case_scores=case_scores,
                 )
