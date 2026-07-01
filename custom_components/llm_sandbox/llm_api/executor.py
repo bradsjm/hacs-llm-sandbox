@@ -1,5 +1,6 @@
 """Monty-backed code executor for the LLM Sandbox facade runtime."""
 
+import ast
 import asyncio
 
 import pydantic_monty  # Required manifest dependency; do not convert to a dynamic import.
@@ -28,6 +29,9 @@ from .contracts import MONTY_TYPE_STUBS
 from .datetime_normalization import normalize_datetime_imports
 from .errors import CodeErrorPayload, HelperErrorPayload, HelperExecutionError, helper_error_from_exception
 from .executor_support import (
+    ExecutionState,
+    MontyFactory,
+    MontyRunner,
     code_error_payload_for_state,
     helper_error_payload_for_state,
     json_safe,
@@ -56,6 +60,7 @@ from .facade_views import (
     SafeStateMachine,
     build_facades,
 )
+from .resolution import available_hint
 from .runtime import RuntimeContext, activate_runtime, clear_runtime
 
 MAX_MONTY_CODE_CHARS = 8000
@@ -63,6 +68,7 @@ MONTY_MAX_ALLOCATIONS = 250_000
 MONTY_MAX_MEMORY_BYTES = 64 * 1024 * 1024
 MONTY_GC_INTERVAL = 1000
 MONTY_MAX_RECURSION_DEPTH = 1000
+_REFERENCE_TYPE_ERRORS = ("unresolved-reference", "used-when-not-defined")
 
 # View classes registered with Monty for type-checking and dataclass binding.
 # Also reused by ``await_normalization`` to derive async/sync method names.
@@ -105,6 +111,105 @@ DATACLASS_REGISTRY: list[type] = [
     SafeNotificationEntry,
     SafeConfigEntry,
 ]
+
+
+def _build_monty(
+    monty_factory: MontyFactory,
+    code: str,
+    input_names: list[str],
+    state: ExecutionState,
+) -> MontyRunner:
+    """Construct the Monty program, failing open on non-reference type errors.
+
+    Reference errors (undefined names) are surfaced so they refine into a
+    familiar NameError. Other type-check strictness the runtime accepts
+    (e.g. ``invalid-assignment`` from heterogeneous dict seeding) is relaxed
+    by rebuilding with ``type_check=False`` and recording ``type_check_relaxed``.
+    """
+    try:
+        return monty_factory(
+            code,
+            inputs=input_names,
+            script_name="llm_sandbox_agent.py",
+            type_check=True,
+            type_check_stubs=MONTY_TYPE_STUBS,
+            dataclass_registry=DATACLASS_REGISTRY,
+        )
+    except Exception as err:
+        message = str(err)
+        # Reference errors (undefined names) and non-diagnostic construction
+        # failures (e.g. SyntaxError) must surface, not be silently relaxed.
+        if any(token in message for token in _REFERENCE_TYPE_ERRORS) or "error[" not in message:
+            raise
+        # Type-check strictness the runtime tolerates (e.g. invalid-assignment
+        # from heterogeneous dict seeding): relax and continue.
+        state.normalizations.append("type_check_relaxed")
+        return monty_factory(
+            code,
+            inputs=input_names,
+            script_name="llm_sandbox_agent.py",
+            type_check=False,
+            type_check_stubs=MONTY_TYPE_STUBS,
+            dataclass_registry=DATACLASS_REGISTRY,
+        )
+
+
+def _is_empty_output(result: object) -> bool:
+    """True for ``None`` or an empty collection, but not scalar 0/False outputs."""
+    if result is None:
+        return True
+    if isinstance(result, list | dict | tuple | str | set):
+        return len(result) == 0
+    return False
+
+
+def _states_root(node: ast.AST) -> bool:
+    """Whether ``node`` is the ``states`` or ``hass.states`` expression."""
+    if isinstance(node, ast.Name):
+        return node.id == "states"
+    return (
+        isinstance(node, ast.Attribute)
+        and node.attr == "states"
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "hass"
+    )
+
+
+def _referenced_missing(code: str, snapshot: HomeSnapshot) -> list[str]:
+    """Entity ids read via literal ``states.get``/``states[...]`` that are absent.
+
+    Static analysis: Monty copies input objects and does not propagate the
+    runtime contextvar to synchronous methods, so absent reads cannot be
+    recorded inside ``states.get``. Scanning the submitted code for literal
+    entity-id reads catches the dominant case (an LLM-typed integration id) and
+    lets the executor self-describe available entities on an empty result.
+    """
+    try:
+        module = ast.parse(code)
+    except SyntaxError:
+        return []
+    missing: list[str] = []
+    seen: set[str] = set()
+
+    def _consider(literal: object) -> None:
+        if isinstance(literal, str) and literal not in seen and literal not in snapshot.states:
+            seen.add(literal)
+            missing.append(literal)
+
+    for node in ast.walk(module):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            if node.func.attr == "get" and _states_root(node.func.value) and node.args:
+                _consider(_literal_str(node.args[0]))
+        elif isinstance(node, ast.Subscript) and _states_root(node.value):
+            _consider(_literal_str(node.slice))
+    return missing
+
+
+def _literal_str(node: ast.AST) -> object:
+    """Return the Python value of a string-literal AST node, else a sentinel."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    return object()  # non-string / non-literal: never matches an entity id
 
 
 async def async_execute_home_code(
@@ -164,14 +269,7 @@ async def async_execute_home_code(
             "gc_interval": MONTY_GC_INTERVAL,
             "max_recursion_depth": MONTY_MAX_RECURSION_DEPTH,
         }
-        monty = monty_factory(
-            executable_code,
-            inputs=input_names,
-            script_name="llm_sandbox_agent.py",
-            type_check=True,
-            type_check_stubs=MONTY_TYPE_STUBS,
-            dataclass_registry=DATACLASS_REGISTRY,
-        )
+        monty = _build_monty(monty_factory, executable_code, input_names, runtime.state)
         output = await asyncio.wait_for(
             monty.run_async(
                 inputs=facade_inputs,
@@ -221,13 +319,25 @@ async def async_execute_home_code(
         clear_runtime()
 
     result = json_safe(output)
+    # Static scan for literal entity-id reads that are absent from the snapshot.
+    # An unguessable integration-specific id often surfaces as an empty result;
+    # when that happens, name the visible entities in the first referenced
+    # domain so the next call can recover. (Monty copies inputs and does not
+    # propagate the runtime contextvar to sync methods, so this is a code scan,
+    # not a runtime record.)
+    referenced_missing = _referenced_missing(code, snapshot)
+    execution_payload: dict[str, object] = {
+        "status": "ok",
+        "helper_calls": runtime.state.helper_calls,
+        "helper_call_limit": runtime.state.helper_call_limit,
+        "normalizations": list(runtime.state.normalizations),
+        "referenced_missing": referenced_missing,
+    }
+    if referenced_missing and _is_empty_output(result):
+        domain = referenced_missing[0].split(".", 1)[0] if "." in referenced_missing[0] else referenced_missing[0]
+        execution_payload["available_hint"] = available_hint(snapshot, domain)
     return {
-        "execution": {
-            "status": "ok",
-            "helper_calls": runtime.state.helper_calls,
-            "helper_call_limit": runtime.state.helper_call_limit,
-            "normalizations": list(runtime.state.normalizations),
-        },
+        "execution": execution_payload,
         "output": result,
         "printed": list(runtime.state.printed),
         "actions": json_safe(runtime.state.actions),

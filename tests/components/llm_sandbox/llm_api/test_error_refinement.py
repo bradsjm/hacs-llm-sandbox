@@ -245,14 +245,40 @@ def test_refine_parse_miss_returns_inputs_unchanged() -> None:
     assert refined_message == "something completely unrelated"
 
 
-def test_refine_reclassifies_next_with_iteration_hint() -> None:
+def test_refine_import_hint_for_dunder_import() -> None:
     refined_kind, refined_message, available_attributes = refine_code_error(
         "MontyTypingError",
-        "unresolved-reference: name `next` is used when not defined",
-        "first = next(iter(items))",
+        "unresolved-reference: name `__import__` is used when not defined",
+        "json = __import__('json')",
     )
 
     assert refined_kind == "NameError"
     assert available_attributes is None
-    assert "next" in refined_message
-    assert "items[0]" in refined_message
+    assert "__import__" in refined_message
+    assert "json" in refined_message
+
+
+def test_refine_collection_dict_method_hint() -> None:
+    refined_kind, refined_message, available_attributes = refine_code_error(
+        "MontyRuntimeError",
+        "'list' object has no attribute 'items'",
+        "for eid, st in states.async_all().items(): ...",
+    )
+
+    assert refined_kind == "AttributeError"
+    assert available_attributes is None
+    assert "list" in refined_message
+    assert "comprehension" in refined_message
+
+
+def test_refine_none_deref_hint() -> None:
+    refined_kind, refined_message, available_attributes = refine_code_error(
+        "MontyRuntimeError",
+        "'NoneType' object has no attribute 'lower'",
+        "name = hass.states.get('light.x').name.lower()",
+    )
+
+    assert refined_kind == "AttributeError"
+    assert available_attributes is None
+    assert "None" in refined_message
+    assert "is not None" in refined_message

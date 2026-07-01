@@ -1,10 +1,12 @@
 """Frozen, JSON-safe snapshot records mirroring Home Assistant registries.
 
-Each record carries a ``__llm_sandbox_json__`` hook so the executor's
-``json_safe`` machinery serializes it without extra adapters. All datetimes
-are stored as ISO strings (Monty has limited datetime support). Enums are
-stored as their ``.value`` strings. Sets of tuples (device identifiers/
-connections) are stored as JSON-safe tuples of tuples.
+Each record inherits ``_JsonSafeRecord``, whose ``__llm_sandbox_json__`` hook
+exposes its dataclass fields as a raw dict; the executor's ``json_safe``
+machinery recurses through that dict and converts nested ``Safe*`` records,
+tuples, dicts, and sets to JSON-safe structures. All datetimes are stored as
+ISO strings (Monty has limited datetime support). Enums are stored as their
+``.value`` strings. Sets of tuples (device identifiers/connections) are stored
+as JSON-safe tuples of tuples.
 
 Field types use plain ``dict``/``tuple`` rather than ``MappingProxyType``
 because the Monty VM cannot convert ``mappingproxy`` objects. Read-only
@@ -13,11 +15,9 @@ and Monty's own immutable type system (Monty makes its own copy of every
 input value, so Python-side mutability is irrelevant from the sandbox).
 """
 
-# ruff: noqa: D105
-
 from collections.abc import Mapping
-from dataclasses import dataclass, field
-from typing import cast
+from dataclasses import dataclass, field, fields
+from typing import Any, cast
 
 from homeassistant.util.json import JsonValueType
 
@@ -25,24 +25,42 @@ type ServiceFieldBrief = dict[str, str | bool | None]
 type ServiceSchemaBrief = dict[str, list[ServiceFieldBrief] | bool]
 
 
+class _JsonSafeRecord:
+    """Serialize a frozen record to a dict of its dataclass fields.
+
+    The hook returns raw field values; the executor's ``json_safe`` recursion
+    converts nested ``Safe*`` records, tuples (incl. tuple-of-tuples), dicts,
+    and sets to JSON-safe structures. ``__slots__`` keeps subclasses with
+    ``slots=True`` truly slot-only.
+    """
+
+    __slots__ = ()
+
+    def __llm_sandbox_json__(self) -> JsonValueType:
+        # Mixin is consumed only by dataclass subclasses; cast satisfies the
+        # dataclass-typed ``fields()`` argument without weakening the surface.
+        return cast(JsonValueType, {f.name: getattr(self, f.name) for f in fields(cast(Any, self))})
+
+
 @dataclass(frozen=True, slots=True)
-class SafeContext:
+class SafeContext(_JsonSafeRecord):
     """Frozen view of a Home Assistant execution context."""
 
     id: str | None
     parent_id: str | None
     user_id: str | None
 
-    def __llm_sandbox_json__(self) -> JsonValueType:
-        return cast(
-            JsonValueType,
-            {"id": self.id, "parent_id": self.parent_id, "user_id": self.user_id},
-        )
-
 
 @dataclass(frozen=True, slots=True)
-class SafeState:
-    """Frozen view of a Home Assistant state object."""
+class SafeState(_JsonSafeRecord):
+    """Frozen view of a Home Assistant state object.
+
+    Carries HA-native state fields plus registry-derived join keys (effective
+    ``area_id``, ``device_id``, ``platform``, ``unique_id``) so an LLM can filter
+    by area/device without a manual state-to-registry join. The effective area
+    mirrors the snapshot index rule (``entity.area_id or device.area_id``) and is
+    ``None`` when no entity registry entry exists.
+    """
 
     entity_id: str
     domain: str
@@ -54,27 +72,17 @@ class SafeState:
     last_reported: str | None
     last_updated: str
     context: SafeContext
-
-    def __llm_sandbox_json__(self) -> JsonValueType:
-        return cast(
-            JsonValueType,
-            {
-                "entity_id": self.entity_id,
-                "domain": self.domain,
-                "object_id": self.object_id,
-                "name": self.name,
-                "state": self.state,
-                "attributes": self.attributes,
-                "last_changed": self.last_changed,
-                "last_reported": self.last_reported,
-                "last_updated": self.last_updated,
-                "context": self.context,
-            },
-        )
+    # Registry-derived join keys filled by ``enrich_states`` (effective area,
+    # device, platform, unique_id). Default None so the base HA-native shape is
+    # constructible before the join; ``None`` when no registry entry exists.
+    area_id: str | None = None
+    device_id: str | None = None
+    platform: str | None = None
+    unique_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
-class SafeRegistryEntry:
+class SafeRegistryEntry(_JsonSafeRecord):
     """Frozen view of a Home Assistant entity registry entry."""
 
     entity_id: str
@@ -98,36 +106,9 @@ class SafeRegistryEntry:
     translation_key: str | None
     has_entity_name: bool
 
-    def __llm_sandbox_json__(self) -> JsonValueType:
-        return cast(
-            JsonValueType,
-            {
-                "entity_id": self.entity_id,
-                "domain": self.domain,
-                "unique_id": self.unique_id,
-                "platform": self.platform,
-                "config_entry_id": self.config_entry_id,
-                "device_id": self.device_id,
-                "area_id": self.area_id,
-                "name": self.name,
-                "original_name": self.original_name,
-                "aliases": self.aliases,
-                "labels": self.labels,
-                "disabled_by": self.disabled_by,
-                "hidden_by": self.hidden_by,
-                "entity_category": self.entity_category,
-                "device_class": self.device_class,
-                "original_device_class": self.original_device_class,
-                "capabilities": self.capabilities,
-                "supported_features": self.supported_features,
-                "translation_key": self.translation_key,
-                "has_entity_name": self.has_entity_name,
-            },
-        )
-
 
 @dataclass(frozen=True, slots=True)
-class SafeDeviceEntry:
+class SafeDeviceEntry(_JsonSafeRecord):
     """Frozen view of a Home Assistant device registry entry."""
 
     id: str
@@ -149,34 +130,9 @@ class SafeDeviceEntry:
     via_device_id: str | None
     disabled_by: str | None
 
-    def __llm_sandbox_json__(self) -> JsonValueType:
-        return cast(
-            JsonValueType,
-            {
-                "id": self.id,
-                "name": self.name,
-                "name_by_user": self.name_by_user,
-                "manufacturer": self.manufacturer,
-                "model": self.model,
-                "model_id": self.model_id,
-                "sw_version": self.sw_version,
-                "hw_version": self.hw_version,
-                "serial_number": self.serial_number,
-                "area_id": self.area_id,
-                "labels": self.labels,
-                "identifiers": [list(ident) for ident in self.identifiers],
-                "connections": [list(conn) for conn in self.connections],
-                "configuration_url": self.configuration_url,
-                "entry_type": self.entry_type,
-                "config_entries": self.config_entries,
-                "via_device_id": self.via_device_id,
-                "disabled_by": self.disabled_by,
-            },
-        )
-
 
 @dataclass(frozen=True, slots=True)
-class SafeAreaEntry:
+class SafeAreaEntry(_JsonSafeRecord):
     """Frozen view of a Home Assistant area registry entry."""
 
     id: str
@@ -192,28 +148,9 @@ class SafeAreaEntry:
     created_at: str | None
     modified_at: str | None
 
-    def __llm_sandbox_json__(self) -> JsonValueType:
-        return cast(
-            JsonValueType,
-            {
-                "id": self.id,
-                "area_id": self.area_id,
-                "name": self.name,
-                "aliases": self.aliases,
-                "floor_id": self.floor_id,
-                "labels": self.labels,
-                "icon": self.icon,
-                "picture": self.picture,
-                "humidity_entity_id": self.humidity_entity_id,
-                "temperature_entity_id": self.temperature_entity_id,
-                "created_at": self.created_at,
-                "modified_at": self.modified_at,
-            },
-        )
-
 
 @dataclass(frozen=True, slots=True)
-class SafeFloorEntry:
+class SafeFloorEntry(_JsonSafeRecord):
     """Frozen view of a Home Assistant floor registry entry."""
 
     floor_id: str
@@ -225,24 +162,9 @@ class SafeFloorEntry:
     created_at: str | None
     modified_at: str | None
 
-    def __llm_sandbox_json__(self) -> JsonValueType:
-        return cast(
-            JsonValueType,
-            {
-                "floor_id": self.floor_id,
-                "id": self.id,
-                "name": self.name,
-                "aliases": self.aliases,
-                "level": self.level,
-                "icon": self.icon,
-                "created_at": self.created_at,
-                "modified_at": self.modified_at,
-            },
-        )
-
 
 @dataclass(frozen=True, slots=True)
-class SafeLabelEntry:
+class SafeLabelEntry(_JsonSafeRecord):
     """Frozen view of a Home Assistant label registry entry."""
 
     label_id: str
@@ -254,24 +176,9 @@ class SafeLabelEntry:
     created_at: str | None
     modified_at: str | None
 
-    def __llm_sandbox_json__(self) -> JsonValueType:
-        return cast(
-            JsonValueType,
-            {
-                "label_id": self.label_id,
-                "name": self.name,
-                "normalized_name": self.normalized_name,
-                "description": self.description,
-                "color": self.color,
-                "icon": self.icon,
-                "created_at": self.created_at,
-                "modified_at": self.modified_at,
-            },
-        )
-
 
 @dataclass(frozen=True, slots=True)
-class SafeCategoryEntry:
+class SafeCategoryEntry(_JsonSafeRecord):
     """Frozen view of a Home Assistant category registry entry."""
 
     category_id: str
@@ -281,22 +188,9 @@ class SafeCategoryEntry:
     created_at: str | None
     modified_at: str | None
 
-    def __llm_sandbox_json__(self) -> JsonValueType:
-        return cast(
-            JsonValueType,
-            {
-                "category_id": self.category_id,
-                "scope": self.scope,
-                "name": self.name,
-                "icon": self.icon,
-                "created_at": self.created_at,
-                "modified_at": self.modified_at,
-            },
-        )
-
 
 @dataclass(frozen=True, slots=True)
-class SafeIssueEntry:
+class SafeIssueEntry(_JsonSafeRecord):
     """Frozen view of a Home Assistant repairs issue entry."""
 
     issue_id: str
@@ -308,24 +202,9 @@ class SafeIssueEntry:
     translation_placeholders: dict[str, str] | None
     created: str | None
 
-    def __llm_sandbox_json__(self) -> JsonValueType:
-        return cast(
-            JsonValueType,
-            {
-                "issue_id": self.issue_id,
-                "domain": self.domain,
-                "severity": self.severity,
-                "active": self.active,
-                "dismissed_version": self.dismissed_version,
-                "translation_key": self.translation_key,
-                "translation_placeholders": self.translation_placeholders,
-                "created": self.created,
-            },
-        )
-
 
 @dataclass(frozen=True, slots=True)
-class SafeNotificationEntry:
+class SafeNotificationEntry(_JsonSafeRecord):
     """Frozen view of a Home Assistant persistent notification."""
 
     notification_id: str
@@ -333,20 +212,9 @@ class SafeNotificationEntry:
     message: str
     created_at: str | None
 
-    def __llm_sandbox_json__(self) -> JsonValueType:
-        return cast(
-            JsonValueType,
-            {
-                "notification_id": self.notification_id,
-                "title": self.title,
-                "message": self.message,
-                "created_at": self.created_at,
-            },
-        )
-
 
 @dataclass(frozen=True, slots=True)
-class SafeConfigEntry:
+class SafeConfigEntry(_JsonSafeRecord):
     """Frozen, secret-stripped view of a Home Assistant config entry.
 
     Only non-sensitive metadata is exposed. ``data``, ``options``,
@@ -363,24 +231,9 @@ class SafeConfigEntry:
     disabled_by: str | None
     reason: str | None
 
-    def __llm_sandbox_json__(self) -> JsonValueType:
-        return cast(
-            JsonValueType,
-            {
-                "entry_id": self.entry_id,
-                "domain": self.domain,
-                "title": self.title,
-                "source": self.source,
-                "state": self.state,
-                "unique_id": self.unique_id,
-                "disabled_by": self.disabled_by,
-                "reason": self.reason,
-            },
-        )
-
 
 @dataclass(frozen=True, slots=True)
-class SafeUnitSystem:
+class SafeUnitSystem(_JsonSafeRecord):
     """Frozen view of Home Assistant unit-system preferences."""
 
     temperature_unit: str
@@ -392,24 +245,9 @@ class SafeUnitSystem:
     wind_speed_unit: str
     accumulated_precipitation_unit: str
 
-    def __llm_sandbox_json__(self) -> JsonValueType:
-        return cast(
-            JsonValueType,
-            {
-                "temperature_unit": self.temperature_unit,
-                "length_unit": self.length_unit,
-                "mass_unit": self.mass_unit,
-                "pressure_unit": self.pressure_unit,
-                "volume_unit": self.volume_unit,
-                "area_unit": self.area_unit,
-                "wind_speed_unit": self.wind_speed_unit,
-                "accumulated_precipitation_unit": self.accumulated_precipitation_unit,
-            },
-        )
-
 
 @dataclass(frozen=True, slots=True)
-class SafeConfig:
+class SafeConfig(_JsonSafeRecord):
     """Frozen view of Home Assistant instance configuration metadata."""
 
     location_name: str
@@ -423,24 +261,6 @@ class SafeConfig:
     internal_url: str | None
     external_url: str | None
     units: SafeUnitSystem
-
-    def __llm_sandbox_json__(self) -> JsonValueType:
-        return cast(
-            JsonValueType,
-            {
-                "location_name": self.location_name,
-                "latitude": self.latitude,
-                "longitude": self.longitude,
-                "elevation": self.elevation,
-                "time_zone": self.time_zone,
-                "language": self.language,
-                "country": self.country,
-                "currency": self.currency,
-                "internal_url": self.internal_url,
-                "external_url": self.external_url,
-                "units": self.units,
-            },
-        )
 
 
 @dataclass(frozen=True, slots=True)

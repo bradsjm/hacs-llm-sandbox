@@ -183,63 +183,139 @@ def code_error_payload_for_state(
     return payload
 
 
-def refine_code_error(kind: str, message: str, code: str) -> tuple[str, str, list[str] | None]:
-    """Refine Monty/type-check errors into actionable sandbox guidance."""
-    from .builtin_normalization import GLOBAL_TYPE_MAP, public_surface, surface_for_class_name
+type RefineResult = tuple[str, str, list[str] | None]
+type ErrorRefiner = Callable[[str, str, str], RefineResult | None]
 
+
+def refine_code_error(kind: str, message: str, code: str) -> RefineResult:
+    """Refine Monty/type-check errors into actionable sandbox guidance.
+
+    Runs the ordered ``REFINERS`` registry; the first rule that applies wins.
+    A rule returns ``None`` to defer; when none apply, the cleaned message is
+    returned unchanged so Monty's natural error surfaces. Internal class names
+    are scrubbed and the known traps are reclassified into familiar Python
+    error types with concrete next steps (imports, formatting, missing attrs).
+    """
     # Monty appends informational lines that are noisy in LLM-facing payloads.
     cleaned_message = "\n".join(line for line in message.splitlines() if not line.strip().startswith("info:"))
-    if "unresolved-reference" in cleaned_message or "used when not defined" in cleaned_message:
-        # Convert Monty unresolved-reference wording into a familiar NameError.
-        if (name_match := re.search(r"`([A-Za-z_]\w*)`", cleaned_message)) is None:
-            return kind, cleaned_message, None
-        name = name_match.group(1)
-        available_attributes: list[str] | None = None
-        if name in {"dir", "vars"}:
-            cleaned_message = (
-                f"`{name}` is not available in the sandbox; use the listed attributes or direct attribute access."
-            )
-            available_attributes = _attributes_for_first_discovery_call(code, name, GLOBAL_TYPE_MAP, public_surface)
-        elif name in {"setattr", "delattr"}:
-            cleaned_message = f"`{name}` is not available in the sandbox; use direct local values instead of mutating facade objects."
-        elif name == "next":
-            cleaned_message = (
-                "`next` is not available in the sandbox; get the first item with an explicit loop "
-                "(`for item in items: ...; break`) or index the list (`items[0]`)."
-            )
-        return "NameError", cleaned_message, available_attributes
-
-    if (module_name := _extract_unresolved_import(cleaned_message)) is not None:
-        # Only json/math/re are importable; guide toward built-in equivalents.
-        return (
-            "ImportError",
-            f"`{module_name}` is not available in the sandbox; only json, math, re are importable. "
-            "Use built-ins instead (e.g. sum()/len() for an average, a dict loop for counting).",
-            None,
-        )
-
-    if "unsupported operand type(s) for %" in cleaned_message:
-        return (
-            "TypeError",
-            'Percent (%) string formatting is not available in the sandbox; use an f-string (e.g. f"{x}") instead.',
-            None,
-        )
-
-    if (attr_match := re.search(r"'(\w+)' object has no attribute '(\w+)'", cleaned_message)) is not None:
-        class_name = attr_match.group(1)
-        attr = attr_match.group(2)
-        if class_name == "str" and attr == "format":
-            return (
-                "AttributeError",
-                'str.format() is not available in the sandbox; use an f-string (e.g. f"{x}") instead.',
-                None,
-            )
-        # Surface the known public attributes for safe facade/record objects.
-        if (surface := surface_for_class_name(class_name)) is not None:
-            return "AttributeError", _scrub_class_name(cleaned_message, class_name), sorted(surface)
-        return "AttributeError", cleaned_message, None
-
+    for refine in REFINERS:
+        if (result := refine(kind, cleaned_message, code)) is not None:
+            return result
     return kind, cleaned_message, None
+
+
+def _refine_unresolved_reference(kind: str, message: str, code: str) -> RefineResult | None:
+    """Convert Monty unresolved-reference wording into a familiar NameError."""
+    if "unresolved-reference" not in message and "used when not defined" not in message:
+        return None
+    if (name_match := re.search(r"`([A-Za-z_]\w*)`", message)) is None:
+        # Guard matched but no backticked name: surface the cleaned message as-is.
+        return kind, message, None
+    name = name_match.group(1)
+    if name in {"dir", "vars"}:
+        from .builtin_normalization import GLOBAL_TYPE_MAP, public_surface
+
+        attributes = _attributes_for_first_discovery_call(code, name, GLOBAL_TYPE_MAP, public_surface)
+        return (
+            "NameError",
+            f"`{name}` is not available in the sandbox; use the listed attributes or direct attribute access.",
+            attributes,
+        )
+    if name in {"setattr", "delattr"}:
+        return (
+            "NameError",
+            f"`{name}` is not available in the sandbox; use direct local values instead of mutating facade objects.",
+            None,
+        )
+    if name == "__import__":
+        return (
+            "NameError",
+            "`__import__` is not available in the sandbox; only json, math, re are importable as import statements. "
+            "Use the pre-bound globals instead.",
+            None,
+        )
+    return "NameError", message, None
+
+
+def _refine_unresolved_import(_kind: str, message: str, _code: str) -> RefineResult | None:
+    """Only json/math/re are importable; guide toward built-in equivalents."""
+    if (module_name := _extract_unresolved_import(message)) is None:
+        return None
+    return (
+        "ImportError",
+        f"`{module_name}` is not available in the sandbox; only json, math, re are importable. "
+        "Use built-ins instead (e.g. sum()/len() for an average, a dict loop for counting).",
+        None,
+    )
+
+
+def _refine_percent_format(_kind: str, message: str, _code: str) -> RefineResult | None:
+    """Redirect % string formatting to f-strings."""
+    if "unsupported operand type(s) for %" not in message:
+        return None
+    return (
+        "TypeError",
+        'Percent (%) string formatting is not available in the sandbox; use an f-string (e.g. f"{x}") instead.',
+        None,
+    )
+
+
+def _refine_collection_dict_method(_kind: str, message: str, _code: str) -> RefineResult | None:
+    """Guide dict-method misuse on list/tuple/set results (e.g. async_all().items())."""
+    if re.search(r"'(list|tuple|set)' object has no attribute '(items|keys|values)'", message) is None:
+        return None
+    return (
+        "AttributeError",
+        "Facade read methods (states.async_all, registry .values()) return a list, not a dict; "
+        "iterate it directly or with a comprehension (e.g. [s.entity_id for s in states.async_all()]) "
+        "instead of .items()/.keys()/.values().",
+        None,
+    )
+
+
+def _refine_none_deref(_kind: str, message: str, _code: str) -> RefineResult | None:
+    """Guide method calls on None, typically a missing state or attribute."""
+    if re.search(r"'NoneType' object has no attribute '\w+'", message) is None:
+        return None
+    return (
+        "AttributeError",
+        "The value is None — usually a missing state or attribute. Guard with `if value is not None:` "
+        "before accessing it (e.g. check hass.states.get(...) for None first).",
+        None,
+    )
+
+
+def _refine_missing_attribute(_kind: str, message: str, _code: str) -> RefineResult | None:
+    """Surface the known public attributes for safe facade/record objects."""
+    if (attr_match := re.search(r"'(\w+)' object has no attribute '(\w+)'", message)) is None:
+        return None
+    class_name = attr_match.group(1)
+    attr = attr_match.group(2)
+    if class_name == "str" and attr == "format":
+        return (
+            "AttributeError",
+            'str.format() is not available in the sandbox; use an f-string (e.g. f"{x}") instead.',
+            None,
+        )
+    from .builtin_normalization import surface_for_class_name
+
+    # Scrub internal class names and surface the known public attribute set.
+    if (surface := surface_for_class_name(class_name)) is not None:
+        return "AttributeError", _scrub_class_name(message, class_name), sorted(surface)
+    return "AttributeError", message, None
+
+
+# Ordered rule registry consumed by ``refine_code_error``. Each rule returns a
+# refined result when it applies or ``None`` to defer to the next rule. Append
+# new recovery hints here (imports, attribute surfaces, formatting traps).
+REFINERS: tuple[ErrorRefiner, ...] = (
+    _refine_unresolved_reference,
+    _refine_unresolved_import,
+    _refine_percent_format,
+    _refine_collection_dict_method,
+    _refine_none_deref,
+    _refine_missing_attribute,
+)
 
 
 def _extract_unresolved_import(message: str) -> str | None:

@@ -8,6 +8,7 @@ combined additively over state-bearing entity ids, and the service catalog is
 never filtered.
 """
 
+from dataclasses import replace
 from typing import cast
 
 import voluptuous as vol
@@ -98,6 +99,9 @@ def build_snapshot(
         visible,
         anchor_device_id,
     )
+    # Fill registry-derived join keys (effective area, device, platform, unique_id)
+    # now that the filtered entity/device collections exist, mirroring the index rule.
+    states = enrich_states(states, entities, devices)
     indexes = _build_indexes(entities, devices, areas)
 
     return HomeSnapshot(
@@ -190,6 +194,41 @@ def _derive_collections(
     filtered_floors = {floor_id: floors[floor_id] for floor_id in floor_ids if floor_id in floors}
 
     return filtered_states, filtered_entities, filtered_devices, filtered_areas, filtered_floors
+
+
+def enrich_states(
+    states: dict[str, SafeState],
+    entities: dict[str, SafeRegistryEntry],
+    devices: dict[str, SafeDeviceEntry],
+) -> dict[str, SafeState]:
+    """Fill registry-derived join keys on each ``SafeState``.
+
+    Effective area uses the same rule as ``_build_indexes``: an entity-level
+    ``area_id`` override wins, otherwise the entity inherits its device's area.
+    Join keys are ``None`` for state-bearing entities with no registry entry.
+    Pure and snapshot-derived so eval fixtures can reuse the canonical join.
+    """
+    if not entities:
+        return states
+    enriched: dict[str, SafeState] = {}
+    for entity_id, safe_state in states.items():
+        entry = entities.get(entity_id)
+        if entry is None:
+            continue
+        area_id = entry.area_id
+        if area_id is None and entry.device_id is not None:
+            device = devices.get(entry.device_id)
+            if device is not None:
+                area_id = device.area_id
+        enriched[entity_id] = replace(
+            safe_state,
+            area_id=area_id,
+            device_id=entry.device_id,
+            platform=entry.platform,
+            unique_id=entry.unique_id,
+        )
+    # Preserve any state-bearing entity without a registry entry (None join keys).
+    return states | enriched
 
 
 def _safe_state(state: State) -> SafeState:

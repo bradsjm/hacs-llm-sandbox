@@ -2,10 +2,8 @@
 
 import pytest
 from custom_components.llm_sandbox.llm_api.builtin_normalization import (
-    GETATTR_RESOLVED,
-    HASATTR_RESOLVED,
-    REWROTE_MAP_FILTER,
     TYPE_NAME_RESOLVED,
+    WRAPPED_NEXT_ITER,
     normalize_builtins,
 )
 
@@ -14,46 +12,10 @@ from custom_components.llm_sandbox.llm_api.builtin_normalization import (
     ("code", "expected_code", "expected_labels"),
     [
         pytest.param(
-            "result = hasattr(floor_registry, 'async_list_floors')",
-            "result = True",
-            {HASATTR_RESOLVED},
-            id="hasattr-true",
-        ),
-        pytest.param(
-            "result = hasattr(floor_registry, 'nope')",
-            "result = False",
-            {HASATTR_RESOLVED},
-            id="hasattr-false",
-        ),
-        pytest.param(
-            "result = getattr(area_registry, 'async_list_areas')",
-            "result = area_registry.async_list_areas",
-            {GETATTR_RESOLVED},
-            id="getattr-resolves-to-attribute",
-        ),
-        pytest.param(
-            "result = getattr(area_registry, 'nope', 'fallback')",
-            "result = 'fallback'",
-            {GETATTR_RESOLVED},
-            id="getattr-returns-default",
-        ),
-        pytest.param(
             "result = type(floor_registry).__name__",
             "result = 'SafeFloorRegistry'",
             {TYPE_NAME_RESOLVED},
             id="type-name-resolved",
-        ),
-        pytest.param(
-            "result = hasattr(date, 'today')",
-            "result = True",
-            {HASATTR_RESOLVED},
-            id="hasattr-date-today",
-        ),
-        pytest.param(
-            "result = hasattr(datetime, 'now')",
-            "result = True",
-            {HASATTR_RESOLVED},
-            id="hasattr-datetime-now",
         ),
         pytest.param(
             "result = type(date).__name__",
@@ -66,12 +28,6 @@ from custom_components.llm_sandbox.llm_api.builtin_normalization import (
             "result = 'SafeDateTimeFacade'",
             {TYPE_NAME_RESOLVED},
             id="type-name-datetime",
-        ),
-        pytest.param(
-            "result = getattr(date, 'fromisoformat')",
-            "result = date.fromisoformat",
-            {GETATTR_RESOLVED},
-            id="getattr-date-fromisoformat",
         ),
         pytest.param(
             "result = type(floor_registry)",
@@ -123,39 +79,53 @@ def test_normalize_builtins(
 
 
 @pytest.mark.parametrize(
-    ("code", "dropped_token"),
+    ("code", "expected_code", "expected_labels"),
     [
-        pytest.param("result = list(map(str, items))", "map(", id="map-name"),
-        pytest.param("result = list(map(lambda x: x * 2, items))", "map(", id="map-lambda"),
-        pytest.param("result = list(map(f, a, b))", "map(", id="map-multi-iterable"),
-        pytest.param("result = list(filter(pred, items))", "filter(", id="filter-name"),
-        pytest.param("result = list(filter(lambda x: x > 1, items))", "filter(", id="filter-lambda"),
-        pytest.param("result = list(filter(None, items))", "filter(", id="filter-none"),
+        pytest.param(
+            "result = next(xs)",
+            "result = next(iter(xs))",
+            {WRAPPED_NEXT_ITER},
+            id="next-one-arg",
+        ),
+        pytest.param(
+            "result = next(xs, default)",
+            "result = next(iter(xs), default)",
+            {WRAPPED_NEXT_ITER},
+            id="next-default",
+        ),
+        pytest.param(
+            "result = next(iter(xs))",
+            "result = next(iter(xs))",
+            set(),
+            id="explicit-iter-unchanged",
+        ),
     ],
 )
-def test_normalize_builtins_rewrites_map_filter(code: str, dropped_token: str) -> None:
-    """map/filter rewrite to list comprehensions with fresh loop targets."""
+def test_normalize_builtins_wraps_next(
+    code: str,
+    expected_code: str,
+    expected_labels: set[str],
+) -> None:
     normalized, labels = normalize_builtins(code)
 
-    assert REWROTE_MAP_FILTER in labels
-    assert dropped_token not in normalized
-    assert "_lsbx_" in normalized
-    # Multi-iterable map is driven through zip to preserve pairing.
-    if code == "result = list(map(f, a, b))":
-        assert "zip(" in normalized
+    assert normalized == expected_code
+    assert set(labels) == expected_labels
 
 
 @pytest.mark.parametrize(
     "code",
     [
-        pytest.param("result = map(obj.method, items)", id="map-attribute-func"),
-        pytest.param("result = filter(obj.method, items)", id="filter-attribute-func"),
-        pytest.param("result = map(f, items, extra=1)", id="map-keyword-arg"),
+        pytest.param("result = list(map(str, items))", id="map-name"),
+        pytest.param("result = list(map(lambda x: x * 2, items))", id="map-lambda"),
+        pytest.param("result = list(map(f, a, b))", id="map-multi-iterable"),
+        pytest.param("result = list(filter(pred, items))", id="filter-name"),
+        pytest.param("result = list(filter(lambda x: x > 1, items))", id="filter-lambda"),
+        pytest.param("result = list(filter(None, items))", id="filter-none"),
     ],
 )
-def test_normalize_builtins_leaves_unsafe_map_filter_unchanged(code: str) -> None:
-    """Unsafe map/filter shapes are left untouched so Monty surfaces the natural error."""
+def test_normalize_builtins_leaves_native_map_filter_unchanged(code: str) -> None:
+    """map/filter run natively in Monty, so normalization leaves them untouched."""
     normalized, labels = normalize_builtins(code)
 
     assert normalized == code
-    assert REWROTE_MAP_FILTER not in labels
+    assert labels == []

@@ -66,6 +66,20 @@ def suggested_methods() -> list[str]:
     ]
 
 
+# Builtin callables Monty runs natively but does not auto-declare to its
+# type-checker. Declaring them lets common LLM discovery patterns
+# (hasattr/getattr/next/iter/map/filter) type-check AND run. Runtime
+# getattr/hasattr cannot walk dunders, so this opens no new escape surface.
+MONTY_BUILTIN_STUBS = """\
+def hasattr(obj: Any, name: str) -> bool: ...
+def getattr(obj: Any, name: str, default: Any = ...) -> Any: ...
+def next(iterator: Any, default: Any = ...) -> Any: ...
+def iter(obj: Any) -> Any: ...
+def map(func: Any, *iterables: Any) -> list[Any]: ...
+def filter(func: Any, iterable: Any) -> list[Any]: ...
+"""
+
+
 def _build_monty_type_stubs() -> str:
     """Render Monty stubs from the facade dataclasses and their methods.
 
@@ -224,6 +238,9 @@ def _build_monty_type_stubs() -> str:
     sections.append("")
     for name in AVAILABLE_GLOBALS:
         sections.append(f"{name}: Any")
+
+    sections.append("")
+    sections.append(MONTY_BUILTIN_STUBS)
 
     return "\n".join(sections)
 

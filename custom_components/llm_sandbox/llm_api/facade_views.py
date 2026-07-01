@@ -28,6 +28,7 @@ from homeassistant.core import SupportsResponse
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.util.json import JsonValueType
 
+from ..runtime import SandboxSettings
 from ..snapshot.models import (
     HomeSnapshot,
     SafeAreaEntry,
@@ -48,6 +49,7 @@ from ..snapshot.models import (
 from ..types import ActionRecord, ProposedAction, TranslationPlaceholders
 from .errors import HelperExecutionError
 from .executor_support import helper_response, json_safe
+from .resolution import CandidateTarget, available_hint, candidates_for_domain, resolve_target_entity
 from .runtime import require_runtime, require_snapshot
 
 _TARGET_SELECTOR_KEYS = frozenset(("entity_id", "device_id", "area_id", "label_id", "label", "floor_id"))
@@ -552,6 +554,43 @@ class SafeServiceRegistry:
             service.lower(), SupportsResponse.NONE.value
         )
 
+    def _policy_block(
+        self,
+        settings: SandboxSettings,
+        domain: str,
+        service: str,
+        blocking: bool,
+        return_response: bool,
+    ) -> _PolicyBlock | None:
+        """Evaluate snapshot-policy gates without raising; None means the call may proceed."""
+        if not settings.actions_enabled:
+            return _PolicyBlock("actions_disabled", {})
+        if settings.action_domains and domain not in settings.action_domains:
+            return _PolicyBlock("action_domain_not_allowed", cast(TranslationPlaceholders, {"domain": domain}))
+        if not self.has_service(domain, service):
+            return _PolicyBlock(
+                "service_not_found",
+                cast(TranslationPlaceholders, {"domain": domain, "service": service}),
+                hints={"available_services": self.services_schema.get(domain, {})},
+            )
+        supports_response = self.services_supports_response[domain][service]
+        if return_response and not blocking:
+            return _PolicyBlock(
+                "service_response_requires_blocking",
+                cast(TranslationPlaceholders, {"blocking": "blocking=True"}),
+            )
+        if supports_response == SupportsResponse.NONE.value and return_response:
+            return _PolicyBlock(
+                "service_response_not_supported",
+                cast(TranslationPlaceholders, {"return_response": "return_response=True"}),
+            )
+        if supports_response == SupportsResponse.ONLY.value and not return_response:
+            return _PolicyBlock(
+                "service_lacks_response_request",
+                cast(TranslationPlaceholders, {"return_response": "return_response=True"}),
+            )
+        return None
+
     async def async_call(
         self,
         domain: str,
@@ -584,66 +623,42 @@ class SafeServiceRegistry:
                     "return_response": return_response,
                 }
 
-            def _raise_validation(
+            def _block(
                 key: str,
                 placeholders: TranslationPlaceholders,
                 *,
+                message: str,
                 hints: Mapping[str, object] | None = None,
             ) -> None:
-                action = _request_action(raw_target)
-                runtime.state.actions.append(
-                    _action_record(
-                        action,
-                        status="error",
-                        response=None,
-                        error=_action_error(key, placeholders, key),
-                    )
-                )
-                raise HelperExecutionError("services.async_call", key, placeholders, hints=hints)
-
-            # Action master switch: refuse all service calls when disabled.
-            if not settings.actions_enabled:
-                _raise_validation("actions_disabled", {})
-            # Domain allowlist: empty means all domains allowed.
-            if settings.action_domains and domain not in settings.action_domains:
-                _raise_validation(
-                    "action_domain_not_allowed",
-                    cast(TranslationPlaceholders, {"domain": domain}),
-                )
-            if not self.has_service(domain, service):
-                _raise_validation(
-                    "service_not_found",
-                    cast(TranslationPlaceholders, {"domain": domain, "service": service}),
-                    hints={"available_services": self.services_schema.get(domain, {})},
-                )
-            supports_response = self.services_supports_response[domain][service]
-            if return_response and not blocking:
-                _raise_validation(
-                    "service_response_requires_blocking",
-                    cast(TranslationPlaceholders, {"blocking": "blocking=True"}),
-                )
-            if supports_response == SupportsResponse.NONE.value and return_response:
-                _raise_validation(
-                    "service_response_not_supported",
-                    cast(TranslationPlaceholders, {"return_response": "return_response=True"}),
-                )
-            if supports_response == SupportsResponse.ONLY.value and not return_response:
-                _raise_validation(
-                    "service_lacks_response_request",
-                    cast(TranslationPlaceholders, {"return_response": "return_response=True"}),
-                )
-            try:
-                resolved_target = self._visible_target(merged_target)
-            except HelperExecutionError as err:
+                # Policy blocks are non-raising: record an errored action and let
+                # the call return None so execution stays status="ok" with a
+                # recorded errored action (Decision 3: live failures keep raising).
                 runtime.state.actions.append(
                     _action_record(
                         _request_action(raw_target),
                         status="error",
                         response=None,
-                        error=_action_error(err.key, err.placeholders, err.key),
+                        error=_action_error(key, placeholders, message, hints=hints),
                     )
                 )
-                raise
+
+            # Policy gate (non-raising).
+            if (block := self._policy_block(settings, domain, service, blocking, return_response)) is not None:
+                _block(block.key, block.placeholders, message=block.key, hints=block.hints)
+                return None
+
+            # Target visibility resolution with auto-resolve.
+            target_outcome = self._visible_target(merged_target, domain)
+            if isinstance(target_outcome, _UnresolvedTarget):
+                _block(
+                    "service_target_not_visible",
+                    cast(TranslationPlaceholders, {"entity_id": target_outcome.requested}),
+                    message=target_outcome.hint,
+                    hints=target_outcome.candidates_hint,
+                )
+                return None
+            resolved_target = target_outcome.target
+
             action = _request_action(resolved_target)
             record = _action_record(action, status="ok", response=None, error=None)
             runtime.state.actions.append(record)
@@ -673,22 +688,7 @@ class SafeServiceRegistry:
                     "service_call_timeout",
                     {"domain": domain, "service": service},
                 ) from err
-            except ServiceValidationError as err:
-                helper_err = self._service_call_error(err, domain, service)
-                record["status"] = "error"
-                record["error"] = _action_error(helper_err.key, helper_err.placeholders, str(err))
-                raise helper_err from err
-            except vol.Invalid as err:
-                helper_err = self._service_call_error(err, domain, service)
-                record["status"] = "error"
-                record["error"] = _action_error(helper_err.key, helper_err.placeholders, str(err))
-                raise helper_err from err
-            except HomeAssistantError as err:
-                helper_err = self._service_call_error(err, domain, service)
-                record["status"] = "error"
-                record["error"] = _action_error(helper_err.key, helper_err.placeholders, str(err))
-                raise helper_err from err
-            except Exception as err:
+            except (ServiceValidationError, vol.Invalid, HomeAssistantError, Exception) as err:
                 helper_err = self._service_call_error(err, domain, service)
                 record["status"] = "error"
                 record["error"] = _action_error(helper_err.key, helper_err.placeholders, str(err))
@@ -698,11 +698,15 @@ class SafeServiceRegistry:
 
         return await helper_response(self._require_state(), "services.async_call", _call)
 
-    def _visible_target(self, target: Mapping[str, object] | None) -> dict[str, object] | None:
+    def _visible_target(
+        self,
+        target: Mapping[str, object] | None,
+        domain: str,
+    ) -> _ResolvedTarget | _UnresolvedTarget:
         """Resolve supported HA target selectors to visible entity IDs."""
         snapshot = require_snapshot()
         if not target:
-            return cast(dict[str, object] | None, json_safe(target))
+            return _ResolvedTarget(cast(dict[str, object] | None, json_safe(target)))
 
         indexes = snapshot.indexes
         entity_ids: set[str] = set()
@@ -713,13 +717,22 @@ class SafeServiceRegistry:
             supported_keys.append("entity_id")
             for entity_id in _target_values(target["entity_id"]):
                 supported_values.append(entity_id)
-                if entity_id not in snapshot.states:
-                    raise HelperExecutionError(
-                        "services.async_call",
-                        "service_target_not_visible",
-                        {"entity_id": entity_id},
+                if entity_id in snapshot.states:
+                    entity_ids.add(entity_id)
+                    continue
+                resolve_domain = entity_id.split(".", 1)[0] if "." in entity_id else domain
+                outcome = resolve_target_entity(snapshot, entity_id, resolve_domain)
+                if outcome.is_resolved:
+                    entity_ids.add(cast(str, outcome.resolved))
+                else:
+                    candidates: tuple[CandidateTarget, ...] = outcome.candidates or candidates_for_domain(
+                        snapshot, resolve_domain
                     )
-                entity_ids.add(entity_id)
+                    return _UnresolvedTarget(
+                        requested=entity_id,
+                        hint=available_hint(snapshot, resolve_domain),
+                        candidates_hint={"candidates": [candidate.entity_id for candidate in candidates]},
+                    )
         if "device_id" in target:
             supported_keys.append("device_id")
             for device_id in _target_values(target["device_id"]):
@@ -748,20 +761,18 @@ class SafeServiceRegistry:
                     entity_ids.update(indexes.entity_ids_by_area_id.get(area_id, ()))
 
         if entity_ids:
-            return {"entity_id": sorted(entity_ids)}
+            return _ResolvedTarget({"entity_id": sorted(entity_ids)})
         if supported_values:
-            raise HelperExecutionError(
-                "services.async_call",
-                "service_target_not_visible",
-                {"entity_id": supported_values[0]},
+            return _UnresolvedTarget(
+                requested=supported_values[0],
+                hint="No visible entities resolved for the requested target.",
             )
         if supported_keys:
-            raise HelperExecutionError(
-                "services.async_call",
-                "service_target_not_visible",
-                {"entity_id": supported_keys[0]},
+            return _UnresolvedTarget(
+                requested=supported_keys[0],
+                hint="No visible entities resolved for the requested target.",
             )
-        return cast(dict[str, object], json_safe(target))
+        return _ResolvedTarget(cast(dict[str, object], json_safe(target)))
 
     def _service_call_error(
         self,
@@ -1139,9 +1150,43 @@ def _extract_target_selectors(
     return cleaned_service_data, cast(dict[str, object], json_safe(merged_target)) if merged_target else None
 
 
-def _action_error(key: str, placeholders: TranslationPlaceholders, message: str) -> dict[str, object]:
+@dataclass(frozen=True, slots=True)
+class _PolicyBlock:
+    """A snapshot-policy gate that prevents a service call from executing."""
+
+    key: str
+    placeholders: TranslationPlaceholders
+    hints: Mapping[str, object] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _ResolvedTarget:
+    """A visibility-resolved service target (entity_id list or empty)."""
+
+    target: dict[str, object] | None
+
+
+@dataclass(frozen=True, slots=True)
+class _UnresolvedTarget:
+    """A target that could not resolve to visible entities; carries discovery hints."""
+
+    requested: str
+    hint: str
+    candidates_hint: Mapping[str, object] | None = None
+
+
+def _action_error(
+    key: str,
+    placeholders: TranslationPlaceholders,
+    message: str,
+    *,
+    hints: Mapping[str, object] | None = None,
+) -> dict[str, object]:
     """Build the JSON-safe action error shape."""
-    return {"key": key, "placeholders": placeholders, "message": message}
+    error: dict[str, object] = {"key": key, "placeholders": placeholders, "message": message}
+    if hints is not None:
+        error["hints"] = hints
+    return error
 
 
 def _action_record(

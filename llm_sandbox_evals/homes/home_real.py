@@ -5,6 +5,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import NotRequired, TypedDict, cast
 
+from custom_components.llm_sandbox.snapshot.builder import enrich_states
 from custom_components.llm_sandbox.snapshot.models import (
     HomeSnapshot,
     SafeAreaEntry,
@@ -116,6 +117,7 @@ def snapshot() -> HomeSnapshot:
     devices = {device["id"]: _device(device) for device in _DATA["devices"]}
     entities = {entity["entity_id"]: _entity(entity, devices, areas) for entity in _DATA["entities"]}
     states = {entity["entity_id"]: _state(entity) for entity in _DATA["entities"]}
+    states = enrich_states(states, entities, devices)
     services = {domain: tuple(services) for domain, services in _DATA["services"].items()}
     return HomeSnapshot(
         created_at=CREATED_AT,

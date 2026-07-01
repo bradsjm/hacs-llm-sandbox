@@ -9,7 +9,7 @@ This repository contains the `llm_sandbox` Home Assistant custom integration. It
 - Never pass live Home Assistant objects, live registries, service handles, event bus, config, auth, filesystem, network, or OS/process APIs into Monty.
 - Build a fresh snapshot for every `execute_home_code` call.
 - Keep Monty-visible objects safe, JSON-compatible, and derived from snapshot records.
-- Preserve HA-native read API shapes where practical (`hass.states`, `er.async_get(hass)`, registry instance methods).
+- Preserve HA-native read API shapes as a minimum base (`hass.states`, `er.async_get(hass)`, registry instance methods): the functionality an LLM expects on that shape must be present, and empirically-valuable derived fields that do not violate that base (e.g. an effective `area_id` on a state record) are acceptable and encouraged.
 - Keep `hass.services.async_call` gated behind the per-entry action settings. When enabled, validate every call against the fresh snapshot (action master switch, domain allowlist, service catalog, target visibility, response mode) and dispatch only through the private `RuntimeContext.invoke` callable — never expose the live callable, the live `hass`, or live registries to Monty.
 - Keep the AST forgiveness layer (datetime, builtin, await, and result-binding normalization) fail-open: on any failure it returns the original code so Monty surfaces the natural error, and it derives async/sync classification plus the builtin surface from the facade dataclasses and snapshot records rather than a hand-maintained allowlist.
 - Store per-entry runtime state on typed `entry.runtime_data`.

@@ -92,17 +92,55 @@ result = {
     assert output["len"] >= 2
 
 
+async def test_missing_entity_read_attaches_available_hint(
+    hass: HomeAssistant,
+    loaded_entry: MockConfigEntry,
+) -> None:
+    """An absent states.get yielding an empty result names visible same-domain entities."""
+    code = """
+result = hass.states.get("light.kitchen_main")
+"""
+
+    result = await _run_code(hass, loaded_entry, code)
+
+    assert result["execution"]["status"] == "ok"
+    assert result["output"] is None
+    assert result["execution"]["referenced_missing"] == ["light.kitchen_main"]
+    hint = result["execution"]["available_hint"]
+    assert isinstance(hint, str)
+    assert "light.bedroom" in hint
+    assert "light.living_room" in hint
+
+
+async def test_present_entity_read_attaches_no_hint(
+    hass: HomeAssistant,
+    loaded_entry: MockConfigEntry,
+) -> None:
+    """A successful read produces no referenced_missing tracking or available_hint."""
+    code = """
+state = hass.states.get("light.bedroom")
+result = state.state if state is not None else None
+"""
+
+    result = await _run_code(hass, loaded_entry, code)
+
+    assert result["execution"]["status"] == "ok"
+    assert result["output"] == "on"
+    assert result["execution"]["referenced_missing"] == []
+    assert "available_hint" not in result["execution"]
+
+
 async def test_map_filter_normalize_and_run(
     hass: HomeAssistant,
     loaded_entry: MockConfigEntry,
 ) -> None:
-    """map()/filter() are rewritten to comprehensions and run end-to-end."""
+    """map()/filter() run natively and return lists end-to-end."""
     code = """
 result = {
-    "map": list(map(lambda x: x * 2, [1, 2, 3])),
-    "filter": list(filter(lambda x: x > 1, [1, 2, 3])),
-    "filter_none": list(filter(None, [0, 1, 2])),
-    "map_multi": list(map(lambda a, b: a + b, [1, 2], [10, 20])),
+    "map": map(lambda x: x * 2, [1, 2, 3]),
+    "filter": filter(lambda x: x > 1, [1, 2, 3]),
+    "filter_none": filter(None, [0, 1, 2]),
+    "map_multi": map(lambda a, b: a + b, [1, 2], [10, 20]),
 }
 """
 
@@ -555,11 +593,11 @@ async def test_timeout_returns_code_error(
     assert result["output"] is None
 
 
-async def test_service_not_found_raises_helper_error(
+async def test_service_not_found_records_error_action_and_continues(
     hass: HomeAssistant,
     loaded_entry: MockConfigEntry,
 ) -> None:
-    """Verify unknown service/domain raises a structured helper error."""
+    """Verify unknown service/domain records an errored action and continues."""
     code = """
 await hass.services.async_call("nonexistent", "do_thing")
 result = "should not reach"
@@ -567,18 +605,17 @@ result = "should not reach"
 
     result = await _run_code(hass, loaded_entry, code)
 
-    assert result["execution"]["status"] == "helper_error"
-    assert result["output"] is None
-    assert result["execution"]["code"] == "service_not_found"
+    assert result["execution"]["status"] == "ok"
+    assert result["output"] == "should not reach"
     assert result["actions"][0]["status"] == "error"
     assert result["actions"][0]["error"]["key"] == "service_not_found"
 
 
-async def test_response_required_service_without_return_response_raises_helper_error(
+async def test_response_required_service_without_return_response_records_error_action(
     hass: HomeAssistant,
     loaded_entry: MockConfigEntry,
 ) -> None:
-    """Verify ONLY response services require return_response=True."""
+    """Verify ONLY response services record an error when return_response is absent."""
     hass.services.async_register(
         "test_response",
         "required",
@@ -592,16 +629,17 @@ result = "should not reach"
 
     result = await _run_code(hass, loaded_entry, code)
 
-    assert result["execution"]["status"] == "helper_error"
-    assert result["output"] is None
-    assert result["execution"]["code"] == "service_lacks_response_request"
+    assert result["execution"]["status"] == "ok"
+    assert result["output"] == "should not reach"
+    assert result["actions"][0]["status"] == "error"
+    assert result["actions"][0]["error"]["key"] == "service_lacks_response_request"
 
 
-async def test_no_response_service_with_return_response_raises_helper_error(
+async def test_no_response_service_with_return_response_records_error_action(
     hass: HomeAssistant,
     loaded_entry: MockConfigEntry,
 ) -> None:
-    """Verify NONE response services reject return_response=True."""
+    """Verify NONE response services record an error for return_response=True."""
     code = """
 await hass.services.async_call("light", "turn_on", blocking=True, return_response=True)
 result = "should not reach"
@@ -609,16 +647,17 @@ result = "should not reach"
 
     result = await _run_code(hass, loaded_entry, code)
 
-    assert result["execution"]["status"] == "helper_error"
-    assert result["output"] is None
-    assert result["execution"]["code"] == "service_response_not_supported"
+    assert result["execution"]["status"] == "ok"
+    assert result["output"] == "should not reach"
+    assert result["actions"][0]["status"] == "error"
+    assert result["actions"][0]["error"]["key"] == "service_response_not_supported"
 
 
-async def test_return_response_without_blocking_raises_helper_error(
+async def test_return_response_without_blocking_records_error_action(
     hass: HomeAssistant,
     loaded_entry: MockConfigEntry,
 ) -> None:
-    """Verify return_response=True requires blocking=True."""
+    """Verify return_response=True records an error when blocking is absent."""
     hass.services.async_register(
         "test_response",
         "optional",
@@ -632,9 +671,10 @@ result = "should not reach"
 
     result = await _run_code(hass, loaded_entry, code)
 
-    assert result["execution"]["status"] == "helper_error"
-    assert result["output"] is None
-    assert result["execution"]["code"] == "service_response_requires_blocking"
+    assert result["execution"]["status"] == "ok"
+    assert result["output"] == "should not reach"
+    assert result["actions"][0]["status"] == "error"
+    assert result["actions"][0]["error"]["key"] == "service_response_requires_blocking"
 
 
 async def test_response_required_service_with_return_response_records_action(
@@ -768,13 +808,14 @@ async def test_forgiveness_layer_collapses_home_tour_to_single_call(
     code = """
 floors = [(f.name, f.floor_id, f.id) for f in floor_registry.async_list_floors()]
 areas = [(a.name, a.id, a.area_id) for a in area_registry.async_list_areas()]
+first_floor = floor_registry.async_list_floors()[0]
 result = {
     "floor_count": len(floors),
     "floors": floors,
     "areas": areas,
-    "has_list": hasattr(floor_registry, "async_list_floors"),
-    "has_bogus": hasattr(floor_registry, "nope"),
-    "area_count_via_getattr": len(getattr(area_registry, "async_list_areas")()),
+    "has_name": hasattr(first_floor, "name"),
+    "has_bogus": hasattr(first_floor, "nope"),
+    "floor_name_via_getattr": getattr(first_floor, "name", None),
     "type_name": type(floor_registry).__name__,
 }
 """
@@ -788,13 +829,11 @@ result = {
     assert output["floors"][0][1] == output["floors"][0][2]
     # Alias: a.area_id equals canonical a.id.
     assert output["areas"][0][1] == output["areas"][0][2]
-    assert output["has_list"] is True
+    assert output["has_name"] is True
     assert output["has_bogus"] is False
-    assert output["area_count_via_getattr"] == 1
+    assert output["floor_name_via_getattr"] == "Ground Floor"
     assert output["type_name"] == "SafeFloorRegistry"
     normalizations = result["execution"]["normalizations"]
-    assert "hasattr_resolved" in normalizations
-    assert "getattr_resolved" in normalizations
     assert "type_name_resolved" in normalizations
 
 
