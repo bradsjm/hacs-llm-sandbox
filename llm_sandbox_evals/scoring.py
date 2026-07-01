@@ -134,13 +134,13 @@ def _has_matching_action(
         if not expected_action.target_entity_ids:
             return True
 
-        action_entity_ids = set(_entity_ids_from_action(action, snapshot))
+        action_entity_ids = set(entity_ids_from_action(action, snapshot))
         if set(expected_action.target_entity_ids) <= action_entity_ids:
             return True
     return False
 
 
-def _entity_ids_from_action(action: Mapping[str, object], snapshot: HomeSnapshot) -> list[str]:
+def entity_ids_from_action(action: Mapping[str, object], snapshot: HomeSnapshot) -> list[str]:
     """Resolve entity ids named directly or via HA target selectors in a recorded action."""
     entity_ids: list[str] = []
 
@@ -158,19 +158,19 @@ def _entity_ids_from_action(action: Mapping[str, object], snapshot: HomeSnapshot
 def _entity_ids_from_mapping(data: Mapping[str, object], snapshot: HomeSnapshot) -> list[str]:
     """Resolve direct entity ids plus simple area/device selectors from an action mapping."""
     entity_ids: list[str] = []
-    entity_ids.extend(_strings_from_value(data.get("entity_id")))
-    entity_ids.extend(_strings_from_value(data.get("entity_ids")))
+    entity_ids.extend(strings_from_value(data.get("entity_id")))
+    entity_ids.extend(strings_from_value(data.get("entity_ids")))
 
-    for device_id in _strings_from_value(data.get("device_id")):
+    for device_id in strings_from_value(data.get("device_id")):
         entity_ids.extend(snapshot.indexes.entity_ids_by_device_id.get(device_id, ()))
 
-    for area_id in _strings_from_value(data.get("area_id")):
+    for area_id in strings_from_value(data.get("area_id")):
         entity_ids.extend(snapshot.indexes.entity_ids_by_area_id.get(area_id, ()))
 
     return _dedupe(entity_ids)
 
 
-def _strings_from_value(value: object) -> list[str]:
+def strings_from_value(value: object) -> list[str]:
     """Return string(s) from scalar/list-like JSON values."""
     if isinstance(value, str):
         return [value]

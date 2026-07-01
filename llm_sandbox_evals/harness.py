@@ -3,12 +3,10 @@
 import asyncio
 import json
 import sys
-from collections.abc import Mapping
 from datetime import UTC, datetime
 
 from custom_components.llm_sandbox.const import TOOL_EXECUTE_HOME_CODE
 from custom_components.llm_sandbox.llm_api.prompts import PromptProfile, resolve_profile
-from custom_components.llm_sandbox.snapshot.models import HomeSnapshot
 
 from llm_sandbox_evals import cases, prompts
 from llm_sandbox_evals.config import EvalConfig
@@ -25,7 +23,7 @@ from llm_sandbox_evals.schema import (
     StepTrace,
     ToolCall,
 )
-from llm_sandbox_evals.scoring import check_case, mean_score, score_case
+from llm_sandbox_evals.scoring import check_case, entity_ids_from_action, mean_score, score_case, strings_from_value
 from llm_sandbox_evals.tools import EVAL_SCOPE, RecordingInvoker, apply_scope, run_tool, tool_result_message
 
 
@@ -102,7 +100,7 @@ async def run_case(
                 recorded_actions.extend(outcome.recorded_actions)
                 referenced_entity_ids.update(_referenced_ids_from_result(outcome.result))
                 for action in outcome.recorded_actions:
-                    referenced_entity_ids.update(_entity_ids_from_action(action, snapshot))
+                    referenced_entity_ids.update(entity_ids_from_action(action, snapshot))
                 status = _execution_status(outcome.result)
                 if call.tool_name == TOOL_EXECUTE_HOME_CODE and status is not None:
                     execute_statuses.add(status)
@@ -256,8 +254,8 @@ def _execution_status(result: dict[str, object] | None) -> str | None:
 
 def _referenced_ids_from_call(call: ToolCall) -> set[str]:
     """Return explicit entity/statistic ids present in native tool arguments."""
-    ids = set(_strings_from_value(call.tool_args.get("entity_ids")))
-    ids.update(_strings_from_value(call.tool_args.get("statistic_ids")))
+    ids = set(strings_from_value(call.tool_args.get("entity_ids")))
+    ids.update(strings_from_value(call.tool_args.get("statistic_ids")))
     return ids
 
 
@@ -273,27 +271,3 @@ def _referenced_ids_from_result(result: dict[str, object] | None) -> set[str]:
     if isinstance(statistics, dict):
         ids.update(str(statistic_id) for statistic_id in statistics)
     return ids
-
-
-def _entity_ids_from_action(action: Mapping[str, object], snapshot: HomeSnapshot) -> set[str]:
-    """Resolve entity ids named directly or via simple HA target selectors in a recorded action."""
-    entity_ids: set[str] = set()
-    for key in ("target", "service_data"):
-        value = action.get(key)
-        if isinstance(value, Mapping):
-            entity_ids.update(_strings_from_value(value.get("entity_id")))
-            entity_ids.update(_strings_from_value(value.get("entity_ids")))
-            for device_id in _strings_from_value(value.get("device_id")):
-                entity_ids.update(snapshot.indexes.entity_ids_by_device_id.get(device_id, ()))
-            for area_id in _strings_from_value(value.get("area_id")):
-                entity_ids.update(snapshot.indexes.entity_ids_by_area_id.get(area_id, ()))
-    return entity_ids
-
-
-def _strings_from_value(value: object) -> list[str]:
-    """Return string(s) from scalar/list-like JSON values."""
-    if isinstance(value, str):
-        return [value]
-    if isinstance(value, list | tuple):
-        return [item for item in value if isinstance(item, str)]
-    return []

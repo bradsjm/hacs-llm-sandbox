@@ -1,6 +1,5 @@
 """Tool runner for the dev-only eval harness."""
 
-import dataclasses
 import json
 import math
 from collections.abc import Callable
@@ -18,8 +17,13 @@ from custom_components.llm_sandbox.llm_api.executor_support import ExecutionStat
 from custom_components.llm_sandbox.llm_api.facade_views import build_llm_context
 from custom_components.llm_sandbox.llm_api.prompts import PromptProfile
 from custom_components.llm_sandbox.llm_api.runtime import RuntimeContext
-from custom_components.llm_sandbox.llm_api.tools.recorder import _RecoverableToolError, _resolve_entity_ids
+from custom_components.llm_sandbox.llm_api.tools import (
+    RecoverableToolError,
+    recorder_error_envelope,
+    resolve_entity_ids,
+)
 from custom_components.llm_sandbox.runtime import SandboxSettings
+from custom_components.llm_sandbox.snapshot import finalize_snapshot
 from custom_components.llm_sandbox.snapshot.models import HomeSnapshot, SnapshotScope
 
 from llm_sandbox_evals.homes import get_home
@@ -44,8 +48,8 @@ def apply_scope(
     Mirrors production ``_passes_visibility`` for the offline-applicable fields only
     (``exclude_hidden`` + ``excluded_entity_categories``). Assist-exposure filtering
     needs live HA and stays a ``build_snapshot`` concern; the eval scope disables it.
-    Collection pruning mirrors production ``_derive_collections`` and then restricts
-    every snapshot index by intersection with the retained ids.
+    Collection pruning, state enrichment, and index rebuilding are delegated to the
+    production snapshot finalizer.
     """
     visible: set[str] = set()
     for entity_id in snapshot.states:
@@ -62,58 +66,7 @@ def apply_scope(
             continue
         visible.add(entity_id)
 
-    new_states = {entity_id: snapshot.states[entity_id] for entity_id in visible}
-    new_entities = {entity_id: snapshot.entities[entity_id] for entity_id in visible if entity_id in snapshot.entities}
-    device_ids = {entry.device_id for entry in new_entities.values() if entry.device_id}
-    # Branch boundary: production force-includes the initiating device for request-location context.
-    if anchor_device_id is not None:
-        device_ids.add(anchor_device_id)
-    new_devices = {device_id: snapshot.devices[device_id] for device_id in device_ids if device_id in snapshot.devices}
-    area_ids = {device.area_id for device in new_devices.values() if device.area_id}
-    area_ids.update(entry.area_id for entry in new_entities.values() if entry.area_id)
-    new_areas = {area_id: snapshot.areas[area_id] for area_id in area_ids if area_id in snapshot.areas}
-    floor_ids = {area.floor_id for area in new_areas.values() if area.floor_id}
-    new_floors = {floor_id: snapshot.floors[floor_id] for floor_id in floor_ids if floor_id in snapshot.floors}
-    new_indexes = dataclasses.replace(
-        snapshot.indexes,
-        entity_ids_by_device_id={
-            key: tuple(entity_id for entity_id in value if entity_id in visible)
-            for key, value in snapshot.indexes.entity_ids_by_device_id.items()
-        },
-        entity_ids_by_area_id={
-            key: tuple(entity_id for entity_id in value if entity_id in visible)
-            for key, value in snapshot.indexes.entity_ids_by_area_id.items()
-        },
-        entity_ids_by_config_entry_id={
-            key: tuple(entity_id for entity_id in value if entity_id in visible)
-            for key, value in snapshot.indexes.entity_ids_by_config_entry_id.items()
-        },
-        entity_ids_by_label={
-            key: tuple(entity_id for entity_id in value if entity_id in visible)
-            for key, value in snapshot.indexes.entity_ids_by_label.items()
-        },
-        device_ids_by_area_id={
-            key: tuple(device_id for device_id in value if device_id in new_devices)
-            for key, value in snapshot.indexes.device_ids_by_area_id.items()
-        },
-        device_ids_by_label={
-            key: tuple(device_id for device_id in value if device_id in new_devices)
-            for key, value in snapshot.indexes.device_ids_by_label.items()
-        },
-        area_ids_by_floor_id={
-            key: tuple(area_id for area_id in value if area_id in new_areas)
-            for key, value in snapshot.indexes.area_ids_by_floor_id.items()
-        },
-    )
-    return dataclasses.replace(
-        snapshot,
-        states=new_states,
-        entities=new_entities,
-        devices=new_devices,
-        areas=new_areas,
-        floors=new_floors,
-        indexes=new_indexes,
-    )
+    return finalize_snapshot(snapshot, visible=visible, anchor_device_id=anchor_device_id)
 
 
 class RecordingInvoker:
@@ -242,8 +195,8 @@ async def _run_execute(
 def _run_history(tool_args: dict[str, object], case: EvalCase, snapshot: HomeSnapshot) -> ToolOutcome:
     """Return fixture-backed history rows in the production response envelope."""
     try:
-        entity_ids = _resolve_entity_ids(snapshot, tool_args, "entity_ids")
-    except _RecoverableToolError as err:
+        entity_ids = resolve_entity_ids(snapshot, tool_args, "entity_ids")
+    except RecoverableToolError as err:
         return _recoverable_recorder_error(TOOL_GET_HISTORY, err)
     start = _optional_string(tool_args.get("start"))
     end = _optional_string(tool_args.get("end"))
@@ -265,8 +218,8 @@ def _run_history(tool_args: dict[str, object], case: EvalCase, snapshot: HomeSna
 def _run_statistics(tool_args: dict[str, object], case: EvalCase, snapshot: HomeSnapshot) -> ToolOutcome:
     """Return fixture-backed statistics rows in the production response envelope."""
     try:
-        statistic_ids = _resolve_entity_ids(snapshot, tool_args, "statistic_ids")
-    except _RecoverableToolError as err:
+        statistic_ids = resolve_entity_ids(snapshot, tool_args, "statistic_ids")
+    except RecoverableToolError as err:
         return _recoverable_recorder_error(TOOL_GET_STATISTICS, err)
     start = _optional_string(tool_args.get("start"))
     end = _optional_string(tool_args.get("end"))
@@ -293,8 +246,8 @@ def _run_statistics(tool_args: dict[str, object], case: EvalCase, snapshot: Home
 def _run_logbook(tool_args: dict[str, object], case: EvalCase, snapshot: HomeSnapshot) -> ToolOutcome:
     """Return fixture-backed logbook rows in the production response envelope."""
     try:
-        entity_ids = _resolve_entity_ids(snapshot, tool_args, "entity_ids")
-    except _RecoverableToolError as err:
+        entity_ids = resolve_entity_ids(snapshot, tool_args, "entity_ids")
+    except RecoverableToolError as err:
         return _recoverable_recorder_error(TOOL_GET_LOGBOOK, err)
     start = _optional_string(tool_args.get("start"))
     end = _optional_string(tool_args.get("end"))
@@ -327,34 +280,15 @@ def _optional_string(value: object) -> str | None:
     return str(value)
 
 
-def _entity_not_visible(tool_name: str) -> ToolOutcome:
-    """Build the production-shaped visibility error envelope."""
-    return ToolOutcome(
-        ok=True,
-        tool_name=tool_name,
-        result={"status": "error", "error": {"key": "entity_not_visible", "placeholders": {}}},
-        recorded_actions=(),
-        error=None,
-    )
-
-
-def _invalid_tool_input(tool_name: str) -> ToolOutcome:
-    """Build the production-shaped malformed input error envelope."""
-    return ToolOutcome(
-        ok=True,
-        tool_name=tool_name,
-        result={"status": "error", "error": {"key": "invalid_tool_input", "placeholders": {}}},
-        recorded_actions=(),
-        error=None,
-    )
-
-
-def _recoverable_recorder_error(tool_name: str, err: _RecoverableToolError) -> ToolOutcome:
+def _recoverable_recorder_error(tool_name: str, err: RecoverableToolError) -> ToolOutcome:
     """Map production recoverable recorder errors to eval response envelopes."""
-    # Branch boundary: preserve visibility failures; all other recoverable errors are invalid input.
-    if err.key == "entity_not_visible":
-        return _entity_not_visible(tool_name)
-    return _invalid_tool_input(tool_name)
+    return ToolOutcome(
+        ok=True,
+        tool_name=tool_name,
+        result=cast(dict[str, object], recorder_error_envelope(err.key, err.placeholders)),
+        recorded_actions=(),
+        error=None,
+    )
 
 
 def tool_result_message(tool_call_id: str, result: dict[str, object] | None) -> dict[str, object]:

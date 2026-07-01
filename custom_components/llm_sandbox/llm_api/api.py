@@ -11,7 +11,7 @@ from homeassistant.helpers import llm
 
 from ..const import DEFAULT_PROMPT_PROFILE, DOMAIN
 from ..runtime import SandboxConfigEntry
-from .prompts import ACTIONS_DISABLED_PROMPT, ACTIONS_ENABLED_PROMPT, resolve_profile
+from .prompts import compose_system_prompt, render_request_location, resolve_profile
 from .tools import ExecuteHomeCodeTool, GetCameraImageTool, GetHistoryTool, GetLogbookTool, GetStatisticsTool
 
 
@@ -70,15 +70,8 @@ def _build_api_prompt(
     hass: HomeAssistant, llm_context: llm.LLMContext, base_prompt: str, actions_enabled: bool
 ) -> str:
     """Return the base API prompt plus concise initiating-location context."""
-    # Exactly one service-call section per instance: live-call guidance when
-    # actions are enabled, the rejection notice otherwise. The static tool
-    # descriptions stay action-neutral.
-    section = ACTIONS_ENABLED_PROMPT if actions_enabled else ACTIONS_DISABLED_PROMPT
-    prompt = f"{base_prompt}\n\n{section}"
     location_prompt = _request_location_prompt(hass, llm_context.device_id)
-    if location_prompt is None:
-        return prompt
-    return f"{prompt}\n\n{location_prompt}"
+    return compose_system_prompt(base_prompt, actions_enabled, location_prompt)
 
 
 def _request_location_prompt(hass: HomeAssistant, device_id: str | None) -> str | None:
@@ -96,17 +89,10 @@ def _request_location_prompt(hass: HomeAssistant, device_id: str | None) -> str 
     floor_id = area.floor_id if area is not None else None
     floor = floor_registry.async_get_floor(floor_id) if floor_id is not None else None
 
-    lines = [
-        "## Request location",
-        f"- device_id: {device_id}",
-    ]
-    if area is not None:
-        lines.append(f"- area_id: {area.id} ({area.name})")
-    if floor is not None:
-        lines.append(f"- floor_id: {floor.floor_id} ({floor.name})")
-    if area is not None:
-        lines.append(
-            "For underspecified local questions, use this area as the default scope. "
-            "If the user asks for the whole home or names another area/floor, follow that explicit scope."
-        )
-    return "\n".join(lines)
+    return render_request_location(
+        device_id,
+        area.id if area is not None else None,
+        area.name if area is not None else None,
+        floor.floor_id if floor is not None else None,
+        floor.name if floor is not None else None,
+    )

@@ -31,6 +31,45 @@ ACTIONS_DISABLED_PROMPT = (
 )
 
 
+def compose_system_prompt(base_prompt: str, actions_enabled: bool, location_section: str | None = None) -> str:
+    """Return the base API prompt plus action and optional location sections."""
+    # Exactly one service-call section per instance: live-call guidance when
+    # actions are enabled, the rejection notice otherwise. The static tool
+    # descriptions stay action-neutral.
+    section = ACTIONS_ENABLED_PROMPT if actions_enabled else ACTIONS_DISABLED_PROMPT
+    prompt = f"{base_prompt}\n\n{section}"
+    if location_section is None:
+        return prompt
+    return f"{prompt}\n\n{location_section}"
+
+
+def render_request_location(
+    device_id: str | None,
+    area_id: str | None,
+    area_name: str | None,
+    floor_id: str | None,
+    floor_name: str | None,
+) -> str | None:
+    """Render a compact prompt section for the initiating device location."""
+    if device_id is None:
+        return None
+
+    lines = [
+        "## Request location",
+        f"- device_id: {device_id}",
+    ]
+    if area_id is not None and area_name is not None:
+        lines.append(f"- area_id: {area_id} ({area_name})")
+    if floor_id is not None and floor_name is not None:
+        lines.append(f"- floor_id: {floor_id} ({floor_name})")
+    if area_id is not None and area_name is not None:
+        lines.append(
+            "For underspecified local questions, use this area as the default scope. "
+            "If the user asks for the whole home or names another area/floor, follow that explicit scope."
+        )
+    return "\n".join(lines)
+
+
 def build_execute_home_code_description() -> str:
     """Return the execute_home_code tool description."""
     return (

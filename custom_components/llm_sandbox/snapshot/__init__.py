@@ -1,6 +1,6 @@
 """Snapshot package: frozen Home Assistant state and registry records."""
 
-from .builder import build_snapshot
+from .builder import build_snapshot, finalize_snapshot
 from .models import (
     DEFAULT_SCOPE,
     HomeSnapshot,
@@ -36,4 +36,5 @@ __all__ = [
     "SnapshotIndexes",
     "SnapshotScope",
     "build_snapshot",
+    "finalize_snapshot",
 ]

@@ -8,6 +8,8 @@ from .content import (
     build_get_history_description,
     build_get_logbook_description,
     build_get_statistics_description,
+    compose_system_prompt,
+    render_request_location,
 )
 from .profiles import PROFILE_OPTIONS, PROFILE_REGISTRY, PromptProfile, resolve_profile
 
@@ -22,5 +24,7 @@ __all__ = [
     "build_get_history_description",
     "build_get_logbook_description",
     "build_get_statistics_description",
+    "compose_system_prompt",
+    "render_request_location",
     "resolve_profile",
 ]

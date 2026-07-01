@@ -100,14 +100,14 @@ def _error_guidance(key: str, placeholders: Mapping[str, str]) -> tuple[str | No
     return message, [template.format_map(values) for template in templates]
 
 
-def _envelope(key: str, placeholders: TranslationPlaceholders) -> JsonObjectType:
+def recorder_error_envelope(key: str, placeholders: TranslationPlaceholders) -> JsonObjectType:
     """Build a recoverable recorder error envelope with actionable guidance."""
     message, hints = _error_guidance(key, placeholders)
     return tool_error_envelope(key, placeholders, message=message, hints=hints)
 
 
 @dataclass(frozen=True, slots=True)
-class _RecoverableToolError(Exception):
+class RecoverableToolError(Exception):
     """Controlled recorder-tool failure converted to an error envelope."""
 
     key: str
@@ -153,15 +153,15 @@ class _RecorderTool(llm.Tool):
             mapped = tool_error_from_exception(err)
             if mapped is None:
                 raise
-            return _envelope(*mapped)
+            return recorder_error_envelope(*mapped)
 
         if not _recorder_available(hass):
-            return _envelope(RECORDER_UNAVAILABLE, {})
+            return recorder_error_envelope(RECORDER_UNAVAILABLE, {})
 
         setup_error = _require_loaded_entry_error(hass, self.entry_id)
         if setup_error is not None:
             key, placeholders = setup_error
-            return _envelope(key, placeholders)
+            return recorder_error_envelope(key, placeholders)
         entry = _require_loaded_entry(hass, self.entry_id)
         runtime_data = entry.runtime_data
         assert runtime_data is not None
@@ -176,13 +176,13 @@ class _RecorderTool(llm.Tool):
 
         try:
             return await self._query(hass, snapshot, settings, deadline, data)
-        except _RecoverableToolError as err:
-            return _envelope(err.key, err.placeholders)
+        except RecoverableToolError as err:
+            return recorder_error_envelope(err.key, err.placeholders)
         except Exception as err:  # noqa: BLE001 - recorder tools map unexpected query failures to envelopes
             mapped = tool_error_from_exception(err)
             if mapped is None:
-                return _envelope(QUERY_FAILED, {"error": type(err).__name__})
-            return _envelope(*mapped)
+                return recorder_error_envelope(QUERY_FAILED, {"error": type(err).__name__})
+            return recorder_error_envelope(*mapped)
 
     async def _query(
         self,
@@ -205,7 +205,7 @@ def _validate_visibility(snapshot: HomeSnapshot, ids: list[str]) -> None:
     """Require all requested IDs to exist in the fresh visible snapshot."""
     for entity_id in ids:
         if entity_id not in snapshot.states:
-            raise _RecoverableToolError(ENTITY_NOT_VISIBLE, {"entity_id": entity_id})
+            raise RecoverableToolError(ENTITY_NOT_VISIBLE, {"entity_id": entity_id})
 
 
 def _as_list(value: object) -> list[str]:
@@ -220,18 +220,21 @@ def _as_list(value: object) -> list[str]:
 
 
 # HA-native target selectors accepted as an alternative to enumerated IDs.
+RECORDER_SELECTOR_FIELD_NAMES = ("area_id", "device_id", "floor_id", "label_id", "domain")
+_SELECTOR_FIELD_DESCRIPTIONS: dict[str, str] = {
+    "area_id": "Area ID(s) to scope the query.",
+    "device_id": "Device ID(s) to scope the query.",
+    "floor_id": "Floor ID(s) to scope the query.",
+    "label_id": "Label ID(s) to scope the query.",
+    "domain": "Domain(s) (e.g. light) to keep from the resolved set.",
+}
 _SELECTOR_FIELDS: dict[vol.Optional, object] = {
-    vol.Optional("area_id", description="Area ID(s) to scope the query."): vol.All(cv.ensure_list, [str]),
-    vol.Optional("device_id", description="Device ID(s) to scope the query."): vol.All(cv.ensure_list, [str]),
-    vol.Optional("floor_id", description="Floor ID(s) to scope the query."): vol.All(cv.ensure_list, [str]),
-    vol.Optional("label_id", description="Label ID(s) to scope the query."): vol.All(cv.ensure_list, [str]),
-    vol.Optional("domain", description="Domain(s) (e.g. light) to keep from the resolved set."): vol.All(
-        cv.ensure_list, [str]
-    ),
+    vol.Optional(field_name, description=_SELECTOR_FIELD_DESCRIPTIONS[field_name]): vol.All(cv.ensure_list, [str])
+    for field_name in RECORDER_SELECTOR_FIELD_NAMES
 }
 
 
-def _resolve_entity_ids(snapshot: HomeSnapshot, data: dict[str, object], id_key: str) -> list[str]:
+def resolve_entity_ids(snapshot: HomeSnapshot, data: dict[str, object], id_key: str) -> list[str]:
     """Resolve explicit IDs plus HA-native selectors to visible entity IDs.
 
     Explicit IDs are validated for visibility (an invisible one names itself in
@@ -279,12 +282,12 @@ def _resolve_entity_ids(snapshot: HomeSnapshot, data: dict[str, object], id_key:
                 resolved.append(entity_id)
 
     if not resolved:
-        raise _RecoverableToolError(
+        raise RecoverableToolError(
             "invalid_tool_input",
             {"error": "no visible entity IDs or scope selectors resolved"},
         )
     if len(resolved) > MAX_RECORDER_ENTITY_IDS:
-        raise _RecoverableToolError(
+        raise RecoverableToolError(
             "invalid_tool_input",
             {"error": f"scope resolves to {len(resolved)} entities; narrow it to at most {MAX_RECORDER_ENTITY_IDS}"},
         )
@@ -314,9 +317,9 @@ def _clamp_window(
     else:
         start = end - timedelta(hours=default_hours)
     if start > end:
-        raise _RecoverableToolError("invalid_tool_input", {"error": "start after end"})
+        raise RecoverableToolError("invalid_tool_input", {"error": "start after end"})
     if end - start > timedelta(hours=max_hours):
-        raise _RecoverableToolError(TIME_WINDOW_TOO_LARGE, {"max_hours": str(max_hours)})
+        raise RecoverableToolError(TIME_WINDOW_TOO_LARGE, {"max_hours": str(max_hours)})
     return start, end
 
 
@@ -402,7 +405,7 @@ class GetHistoryTool(_RecorderTool):
         deadline: float,
         data: dict[str, object],
     ) -> JsonObjectType:
-        entity_ids = _resolve_entity_ids(snapshot, data, "entity_ids")
+        entity_ids = resolve_entity_ids(snapshot, data, "entity_ids")
         start, end = _clamp_window(
             cast(datetime | None, data.get("start")),
             cast(datetime | None, data.get("end")),
@@ -487,7 +490,7 @@ class GetStatisticsTool(_RecorderTool):
         deadline: float,
         data: dict[str, object],
     ) -> JsonObjectType:
-        statistic_ids = _resolve_entity_ids(snapshot, data, "statistic_ids")
+        statistic_ids = resolve_entity_ids(snapshot, data, "statistic_ids")
         period = cast(Literal["5minute", "hour", "day"], data["period"])
         start, end = _clamp_window(
             cast(datetime | None, data.get("start")),
@@ -565,7 +568,7 @@ class GetLogbookTool(_RecorderTool):
         deadline: float,
         data: dict[str, object],
     ) -> JsonObjectType:
-        entity_ids = _resolve_entity_ids(snapshot, data, "entity_ids")
+        entity_ids = resolve_entity_ids(snapshot, data, "entity_ids")
         start, end = _clamp_window(
             cast(datetime | None, data.get("start")),
             cast(datetime | None, data.get("end")),
@@ -574,7 +577,7 @@ class GetLogbookTool(_RecorderTool):
             max_hours=MAX_RECORDER_LOOKBACK_HOURS,
         )
         if LOGBOOK_DOMAIN not in hass.data:
-            raise _RecoverableToolError("logbook_unavailable", {})
+            raise RecoverableToolError("logbook_unavailable", {})
 
         event_types = async_determine_event_types(hass, entity_ids, None)
         processor = EventProcessor(

@@ -11,14 +11,15 @@ from custom_components.llm_sandbox.const import (
     TOOL_GET_STATISTICS,
 )
 from custom_components.llm_sandbox.llm_api.prompts import (
-    ACTIONS_DISABLED_PROMPT,
-    ACTIONS_ENABLED_PROMPT,
     build_execute_home_code_description,
     build_get_history_description,
     build_get_logbook_description,
     build_get_statistics_description,
+    compose_system_prompt,
+    render_request_location,
     resolve_profile,
 )
+from custom_components.llm_sandbox.llm_api.tools import RECORDER_SELECTOR_FIELD_NAMES
 from custom_components.llm_sandbox.snapshot.models import HomeSnapshot
 
 from llm_sandbox_evals.schema import EvalCase, PromptCandidate, ToolSpec
@@ -58,12 +59,8 @@ def load_candidates(candidate_ids: list[str], prompt_profile_id: str) -> list[Pr
 
 def render_messages(candidate: PromptCandidate, case: EvalCase, snapshot: HomeSnapshot) -> list[dict[str, object]]:
     """Render provider messages for the native tool-calling agent loop."""
-    sections = [ACTIONS_ENABLED_PROMPT if case.actions_enabled else ACTIONS_DISABLED_PROMPT]
     location_section = _request_location_section(case.llm_context.device_id, snapshot)
-    # The production API omits the location section when there is no initiating device.
-    if location_section is not None:
-        sections.append(location_section)
-    system = f"{candidate.api_prompt}\n\n{'\n\n'.join(sections)}"
+    system = compose_system_prompt(candidate.api_prompt, case.actions_enabled, location_section)
     return [{"role": "system", "content": system}, {"role": "user", "content": case.user_request}]
 
 
@@ -84,7 +81,6 @@ def tool_specs(candidate: PromptCandidate) -> list[ToolSpec]:
         ToolSpec(
             name=TOOL_EXECUTE_HOME_CODE,
             description=candidate.execute_home_code_description,
-            args=("code",),
             parameters={
                 "type": "object",
                 "properties": {"code": {"type": "string"}},
@@ -94,30 +90,16 @@ def tool_specs(candidate: PromptCandidate) -> list[ToolSpec]:
         ToolSpec(
             name=TOOL_GET_HISTORY,
             description=candidate.get_history_description,
-            args=("entity_ids", "area_id", "device_id", "floor_id", "label_id", "domain", "hours", "start", "end"),
             parameters=_recorder_parameters(id_key="entity_ids"),
         ),
         ToolSpec(
             name=TOOL_GET_STATISTICS,
             description=candidate.get_statistics_description,
-            args=(
-                "statistic_ids",
-                "area_id",
-                "device_id",
-                "floor_id",
-                "label_id",
-                "domain",
-                "hours",
-                "start",
-                "end",
-                "period",
-            ),
             parameters=_recorder_parameters(id_key="statistic_ids", include_period=True),
         ),
         ToolSpec(
             name=TOOL_GET_LOGBOOK,
             description=candidate.get_logbook_description,
-            args=("entity_ids", "area_id", "device_id", "floor_id", "label_id", "domain", "hours", "start", "end"),
             parameters=_recorder_parameters(id_key="entity_ids"),
         ),
     ]
@@ -127,15 +109,11 @@ def _recorder_parameters(*, id_key: str, include_period: bool = False) -> dict[s
     """Build the shared recorder JSON Schema accepted by native function calling."""
     properties: dict[str, object] = {
         id_key: {"type": "array", "items": {"type": "string"}},
-        "area_id": {"type": "string"},
-        "device_id": {"type": "string"},
-        "floor_id": {"type": "string"},
-        "label_id": {"type": "string"},
-        "domain": {"type": "string"},
         "hours": {"type": "number"},
         "start": {"type": "string"},
         "end": {"type": "string"},
     }
+    properties.update({field_name: {"type": "string"} for field_name in RECORDER_SELECTOR_FIELD_NAMES})
     # Branch boundary: statistics adds one aggregation-period enum.
     if include_period:
         properties["period"] = {"type": "string", "enum": ["5minute", "hour", "day"]}
@@ -153,21 +131,13 @@ def _request_location_section(device_id: str | None, snapshot: HomeSnapshot) -> 
     floor_id = area.floor_id if area is not None else None
     floor = snapshot.floors.get(floor_id) if floor_id is not None else None
 
-    lines = [
-        "## Request location",
-        f"- device_id: {device_id}",
-    ]
-    # Area/floor lines exactly mirror production labels while guarding missing snapshot records.
-    if area is not None:
-        lines.append(f"- area_id: {area.id} ({area.name})")
-    if floor is not None:
-        lines.append(f"- floor_id: {floor.floor_id} ({floor.name})")
-    if area is not None:
-        lines.append(
-            "For underspecified local questions, use this area as the default scope. "
-            "If the user asks for the whole home or names another area/floor, follow that explicit scope."
-        )
-    return "\n".join(lines)
+    return render_request_location(
+        device_id,
+        area.id if area is not None else None,
+        area.name if area is not None else None,
+        floor.floor_id if floor is not None else None,
+        floor.name if floor is not None else None,
+    )
 
 
 def _load_optimized(path: str) -> PromptCandidate:

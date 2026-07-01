@@ -90,19 +90,15 @@ def build_snapshot(
     # Visibility restrictions always run through one combined predicate so the
     # no-restrictions scope still derives from state-bearing entities.
     visible = _visible_entity_ids(hass, states, entities, scope)
-    states, entities, devices, areas, floors = _derive_collections(
+    states, entities, devices, areas, floors, indexes = _finalize_snapshot_collections(
         states,
         entities,
         devices,
         areas,
         floors,
-        visible,
-        anchor_device_id,
+        visible=visible,
+        anchor_device_id=anchor_device_id,
     )
-    # Fill registry-derived join keys (effective area, device, platform, unique_id)
-    # now that the filtered entity/device collections exist, mirroring the index rule.
-    states = enrich_states(states, entities, devices)
-    indexes = _build_indexes(entities, devices, areas)
 
     return HomeSnapshot(
         created_at=dt_util.utcnow().isoformat(),
@@ -122,6 +118,71 @@ def build_snapshot(
         config_entries=config_entries,
         services_schema=services_schema,
     )
+
+
+def finalize_snapshot(
+    snapshot: HomeSnapshot,
+    *,
+    visible: set[str],
+    anchor_device_id: str | None = None,
+) -> HomeSnapshot:
+    """Return ``snapshot`` with collections finalized from visible entity ids.
+
+    Pure helper for offline snapshot fixtures: callers supply the visibility set,
+    while the production collection cascade, state enrichment, and index rebuild
+    stay centralized here.
+    """
+    states, entities, devices, areas, floors, indexes = _finalize_snapshot_collections(
+        snapshot.states,
+        snapshot.entities,
+        snapshot.devices,
+        snapshot.areas,
+        snapshot.floors,
+        visible=visible,
+        anchor_device_id=anchor_device_id,
+    )
+    return replace(
+        snapshot,
+        states=states,
+        entities=entities,
+        devices=devices,
+        areas=areas,
+        floors=floors,
+        indexes=indexes,
+    )
+
+
+def _finalize_snapshot_collections(
+    states: dict[str, SafeState],
+    entities: dict[str, SafeRegistryEntry],
+    devices: dict[str, SafeDeviceEntry],
+    areas: dict[str, SafeAreaEntry],
+    floors: dict[str, SafeFloorEntry],
+    *,
+    visible: set[str],
+    anchor_device_id: str | None,
+) -> tuple[
+    dict[str, SafeState],
+    dict[str, SafeRegistryEntry],
+    dict[str, SafeDeviceEntry],
+    dict[str, SafeAreaEntry],
+    dict[str, SafeFloorEntry],
+    SnapshotIndexes,
+]:
+    """Apply the canonical visible-collection cascade and index rebuild."""
+    states, entities, devices, areas, floors = _derive_collections(
+        states,
+        entities,
+        devices,
+        areas,
+        floors,
+        visible,
+        anchor_device_id,
+    )
+    # Fill registry-derived join keys (effective area, device, platform, unique_id)
+    # now that the filtered entity/device collections exist, mirroring the index rule.
+    states = enrich_states(states, entities, devices)
+    return states, entities, devices, areas, floors, _build_indexes(entities, devices, areas)
 
 
 def _visible_entity_ids(

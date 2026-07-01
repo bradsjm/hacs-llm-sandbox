@@ -130,11 +130,10 @@ class CheckResult:
 
 @dataclass(frozen=True, slots=True)
 class ToolSpec:
-    """A tool's name, description, and argument names exposed to the model."""
+    """A tool's name, description, and JSON Schema exposed to the model."""
 
     name: str
     description: str
-    args: tuple[str, ...]
     parameters: dict[str, object]
 
 
