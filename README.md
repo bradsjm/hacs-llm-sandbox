@@ -1,126 +1,124 @@
-# LLM Sandbox
+# Assist Agent Sandbox
 
-Assist Sandbox (LLM Sandbox) is a Home Assistant custom integration that gives Assist bounded LLM tools for reading visible home context, querying recorder history, running sandboxed Python/Monty code, and optionally performing validated Home Assistant actions.
+[![Home Assistant](https://img.shields.io/badge/Home%20Assistant-%3E%3D2026.6.4-41BDF5.svg)](https://www.home-assistant.io/)
+[![HACS](https://img.shields.io/badge/HACS-%3E%3D2.0.0-41BDF5.svg)](https://hacs.xyz/)
+[![Python](https://img.shields.io/badge/Python-%3E%3D3.14.2-blue.svg)](https://www.python.org/)
+[![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](pyproject.toml)
+[![License](https://img.shields.io/github/license/bradsjm/hacs-llm-sandbox.svg)](LICENSE)
 
-The sandbox never receives the live `hass` object, live registries, the event bus, auth, config, filesystem, network, or OS/process APIs. It receives safe facade objects built from snapshot records.
+**Assist Agent Sandbox** supercharges Home Assistant's **Assist** with a set of tools that let the AI read your home, reason over it, and answer the kinds of questions a single built-in intent never could.
 
-Service calls through `hass.services.async_call(...)` are read-only by default. When actions are enabled, each call is validated against the snapshot (domain allowlist, service catalog, target visibility, response mode) and then dispatched live through a private invoker that keeps the live callable and the real Home Assistant context out of Monty. Per-call outcomes are returned in `actions`.
+Instead of only triggering hard-coded scenes or one service at a time, the assistant can look across your whole home — current states, entity history, long-term statistics, the activity logbook, and even a live camera frame — write a small bit of logic, and give you a real answer or take a precise action.
 
-## Capabilities
+It does all of this inside a [**minimal, secure Python interpreter written in Rust for use by AI**](https://github.com/pydantic/monty) that only ever sees a frozen, filtered copy of your home. It is **read-only by default**, and every safety boundary is opt-in.
 
-- Config flow for one `llm_sandbox` entry scoped to the default `conversation` assistant.
-- LLM API tools: `execute_home_code`, `get_history`, `get_statistics`, and `get_logbook`.
-- `get_history` reads bounded recorder state history for visible entities.
-- `get_statistics` reads bounded long-term recorder statistics for visible entity-backed statistic IDs.
-- `get_logbook` reads bounded logbook events for visible entities.
-- Fresh per-call snapshot of states, entity/device/area/floor registries, and the service catalog.
-- HA-style read globals in Monty: `hass`, `states`, `er`, `dr`, `ar`, `fr`, `lr`, `cr`, `entity_registry`, `device_registry`, `area_registry`, `floor_registry`, `label_registry`, `category_registry`, `repairs`, `persistent_notifications`, `config_entries`, `date`, `datetime`, `now`, and `llm_context`. The `date` and `datetime` globals are frozen snapshot-backed facades.
-- Label registry snapshot exposed via `lr` / `label_registry` (read-only, list and by-name lookup).
-- Category registry snapshot exposed via `cr` / `category_registry` (read-only, scope-keyed list and id lookup).
-- Repairs issues (issue registry) exposed via `repairs` (read-only list, filtered by domain/severity/active/dismissed).
-- Persistent notifications exposed via `persistent_notifications` (read-only list and lookup by `notification_id`), read from the notification store.
-- Config entries exposed via `config_entries` with credentials (data/options) stripped; lookup by entry_id and filter by domain.
-- `llm_context` includes the initiating `device_id` plus derived `area_id`, `area_name`, `floor_id`, and `floor_name` when Home Assistant provides a satellite device.
-- Live service calls through `await hass.services.async_call(...)` when actions are enabled; per-call outcomes are returned in `actions`.
-- Action safety controls: `actions_enabled` gates all service calls, `action_domains` restricts controllable domains, targets must be visible to the sandbox, and real Home Assistant context is used for attribution.
-- Selectable base prompt profile for the model-facing API instructions (source-controlled; ships with a Standard profile).
-- Options for execution timeout and helper-call budget.
+> This is an early **0.1.0** release. Treat it as a preview.
 
-## Recorder tools
+---
 
-`get_history` returns recorded state history for one or more visible entities. Pass `entity_ids` and optional ISO-8601 `start`/`end` timestamps; omitted timestamps default to the last hour. History windows are capped at 24 hours.
+## What it gives Assist
 
-`get_statistics` returns long-term recorder statistics for one or more visible entity-backed statistic IDs. Pass `statistic_ids`, optional ISO-8601 `start`/`end` timestamps, and optional `period` (`5minute`, `hour`, or `day`; default `hour`). Statistics windows default to 24 hours and are capped at 30 days.
+Once enabled, the assistant gains five tools it can call during a conversation:
 
-`get_logbook` returns logbook events for one or more visible entities. Pass `entity_ids` and optional ISO-8601 `start`/`end` timestamps; omitted timestamps default to the last 24 hours. Logbook windows are capped at 24 hours.
+| Tool | What it's for |
+| --- | --- |
+| **`execute_home_code`** | The assistant writes and runs a short Python snippet to read and reason over your home — current states, the entity/device/area/floor/label registries, repairs, persistent notifications, and (secret-stripped) config entries. |
+| **`get_history`** | Recorded **state history** — how a value changed over time (e.g. a temperature curve). Up to 24 hours. |
+| **`get_statistics`** | Pre-aggregated **long-term statistics** (mean / min / max) over a period. Up to 30 days. |
+| **`get_logbook`** | The **activity timeline** — what happened and why (e.g. "did the front door open after midnight?"). Up to 24 hours. |
+| **`get_camera_image`** | Captures a **live frame** from a camera or image entity so a multimodal model can look at it ("what's on the front porch right now?"). |
 
-All recorder-tool windows are UTC. Results use ISO-8601 timestamps and row caps, with `truncated` set when older rows were omitted.
+## Why you'd install it
 
-Recorder tools are always registered and are gated at call time. They return `recorder_unavailable` when recorder is not running, `entity_not_visible` when a requested entity is outside the sandbox's fresh per-call snapshot, `time_window_too_large` when the requested window exceeds the cap, `logbook_unavailable` when logbook is not running, and `query_failed` when a recorder query fails unexpectedly.
+These tools turn Assist from a voice remote into something that actually *understands* your home. Things that become possible:
 
-Out of scope: beyond secret-stripping config-entry credentials, no attribute-value redaction is applied — the model sees every value in the visible snapshot. No non-Home-Assistant helper globals are exposed.
+- **Cross-device reasoning** — "Which lights are on in the living room, and what's drawing the most power right now?"
+- **Trend questions** — "What's the average bedroom humidity over the last day, and is it trending up?"
+- **Timeline questions** — "Did anyone open the garage after 10pm last night? Show me what happened."
+- **Discovery** — "List every Zigbee device assigned to the wrong room."
+- **Visual checks** — "Is there a package at the front door?" (with a multimodal model + camera)
+- **Diagnostics** — "What repairs are currently open, and are any critical?"
 
-## Tool behavior
+The assistant figures out the answer itself — there's nothing for you to script per question.
 
-`execute_home_code` accepts one argument:
+## Requirements
 
-```json
-{"code": "result = hass.states.get('light.kitchen').state"}
-```
+- **Home Assistant 2026.6.4 or newer**, running on **Python 3.14.2+**.
+- **A conversation agent that supports tools**, set as your Assist agent (e.g. OpenAI, Google Gemini, Anthropic, or a capable local model). This integration provides the tools; your agent provides the brain.
+- **A strong, tool-calling model.** Because the assistant writes Python and decides which tool to use, model quality is the single biggest factor in how well this works. Cloud models cost money per call.
+- **Recorder enabled** for `get_history` / `get_statistics`, and **Logbook enabled** for `get_logbook`. Both are on by default in Home Assistant.
+- For **`get_camera_image`**, a camera or image entity plus a **multimodal model** that can actually interpret the image.
 
-It returns:
+## Installation
 
-```json
-{
-  "execution": {"status": "ok"},
-  "output": "on",
-  "printed": [],
-  "actions": []
-}
-```
+1. In HACS, add this repository as a **custom repository** (type: *Integration*).
+2. Find **Assist Agent Sandbox** and install it.
+3. Restart Home Assistant.
+4. Go to **Settings → Devices & Services → Add Integration** and search for **Assist Agent Sandbox**.
+5. Confirm the name and assistant scope (it attaches to your default `conversation` assistant).
 
-`execution.status` can be `ok`, `code_error`, `helper_error`, or `setup_error`.
-Execution timeouts are returned as `code_error` with `kind` set to `TimeoutError`.
-Service call errors are captured and returned to the LLM so it can recover. If a service name is wrong, the response includes the valid services for that domain plus brief parameter schemas.
-Every `execution` object also reports `helper_calls`/`helper_call_limit` and the forgiveness-layer `normalizations` applied to the code; `code_error` and `helper_error` payloads additionally list `available_globals` and `suggested_methods`.
+## Enable for your conversation (Critical Step!)
 
-Example action:
+Make sure your **conversation agent exposes these tools**: open your agent's settings (e.g. the OpenAI Conversation entry), and enable the **Assist Agent Sandbox** tool set so the model is allowed to call it.
 
-```py
-await hass.services.async_call(
-    "light",
-    "turn_on",
-    {"brightness_pct": 80},
-    target={"entity_id": "light.bedroom"},
-)
-result = "called"
-```
+## Configuration
 
-When actions are enabled and the domain and target are allowed, Home Assistant runs the service call. The outcome is returned in `actions`.
+Open the integration's **Configure** dialog. Options are grouped into four sections.
 
-## Forgiveness layer
+**Visibility restrictions** — what the sandbox can see.
 
-`execute_home_code` runs the submitted code through a fail-open AST normalization pipeline before Monty type-checks it. Each pass is independent, returns the original code unchanged on any failure, and records the labels it applied in `execution.normalizations` so the model can see what was rewritten:
+| Option | Default | Meaning |
+| --- | --- | --- |
+| Restrict to Assist-exposed entities | On | Only entities you've exposed to Assist are visible. |
+| Exclude hidden entities | On | Entities marked hidden in the registry are dropped. |
+| Exclude configuration entities | On | `config`-category entities are dropped. |
+| Exclude diagnostic entities | On | `diagnostic`-category entities are dropped. |
 
-- **datetime imports** — `from datetime import datetime`/`date` and `import datetime` (`as alias`) resolve to the frozen `date`/`datetime` facade globals. A locally shadowed alias (e.g. a `dt` parameter) is skipped so the real import surfaces a natural error.
-- **builtin reflection** — `getattr`/`hasattr` with literal names and `type(x).__name__` over known facade globals are statically resolved to direct attribute access, without enabling dunder walking or dynamic resolution.
-- **await** — missing `await` on known async facade methods is added; `await` over a provably-synchronous facade chain is stripped; and state-machine sugar (`states['light.x']`, `'light.x' in states`, `len(states)`) is rewritten to public method calls. Async/sync classification is derived from the facade dataclasses, not a hand-maintained list.
-- **result binding** — a trailing bare expression is promoted to `result = ...`, and an explicit `result` assignment is returned as the tool output.
+**Action restrictions** — whether the assistant can *do* things, not just read.
 
-This keeps common, harmless variations (a missing `await`, `from datetime import datetime`, a forgotten `result =`) from forcing retry loops.
+| Option | Default | Meaning |
+| --- | --- | --- |
+| Enable actions on visible entities | **Off** | Master switch. When off, every service call is rejected — the assistant is read-only. |
+| Allowed service domains | Empty | When actions are on, restrict calls to specific domains (e.g. `light`, `switch`). Leave empty to allow all. |
+
+**Execution limits** — runaway protection.
+
+| Option | Default | Range |
+| --- | --- | --- |
+| Maximum execution time | 12 seconds | 3–30 s |
+| Maximum service calls per request | 32 | 1–100 |
+
+**Prompt** — the base instructions sent to the model. Ships with a single **Standard** profile.
+
+## How it works
+
+The safety model rests on two ideas: a **frozen snapshot** and an **isolated sandbox**.
+
+1. **Every request builds a fresh snapshot.** When the assistant calls a tool, the integration takes a point-in-time copy of your home's current states, all registries (entities, devices, areas, floors, labels), the service catalog, repairs, persistent notifications, and config entries. That snapshot is then narrowed by your visibility settings so only what you've allowed is included.
+
+2. **Code runs inside Monty, an isolated Python sandbox.** The assistant's snippet never touches the *live* Home Assistant object. It only receives safe, frozen copies built from the snapshot. The sandbox has **no access** to your filesystem, the network, the event bus, authentication, your configuration files, or any OS/process APIs. Imports are limited to `json`, `math`, and `re`.
+
+3. **Reads are always allowed; control is gated.** Reading state and history works out of the box. Calling services (turning things on/off) is **off by default**. When you enable it, every single call is re-checked against that request's snapshot: the domain must be allowed, the target must be visible, and it must fit within the call budget. Calls run through a private path that never hands the live Home Assistant object to the sandbox.
+
+4. **A forgiveness layer fixes common mistakes.** The assistant's code passes through a normalization step that silently repairs harmless variations — a missing `await`, an imported `datetime`, a forgotten `result =` — so the assistant succeeds on the first try instead of burning retries (and tokens) on trivial errors.
+
+## Things to know before you install
+
+- **You need a capable model.** This integration lives or dies by model quality. A weak model will write broken code, pick the wrong tool, or misread results. Budget for a strong cloud model, or run a strong local model.
+- **It costs tokens.** Each turn that uses these tools sends tool definitions, snapshots, and (for history/cameras) potentially large payloads to your model provider. Expect higher per-conversation cost than plain Assist.
+- **Attribute values are exposed.** Beyond stripping credentials out of config-entry data, **no value redaction is performed.** If any visible entity carries sensitive data in its attributes (codes, tokens, personal info), the model will see every value. Use the visibility restrictions — and your Assist exposure settings — to keep sensitive entities out of scope.
+- **Visibility is filtering, not a hard security boundary.** The visibility settings reduce *what's exposed* to the model; the actual isolation boundary is the Monty sandbox (no filesystem, network, live objects, or OS access). Don't rely on visibility toggles alone for sensitive environments.
+- **Actions are powerful — keep the allowlist tight.** If you turn actions on, the assistant can operate real devices. Restrict it to the domains you're comfortable with, and remember a capable model can chain many calls within one turn (bounded only by the call budget).
+- **The snapshot is frozen mid-request.** A service call made inside a code run won't be reflected in that same run's reads — the assistant is told this and will call the tool again to observe new state.
+- **One entry per assistant.** The integration is scoped to your default `conversation` assistant; only one sandbox entry is supported.
 
 ## Development
 
-Install the locked development environment:
+This is a community integration. To contribute, set up a dev environment, or report issues, see [CONTRIBUTING.md](CONTRIBUTING.md) and the [issue tracker](https://github.com/bradsjm/hacs-llm-sandbox/issues).
 
-```bash
-scripts/setup
-```
+## Support
 
-Run checks:
-
-```bash
-scripts/check
-```
-
-Focused commands:
-
-```bash
-scripts/lint-check
-scripts/type-check
-scripts/yaml-check
-scripts/test
-scripts/format
-```
-
-Run a development Home Assistant container:
-
-```bash
-scripts/run-docker
-```
-
-After changing files under `custom_components/`, restart the container:
-
-```bash
-docker restart home-assistant
-```
+- [Documentation & source](https://github.com/bradsjm/hacs-llm-sandbox)
+- [Report an issue](https://github.com/bradsjm/hacs-llm-sandbox/issues)
+- [Changelog](CHANGELOG.md)
+- Licensed under the [LICENSE](LICENSE).
