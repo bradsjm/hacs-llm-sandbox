@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+exec uv run --group dev --group evals python -m llm_sandbox_evals eval "$@"

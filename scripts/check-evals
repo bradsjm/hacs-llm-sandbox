@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-uv run --group dev --group evals ruff check llm_sandbox_evals && uv run --group dev --group evals mypy llm_sandbox_evals && uv run --group dev --group evals python -m llm_sandbox_evals eval --models stub
+uv run --group dev --group evals ruff check llm_sandbox_evals && \
+uv run --group dev --group evals mypy llm_sandbox_evals && \
+uv run --group dev --group evals python -m llm_sandbox_evals eval --models stub

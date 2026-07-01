@@ -67,7 +67,8 @@ def run_optimize(config: EvalConfig) -> OptimizerResult:
     copro = dspy.COPRO(prompt_model=prompt_lm, metric=_make_metric(), breadth=config.breadth, depth=config.depth)
     # eval_kwargs forwards to dspy.Evaluate for candidate scoring. num_threads=1
     # keeps the sync metric's asyncio.run loop single (the executor is async).
-    compiled = copro.compile(student, trainset=trainset, eval_kwargs={"num_threads": 1, "display_progress": False})
+    # display_progress=True so the long optimization reports its own activity.
+    compiled = copro.compile(student, trainset=trainset, eval_kwargs={"num_threads": 1, "display_progress": True})
     optimized_instruction = str(compiled.signature.instructions)
     optimized_candidate = PromptCandidate(
         id="optimized",
