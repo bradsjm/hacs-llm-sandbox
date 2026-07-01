@@ -58,6 +58,14 @@ def _build_parser() -> argparse.ArgumentParser:
     optimize_parser = subparsers.add_parser("optimize", help="optimize the API prompt with DSPy COPRO")
     optimize_parser.add_argument("--target-model", help="model id to optimize against")
     optimize_parser.add_argument("--proposer-model", help="model id used to propose prompt rewrites")
+    optimize_parser.add_argument(
+        "--target-reasoning",
+        help="reasoning effort for the target model during DSPy scoring and the baseline/optimized eval (e.g. none/minimal/low/medium/high)",
+    )
+    optimize_parser.add_argument(
+        "--proposer-reasoning",
+        help="reasoning effort for the proposer model during DSPy (e.g. minimal/low/medium/high)",
+    )
     optimize_parser.add_argument("--breadth", type=int, help="COPRO breadth (default 5)")
     optimize_parser.add_argument("--depth", type=int, help="COPRO depth (default 2)")
     optimize_parser.add_argument("--cases", help="comma-separated case ids or categories")
@@ -65,7 +73,9 @@ def _build_parser() -> argparse.ArgumentParser:
         "--reasoning",
         help="reasoning effort level passed to cross-eval harness models (e.g. minimal/low/medium/high)",
     )
-    optimize_parser.add_argument("--cross-eval-models", help="comma-separated model ids for baseline vs optimized eval")
+    optimize_parser.add_argument(
+        "--cross-eval-models", help="comma-separated model ids for baseline vs optimized eval"
+    )
     optimize_parser.add_argument("--runs-dir", type=Path, help="directory for run artifacts")
     return parser
 
@@ -133,6 +143,8 @@ def _run_optimize(args: argparse.Namespace) -> int:
         reasoning_effort=args.reasoning,
         target_model=args.target_model,
         proposer_model=args.proposer_model,
+        target_reasoning_effort=args.target_reasoning,
+        proposer_reasoning_effort=args.proposer_reasoning,
         breadth=args.breadth or 5,
         depth=args.depth or 2,
         cross_eval_models=_csv_arg(args.cross_eval_models),

@@ -14,7 +14,7 @@ from llm_sandbox_evals import prompts, reports, tools
 from llm_sandbox_evals.config import EvalConfig
 from llm_sandbox_evals.harness import _select_cases, run_matrix
 from llm_sandbox_evals.homes import get_home
-from llm_sandbox_evals.models import parse_tool_call
+from llm_sandbox_evals.models import litellm_reasoning_kwargs, parse_tool_call
 from llm_sandbox_evals.schema import PromptCandidate
 from llm_sandbox_evals.scoring import check_case, mean_score, score_case
 
@@ -43,9 +43,18 @@ def run_optimize(config: EvalConfig) -> OptimizerResult:
 
     proposer = config.proposer_model or target
     baseline = prompts.baseline_candidate()
-    target_lm = dspy.LM(model=target, temperature=0.0)
+    # Per-role reasoning: COPRO scores candidate instructions against the target
+    # LM and proposes rewrites with the proposer LM. Reasoning is forwarded to
+    # each dspy.LM via the same provider contract the eval adapter uses.
+    target_lm = dspy.LM(
+        model=target,
+        **litellm_reasoning_kwargs(temperature=0.0, reasoning_effort=config.target_reasoning_effort),
+    )
     dspy.configure(lm=target_lm)
-    prompt_lm = dspy.LM(model=proposer, temperature=1.0)
+    prompt_lm = dspy.LM(
+        model=proposer,
+        **litellm_reasoning_kwargs(temperature=1.0, reasoning_effort=config.proposer_reasoning_effort),
+    )
 
     trainset = []
     for case in _select_cases(config.cases, config.homes):
@@ -58,9 +67,7 @@ def run_optimize(config: EvalConfig) -> OptimizerResult:
     copro = dspy.COPRO(prompt_model=prompt_lm, metric=_make_metric(), breadth=config.breadth, depth=config.depth)
     # eval_kwargs forwards to dspy.Evaluate for candidate scoring. num_threads=1
     # keeps the sync metric's asyncio.run loop single (the executor is async).
-    compiled = copro.compile(
-        student, trainset=trainset, eval_kwargs={"num_threads": 1, "display_progress": False}
-    )
+    compiled = copro.compile(student, trainset=trainset, eval_kwargs={"num_threads": 1, "display_progress": False})
     optimized_instruction = str(compiled.signature.instructions)
     optimized_candidate = PromptCandidate(
         id="optimized",
@@ -86,7 +93,7 @@ def run_optimize(config: EvalConfig) -> OptimizerResult:
             cases=config.cases,
             homes=config.homes,
             runs_dir=config.runs_dir,
-            reasoning_effort=config.reasoning_effort,
+            reasoning_effort=config.target_reasoning_effort,
         )
     )
     optimized_mean = _candidate_mean(
@@ -96,7 +103,7 @@ def run_optimize(config: EvalConfig) -> OptimizerResult:
             cases=config.cases,
             homes=config.homes,
             runs_dir=config.runs_dir,
-            reasoning_effort=config.reasoning_effort,
+            reasoning_effort=config.target_reasoning_effort,
         )
     )
 

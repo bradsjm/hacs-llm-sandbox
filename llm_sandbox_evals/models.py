@@ -15,6 +15,28 @@ _FIXED_END = "2026-06-29T12:00:00+00:00"
 _FIXED_START = "2026-06-28T12:00:00+00:00"
 
 
+def litellm_reasoning_kwargs(*, temperature: float, reasoning_effort: str | None) -> dict[str, object]:
+    """Map decoding intent onto litellm kwargs honoring the reasoning contract.
+
+    Reasoning models generally ignore or reject an explicit temperature, so a
+    real effort level (minimal/low/medium/high/max) lets the provider default
+    it. ``"none"`` disables reasoning while keeping deterministic decoding, and
+    ``None`` sends no reasoning body at all. The result is valid for both
+    ``litellm.completion`` and ``dspy.LM`` (which forwards to it).
+    """
+    # Branch boundary: no reasoning requested -> deterministic temperature only.
+    if reasoning_effort is None:
+        return {"temperature": temperature}
+    # Route via extra_body: some providers (e.g. OpenRouter) reject a top-level
+    # reasoning_effort param, but accept it in the raw body.
+    kwargs: dict[str, object] = {"extra_body": {"reasoning_effort": reasoning_effort}}
+    # "none" disables reasoning but deterministic decoding is still wanted, so
+    # the explicit temperature is kept; real effort levels defer to the provider.
+    if reasoning_effort == "none":
+        kwargs["temperature"] = temperature
+    return kwargs
+
+
 class ModelAdapter(Protocol):
     """Protocol implemented by all model completion adapters."""
 
@@ -56,20 +78,13 @@ class LiteLLMAdapter:
         try:
             litellm = importlib.import_module("litellm")
             completion = cast(Callable[..., object], litellm.__dict__["completion"])
-            # Reasoning models generally ignore or reject an explicit temperature,
-            # so let the provider default it when a reasoning effort is requested.
             kwargs: dict[str, object] = {
                 "model": model_id,
                 "messages": [{"role": "user", "content": prompt}],
                 "timeout": 60,
                 "num_retries": 1,
             }
-            if self._reasoning_effort:
-                # Route via extra_body: some providers (e.g. OpenRouter) reject a
-                # top-level reasoning_effort param, but accept it in the raw body.
-                kwargs["extra_body"] = {"reasoning_effort": self._reasoning_effort}
-            else:
-                kwargs["temperature"] = 0.0
+            kwargs.update(litellm_reasoning_kwargs(temperature=0.0, reasoning_effort=self._reasoning_effort))
             response = await asyncio.wait_for(
                 asyncio.to_thread(completion, **kwargs),
                 timeout=90,

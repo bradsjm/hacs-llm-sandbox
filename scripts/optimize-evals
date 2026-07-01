@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Optimize the execute_home_code instruction via DSPy COPRO against a real model.
+# Requires API keys in .env (e.g. OPENROUTER_API_KEY). Costs model calls.
+#
+# Override the target model with EVAL_TARGET_MODEL or pass flags directly, e.g.:
+#   scripts/optimize-evals --target-model gpt-4o-mini --breadth 5 --depth 2
+#   scripts/optimize-evals --cases complex --cross-eval-models gpt-4o-mini,stub
+set -euo pipefail
+
+exec uv run --group dev --group evals python -m llm_sandbox_evals optimize \
+  --target-model "${EVAL_TARGET_MODEL:-openrouter/deepseek/deepseek-v4-flash}" \
+  --proposer-model "${EVAL_PROPOSER_MODEL:-openrouter/zai/glm-5.2}" "$@"

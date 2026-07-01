@@ -35,26 +35,62 @@ uv run --group dev --group evals python -m llm_sandbox_evals eval --models gpt-4
 
 Every candidate is evaluated against every model. The `Candidate x model means` table shows the matrix; candidates rank by mean score, tie-broken by the best **minimum-across-models** score (robustness to the worst model wins ties). A model call that fails (bad key, network) is captured as an error in that case's trace and scores `0.0` — it never aborts the run.
 
+## Optimizing the prompt (DSPy COPRO)
+
+The `optimize` command uses [DSPy](https://dspy.ai/)'s COPRO instruction optimizer to rewrite the `execute_home_code` instruction (`api_prompt`, seeded from production `BASE_API_PROMPT`) and **keeps the real harness as the metric**: COPRO proposes instruction variants, and each is scored by the existing pipeline (`parse_tool_call` → `run_tool` → `check_case` → `score_case`) against one target model. The winner is then cross-evaluated against the model matrix.
+
+```bash
+uv run --group dev --group evals python -m llm_sandbox_evals optimize \
+  --target-model openrouter/deepseek/deepseek-v4-flash \
+  --breadth 5 --depth 2 \
+  --cases state_read,registry_read,complex \
+  --cross-eval-models openrouter/deepseek/deepseek-v4-flash,stub
+```
+
+Flags:
+- `--target-model` — model to optimize against (required; must be a real model, not `stub`).
+- `--proposer-model` — model COPRO uses to propose rewrites (defaults to the target model).
+- `--breadth` / `--depth` — COPRO search breadth/depth (defaults 5/2). Cost scales as `breadth × depth × trainset`.
+- `--cases` — case ids/categories used as the optimization trainset (keep small to bound cost).
+- `--cross-eval-models` — models for the baseline-vs-optimized leaderboard.
+- `--target-reasoning` — reasoning effort for the target model during DSPy scoring and the baseline/optimized eval (e.g. `none` to disable a reasoning model that defaults to high).
+- `--proposer-reasoning` — reasoning effort for the proposer model during DSPy.
+- `--reasoning` — reasoning effort forwarded to the cross-eval harness models.
+
+It writes `optimized_candidate.json` + `optimized_prompt.md` and prints a baseline-vs-optimized summary plus the cross-eval run dir. **Production `prompts.py` is never auto-patched** — the optimized text is exported for human review. Re-evaluate a saved candidate against any models:
+
+```bash
+uv run --group dev --group evals python -m llm_sandbox_evals eval \
+  --candidates baseline,optimized:eval_data/runs/<run_id>/optimized_candidate.json \
+  --models openrouter/deepseek/deepseek-v4-flash,stub
+```
+
 ## Commands
 
 ```
-python -m llm_sandbox_evals eval [--models id,...] [--candidates id,...] [--cases id,...|category,...] [--runs-dir PATH]
+python -m llm_sandbox_evals eval [--models id,...] [--candidates id,...] [--cases id,...|category,...] [--concurrency N] [--reasoning LEVEL] [--runs-dir PATH]
+python -m llm_sandbox_evals optimize --target-model ID [--proposer-model ID] [--breadth N] [--depth N] [--cases ...] [--cross-eval-models ...] [--target-reasoning LEVEL] [--proposer-reasoning LEVEL] [--reasoning LEVEL] [--runs-dir PATH]
 python -m llm_sandbox_evals report <run_id> [--runs-dir PATH]
 ```
 
 - `eval` runs the matrix and writes artifacts under `eval_data/runs/<run_id>/`.
+- `optimize` runs DSPy COPRO against one target model and cross-evaluates the winner (see *Optimizing the prompt* above).
 - `report <run_id>` re-renders a saved run's leaderboard from its `run.json` without re-running.
 - `--cases` accepts case ids **or** category names (`state_read`, `registry_read`, `recorder_read`, `action_allowed`, `action_blocked`, `complex`).
+- `--candidates` accepts `baseline` and `optimized:<path>` (a saved `optimized_candidate.json`).
+- `--reasoning LEVEL` forwards a reasoning effort (e.g. `medium`/`high`, or `none` to disable a reasoning model) to real models via litellm. `optimize` adds `--target-reasoning` and `--proposer-reasoning` to control the target and proposer models independently (e.g. `--target-reasoning none --proposer-reasoning high`).
 - Defaults: `--models stub`, `--candidates baseline`, all cases.
 
 ## Checks
 
 ```bash
-scripts/check-evals      # ruff + mypy + offline stub eval
-scripts/format-evals     # ruff format
+scripts/setup-evals        # uv sync --group dev --group evals
+scripts/check-evals        # ruff + mypy + offline stub eval (no API key, no dspy call)
+scripts/format-evals       # ruff format
+scripts/optimize-evals     # DSPy COPRO run — needs API keys, costs model calls
 ```
 
-The integration's `scripts/check` is unaffected by this package.
+The integration's `scripts/check` is unaffected by this package. `optimize-evals` is intentionally **not** part of `check-evals` (it requires a real model and spends budget).
 
 ## How scoring works
 
@@ -93,7 +129,7 @@ Add a module under `homes/` exposing `snapshot() -> HomeSnapshot` and `recorder(
 
 ## Adding prompt candidates
 
-Only `baseline` ships (auto-built from production `prompts.py`). `load_candidates` rejects unknown ids. To evaluate an alternative prompt, add a `PromptCandidate` and expose it through `prompts.load_candidates`. The follow-up DSPy optimizer (see scope) will emit optimized candidates through this same seam.
+`baseline` (auto-built from production `prompts.py`) and any `optimized:<path>` candidate (a saved `optimized_candidate.json`) are loadable via `--candidates`. `load_candidates` rejects unknown ids. To evaluate a hand-authored alternative prompt, add a `PromptCandidate` and expose it through `prompts.load_candidates`. The `optimize` command emits optimized candidates through this same seam.
 
 ## Artifacts
 
@@ -107,8 +143,6 @@ Only `baseline` ships (auto-built from production `prompts.py`). `load_candidate
 
 ## Scope
 
-**In:** deterministic scoring, multi-model matrix, offline stub validation, real `execute_home_code` against frozen snapshots, fixture-backed recorder emulation, artifact reports.
+**In:** deterministic scoring, multi-model matrix, offline stub validation, real `execute_home_code` against frozen snapshots, fixture-backed recorder emulation, artifact reports, and DSPy COPRO instruction optimization (export-only; never auto-patches production `prompts.py`).
 
-**Out of scope (v1):** native provider function-calling, LLM-as-judge scoring, live Home Assistant or recorder DB, CI jobs that call paid models, and auto-editing production `prompts.py`.
-
-**Deferred follow-up:** the DSPy/GEPA prompt optimizer. The `ModelAdapter` protocol and `PromptCandidate` seam are in place so an optimizer can propose candidates, cross-evaluate them through this same harness, and export the winner for human review — without auto-patching production prompts.
+**Out of scope:** native provider function-calling, LLM-as-judge scoring, live Home Assistant or recorder DB, CI jobs that call paid models, and auto-editing production `prompts.py`. GEPA/MIPROv2 (richer feedback-driven or joint demo+instruction search) are not yet wired; COPRO is the implemented optimizer.
