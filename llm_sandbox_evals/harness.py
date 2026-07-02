@@ -115,7 +115,13 @@ async def run_case(
             final_answer = forced_step.text
 
         checks = check_case(
-            case, final_answer, tuple(recorded_actions), execute_statuses, referenced_entity_ids, snapshot
+            case,
+            final_answer,
+            tuple(recorded_actions),
+            execute_statuses,
+            referenced_entity_ids,
+            snapshot,
+            tuple(steps),
         )
         score = score_case(checks, turns, case.par_turns, config.efficiency_k, config.efficiency_floor)
         return CaseTrace(

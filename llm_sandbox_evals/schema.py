@@ -48,10 +48,15 @@ class Expected:
     """Deterministic expectations used to score a case."""
 
     tool_name: str
+    required_tool_names: tuple[str, ...] = ()
+    required_tool_sequence: tuple[str, ...] = ()
     # execution.status value: ok|code_error|helper_error|setup_error, or "na" when not applicable.
     execution_status: str = "ok"
     output_contains_entities: tuple[str, ...] = ()
     output_excludes_entities: tuple[str, ...] = ()
+    evidence_contains_entities: tuple[str, ...] = ()
+    evidence_excludes_entities: tuple[str, ...] = ()
+    required_error_keys: tuple[str, ...] = ()
     actions: tuple[ExpectedAction, ...] = ()
     # (start_iso, end_iso) recorder window expectation, or None when not a recorder case.
     recorder_window: tuple[str, str] | None = None

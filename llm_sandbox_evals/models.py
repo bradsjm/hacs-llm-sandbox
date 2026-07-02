@@ -19,6 +19,7 @@ from llm_sandbox_evals.schema import AgentStep, ToolCall
 _ENTITY_ID_RE = re.compile(r"\b[a-z_]+\.[a-z0-9_]+\b")
 _FIXED_END = "2026-06-29T12:00:00+00:00"
 _FIXED_START = "2026-06-28T12:00:00+00:00"
+_FIXED_TODAY_START = "2026-06-29T00:00:00+00:00"
 
 
 def litellm_reasoning_kwargs(*, temperature: float, reasoning_effort: str | None) -> dict[str, object]:
@@ -61,31 +62,149 @@ class StubAdapter:
         """Emit one tool call, then a terminal answer that echoes the last tool result."""
         _ = (model_id, tools)
         last_tool_content = _last_tool_content(messages)
-        # Branch boundary: forced text or existing tool output terminates the stub loop.
-        if force_text or last_tool_content is not None:
-            text = last_tool_content or ""
+        user_request = _first_user_content(messages)
+        # Branch boundary: forced text always terminates the stub loop.
+        if force_text:
+            text = _all_tool_content(messages) or ""
             return AgentStep(
                 tool_calls=(), text=text, assistant_message={"role": "assistant", "content": text}, raw=text
             )
 
-        user_request = _first_user_content(messages)
-        tool_name = _select_stub_tool(user_request)
-        tool_args = _build_stub_tool_args(tool_name, user_request)
-        call = ToolCall(id="stub-call-1", tool_name=tool_name, tool_args=tool_args)
-        message: dict[str, object] = {
-            "role": "assistant",
-            "content": "",
-            "tool_calls": [
-                {
-                    "id": call.id,
-                    "type": "function",
-                    "function": {"name": call.tool_name, "arguments": json.dumps(call.tool_args, sort_keys=True)},
-                }
-            ],
+        tool_count = _tool_message_count(messages)
+        # Branch boundary: selected multi-tool scenarios continue after prior tool output.
+        if last_tool_content is not None:
+            followup_calls = _stub_followup_calls(user_request, tool_count)
+            if not followup_calls:
+                text = _all_tool_content(messages) or last_tool_content
+                return AgentStep(
+                    tool_calls=(), text=text, assistant_message={"role": "assistant", "content": text}, raw=text
+                )
+            return _stub_step(followup_calls)
+
+        return _stub_step(_stub_initial_calls(user_request))
+
+
+def _stub_step(calls: tuple[ToolCall, ...]) -> AgentStep:
+    """Return one deterministic assistant tool-call step."""
+    tool_calls = [
+        {
+            "id": call.id,
+            "type": "function",
+            "function": {"name": call.tool_name, "arguments": json.dumps(call.tool_args, sort_keys=True)},
         }
-        return AgentStep(
-            tool_calls=(call,), text="", assistant_message=message, raw=json.dumps(message, sort_keys=True)
+        for call in calls
+    ]
+    message: dict[str, object] = {"role": "assistant", "content": "", "tool_calls": tool_calls}
+    return AgentStep(tool_calls=calls, text="", assistant_message=message, raw=json.dumps(message, sort_keys=True))
+
+
+def _stub_initial_calls(user_request: str) -> tuple[ToolCall, ...]:
+    """Return the first deterministic tool call(s) for the stub adapter."""
+    lowered = user_request.lower()
+    if "sensor.living_room_temperature" in lowered:
+        return (_call(1, TOOL_GET_HISTORY, {"entity_ids": ["sensor.living_room_temperature"], **_last_day_window()}),)
+    if "summarize the living room temperature history" in lowered and "humidity hourly statistics" in lowered:
+        return (
+            _call(1, TOOL_GET_HISTORY, {"entity_ids": ["sensor.living_temp"], **_last_day_window()}),
+            _call(
+                2,
+                TOOL_GET_STATISTICS,
+                {"statistic_ids": ["sensor.bedroom_humidity"], "period": "hour", **_last_day_window()},
+            ),
         )
+    if "find the living room temperature sensor" in lowered:
+        return (_call(1, TOOL_EXECUTE_HOME_CODE, {"code": 'result = states.get("sensor.living_temp")'}),)
+    if "living room temperature has been above 25" in lowered:
+        return (_call(1, TOOL_GET_HISTORY, {"entity_ids": ["sensor.living_temp"], **_last_day_window()}),)
+    if "living room light turned on today" in lowered:
+        return (_call(1, TOOL_GET_LOGBOOK, {"entity_ids": ["light.living"], **_today_window()}),)
+    if "living room light on right now" in lowered and "last change" in lowered:
+        return (
+            _call(1, TOOL_EXECUTE_HOME_CODE, {"code": 'result = states.get("light.living")'}),
+            _call(2, TOOL_GET_LOGBOOK, {"entity_ids": ["light.living"], **_today_window()}),
+        )
+    if "light in this room" in lowered:
+        return (_call(1, TOOL_EXECUTE_HOME_CODE, {"code": 'result = states.get("light.living")'}),)
+    if "garage door opener" in lowered:
+        return (_call(1, TOOL_EXECUTE_HOME_CODE, {"code": "result = states.entity_ids()"}),)
+    if "outside temperature stayed below 80" in lowered:
+        return (_call(1, TOOL_GET_HISTORY, {"entity_ids": ["sensor.tempest_temperature"], **_last_day_window()}),)
+
+    tool_name = _select_stub_tool(user_request)
+    return (_call(1, tool_name, _build_stub_tool_args(tool_name, user_request)),)
+
+
+def _stub_followup_calls(user_request: str, tool_count: int) -> tuple[ToolCall, ...]:
+    """Return the next deterministic tool call(s) after previous tool output."""
+    lowered = user_request.lower()
+    next_id = tool_count + 1
+    if "sensor.living_room_temperature" in lowered and tool_count == 1:
+        return (_call(next_id, TOOL_EXECUTE_HOME_CODE, {"code": 'result = states.get("sensor.living_temp")'}),)
+    if "sensor.living_room_temperature" in lowered and tool_count == 2:
+        return (_call(next_id, TOOL_GET_HISTORY, {"entity_ids": ["sensor.living_temp"], **_last_day_window()}),)
+    if "find the living room temperature sensor" in lowered and tool_count == 1:
+        return (_call(next_id, TOOL_GET_HISTORY, {"entity_ids": ["sensor.living_temp"], **_last_day_window()}),)
+    if "living room temperature has been above 25" in lowered and tool_count == 1:
+        return (_call(next_id, TOOL_EXECUTE_HOME_CODE, {"code": _fan_50_code("fan.living_fan")}),)
+    if "living room light turned on today" in lowered and tool_count == 1:
+        return (_call(next_id, TOOL_EXECUTE_HOME_CODE, {"code": _service_code("light", "turn_off", "light.living")}),)
+    if "light in this room" in lowered and tool_count == 1:
+        return (_call(next_id, TOOL_GET_LOGBOOK, {"entity_ids": ["light.living"], **_today_window()}),)
+    if "outside temperature stayed below 80" in lowered and tool_count == 1:
+        return (
+            _call(
+                next_id, TOOL_EXECUTE_HOME_CODE, {"code": _service_code("cover", "close_cover", "cover.office_blinds")}
+            ),
+        )
+    return ()
+
+
+def _call(index: int, tool_name: str, tool_args: dict[str, object]) -> ToolCall:
+    """Build one deterministic stub tool call."""
+    return ToolCall(id=f"stub-call-{index}", tool_name=tool_name, tool_args=tool_args)
+
+
+def _last_day_window() -> dict[str, object]:
+    """Return the fixed 24-hour eval recorder window."""
+    return {"start": _FIXED_START, "end": _FIXED_END}
+
+
+def _today_window() -> dict[str, object]:
+    """Return the fixed same-day eval recorder window."""
+    return {"start": _FIXED_TODAY_START, "end": _FIXED_END}
+
+
+def _service_code(domain: str, service: str, entity_id: str) -> str:
+    """Return minimal executable code that records a safe service call."""
+    return (
+        f'await hass.services.async_call("{domain}", "{service}", target={{"entity_id": "{entity_id}"}})\n'
+        'result = "ok"'
+    )
+
+
+def _fan_50_code(entity_id: str) -> str:
+    """Return minimal executable code that records a fan percentage service call."""
+    return (
+        'await hass.services.async_call("fan", "set_percentage", {"percentage": 50}, '
+        f'target={{"entity_id": "{entity_id}"}})\nresult = "ok"'
+    )
+
+
+def _tool_message_count(messages: list[dict[str, object]]) -> int:
+    """Return how many tool-result messages have already been appended."""
+    return sum(1 for message in messages if message.get("role") == "tool")
+
+
+def _all_tool_content(messages: list[dict[str, object]]) -> str | None:
+    """Return all tool-result contents in order for deterministic stub summaries."""
+    contents = [
+        content
+        for message in messages
+        if message.get("role") == "tool" and isinstance((content := message.get("content")), str)
+    ]
+    if not contents:
+        return None
+    return "\n".join(contents)
 
 
 class LiteLLMAdapter:

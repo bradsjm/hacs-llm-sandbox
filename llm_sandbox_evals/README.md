@@ -99,7 +99,7 @@ The integration's `scripts/check` is unaffected by this package. `optimize-evals
 
 Each `(candidate, model, case)` runs until the assistant emits a terminal natural-language answer with no tool calls, or until `case.max_turns or config.max_turns` is reached and the harness forces a final answer. It then produces a score in `[0.0, 1.0]`:
 
-- **Required outcome gates** (any failure caps the case at `0.0`): expected final-answer entity references are present/absent, expected actions were recorded, disabled-action cases did not execute actions, expected execution status was observed, and invisible targets were not referenced.
+- **Required outcome gates** (any failure caps the case at `0.0`): expected tools were used, required multi-tool sequences were followed, recorder windows covered the requested period, intermediate tool evidence was present/absent, expected final-answer entity references are present/absent for read/report cases, expected actions were recorded, disabled-action cases did not execute actions, expected execution status was observed, and invisible targets were not referenced.
 - **Efficiency** applies only after required gates pass: `1.0` when tool-turns are at or below `par_turns`, otherwise `max(efficiency_floor, 1 - efficiency_k * (turns - par_turns))`.
 - Default efficiency settings are `efficiency_k=0.25`, `efficiency_floor=0.1`, `max_turns=5`.
 
@@ -123,7 +123,7 @@ EvalCase(
 ),
 ```
 
-Categories: `state_read`, `registry_read`, `recorder_read`, `action_allowed`, `action_blocked`, `complex`. The `expected.tool_name` must match a production tool constant (`execute_home_code`, `get_history`, `get_statistics`, `get_logbook`). Set `par_turns` to the efficient tool-turn target for the case. Recorder cases can be solved with explicit ids or supported selectors (`entity_ids`/`statistic_ids`, `area_id`, `device_id`, `floor_id`, `label_id`, `domain`, bounded time window args) through native function calling.
+Categories: `state_read`, `registry_read`, `recorder_read`, `action_allowed`, `action_blocked`, `complex`. The `expected.tool_name` must match a production tool constant (`execute_home_code`, `get_history`, `get_statistics`, `get_logbook`) and is enforced as the primary expected tool. Use `required_tool_names` and `required_tool_sequence` for multi-tool cases, `recorder_window` for bounded recorder coverage, `required_error_keys` for recovery cases, and `evidence_contains_entities` / `evidence_excludes_entities` for tool-call/tool-result evidence. Final-answer entity checks are for read/report cases; action cases may finish with a simple acknowledgement and should be scored through recorded actions plus intermediate evidence. Set `par_turns` to the efficient tool-turn target for the case. Recorder cases can be solved with explicit ids or supported selectors (`entity_ids`/`statistic_ids`, `area_id`, `device_id`, `floor_id`, `label_id`, `domain`, bounded time window args) through native function calling.
 
 ## Adding fixtures
 

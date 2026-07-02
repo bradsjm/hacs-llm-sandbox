@@ -1,11 +1,28 @@
 """Deterministic outcome and efficiency scoring for eval case outcomes."""
 
+import json
 import re
 from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
+from datetime import datetime, timedelta
 
+from custom_components.llm_sandbox.const import TOOL_GET_HISTORY, TOOL_GET_LOGBOOK, TOOL_GET_STATISTICS
 from custom_components.llm_sandbox.snapshot.models import HomeSnapshot
 
-from llm_sandbox_evals.schema import CheckResult, EvalCase, ExpectedAction
+from llm_sandbox_evals.schema import CheckResult, EvalCase, ExpectedAction, StepTrace
+
+_RECORDER_TOOL_NAMES = {TOOL_GET_HISTORY, TOOL_GET_STATISTICS, TOOL_GET_LOGBOOK}
+
+
+@dataclass(frozen=True, slots=True)
+class TraceFacts:
+    """Flattened evidence derived from all tool turns in one case trace."""
+
+    tool_names: tuple[str, ...]
+    evidence_text: str
+    evidence_entity_ids: frozenset[str]
+    recorder_windows: tuple[tuple[datetime, datetime], ...]
+    error_keys: frozenset[str]
 
 
 def check_case(
@@ -15,10 +32,58 @@ def check_case(
     execute_statuses: set[str],
     referenced_entity_ids: set[str],
     snapshot: HomeSnapshot,
+    steps: tuple[StepTrace, ...],
 ) -> list[CheckResult]:
     """Build required, outcome-based checks for one case across all turns."""
     checks: list[CheckResult] = []
     answer_text = final_answer.lower()
+    facts = _trace_facts(steps, recorded_actions, snapshot)
+
+    checks.append(
+        CheckResult(
+            name="tool_used",
+            passed=case.expected.tool_name in facts.tool_names,
+            required=True,
+            feedback=f"observed={','.join(facts.tool_names)} expected={case.expected.tool_name}",
+        )
+    )
+
+    if case.expected.required_tool_names:
+        missing_tools = sorted(set(case.expected.required_tool_names) - set(facts.tool_names))
+        checks.append(
+            CheckResult(
+                name="required_tools_used",
+                passed=not missing_tools,
+                required=True,
+                feedback=f"missing={','.join(missing_tools)}",
+            )
+        )
+
+    if case.expected.required_tool_sequence:
+        checks.append(
+            CheckResult(
+                name="required_tool_sequence",
+                passed=_contains_ordered_subsequence(facts.tool_names, case.expected.required_tool_sequence),
+                required=True,
+                feedback=(
+                    f"observed={','.join(facts.tool_names)} expected={','.join(case.expected.required_tool_sequence)}"
+                ),
+            )
+        )
+
+    if case.expected.required_error_keys:
+        missing_errors = sorted(set(case.expected.required_error_keys) - set(facts.error_keys))
+        checks.append(
+            CheckResult(
+                name="required_error_keys",
+                passed=not missing_errors,
+                required=True,
+                feedback=f"missing={','.join(missing_errors)} observed={','.join(sorted(facts.error_keys))}",
+            )
+        )
+
+    if case.expected.recorder_window is not None:
+        checks.append(_recorder_window_check(case, facts))
 
     # Branch boundary: execute-code status expectations are aggregated across all execute turns.
     if case.expected.execution_status != "na":
@@ -86,6 +151,36 @@ def check_case(
             )
         )
 
+    if case.expected.evidence_contains_entities:
+        missing_evidence = sorted(
+            entity_id
+            for entity_id in case.expected.evidence_contains_entities
+            if not _entity_in_evidence(entity_id, facts, snapshot)
+        )
+        checks.append(
+            CheckResult(
+                name="evidence_contains",
+                passed=not missing_evidence,
+                required=True,
+                feedback=f"missing={','.join(missing_evidence)}",
+            )
+        )
+
+    if case.expected.evidence_excludes_entities:
+        present_evidence = sorted(
+            entity_id
+            for entity_id in case.expected.evidence_excludes_entities
+            if _entity_in_evidence(entity_id, facts, snapshot)
+        )
+        checks.append(
+            CheckResult(
+                name="evidence_excludes",
+                passed=not present_evidence,
+                required=True,
+                feedback=f"present={','.join(present_evidence)}",
+            )
+        )
+
     if case.expected.actions:
         unmatched_actions = [
             expected_action
@@ -102,6 +197,154 @@ def check_case(
         )
 
     return checks
+
+
+def _trace_facts(
+    steps: tuple[StepTrace, ...],
+    recorded_actions: tuple[dict[str, object], ...],
+    snapshot: HomeSnapshot,
+) -> TraceFacts:
+    """Flatten all tool turns into facts used by deterministic scoring checks."""
+    tool_names: list[str] = []
+    evidence_parts: list[str] = []
+    evidence_entity_ids: set[str] = set()
+    recorder_windows: list[tuple[datetime, datetime]] = []
+    error_keys: set[str] = set()
+
+    for step in steps:
+        for index, call in enumerate(step.tool_calls):
+            tool_names.append(call.tool_name)
+            evidence_entity_ids.update(_ids_from_tool_args(call.tool_args))
+            result = step.tool_results[index] if index < len(step.tool_results) else None
+            if result is not None:
+                evidence_parts.append(json.dumps(result, sort_keys=True, default=str))
+                evidence_entity_ids.update(_ids_from_result(result))
+                error_key = _error_key(result)
+                if error_key is not None:
+                    error_keys.add(error_key)
+            if call.tool_name in _RECORDER_TOOL_NAMES:
+                window = _window_from_call_or_result(call.tool_args, result, snapshot)
+                if window is not None:
+                    recorder_windows.append(window)
+
+    for action in recorded_actions:
+        evidence_parts.append(json.dumps(action, sort_keys=True, default=str))
+        evidence_entity_ids.update(entity_ids_from_action(action, snapshot))
+        error_key = _error_key(action)
+        if error_key is not None:
+            error_keys.add(error_key)
+
+    return TraceFacts(
+        tool_names=tuple(tool_names),
+        evidence_text="\n".join(evidence_parts).lower(),
+        evidence_entity_ids=frozenset(evidence_entity_ids),
+        recorder_windows=tuple(recorder_windows),
+        error_keys=frozenset(error_keys),
+    )
+
+
+def _ids_from_tool_args(tool_args: Mapping[str, object]) -> set[str]:
+    """Return explicit entity/statistic ids from native tool arguments."""
+    ids = set(strings_from_value(tool_args.get("entity_ids")))
+    ids.update(strings_from_value(tool_args.get("statistic_ids")))
+    return ids
+
+
+def _ids_from_result(result: Mapping[str, object]) -> set[str]:
+    """Return entity/statistic ids surfaced by public tool result envelopes."""
+    ids: set[str] = set()
+    entities = result.get("entities")
+    if isinstance(entities, Mapping):
+        ids.update(str(entity_id) for entity_id in entities)
+    statistics = result.get("statistics")
+    if isinstance(statistics, Mapping):
+        ids.update(str(statistic_id) for statistic_id in statistics)
+    return ids
+
+
+def _error_key(result: Mapping[str, object]) -> str | None:
+    """Return the stable error key from a tool result or action record."""
+    error = result.get("error")
+    if not isinstance(error, Mapping):
+        return None
+    key = error.get("key")
+    return key if isinstance(key, str) else None
+
+
+def _window_from_call_or_result(
+    tool_args: Mapping[str, object],
+    result: Mapping[str, object] | None,
+    snapshot: HomeSnapshot,
+) -> tuple[datetime, datetime] | None:
+    """Return a recorder query window from explicit args, relative hours, or result metadata."""
+    args_window = _window_from_values(tool_args.get("start"), tool_args.get("end"))
+    if args_window is not None:
+        return args_window
+
+    hours = tool_args.get("hours")
+    if isinstance(hours, int | float):
+        end = _parse_datetime(snapshot.created_at)
+        if end is not None:
+            return (end - timedelta(hours=float(hours)), end)
+
+    if result is None:
+        return None
+    result_window = result.get("window")
+    if not isinstance(result_window, Mapping):
+        return None
+    return _window_from_values(result_window.get("start"), result_window.get("end"))
+
+
+def _window_from_values(start_value: object, end_value: object) -> tuple[datetime, datetime] | None:
+    """Return a parsed time window when both values are valid ISO datetimes."""
+    if not isinstance(start_value, str) or not isinstance(end_value, str):
+        return None
+    start = _parse_datetime(start_value)
+    end = _parse_datetime(end_value)
+    if start is None or end is None:
+        return None
+    return (start, end)
+
+
+def _parse_datetime(value: str) -> datetime | None:
+    """Parse an ISO timestamp for deterministic recorder-window checks."""
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _recorder_window_check(case: EvalCase, facts: TraceFacts) -> CheckResult:
+    """Return whether any recorder tool call/result covers the expected time window."""
+    expected = case.expected.recorder_window
+    if expected is None:
+        return CheckResult(name="recorder_window", passed=True, required=True, feedback="")
+    expected_window = _window_from_values(expected[0], expected[1])
+    if expected_window is None:
+        return CheckResult(name="recorder_window", passed=False, required=True, feedback="invalid expected window")
+    expected_start, expected_end = expected_window
+    covered = any(start <= expected_start and end >= expected_end for start, end in facts.recorder_windows)
+    observed = ";".join(f"{start.isoformat()}..{end.isoformat()}" for start, end in facts.recorder_windows)
+    return CheckResult(
+        name="recorder_window",
+        passed=covered,
+        required=True,
+        feedback=f"observed={observed} expected={expected[0]}..{expected[1]}",
+    )
+
+
+def _contains_ordered_subsequence(observed: tuple[str, ...], expected: tuple[str, ...]) -> bool:
+    """Return whether expected tool names appear in order within observed tool names."""
+    position = 0
+    for tool_name in observed:
+        if position < len(expected) and tool_name == expected[position]:
+            position += 1
+    return position == len(expected)
+
+
+def _entity_in_evidence(entity_id: str, facts: TraceFacts, snapshot: HomeSnapshot) -> bool:
+    """Return whether a tool call/result/action references an entity by id or name."""
+    return entity_id in facts.evidence_entity_ids or _entity_mentioned(entity_id, facts.evidence_text, snapshot)
 
 
 def score_case(checks: list[CheckResult], turns: int, par: int, k: float, floor: float) -> float:
