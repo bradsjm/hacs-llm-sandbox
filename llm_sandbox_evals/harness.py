@@ -111,11 +111,6 @@ async def run_case(
                 tool_result = outcome.result
             steps.append(StepTrace(tool_calls=step.tool_calls, tool_results=tuple(results)))
             turns += 1
-        else:
-            forced_step = await adapter.respond(model_id, messages, tools, force_text=True)
-            raw_output = forced_step.raw
-            final_answer = forced_step.text
-
         checks = check_case(
             case,
             final_answer,
@@ -125,6 +120,16 @@ async def run_case(
             snapshot,
             tuple(steps),
         )
+        # Branch boundary: the eval loop must not synthesize a final answer after the cap.
+        if turns >= cap and not final_answer:
+            checks.append(
+                CheckResult(
+                    name="max_turns_exceeded",
+                    passed=False,
+                    required=True,
+                    feedback=f"turns={turns} max_turns={cap}",
+                )
+            )
         score = score_case(checks, turns, case.par_turns, config.efficiency_k, config.efficiency_floor)
         return CaseTrace(
             case_id=case.id,

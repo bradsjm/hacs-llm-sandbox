@@ -332,7 +332,7 @@ async def async_execute_home_code(
         "status": "ok",
         "helper_calls": runtime.state.helper_calls,
         "helper_call_limit": runtime.state.helper_call_limit,
-        "normalizations": list(runtime.state.normalizations),
+        "adjustments": list(runtime.state.adjustments),
         "referenced_missing": referenced_missing,
     }
     if referenced_missing and _is_empty_output(result):

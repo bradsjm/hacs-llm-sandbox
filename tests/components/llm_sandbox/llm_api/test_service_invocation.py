@@ -264,6 +264,12 @@ async def test_explicit_hidden_entity_target_resolves_to_unique_visible_entity()
     )
 
     assert result is None
+    adjustment = _single_adjustment(harness.runtime.state.actions[0])
+    assert adjustment["key"] == "target_entity_resolved"
+    assert adjustment["retry_needed"] is False
+    assert "no retry needed" in str(adjustment["message"])
+    assert adjustment["requested"] == {"entity_id": "bedroom"}
+    assert adjustment["applied"] == {"entity_id": ["light.bedroom"]}
     assert harness.invoker.calls == [
         {
             "domain": "light",
@@ -294,6 +300,7 @@ async def test_service_data_entity_selector_bypass_is_cleaned_and_resolved() -> 
     assert action["service_data"] == {"brightness_pct": 25}
     assert action["target"] == {"entity_id": ["light.bedroom"]}
     assert action["status"] == "ok"
+    assert _adjustment_keys(action) == ["target_selector_moved", "target_entity_resolved"]
     assert harness.invoker.calls == [
         {
             "domain": "light",
@@ -317,6 +324,11 @@ async def test_device_target_resolves_to_visible_entity_target_for_invocation() 
     )
 
     assert result is None
+    adjustment = _single_adjustment(harness.runtime.state.actions[0])
+    assert adjustment["key"] == "target_selector_expanded"
+    assert adjustment["retry_needed"] is False
+    assert adjustment["requested"] == {"device_id": "device-bedroom"}
+    assert adjustment["applied"] == {"entity_id": ["light.bedroom"]}
     assert harness.invoker.calls == [
         {
             "domain": "light",
@@ -797,6 +809,23 @@ def _code_action_statuses(payload: CodeErrorPayload) -> list[object]:
 def _code_action_keys(payload: CodeErrorPayload) -> list[object]:
     """Return action error keys from a code-error payload."""
     return [_action_key(action) for action in _code_actions(payload)]
+
+
+def _single_adjustment(action: ActionRecord) -> dict[str, object]:
+    """Return the only adjustment on an action record."""
+    adjustments = action.get("adjustments")
+    assert isinstance(adjustments, list)
+    assert len(adjustments) == 1
+    adjustment = adjustments[0]
+    assert isinstance(adjustment, dict)
+    return cast(dict[str, object], adjustment)
+
+
+def _adjustment_keys(action: ActionRecord) -> list[str]:
+    """Return adjustment keys from one action record."""
+    adjustments = action.get("adjustments")
+    assert isinstance(adjustments, list)
+    return [str(adjustment["key"]) for adjustment in adjustments if isinstance(adjustment, dict)]
 
 
 def _action_key(action: ActionRecord) -> object:

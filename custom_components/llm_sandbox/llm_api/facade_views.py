@@ -608,7 +608,7 @@ class SafeServiceRegistry:
         async def _call() -> object:
             runtime = require_runtime(None)
             settings = runtime.settings
-            cleaned_service_data, merged_target = _extract_target_selectors(service_data, target)
+            cleaned_service_data, merged_target, selector_adjustments = _extract_target_selectors(service_data, target)
             raw_target = cast(dict[str, object], json_safe(merged_target)) if merged_target is not None else None
 
             def _request_action(action_target: dict[str, object] | None) -> ProposedAction:
@@ -658,7 +658,13 @@ class SafeServiceRegistry:
             resolved_target = target_outcome.target
 
             action = _request_action(resolved_target)
-            record = _action_record(action, status="ok", response=None, error=None)
+            record = _action_record(
+                action,
+                status="ok",
+                response=None,
+                error=None,
+                adjustments=[*selector_adjustments, *target_outcome.adjustments],
+            )
             runtime.state.actions.append(record)
             remaining = runtime.deadline - time.monotonic()
             # Mutate the just-recorded action before raising when no per-call budget remains.
@@ -710,6 +716,7 @@ class SafeServiceRegistry:
         entity_ids: set[str] = set()
         supported_values: list[str] = []
         supported_keys: list[str] = []
+        adjustments: list[dict[str, object]] = []
 
         if "entity_id" in target:
             supported_keys.append("entity_id")
@@ -721,7 +728,9 @@ class SafeServiceRegistry:
                 resolve_domain = entity_id.split(".", 1)[0] if "." in entity_id else domain
                 outcome = resolve_target_entity(snapshot, entity_id, resolve_domain)
                 if outcome.is_resolved:
-                    entity_ids.add(cast(str, outcome.resolved))
+                    resolved_entity_id = cast(str, outcome.resolved)
+                    entity_ids.add(resolved_entity_id)
+                    adjustments.append(_target_entity_resolved_adjustment(entity_id, resolved_entity_id))
                 else:
                     candidates: tuple[CandidateTarget, ...] = outcome.candidates or candidates_for_domain(
                         snapshot, resolve_domain
@@ -735,31 +744,47 @@ class SafeServiceRegistry:
             supported_keys.append("device_id")
             for device_id in _target_values(target["device_id"]):
                 supported_values.append(device_id)
-                entity_ids.update(indexes.entity_ids_by_device_id.get(device_id, ()))
+                resolved = indexes.entity_ids_by_device_id.get(device_id, ())
+                entity_ids.update(resolved)
+                if resolved:
+                    adjustments.append(_target_selector_expanded_adjustment("device_id", device_id, resolved))
         if "area_id" in target:
             supported_keys.append("area_id")
             for area_id in _target_values(target["area_id"]):
                 supported_values.append(area_id)
-                entity_ids.update(indexes.entity_ids_by_area_id.get(area_id, ()))
+                resolved = indexes.entity_ids_by_area_id.get(area_id, ())
+                entity_ids.update(resolved)
+                if resolved:
+                    adjustments.append(_target_selector_expanded_adjustment("area_id", area_id, resolved))
         if "label_id" in target:
             supported_keys.append("label_id")
             for label_id in _target_values(target["label_id"]):
                 supported_values.append(label_id)
-                entity_ids.update(indexes.entity_ids_by_label.get(label_id, ()))
+                resolved = indexes.entity_ids_by_label.get(label_id, ())
+                entity_ids.update(resolved)
+                if resolved:
+                    adjustments.append(_target_selector_expanded_adjustment("label_id", label_id, resolved))
         if "label" in target:
             supported_keys.append("label")
             for label_id in _target_values(target["label"]):
                 supported_values.append(label_id)
-                entity_ids.update(indexes.entity_ids_by_label.get(label_id, ()))
+                resolved = indexes.entity_ids_by_label.get(label_id, ())
+                entity_ids.update(resolved)
+                if resolved:
+                    adjustments.append(_target_selector_expanded_adjustment("label", label_id, resolved))
         if "floor_id" in target:
             supported_keys.append("floor_id")
             for floor_id in _target_values(target["floor_id"]):
                 supported_values.append(floor_id)
+                floor_entity_ids: list[str] = []
                 for area_id in indexes.area_ids_by_floor_id.get(floor_id, ()):
-                    entity_ids.update(indexes.entity_ids_by_area_id.get(area_id, ()))
+                    floor_entity_ids.extend(indexes.entity_ids_by_area_id.get(area_id, ()))
+                entity_ids.update(floor_entity_ids)
+                if floor_entity_ids:
+                    adjustments.append(_target_selector_expanded_adjustment("floor_id", floor_id, floor_entity_ids))
 
         if entity_ids:
-            return _ResolvedTarget({"entity_id": sorted(entity_ids)})
+            return _ResolvedTarget({"entity_id": sorted(entity_ids)}, tuple(adjustments))
         if supported_values:
             return _UnresolvedTarget(
                 requested=supported_values[0],
@@ -1147,7 +1172,7 @@ def _target_values(value: object) -> list[str]:
 def _extract_target_selectors(
     service_data: Mapping[str, object] | None,
     target: Mapping[str, object] | None,
-) -> tuple[dict[str, object] | None, dict[str, object] | None]:
+) -> tuple[dict[str, object] | None, dict[str, object] | None, tuple[dict[str, object], ...]]:
     """Move HA target selector keys from service data into the target mapping."""
     raw_service_data = dict(service_data) if service_data is not None else {}
     extracted_target = {
@@ -1158,7 +1183,13 @@ def _extract_target_selectors(
     # Explicit target values win over selector values supplied inside service data.
     merged_target = extracted_target | raw_target
     cleaned_service_data = cast(dict[str, object], json_safe(raw_service_data)) if raw_service_data else None
-    return cleaned_service_data, cast(dict[str, object], json_safe(merged_target)) if merged_target else None
+    applied_keys = tuple(key for key in extracted_target if key not in raw_target)
+    adjustments = (_target_selector_moved_adjustment(applied_keys),) if applied_keys else ()
+    return (
+        cleaned_service_data,
+        cast(dict[str, object], json_safe(merged_target)) if merged_target else None,
+        adjustments,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1175,6 +1206,7 @@ class _ResolvedTarget:
     """A visibility-resolved service target (entity_id list or empty)."""
 
     target: dict[str, object] | None
+    adjustments: tuple[dict[str, object], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -1206,9 +1238,10 @@ def _action_record(
     status: str,
     response: object,
     error: dict[str, object] | None,
+    adjustments: list[dict[str, object]] | None = None,
 ) -> ActionRecord:
     """Build one mutable service action record."""
-    return {
+    record: ActionRecord = {
         "domain": action["domain"],
         "service": action["service"],
         "service_data": action["service_data"],
@@ -1219,3 +1252,50 @@ def _action_record(
         "response": response,
         "error": error,
     }
+    if adjustments:
+        record["adjustments"] = adjustments
+    return record
+
+
+def _applied_adjustment(key: str, message: str, **extra: object) -> dict[str, object]:
+    """Build a concise model-facing note for a rewrite already applied."""
+    return {"key": key, "status": "applied", "retry_needed": False, "message": message, **extra}
+
+
+def _target_selector_moved_adjustment(selectors: tuple[str, ...]) -> dict[str, object]:
+    """Explain target selectors moved out of service_data."""
+    selector_list = sorted(selectors)
+    return _applied_adjustment(
+        "target_selector_moved",
+        "Moved target selector(s) from service_data into target before execution; no retry needed.",
+        selectors=selector_list,
+    )
+
+
+def _target_entity_resolved_adjustment(requested_entity_id: str, resolved_entity_id: str) -> dict[str, object]:
+    """Explain fuzzy entity-id resolution for one requested target."""
+    return _applied_adjustment(
+        "target_entity_resolved",
+        (
+            f"Resolved requested target entity_id {requested_entity_id} to visible entity {resolved_entity_id} "
+            "before execution; no retry needed."
+        ),
+        requested={"entity_id": requested_entity_id},
+        applied={"entity_id": [resolved_entity_id]},
+    )
+
+
+def _target_selector_expanded_adjustment(
+    selector: str,
+    requested: str,
+    resolved_entity_ids: tuple[str, ...] | list[str],
+) -> dict[str, object]:
+    """Explain selector expansion to concrete visible entity IDs."""
+    entity_ids = sorted(set(resolved_entity_ids))
+    return _applied_adjustment(
+        "target_selector_expanded",
+        f"Expanded target {selector} {requested} to visible entity target(s) before execution; no retry needed.",
+        selector=selector,
+        requested={selector: requested},
+        applied={"entity_id": entity_ids},
+    )

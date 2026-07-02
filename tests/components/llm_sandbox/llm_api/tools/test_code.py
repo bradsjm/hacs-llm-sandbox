@@ -786,7 +786,6 @@ result = "ok"
     result = await _run_code(hass, loaded_entry, code)
 
     assert result["execution"]["status"] == "ok"
-    assert "awaited_async_calls" in result["execution"]["normalizations"]
 
 
 async def test_forgiveness_layer_collapses_home_tour_to_single_call(
@@ -833,8 +832,6 @@ result = {
     assert output["has_bogus"] is False
     assert output["floor_name_via_getattr"] == "Ground Floor"
     assert output["type_name"] == "SafeFloorRegistry"
-    normalizations = result["execution"]["normalizations"]
-    assert "type_name_resolved" in normalizations
 
 
 async def test_datetime_now_isoformat(
@@ -966,7 +963,6 @@ async def test_from_datetime_import_normalized(
     result = await _run_code(hass, loaded_entry, code)
     assert result["execution"]["status"] == "ok"
     assert result["output"] is True
-    assert "datetime_imports_resolved" in result["execution"]["normalizations"]
 
 
 async def test_import_datetime_as_dt_normalized(
@@ -978,7 +974,6 @@ async def test_import_datetime_as_dt_normalized(
     result = await _run_code(hass, loaded_entry, code)
     assert result["execution"]["status"] == "ok"
     assert result["output"] is True
-    assert "datetime_imports_resolved" in result["execution"]["normalizations"]
 
 
 async def test_from_datetime_import_date_as_d_normalized(

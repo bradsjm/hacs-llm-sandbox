@@ -40,12 +40,7 @@ class ModelAdapter(Protocol):
     """Protocol implemented by all model completion adapters."""
 
     async def respond(
-        self,
-        model_id: str,
-        messages: list[dict[str, object]],
-        tools: list[dict[str, object]],
-        *,
-        force_text: bool = False,
+        self, model_id: str, messages: list[dict[str, object]], tools: list[dict[str, object]]
     ) -> AgentStep:
         """Return one assistant step using native provider tool calling."""
 
@@ -67,19 +62,11 @@ class StubAdapter:
         model_id: str,
         messages: list[dict[str, object]],
         tools: list[dict[str, object]],
-        *,
-        force_text: bool = False,
     ) -> AgentStep:
         """Emit one tool call, then a terminal answer that echoes the last tool result."""
         _ = (model_id, tools)
         last_tool_content = _last_tool_content(messages)
         user_request = _first_user_content(messages)
-        # Branch boundary: forced text always terminates the stub loop.
-        if force_text:
-            text = _all_tool_content(messages) or ""
-            return AgentStep(
-                tool_calls=(), text=text, assistant_message={"role": "assistant", "content": text}, raw=text
-            )
 
         tool_count = _tool_message_count(messages)
         # Branch boundary: selected multi-tool scenarios continue after prior tool output.
@@ -231,8 +218,6 @@ class LiteLLMAdapter:
         model_id: str,
         messages: list[dict[str, object]],
         tools: list[dict[str, object]],
-        *,
-        force_text: bool = False,
     ) -> AgentStep:
         """Call LiteLLM and normalize one assistant message into an AgentStep."""
         try:
@@ -245,7 +230,7 @@ class LiteLLMAdapter:
                 "model": model_id,
                 "messages": messages,
                 "tools": tools,
-                "tool_choice": "none" if force_text else "auto",
+                "tool_choice": "auto",
                 "timeout": litellm_timeout,
                 "num_retries": 0,
             }

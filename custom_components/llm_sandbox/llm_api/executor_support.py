@@ -61,9 +61,10 @@ class ExecutionState:
 
     helper_calls: int = 0
     helper_call_limit: int = DEFAULT_HELPER_CALL_BUDGET
-    # Forgiveness-layer metadata, surfaced in the execution payload so the
-    # LLM can see what was rewritten without forcing a retry.
+    # Internal forgiveness-layer labels. Payloads expose these as concise
+    # adjustments that tell the model the change was already applied.
     normalizations: list[str] = field(default_factory=list)
+    adjustments: list[dict[str, object]] = field(default_factory=list)
     # Captured print() output, one entry per call. Independent of the helper
     # call budget: print() routes through Monty's print_callback, not helper_response.
     printed: list[str] = field(default_factory=list)
@@ -148,7 +149,7 @@ def helper_error_payload_for_state(
         helper_call_limit=state.helper_call_limit,
         available_globals=list(AVAILABLE_GLOBALS),
         suggested_methods=suggested_methods(),
-        normalizations=list(state.normalizations),
+        adjustments=list(state.adjustments),
         printed=list(state.printed),
         actions=cast(list[ActionRecord], json_safe(state.actions)),
         service_hints=err.hints,
@@ -173,7 +174,7 @@ def code_error_payload_for_state(
         helper_call_limit=state.helper_call_limit,
         available_globals=list(AVAILABLE_GLOBALS),
         suggested_methods=suggested_methods(),
-        normalizations=list(state.normalizations),
+        adjustments=list(state.adjustments),
         printed=list(state.printed),
         actions=cast(list[ActionRecord], json_safe(state.actions)),
         available_attributes=available_attributes,

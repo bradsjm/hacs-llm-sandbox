@@ -24,8 +24,7 @@ class HelperErrorExecutionPayload(TypedDict):
     helper_call_limit: int
     available_globals: list[str]
     suggested_methods: list[str]
-    # Forgiveness-layer metadata so the LLM can see what was auto-rewritten.
-    normalizations: list[str]
+    adjustments: list[dict[str, object]]
 
 
 class CodeErrorExecutionPayload(TypedDict):
@@ -38,7 +37,7 @@ class CodeErrorExecutionPayload(TypedDict):
     helper_call_limit: int
     available_globals: list[str]
     suggested_methods: list[str]
-    normalizations: list[str]
+    adjustments: list[dict[str, object]]
     available_attributes: NotRequired[list[str]]
     location: NotRequired[dict[str, int]]
 
@@ -101,7 +100,7 @@ def helper_error_payload(
     helper_call_limit: int,
     available_globals: list[str],
     suggested_methods: list[str],
-    normalizations: list[str],
+    adjustments: list[dict[str, object]],
     printed: list[str],
     actions: list[ActionRecord] | None = None,
     service_hints: Mapping[str, Any] | None = None,
@@ -118,7 +117,7 @@ def helper_error_payload(
             "helper_call_limit": helper_call_limit,
             "available_globals": available_globals,
             "suggested_methods": suggested_methods,
-            "normalizations": normalizations,
+            "adjustments": adjustments,
         },
         "output": None,
         "printed": printed,
@@ -137,7 +136,7 @@ def code_error_payload(
     helper_call_limit: int,
     available_globals: list[str],
     suggested_methods: list[str],
-    normalizations: list[str],
+    adjustments: list[dict[str, object]],
     printed: list[str],
     actions: list[ActionRecord] | None = None,
     available_attributes: list[str] | None = None,
@@ -152,7 +151,7 @@ def code_error_payload(
             "helper_call_limit": helper_call_limit,
             "available_globals": available_globals,
             "suggested_methods": suggested_methods,
-            "normalizations": normalizations,
+            "adjustments": adjustments,
         },
         "output": None,
         "printed": printed,
