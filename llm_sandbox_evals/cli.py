@@ -241,6 +241,17 @@ def _add_optimize_parser(subparsers: argparse._SubParsersAction[argparse.Argumen
         help="COPRO search depth (default: 2). Cost scales with this.",
     )
     optimize_parser.add_argument(
+        "--length-penalty",
+        type=float,
+        metavar="COEFF",
+        help=(
+            "penalty coefficient applied to api_prompt growth during COPRO candidate "
+            "selection (default: 0.02). Higher values more aggressively tie-break toward "
+            "smaller prompts at equal quality; 0 disables size-aware selection. Does not "
+            "change the reported baseline_mean/optimized_mean (those stay raw quality)."
+        ),
+    )
+    optimize_parser.add_argument(
         "--cases",
         metavar="ID|CATEGORY,...",
         help="case ids or categories used as the optimization trainset (default: all cases). "
@@ -360,6 +371,7 @@ def _run_optimize(args: argparse.Namespace) -> int:
         proposer_reasoning_effort=args.proposer_reasoning,
         breadth=args.breadth or 5,
         depth=args.depth or 2,
+        length_penalty=args.length_penalty if args.length_penalty is not None else base_config.length_penalty,
         cross_eval_models=_csv_arg(args.cross_eval_models),
     )
     _say(_optimize_banner(config))
@@ -373,6 +385,10 @@ def _run_optimize(args: argparse.Namespace) -> int:
         _optimize_footer(
             baseline_mean=result.baseline_mean,
             optimized_mean=result.optimized_mean,
+            optimized_prompt_chars=result.optimized_prompt_chars,
+            baseline_prompt_chars=result.baseline_prompt_chars,
+            size_ratio=result.size_ratio,
+            optimized_full_mean=result.optimized_full_mean,
             candidate_path=result.candidate_path,
             cross_eval_run_dir=result.cross_eval_run_dir,
             prompt_profile=config.prompt_profile,
@@ -387,6 +403,10 @@ def _run_optimize(args: argparse.Namespace) -> int:
         f"proposer_model: {result.proposer_model}",
         f"baseline_mean: {result.baseline_mean:.3f}",
         f"optimized_mean: {result.optimized_mean:.3f}",
+        f"baseline_prompt_chars: {result.baseline_prompt_chars}",
+        f"optimized_prompt_chars: {result.optimized_prompt_chars}",
+        f"size_ratio: {result.size_ratio:.3f}",
+        f"optimized_full_mean: {result.optimized_full_mean:.3f}",
         f"optimized_candidate: {result.candidate_path}",
         f"optimized_prompt: {result.candidate_path.parent / 'optimized_prompt.md'}",
     ]
@@ -470,6 +490,10 @@ def _optimize_footer(
     *,
     baseline_mean: float,
     optimized_mean: float,
+    optimized_prompt_chars: int,
+    baseline_prompt_chars: int,
+    size_ratio: float,
+    optimized_full_mean: float,
     candidate_path: Path,
     cross_eval_run_dir: Path | None,
     prompt_profile: str,
@@ -489,6 +513,8 @@ def _optimize_footer(
         "\nOptimization complete.\n\n"
         f"  baseline_mean   : {baseline_mean:.3f}   (production profile {prompt_profile!r}, on the target model)\n"
         f"  optimized_mean  : {optimized_mean:.3f}   (best COPRO rewrite)   delta {delta_str}\n"
+        f"  optimized_chars : {optimized_prompt_chars}   (baseline {baseline_prompt_chars}; ratio {size_ratio:.3f})\n"
+        f"  optimized_full_mean : {optimized_full_mean:.3f}   (mean on the FULL case suite, not just the trainset)\n"
         f"  optimized prompt: {prompt_path}   (the ONLY text COPRO changed - review this)\n"
         f"{cross_eval_line}\n\n"
         "Next steps:\n"
@@ -499,7 +525,7 @@ def _optimize_footer(
         f"        --candidates baseline,optimized:{candidate_path} \\\n"
         "        --models <model-a>,<model-b>,stub\n"
         "  - To ship it, copy the approved text into\n"
-        "    custom_components/llm_sandbox/llm_api/prompts.py by hand.\n"
+        "    custom_components/llm_sandbox/llm_api/prompts/profiles.py by hand.\n"
     )
 
 

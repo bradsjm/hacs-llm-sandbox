@@ -14,6 +14,8 @@ from llm_sandbox_evals.schema import CandidateModelScore, CaseTrace, RunResult
 
 _SAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9_.-]")
 _INTEGRATION_MANIFEST = Path(__file__).resolve().parent.parent / "custom_components" / "llm_sandbox" / "manifest.json"
+# Two candidate means within this epsilon are treated as equal quality and tie-broken by smaller prompt size.
+_SIZE_TIE_EPSILON = 0.005
 
 
 def write_run(result: RunResult, runs_dir: Path) -> Path:
@@ -196,11 +198,26 @@ def _candidate_table(
 ) -> list[str]:
     """Render candidate ranking rows."""
     score_map = {(score.candidate_id, score.model_id): score for score in scores}
-    ranked_rows: list[tuple[str, float, float, float, dict[str, float]]] = []
+    ranked_rows: list[tuple[str, float, float, float, dict[str, float], int, int, float]] = []
+    candidate_prompt_chars: dict[str, int] = {}
     for candidate_id in candidate_ids:
         candidate_scores = [
             score_map[(candidate_id, model_id)] for model_id in model_ids if (candidate_id, model_id) in score_map
         ]
+        prompt_chars = candidate_scores[0].prompt_chars if candidate_scores else 0
+        candidate_prompt_chars[candidate_id] = prompt_chars
+
+    baseline_prompt_chars = candidate_prompt_chars.get("baseline", max(candidate_prompt_chars.values(), default=0))
+    if baseline_prompt_chars == 0:
+        baseline_prompt_chars = 1
+
+    for candidate_id in candidate_ids:
+        candidate_scores = [
+            score_map[(candidate_id, model_id)] for model_id in model_ids if (candidate_id, model_id) in score_map
+        ]
+        prompt_chars = candidate_prompt_chars[candidate_id]
+        api_prompt_chars = candidate_scores[0].api_prompt_chars if candidate_scores else 0
+        size_ratio = prompt_chars / baseline_prompt_chars if baseline_prompt_chars else 0.0
         all_case_scores = [case_score for score in candidate_scores for case_score in score.case_scores.values()]
         model_means = [score.mean for score in candidate_scores]
         turns = [score.mean_turns for score in candidate_scores]
@@ -217,13 +234,31 @@ def _candidate_table(
                 min(model_means, default=0.0),
                 _mean(turns),
                 category_means,
+                prompt_chars,
+                api_prompt_chars,
+                size_ratio,
             )
         )
 
-    ranked_rows.sort(key=lambda row: (row[1], row[2]), reverse=True)
-    header = ["Candidate", "Mean", "MinModel", "Turns", *categories]
+    ranked_rows.sort(
+        key=lambda row: (
+            -round(row[1] / _SIZE_TIE_EPSILON),
+            row[6],
+            -row[2],
+        )
+    )
+    header = ["Candidate", "Mean", "MinModel", "Turns", "PromptChars", "SizeRatio", *categories]
     lines = [_markdown_row(header), _markdown_separator(len(header))]
-    for candidate_id, mean, min_model, mean_turns, category_means in ranked_rows:
+    for (
+        candidate_id,
+        mean,
+        min_model,
+        mean_turns,
+        category_means,
+        prompt_chars,
+        _api_prompt_chars,
+        size_ratio,
+    ) in ranked_rows:
         lines.append(
             _markdown_row(
                 [
@@ -231,6 +266,8 @@ def _candidate_table(
                     _format_score(mean),
                     _format_score(min_model),
                     _format_score(mean_turns),
+                    str(int(prompt_chars)),
+                    _format_score(size_ratio),
                     *[_format_score(category_means[cat]) for cat in categories],
                 ]
             )
@@ -318,6 +355,8 @@ def _scores_field(value: object) -> list[CandidateModelScore]:
                 mean_turns=float(item.get("mean_turns", 0.0)),
                 per_category=_float_map(item.get("per_category")),
                 case_scores=_float_map(item.get("case_scores")),
+                api_prompt_chars=int(item.get("api_prompt_chars", 0)),
+                prompt_chars=int(item.get("prompt_chars", 0)),
             )
         )
     return scores

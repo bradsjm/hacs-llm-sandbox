@@ -1,6 +1,7 @@
 """Prompt and function-schema assembly for the dev-only eval harness."""
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 from custom_components.llm_sandbox.const import (
@@ -27,6 +28,25 @@ from llm_sandbox_evals.schema import EvalCase, PromptCandidate, ToolSpec
 _BASELINE_ID = "baseline"
 
 
+def candidate_prompt_sizes(candidate: PromptCandidate) -> tuple[int, int]:
+    """Return ``(api_prompt_chars, authored_prompt_chars)`` for a candidate.
+
+    ``api_prompt_chars`` is the length of the COPRO-mutable instruction.
+    ``authored_prompt_chars`` adds the four tool-description fields. Action
+    sections and JSON-schema scaffolding are excluded because they are
+    candidate-invariant (identical across candidates) and only add a constant
+    offset, so they would dilute size-comparison signal.
+    """
+    api_prompt_chars = len(candidate.api_prompt)
+    authored_prompt_chars = api_prompt_chars + (
+        len(candidate.execute_home_code_description)
+        + len(candidate.get_history_description)
+        + len(candidate.get_statistics_description)
+        + len(candidate.get_logbook_description)
+    )
+    return api_prompt_chars, authored_prompt_chars
+
+
 def baseline_candidate(prompt_profile_id: str = DEFAULT_PROMPT_PROFILE) -> PromptCandidate:
     """Return the production-baseline prompt candidate."""
     profile = resolve_profile(prompt_profile_id)
@@ -51,6 +71,12 @@ def load_candidates(candidate_ids: list[str], prompt_profile_id: str) -> list[Pr
         # Branch boundary: optimizer artifacts are explicitly loaded from JSON.
         if candidate_id.startswith("optimized:"):
             candidates.append(_load_optimized(candidate_id.removeprefix("optimized:")))
+            continue
+        # Branch boundary: any registered production profile is loadable as a candidate.
+        if candidate_id.startswith("profile:"):
+            profile_id = candidate_id.removeprefix("profile:")
+            # resolve_profile (called inside baseline_candidate) raises ValueError for unknown ids.
+            candidates.append(replace(baseline_candidate(profile_id), id=candidate_id))
             continue
         # Candidate ids are configuration errors when unknown; do not silently fall back.
         raise ValueError(f"unknown prompt candidate id(s): {candidate_id}")

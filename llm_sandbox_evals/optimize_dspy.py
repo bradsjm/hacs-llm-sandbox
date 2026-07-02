@@ -34,6 +34,20 @@ class OptimizerResult:
     optimized_candidate: PromptCandidate
     candidate_path: Path
     cross_eval_run_dir: Path | None
+    baseline_prompt_chars: int
+    optimized_prompt_chars: int
+    size_ratio: float
+    optimized_full_mean: float
+
+
+def size_penalized_utility(score: float, api_prompt_ratio: float, penalty: float) -> float:
+    """Penalize COPRO utility only when the instruction grew beyond the baseline.
+
+    ratio <= 1.0 (prompt shrank or stayed same) returns the raw score unchanged;
+    growth reduces utility linearly. This steers COPRO candidate selection only
+    and is NEVER applied to the human-facing baseline_mean/optimized_mean numbers.
+    """
+    return score - penalty * max(0.0, api_prompt_ratio - 1.0)
 
 
 def run_optimize(config: EvalConfig) -> OptimizerResult:
@@ -115,6 +129,21 @@ def run_optimize(config: EvalConfig) -> OptimizerResult:
             reasoning_effort=config.target_reasoning_effort,
         )
     )
+    # Branch boundary: this adds one full case-suite pass on the target model, increasing paid model-call cost.
+    optimized_full_mean = _candidate_mean(
+        EvalConfig(
+            models=[target],
+            candidates=[f"optimized:{candidate_path}"],
+            prompt_profile=config.prompt_profile,
+            cases=None,
+            homes=config.homes,
+            runs_dir=config.runs_dir,
+            max_turns=config.max_turns,
+            efficiency_k=config.efficiency_k,
+            efficiency_floor=config.efficiency_floor,
+            reasoning_effort=config.target_reasoning_effort,
+        )
+    )
 
     cross_eval_run_dir: Path | None = None
     # Branch boundary: cross-evaluation is optional because it can multiply paid model calls.
@@ -137,6 +166,11 @@ def run_optimize(config: EvalConfig) -> OptimizerResult:
         )
         cross_eval_run_dir = reports.write_run(cross_result, config.runs_dir)
 
+    baseline_prompt_chars, baseline_authored = prompts.candidate_prompt_sizes(baseline)
+    _ = baseline_authored
+    optimized_prompt_chars, _ = prompts.candidate_prompt_sizes(optimized_candidate)
+    size_ratio = optimized_prompt_chars / max(1, baseline_prompt_chars)
+
     return OptimizerResult(
         run_id=run_id,
         created_at=created_at,
@@ -147,6 +181,10 @@ def run_optimize(config: EvalConfig) -> OptimizerResult:
         optimized_candidate=optimized_candidate,
         candidate_path=candidate_path,
         cross_eval_run_dir=cross_eval_run_dir,
+        baseline_prompt_chars=baseline_prompt_chars,
+        optimized_prompt_chars=optimized_prompt_chars,
+        size_ratio=size_ratio,
+        optimized_full_mean=optimized_full_mean,
     )
 
 
@@ -182,7 +220,9 @@ class _PromptInstructionStudent(dspy.Module):
                 self.config,
             )
         )
-        return dspy.Prediction(score=trace.score)
+        ratio = len(instruction) / max(1, len(self.baseline.api_prompt))
+        # Penalize COPRO's internal candidate selection only; reported means stay raw quality scores.
+        return dspy.Prediction(score=size_penalized_utility(trace.score, ratio, self.config.length_penalty))
 
 
 def _make_metric() -> Callable[..., float]:

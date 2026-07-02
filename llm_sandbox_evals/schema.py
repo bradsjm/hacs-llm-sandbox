@@ -177,6 +177,9 @@ class CandidateModelScore:
     mean_turns: float
     per_category: dict[str, float]
     case_scores: dict[str, float]
+    # Authored prompt sizes; defaults keep old run.json files loadable.
+    api_prompt_chars: int = 0
+    prompt_chars: int = 0
 
 
 @dataclass(frozen=True, slots=True)

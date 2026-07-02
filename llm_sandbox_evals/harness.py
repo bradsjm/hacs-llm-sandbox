@@ -12,7 +12,7 @@ from llm_sandbox_evals import cases, prompts
 from llm_sandbox_evals.config import EvalConfig
 from llm_sandbox_evals.homes import get_home
 from llm_sandbox_evals.models import ModelAdapter, ModelResponseError, get_adapter
-from llm_sandbox_evals.prompts import load_candidates
+from llm_sandbox_evals.prompts import candidate_prompt_sizes, load_candidates
 from llm_sandbox_evals.schema import (
     CandidateModelScore,
     CaseTrace,
@@ -273,6 +273,7 @@ def _score_matrix(
     traces_by_pair = {(trace.candidate_id, trace.model_id, trace.case_id): trace for trace in traces}
 
     for candidate in candidates:
+        api_prompt_chars, prompt_chars = candidate_prompt_sizes(candidate)
         for model_id in model_ids:
             case_scores: dict[str, float] = {}
             per_category: dict[str, float] = {}
@@ -293,6 +294,8 @@ def _score_matrix(
                     mean_turns=mean_score([float(trace.turns) for trace in pair_traces]),
                     per_category=per_category,
                     case_scores=case_scores,
+                    api_prompt_chars=api_prompt_chars,
+                    prompt_chars=prompt_chars,
                 )
             )
     return scores

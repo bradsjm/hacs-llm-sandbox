@@ -29,6 +29,7 @@ class EvalConfig:
     breadth: int = 5
     depth: int = 2
     cross_eval_models: list[str] | None = None
+    length_penalty: float = 0.02  # Penalizes api_prompt growth in COPRO; smaller = weaker tie-break.
 
 
 def load_config() -> EvalConfig:
