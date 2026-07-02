@@ -20,6 +20,7 @@ def test_monty_type_stubs_exclude_private_methods() -> None:
         in MONTY_TYPE_STUBS
     )
     assert "def async_services_for_domain" in MONTY_TYPE_STUBS
+    assert "def async_services_for_target" in MONTY_TYPE_STUBS
     assert "def supports_response" in MONTY_TYPE_STUBS
     assert "def async_get" in MONTY_TYPE_STUBS
     assert "def async_entries_for_label" in MONTY_TYPE_STUBS

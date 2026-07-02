@@ -12,6 +12,7 @@ import re
 from dataclasses import dataclass
 
 from ..snapshot.models import HomeSnapshot
+from .target_matching import entities_for_service
 
 _DISCOVERY_LIMIT = 8
 
@@ -136,6 +137,31 @@ def available_hint(snapshot: HomeSnapshot, domain: str) -> str:
         return f"Visible entities in the '{domain}' domain: {', '.join(ids[:_DISCOVERY_LIMIT])}{suffix}"
 
     return f"No visible entities in the '{domain}' domain."
+
+
+def rank_candidates_for_service(
+    snapshot: HomeSnapshot,
+    candidates: tuple[CandidateTarget, ...],
+    domain: str,
+    service: str,
+) -> tuple[CandidateTarget, ...]:
+    """Order candidates so entities the service targets sort first.
+
+    Target-aware ranking for fix lists: when a service declares target metadata,
+    entities it accepts rank ahead of unrelated same-domain entities so the
+    surfaced candidates reflect what the service can actually act on. Returns the
+    input unchanged (already deterministic) when the service has no target
+    metadata, preserving HA as the final arbiter.
+    """
+    matched = entities_for_service(snapshot, domain, service)
+    if not matched:
+        return candidates
+    return tuple(
+        sorted(
+            candidates,
+            key=lambda candidate: (candidate.entity_id not in matched, candidate.entity_id),
+        )
+    )
 
 
 def _tokens(text: str) -> frozenset[str]:

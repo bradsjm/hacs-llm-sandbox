@@ -47,8 +47,15 @@ from ..snapshot.models import (
 from ..types import ActionRecord, ProposedAction, TranslationPlaceholders
 from .errors import HelperExecutionError
 from .executor_support import helper_response, json_safe
-from .resolution import _DISCOVERY_LIMIT, CandidateTarget, candidates_for_domain, resolve_target_entity
+from .resolution import (
+    _DISCOVERY_LIMIT,
+    CandidateTarget,
+    candidates_for_domain,
+    rank_candidates_for_service,
+    resolve_target_entity,
+)
 from .runtime import require_runtime, require_snapshot
+from .target_matching import entities_for_service, service_accepts_domain, services_for_entity
 
 _TARGET_SELECTOR_KEYS = frozenset(("entity_id", "device_id", "area_id", "label_id", "label", "floor_id"))
 
@@ -552,6 +559,38 @@ class SafeServiceRegistry:
             service.lower(), SupportsResponse.NONE.value
         )
 
+    def async_services_for_target(
+        self, target: Mapping[str, object] | None
+    ) -> dict[str, dict[str, dict[str, object]]]:
+        """Return compact, snapshot-derived service metadata for a target.
+
+        Resolves ``entity_id``/``device_id``/``area_id``/``label_id``/``floor_id``
+        selectors against the snapshot and reports, per resolved entity, the
+        services whose declared target accepts that entity (mirroring HA's
+        ``async_get_services_for_target``). Computed on demand from the frozen
+        snapshot; no live Home Assistant call. Output is bounded to
+        ``_DISCOVERY_LIMIT`` entities; each service lists its field names.
+        """
+        snapshot = require_snapshot()
+        entity_ids = sorted(_expand_target_entities(snapshot, target))
+        if not entity_ids:
+            return {}
+        result: dict[str, dict[str, dict[str, object]]] = {}
+        for entity_id in entity_ids[:_DISCOVERY_LIMIT]:
+            matched = services_for_entity(snapshot, entity_id)
+            if not matched:
+                continue
+            per_entity: dict[str, dict[str, object]] = {}
+            for service_id in matched:
+                domain, _, service = service_id.partition(".")
+                fields = _service_field_names(self.services_schema.get(domain, {}).get(service)) or []
+                per_entity.setdefault(domain, {})[service] = {
+                    "supports_response": self.supports_response(domain, service),
+                    "fields": fields,
+                }
+            result[entity_id] = per_entity
+        return result
+
     def _policy_block(
         self,
         settings: SandboxSettings,
@@ -607,6 +646,43 @@ class SafeServiceRegistry:
                 message=f"Service '{domain}.{service}' requires return_response=True.",
             )
         return None
+
+    def _target_capability_block(
+        self,
+        snapshot: HomeSnapshot,
+        domain: str,
+        service: str,
+        resolved_target: dict[str, object] | None,
+    ) -> _PolicyBlock | None:
+        """Conservative stable-fact pre-block for an exclusive domain mismatch.
+
+        Pre-blocks only when the service declares exclusive target domains and none
+        of the resolved target entities match — a stable snapshot fact Home Assistant
+        would reject live anyway. Field/capability support (e.g. color temperature)
+        is never pre-blocked; it informs ranking and discovery, and HA decides live.
+        Returns ``None`` when the service has no target metadata or the mismatch is
+        not a definitive domain exclusion.
+        """
+        target_brief = snapshot.services_target.get(domain, {}).get(service)
+        if not isinstance(target_brief, Mapping):
+            return None
+        resolved_ids = resolved_target.get("entity_id") if isinstance(resolved_target, Mapping) else None
+        if not isinstance(resolved_ids, list) or not resolved_ids:
+            return None
+        excluded = sorted({eid.split(".", 1)[0] for eid in resolved_ids if isinstance(eid, str) and "." in eid})
+        if not excluded:
+            return None
+        # Block only when every resolved domain is definitively excluded. A brief
+        # that does not constrain domains returns None (not False) and skips blocking.
+        if any(service_accepts_domain(target_brief, entity_domain) is not False for entity_domain in excluded):
+            return None
+        valid = _bounded_entity_ids(entities_for_service(snapshot, domain, service))
+        return _PolicyBlock(
+            "service_target_not_supported",
+            cast(TranslationPlaceholders, {"domain": domain, "service": service}),
+            message=_service_target_not_supported_message(domain, service, excluded, valid),
+            fix=valid,
+        )
 
     async def async_call(
         self,
@@ -665,7 +741,7 @@ class SafeServiceRegistry:
                 return None
 
             # Target visibility resolution with auto-resolve.
-            target_outcome = self._visible_target(merged_target, domain)
+            target_outcome = self._visible_target(merged_target, domain, service)
             if isinstance(target_outcome, _UnresolvedTarget):
                 _block(
                     "service_target_not_visible",
@@ -675,6 +751,14 @@ class SafeServiceRegistry:
                 )
                 return None
             resolved_target = target_outcome.target
+
+            # Conservative stable-fact pre-block: a service whose declared target
+            # excludes every resolved entity's domain is blocked with guidance
+            # instead of forwarding a call Home Assistant would reject live.
+            snapshot = require_snapshot()
+            if (cap_block := self._target_capability_block(snapshot, domain, service, resolved_target)) is not None:
+                _block(cap_block.key, cap_block.placeholders, message=cap_block.message, fix=cap_block.fix)
+                return None
 
             action = _request_action(resolved_target)
             record = _action_record(
@@ -732,6 +816,7 @@ class SafeServiceRegistry:
         self,
         target: Mapping[str, object] | None,
         domain: str,
+        service: str | None = None,
     ) -> _ResolvedTarget | _UnresolvedTarget:
         """Resolve supported HA target selectors to visible entity IDs."""
         snapshot = require_snapshot()
@@ -761,6 +846,9 @@ class SafeServiceRegistry:
                     candidates: tuple[CandidateTarget, ...] = outcome.candidates or candidates_for_domain(
                         snapshot, resolve_domain, limit=_DISCOVERY_LIMIT + 1
                     )
+                    if service is not None:
+                        # Target-aware ranking: entities the service accepts sort first.
+                        candidates = rank_candidates_for_service(snapshot, candidates, resolve_domain, service)
                     fix = _candidate_ids(candidates)
                     return _UnresolvedTarget(
                         requested=entity_id,
@@ -813,7 +901,10 @@ class SafeServiceRegistry:
         if entity_ids:
             return _ResolvedTarget({"entity_id": sorted(entity_ids)}, tuple(adjustments))
         if supported_values:
-            fallback_fix = _candidate_ids(candidates_for_domain(snapshot, domain, limit=_DISCOVERY_LIMIT + 1))
+            fallback_candidates = candidates_for_domain(snapshot, domain, limit=_DISCOVERY_LIMIT + 1)
+            if service is not None:
+                fallback_candidates = rank_candidates_for_service(snapshot, fallback_candidates, domain, service)
+            fallback_fix = _candidate_ids(fallback_candidates)
             return _UnresolvedTarget(
                 requested=supported_values[0],
                 hint=_target_not_found_message(supported_values[0], domain, fallback_fix),
@@ -1198,6 +1289,44 @@ def _target_values(value: object) -> list[str]:
     return [str(value)]
 
 
+def _expand_target_entities(snapshot: HomeSnapshot, target: Mapping[str, object] | None) -> set[str]:
+    """Resolve HA target selectors to visible entity ids for read-only discovery.
+
+    Unlike ``_visible_target`` this performs no fuzzy auto-resolution and records
+    no action: it is a pure selector expansion used by ``async_services_for_target``.
+    """
+    if not isinstance(target, Mapping):
+        return set()
+    indexes = snapshot.indexes
+    entity_ids: set[str] = set()
+    if "entity_id" in target:
+        for entity_id in _target_values(target["entity_id"]):
+            if entity_id in snapshot.states:
+                entity_ids.add(entity_id)
+    if "device_id" in target:
+        for device_id in _target_values(target["device_id"]):
+            entity_ids.update(indexes.entity_ids_by_device_id.get(device_id, ()))
+    if "area_id" in target:
+        for area_id in _target_values(target["area_id"]):
+            entity_ids.update(indexes.entity_ids_by_area_id.get(area_id, ()))
+    if "label_id" in target:
+        for label_id in _target_values(target["label_id"]):
+            entity_ids.update(indexes.entity_ids_by_label.get(label_id, ()))
+    if "label" in target:
+        for label_id in _target_values(target["label"]):
+            entity_ids.update(indexes.entity_ids_by_label.get(label_id, ()))
+    if "floor_id" in target:
+        for floor_id in _target_values(target["floor_id"]):
+            for area_id in indexes.area_ids_by_floor_id.get(floor_id, ()):
+                entity_ids.update(indexes.entity_ids_by_area_id.get(area_id, ()))
+    return entity_ids
+
+
+def _bounded_entity_ids(entity_ids: tuple[str, ...] | list[str]) -> list[str]:
+    """Bound a raw entity-id list to the discovery limit plus overflow marker."""
+    return _bounded_strings(sorted(entity_ids))
+
+
 def _bounded_strings(values: list[str]) -> list[str]:
     """Bound deterministic repair lists to the discovery limit plus overflow marker."""
     if len(values) > _DISCOVERY_LIMIT:
@@ -1229,6 +1358,17 @@ def _target_not_found_message(requested: str, domain: str, fix: list[str]) -> st
     if fix:
         return f"Target '{requested}' not found in '{domain}'. Did you mean: {', '.join(fix)}."
     return f"Target '{requested}' not found in '{domain}'."
+
+
+def _service_target_not_supported_message(
+    domain: str,
+    service: str,
+    excluded_domains: list[str],
+    fix: list[str],
+) -> str:
+    """Return the compact domain-mismatch repair message."""
+    accepted = f" Try: {', '.join(fix)}." if fix else ""
+    return f"Service '{domain}.{service}' does not target {', '.join(excluded_domains)} entities.{accepted}"
 
 
 def _service_field_names(brief: ServiceSchemaBrief | None) -> list[str] | None:

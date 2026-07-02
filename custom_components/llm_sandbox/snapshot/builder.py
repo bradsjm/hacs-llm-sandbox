@@ -8,6 +8,7 @@ combined additively over state-bearing entity ids, and the service catalog is
 never filtered.
 """
 
+from collections.abc import Mapping
 from dataclasses import replace
 from typing import cast
 
@@ -44,7 +45,10 @@ from .models import (
     SafeState,
     SafeUnitSystem,
     ServiceFieldBrief,
+    ServiceFieldFilter,
     ServiceSchemaBrief,
+    ServiceTargetBrief,
+    ServiceTargetFilter,
     SnapshotIndexes,
     SnapshotScope,
 )
@@ -85,7 +89,7 @@ def build_snapshot(
     )
     config_entries = [_safe_config_entry(entry) for entry in hass.config_entries.async_entries()]
 
-    service_catalog, service_response, services_schema = _safe_services(hass)
+    service_catalog, service_response, services_schema, services_target = _safe_services(hass)
 
     # Visibility restrictions always run through one combined predicate so the
     # no-restrictions scope still derives from state-bearing entities.
@@ -117,6 +121,7 @@ def build_snapshot(
         notifications=notifications,
         config_entries=config_entries,
         services_schema=services_schema,
+        services_target=services_target,
     )
 
 
@@ -493,29 +498,40 @@ def _safe_services(
     dict[str, tuple[str, ...]],
     dict[str, dict[str, str]],
     dict[str, dict[str, ServiceSchemaBrief]],
+    dict[str, dict[str, ServiceTargetBrief]],
 ]:
     """Snapshot the service catalog as domain -> service names.
 
-    Returns ``(services, services_supports_response, services_schema)`` where
-    response support preserves each service's enum value as a JSON-safe string,
-    and service schemas are eager JSON-safe parameter briefs.
+    Returns ``(services, services_supports_response, services_schema, services_target)``
+    where response support preserves each service's enum value as a JSON-safe string,
+    service schemas are eager JSON-safe parameter briefs, and service targets carry
+    the entity-filter metadata HA's automation matching uses
+    (``websocket_api/automation.py``). Services without a declared target are absent
+    from ``services_target``; the matcher treats absence as "not entity-targeting".
     """
     catalog = hass.services.async_services()
     services: dict[str, tuple[str, ...]] = {}
     supports_response: dict[str, dict[str, str]] = {}
     services_schema: dict[str, dict[str, ServiceSchemaBrief]] = {}
+    services_target: dict[str, dict[str, ServiceTargetBrief]] = {}
     for domain, domain_services in catalog.items():
         names: list[str] = []
         response_values: dict[str, str] = {}
         schema_values: dict[str, ServiceSchemaBrief] = {}
+        target_values: dict[str, ServiceTargetBrief] = {}
         for service_name, service in domain_services.items():
             names.append(service_name)
             response_values[service_name] = service.supports_response.value
             schema_values[service_name] = _service_schema_brief(hass, domain, service_name, service.schema)
+            target_brief = _service_target_brief(hass, domain, service_name)
+            if target_brief is not None:
+                target_values[service_name] = target_brief
         services[domain] = tuple(sorted(names))
         supports_response[domain] = {name: response_values[name] for name in sorted(response_values)}
         services_schema[domain] = {name: schema_values[name] for name in sorted(schema_values)}
-    return services, supports_response, services_schema
+        if target_values:
+            services_target[domain] = {name: target_values[name] for name in sorted(target_values)}
+    return services, supports_response, services_schema, services_target
 
 
 def _service_schema_brief(
@@ -552,14 +568,16 @@ def _service_schema_brief(
         # value spaces; keep the brief coarse and mark the schema as dynamic.
         dynamic = dynamic or "selector" in field_description or not _is_plain_service_validator(validator)
         description = field_description.get("description")
-        fields.append(
-            {
-                "name": name,
-                "required": required,
-                "type_hint": _service_type_hint(validator),
-                "description": description if isinstance(description, str) else None,
-            }
-        )
+        field_brief: ServiceFieldBrief = {
+            "name": name,
+            "required": required,
+            "type_hint": _service_type_hint(validator),
+            "description": description if isinstance(description, str) else None,
+        }
+        field_filter = _service_field_filter(field_description)
+        if field_filter is not None:
+            field_brief["filter"] = field_filter
+        fields.append(field_brief)
 
     fields = sorted(fields, key=lambda field: str(field["name"]))
     if len(fields) > SERVICE_SCHEMA_FIELD_LIMIT:
@@ -577,6 +595,80 @@ def _service_description_fields(hass: HomeAssistant, domain: str, service_name: 
     if not isinstance(fields, dict):
         return {}
     return {str(name): field for name, field in fields.items() if isinstance(field, dict)}
+
+
+def _service_field_filter(field_description: Mapping[str, object]) -> ServiceFieldFilter | None:
+    """Extract a JSON-safe capability filter for one service field, if declared.
+
+    HA validates ``services.yaml`` field ``filter`` blocks via ``_FIELD_SCHEMA``,
+    resolving ``supported_features`` / attribute-option names to their enum values.
+    A field without a ``filter`` (or with an empty one) is universally usable and
+    returns ``None`` so the matcher treats it as unconditional.
+    """
+    raw_filter = field_description.get("filter")
+    if not isinstance(raw_filter, Mapping):
+        return None
+    field_filter: ServiceFieldFilter = {}
+    raw_features = raw_filter.get("supported_features")
+    if isinstance(raw_features, list):
+        features = [value for value in raw_features if isinstance(value, int)]
+        if features:
+            field_filter["supported_features"] = features
+    raw_attribute = raw_filter.get("attribute")
+    if isinstance(raw_attribute, Mapping):
+        attribute: dict[str, list[int | str]] = {}
+        for attr_name, allowed in raw_attribute.items():
+            if not isinstance(allowed, list):
+                continue
+            values = [value for value in allowed if isinstance(value, int | str)]
+            if values:
+                attribute[str(attr_name)] = values
+        if attribute:
+            field_filter["attribute"] = attribute
+    return field_filter or None
+
+
+def _service_target_brief(
+    hass: HomeAssistant,
+    domain: str,
+    service_name: str,
+) -> ServiceTargetBrief | None:
+    """Build a JSON-safe target brief mirroring HA's automation matching input.
+
+    Captures the service's declared ``entity`` target filters (each may constrain
+    ``domain``, ``device_class``, ``integration``, ``supported_features``) from the
+    cached service description. A service with a ``target`` but no entity filters
+    is captured as ``{"entity": []}`` (matches any entity); a service without any
+    ``target`` returns ``None`` (not entity-targeting, excluded from discovery).
+    """
+    description = async_get_cached_service_description(hass, domain, service_name)
+    if not isinstance(description, dict):
+        return None
+    target = description.get("target")
+    if not isinstance(target, Mapping):
+        return None
+    raw_entity_filters = target.get("entity")
+    if raw_entity_filters is None:
+        # Target present but entity filters absent: HA treats this as matching
+        # any entity, so capture an empty filter list to preserve that signal.
+        raw_entity_filters = []
+    if not isinstance(raw_entity_filters, list):
+        return None
+    filters: list[ServiceTargetFilter] = []
+    for raw_filter in raw_entity_filters:
+        if not isinstance(raw_filter, Mapping):
+            continue
+        filters.append(
+            {
+                "domain": [str(value) for value in raw_filter.get("domain", []) if isinstance(value, str)],
+                "device_class": [str(value) for value in raw_filter.get("device_class", []) if isinstance(value, str)],
+                "integration": value if isinstance(value := raw_filter.get("integration"), str) else None,
+                "supported_features": [
+                    value for value in raw_filter.get("supported_features", []) if isinstance(value, int)
+                ],
+            }
+        )
+    return {"entity": filters}
 
 
 def _service_field_name_and_required(key: object) -> tuple[str | None, bool]:

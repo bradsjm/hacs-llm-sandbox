@@ -21,8 +21,23 @@ from typing import Any, cast
 
 from homeassistant.util.json import JsonValueType
 
-type ServiceFieldBrief = dict[str, str | bool | None]
+# Service field briefs are loosely-structured JSON dicts. Known keys:
+# ``name`` (str), ``required`` (bool), ``type_hint`` (str | None),
+# ``description`` (str | None), and the optional ``filter`` carrying HA's
+# field-level capability filter (``supported_features`` bit constants and/or
+# ``attribute`` value-intersection rules such as ``supported_color_modes``).
+type ServiceFieldFilter = dict[str, list[int] | dict[str, list[int | str]]]
+type ServiceFieldBrief = dict[str, str | bool | None | list[int] | ServiceFieldFilter]
 type ServiceSchemaBrief = dict[str, list[ServiceFieldBrief] | bool]
+
+# Per-service target metadata, mirroring HA's automation target matching
+# (``websocket_api/automation.py``). ``entity`` holds one filter dict per
+# accepted entity group; each may constrain ``domain``, ``device_class``,
+# ``integration``, and ``supported_features``. ``primary_entities_only``
+# gates non-primary entity categories. Services without a declared target
+# are absent from this mapping, which the matcher treats as "accepts any".
+type ServiceTargetFilter = dict[str, list[str | int] | str | None]
+type ServiceTargetBrief = dict[str, list[ServiceTargetFilter] | bool]
 
 
 class _JsonSafeRecord:
@@ -333,3 +348,4 @@ class HomeSnapshot:
     notifications: list[SafeNotificationEntry]
     config_entries: list[SafeConfigEntry]
     services_schema: Mapping[str, Mapping[str, ServiceSchemaBrief]] = field(default_factory=dict)
+    services_target: Mapping[str, Mapping[str, ServiceTargetBrief]] = field(default_factory=dict)

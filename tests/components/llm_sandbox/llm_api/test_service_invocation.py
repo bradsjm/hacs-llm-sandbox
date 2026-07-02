@@ -3,7 +3,7 @@
 import math
 import time
 from collections.abc import Iterator, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import cast
 
 import pytest
@@ -545,6 +545,84 @@ async def test_response_flag_rules_record_blocked_action_and_returns_none(
     assert harness.invoker.calls == []
 
 
+async def test_async_services_for_target_reports_per_entity_services() -> None:
+    """Discovery returns, per resolved entity, the services whose target accepts it."""
+    snapshot = replace(
+        _snapshot(),
+        services_target={
+            "light": {
+                "get_state": {"entity": [{"domain": ["light"]}]},
+                "turn_on": {"entity": [{"domain": ["light"]}]},
+            },
+            "switch": {"turn_on": {"entity": [{"domain": ["switch"]}]}},
+        },
+    )
+    harness = _service_harness(snapshot=snapshot)
+
+    result = harness.services.async_services_for_target({"entity_id": "light.bedroom"})
+
+    assert result == {
+        "light.bedroom": {
+            "light": {
+                "get_state": {"supports_response": SupportsResponse.OPTIONAL.value, "fields": []},
+                "turn_on": {"supports_response": SupportsResponse.NONE.value, "fields": ["brightness_pct"]},
+            }
+        }
+    }
+
+
+def test_async_services_for_target_returns_empty_for_unresolved_selector() -> None:
+    """A selector that resolves to no visible entity yields an empty discovery map."""
+    harness = _service_harness()
+
+    assert harness.services.async_services_for_target({"entity_id": "light.missing"}) == {}
+    assert harness.services.async_services_for_target(None) == {}
+
+
+async def test_cross_domain_target_is_blocked_with_service_supported_fix() -> None:
+    """A service whose target excludes the resolved entity's domain blocks with matching fixes."""
+    snapshot = replace(
+        _snapshot(),
+        services_target={"light": {"turn_on": {"entity": [{"domain": ["light"]}]}}},
+    )
+    harness = _service_harness(snapshot=snapshot)
+
+    result = await _ok_call(harness, "light", "turn_on", target={"entity_id": "switch.outlet"})
+
+    assert result is None
+    assert _action_statuses_via_state(harness) == ["error"]
+    assert _action_keys_via_state(harness) == ["service_target_not_supported"]
+    error = cast(dict[str, object], harness.runtime.state.actions[0]["error"])
+    # The fix names the visible entity the service does target (light.bedroom), not the switch.
+    assert error["fix"] == ["light.bedroom"]
+    assert harness.invoker.calls == []
+
+
+async def test_unresolved_target_fix_list_ranks_service_supported_entities_first() -> None:
+    """Target-not-visible fix lists order entities the service supports ahead of others."""
+    snapshot = replace(
+        _snapshot(),
+        states={
+            "cover.blind_supported": _state(
+                "cover.blind_supported", "open", "Supported Blind", attributes={"supported_features": 4}
+            ),
+            "cover.blind_plain": _state("cover.blind_plain", "open", "Plain Blind"),
+        },
+        services={"cover": ("stop_cover",)},
+        services_supports_response={"cover": {"stop_cover": SupportsResponse.NONE.value}},
+        services_target={"cover": {"stop_cover": {"entity": [{"domain": ["cover"], "supported_features": [4]}]}}},
+        services_schema={"cover": {"stop_cover": SWITCH_TURN_ON_BRIEF}},
+    )
+    harness = _service_harness(snapshot=snapshot)
+
+    result = await _ok_call(harness, "cover", "stop_cover", target={"entity_id": "cover.nope"})
+
+    assert result is None
+    assert _action_keys_via_state(harness) == ["service_target_not_visible"]
+    error = cast(dict[str, object], harness.runtime.state.actions[0]["error"])
+    assert error["fix"] == ["cover.blind_supported", "cover.blind_plain"]
+
+
 def _service_harness(
     *,
     actions_enabled: bool = True,
@@ -665,16 +743,25 @@ def _config() -> SafeConfig:
     )
 
 
-def _state(entity_id: str, state: str, name: str) -> SafeState:
+def _state(
+    entity_id: str,
+    state: str,
+    name: str,
+    *,
+    attributes: Mapping[str, object] | None = None,
+) -> SafeState:
     """Build a minimal visible state record for target validation."""
     domain, object_id = entity_id.split(".", 1)
+    merged: dict[str, object] = {"friendly_name": name}
+    if attributes:
+        merged.update(attributes)
     return SafeState(
         entity_id=entity_id,
         domain=domain,
         object_id=object_id,
         name=name,
         state=state,
-        attributes={"friendly_name": name},
+        attributes=merged,
         last_changed="2026-06-29T00:00:00+00:00",
         last_reported="2026-06-29T00:00:00+00:00",
         last_updated="2026-06-29T00:00:00+00:00",

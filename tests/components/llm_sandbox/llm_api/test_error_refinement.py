@@ -110,6 +110,7 @@ def test_refine_unknown_name_keeps_message_no_attributes() -> None:
                 "async_call",
                 "async_services",
                 "async_services_for_domain",
+                "async_services_for_target",
                 "has_service",
                 "services",
                 "services_schema",

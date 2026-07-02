@@ -1,9 +1,14 @@
 """Unit tests for snapshot-backed service target resolution."""
 
 from collections.abc import Sequence
+from dataclasses import replace
 
 import pytest
-from custom_components.llm_sandbox.llm_api.resolution import available_hint, resolve_target_entity
+from custom_components.llm_sandbox.llm_api.resolution import (
+    available_hint,
+    rank_candidates_for_service,
+    resolve_target_entity,
+)
 from custom_components.llm_sandbox.snapshot.models import (
     HomeSnapshot,
     SafeConfig,
@@ -125,6 +130,63 @@ def test_available_hint_marks_overflow_only_above_discovery_limit(
     hint = available_hint(_snapshot(state_specs), "light")
 
     assert hint.endswith(" ...") is expect_overflow
+
+
+def test_rank_candidates_for_service_surfaces_targeted_entities_first() -> None:
+    """Fix-list candidates the service targets sort ahead of unrelated same-domain entities."""
+    from custom_components.llm_sandbox.llm_api.resolution import CandidateTarget
+
+    snapshot = replace(
+        _snapshot(
+            (
+                ("cover.blind_supported", None),
+                ("cover.blind_plain", None),
+            )
+        ),
+        services_target={
+            "cover": {
+                "stop_cover": {
+                    "entity": [{"domain": ["cover"], "supported_features": [4]}],
+                }
+            }
+        },
+        states={
+            "cover.blind_supported": _state_with_features("cover.blind_supported", 4),
+            "cover.blind_plain": _state_with_features("cover.blind_plain", 0),
+        },
+    )
+    candidates = (
+        CandidateTarget(entity_id="cover.blind_plain", name=None, object_id="blind_plain"),
+        CandidateTarget(entity_id="cover.blind_supported", name=None, object_id="blind_supported"),
+    )
+
+    ranked = rank_candidates_for_service(snapshot, candidates, "cover", "stop_cover")
+
+    assert [candidate.entity_id for candidate in ranked] == [
+        "cover.blind_supported",
+        "cover.blind_plain",
+    ]
+
+
+def test_rank_candidates_for_service_preserves_order_without_target_metadata() -> None:
+    """When the service has no target metadata, ranking is a no-op (HA decides)."""
+    from custom_components.llm_sandbox.llm_api.resolution import CandidateTarget
+
+    snapshot = _snapshot((("light.alpha", None), ("light.beta", None)))
+    candidates = (
+        CandidateTarget(entity_id="light.alpha", name=None, object_id="alpha"),
+        CandidateTarget(entity_id="light.beta", name=None, object_id="beta"),
+    )
+
+    ranked = rank_candidates_for_service(snapshot, candidates, "light", "turn_on")
+
+    assert [candidate.entity_id for candidate in ranked] == ["light.alpha", "light.beta"]
+
+
+def _state_with_features(entity_id: str, supported_features: int) -> SafeState:
+    """Build a state record carrying a supported_features attribute."""
+    base = _state(entity_id, None)
+    return replace(base, attributes={"supported_features": supported_features})
 
 
 def _snapshot(state_specs: Sequence[tuple[str, str | None]]) -> HomeSnapshot:

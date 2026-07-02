@@ -25,8 +25,8 @@ ACTIONS_DISABLED_PROMPT = (
     "## Service calls (disabled)\n"
     "Service calls are disabled for this assistant. hass.services.async_call is "
     "rejected. Use the service-catalog reads (has_service, "
-    "async_services_for_domain, supports_response), states, and registries "
-    "only.\n"
+    "async_services_for_domain, async_services_for_target, supports_response), "
+    "states, and registries only.\n"
 )
 
 

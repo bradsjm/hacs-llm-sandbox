@@ -230,6 +230,52 @@ async def test_snapshot_service_schema_plain_keys_are_optional(hass: HomeAssista
     assert fields["name"]["required"] is False
 
 
+async def test_snapshot_captures_service_target_and_field_capability_filters(hass: HomeAssistant) -> None:
+    """Service target entity-filters and per-field capability filters are captured."""
+    from homeassistant.helpers.service import async_set_service_schema
+
+    hass.services.async_register(
+        "cover",
+        "stop_cover",
+        lambda call: None,
+        schema=vol.Schema({vol.Optional("color_temp_kelvin"): int}),
+    )
+    async_set_service_schema(
+        hass,
+        "cover",
+        "stop_cover",
+        {
+            "target": {"entity": [{"domain": ["cover"], "supported_features": [4]}]},
+            "fields": {
+                "color_temp_kelvin": {"filter": {"attribute": {"supported_color_modes": ["color_temp"]}}},
+            },
+        },
+    )
+    await hass.async_block_till_done()
+
+    snapshot = build_snapshot(hass)
+
+    assert snapshot.services_target["cover"]["stop_cover"] == {
+        "entity": [
+            {"domain": ["cover"], "device_class": [], "integration": None, "supported_features": [4]}
+        ]
+    }
+    fields = {
+        field["name"]: field for field in snapshot.services_schema["cover"]["stop_cover"]["fields"]
+    }
+    assert fields["color_temp_kelvin"]["filter"] == {"attribute": {"supported_color_modes": ["color_temp"]}}
+
+
+async def test_snapshot_omits_services_target_for_non_entity_services(hass: HomeAssistant) -> None:
+    """Services without a declared target are absent from services_target."""
+    hass.services.async_register("script", "reload", lambda call: None)
+    await hass.async_block_till_done()
+
+    snapshot = build_snapshot(hass)
+
+    assert "script" not in snapshot.services_target
+
+
 async def test_snapshot_device_label_index(hass: HomeAssistant) -> None:
     device_registry = dr.async_get(hass)
     device = device_registry.async_get_or_create(

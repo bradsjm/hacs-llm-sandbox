@@ -90,6 +90,9 @@
     "service_target_not_visible": {
       "message": "Entity {entity_id} is not available to control."
     },
+    "service_target_not_supported": {
+      "message": "Service {domain}.{service} does not target the requested entities."
+    },
     "service_call_timeout": {
       "message": "Service call to {domain}.{service} timed out."
     },
