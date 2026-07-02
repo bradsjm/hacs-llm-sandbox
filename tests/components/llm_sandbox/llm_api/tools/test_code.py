@@ -92,7 +92,7 @@ result = {
     assert output["len"] >= 2
 
 
-async def test_missing_entity_read_attaches_available_hint(
+async def test_missing_entity_read_attaches_note(
     hass: HomeAssistant,
     loaded_entry: MockConfigEntry,
 ) -> None:
@@ -105,18 +105,18 @@ result = hass.states.get("light.kitchen_main")
 
     assert result["execution"]["status"] == "ok"
     assert result["output"] is None
-    assert result["execution"]["referenced_missing"] == ["light.kitchen_main"]
-    hint = result["execution"]["available_hint"]
-    assert isinstance(hint, str)
-    assert "light.bedroom" in hint
-    assert "light.living_room" in hint
+    note = result["note"]
+    assert isinstance(note, str)
+    assert note
+    assert "light.kitchen_main" in note
+    assert "light.bedroom" in note
 
 
 async def test_present_entity_read_attaches_no_hint(
     hass: HomeAssistant,
     loaded_entry: MockConfigEntry,
 ) -> None:
-    """A successful read produces no referenced_missing tracking or available_hint."""
+    """A successful read produces no repair note."""
     code = """
 state = hass.states.get("light.bedroom")
 result = state.state if state is not None else None
@@ -126,8 +126,7 @@ result = state.state if state is not None else None
 
     assert result["execution"]["status"] == "ok"
     assert result["output"] == "on"
-    assert result["execution"]["referenced_missing"] == []
-    assert "available_hint" not in result["execution"]
+    assert "note" not in result
 
 
 async def test_map_filter_normalize_and_run(
@@ -516,13 +515,12 @@ result = ret
     actions = result["actions"]
     assert len(actions) == 1
     action = actions[0]
-    assert action["domain"] == "light"
-    assert action["service"] == "turn_on"
-    assert action["service_data"]["brightness_pct"] == 80
+    assert action["service"] == "light.turn_on"
     assert action["target"]["entity_id"] == ["light.bedroom"]
     assert action["status"] == "ok"
-    assert action["response"] is None
-    assert action["error"] is None
+    assert "service_data" not in action
+    assert "response" not in action
+    assert "error" not in action
     assert events == ["turn_on"]
 
 
@@ -553,11 +551,9 @@ result = "ok"
     assert result["execution"]["status"] == "ok"
     json.dumps(result["actions"])
     action = result["actions"][0]
-    nested = action["service_data"]["7"]
-    assert nested["levels"] == [1, 2]
-    assert set(nested["labels"]) == {"cozy", "night"}
-    assert nested["state"]["entity_id"] == "light.bedroom"
+    assert action["service"] == "light.turn_on"
     assert action["target"]["entity_id"] == ["light.bedroom"]
+    assert "service_data" not in action
 
 
 async def test_large_allocation_fails_with_monty_resource_limit(
@@ -702,11 +698,10 @@ result = await hass.services.async_call(
     assert result["execution"]["status"] == "ok"
     actions = result["actions"]
     assert len(actions) == 1
-    assert actions[0]["domain"] == "test_response"
-    assert actions[0]["service"] == "required"
-    assert actions[0]["return_response"] is True
+    assert actions[0]["service"] == "test_response.required"
     assert actions[0]["status"] == "ok"
     assert actions[0]["response"] == result["output"]
+    assert "return_response" not in actions[0]
 
 
 async def test_positional_response_service_call_records_action(
@@ -741,14 +736,13 @@ result = await hass.services.async_call(
     actions = result["actions"]
     assert len(actions) == 1
     action = actions[0]
-    assert action["domain"] == "test_response"
-    assert action["service"] == "required"
-    assert action["service_data"] is None
-    assert action["blocking"] is True
+    assert action["service"] == "test_response.required"
     assert action["target"]["entity_id"] == ["light.bedroom"]
-    assert action["return_response"] is True
     assert action["status"] == "ok"
     assert action["response"] == result["output"]
+    assert "service_data" not in action
+    assert "blocking" not in action
+    assert "return_response" not in action
     assert events == ["required"]
 
 

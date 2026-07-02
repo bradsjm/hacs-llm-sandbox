@@ -141,18 +141,12 @@ def helper_error_payload_for_state(
     state: ExecutionState,
 ) -> HelperErrorPayload:
     """Build a helper-error response using current execution state."""
-    from .contracts import AVAILABLE_GLOBALS, suggested_methods
-
     return helper_error_payload(
         err,
-        helper_calls=state.helper_calls,
-        helper_call_limit=state.helper_call_limit,
-        available_globals=list(AVAILABLE_GLOBALS),
-        suggested_methods=suggested_methods(),
+        message=_helper_error_message(err, state),
         adjustments=list(state.adjustments),
         printed=list(state.printed),
         actions=cast(list[ActionRecord], json_safe(state.actions)),
-        service_hints=err.hints,
     )
 
 
@@ -161,27 +155,31 @@ def code_error_payload_for_state(
     kind: str,
     message: str,
     state: ExecutionState,
-    location: dict[str, int] | None = None,
     available_attributes: list[str] | None = None,
 ) -> CodeErrorPayload:
     """Build a code-execution error response using current state."""
-    from .contracts import AVAILABLE_GLOBALS, suggested_methods
+    fix = available_attributes
+    if kind == "NameError" and fix is None and "not defined" in message:
+        from .contracts import AVAILABLE_GLOBALS
 
-    payload = code_error_payload(
+        fix = list(AVAILABLE_GLOBALS)
+    return code_error_payload(
         kind=kind,
         message=message,
-        helper_calls=state.helper_calls,
-        helper_call_limit=state.helper_call_limit,
-        available_globals=list(AVAILABLE_GLOBALS),
-        suggested_methods=suggested_methods(),
         adjustments=list(state.adjustments),
         printed=list(state.printed),
         actions=cast(list[ActionRecord], json_safe(state.actions)),
-        available_attributes=available_attributes,
+        fix=fix,
     )
-    if location is not None:
-        payload["execution"]["location"] = location
-    return payload
+
+
+def _helper_error_message(err: HelperExecutionError, state: ExecutionState) -> str:
+    """Return one actionable sentence for a helper execution error."""
+    if err.key == "call_budget_exceeded":
+        return f"Stopped after {state.helper_call_limit} service calls; do not retry the same call."
+    if reason := err.placeholders.get("reason"):
+        return f"Fix the {err.helper} call failure: {reason}."
+    return f"Resolve the {err.helper} error '{err.key}' before retrying."
 
 
 type RefineResult = tuple[str, str, list[str] | None]
@@ -209,9 +207,10 @@ def _refine_unresolved_reference(kind: str, message: str, code: str) -> RefineRe
     """Convert Monty unresolved-reference wording into a familiar NameError."""
     if "unresolved-reference" not in message and "used when not defined" not in message:
         return None
+    clean_message = _strip_monty_code_frame(message)
     if (name_match := re.search(r"`([A-Za-z_]\w*)`", message)) is None:
         # Guard matched but no backticked name: surface the cleaned message as-is.
-        return kind, message, None
+        return kind, clean_message, None
     name = name_match.group(1)
     if name in {"dir", "vars"}:
         from .builtin_normalization import GLOBAL_TYPE_MAP, public_surface
@@ -235,7 +234,11 @@ def _refine_unresolved_reference(kind: str, message: str, code: str) -> RefineRe
             "Use the pre-bound globals instead.",
             None,
         )
-    return "NameError", message, None
+    return (
+        "NameError",
+        f"`{name}` is not defined; use an available sandbox global or assign it before use.",
+        None,
+    )
 
 
 def _refine_unresolved_import(_kind: str, message: str, _code: str) -> RefineResult | None:
@@ -328,6 +331,19 @@ def _extract_unresolved_import(message: str) -> str | None:
     ):
         return str(match.group(1) or match.group(2))
     return "<module>"
+
+
+def _strip_monty_code_frame(message: str) -> str:
+    """Remove Monty source-frame lines from an otherwise useful diagnostic."""
+    lines = []
+    for line in message.splitlines():
+        stripped = line.strip()
+        if not stripped or "llm_sandbox_agent.py" in stripped or stripped.startswith("-->"):
+            continue
+        if set(stripped) <= {"^", "|", " ", "-"}:
+            continue
+        lines.append(stripped)
+    return " ".join(lines)
 
 
 def _scrub_class_name(message: str, class_name: str) -> str:

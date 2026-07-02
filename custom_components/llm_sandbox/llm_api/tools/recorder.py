@@ -41,6 +41,7 @@ from ...types import TranslationPlaceholders
 from ..errors import tool_error_envelope, tool_error_from_exception
 from ..executor_support import json_safe
 from ..prompts import build_get_history_description, build_get_logbook_description, build_get_statistics_description
+from ..resolution import _DISCOVERY_LIMIT, candidates_for_domain, resolve_target_entity
 from ._support import _require_loaded_entry, _require_loaded_entry_error
 
 RECORDER_UNAVAILABLE = "recorder_unavailable"
@@ -52,14 +53,10 @@ QUERY_FAILED = "query_failed"
 # alternative to absolute ISO start/end (the sandbox forbids timedelta math).
 _HOURS_ARG = vol.All(vol.Coerce(float), vol.Range(min=0))
 
-# Actionable guidance keyed by the recoverable error key. Message/hints are
-# surfaced inline to the LLM so a follow-up call can succeed; stable keys stay
-# translated in en.json for the human-facing contract.
+# Actionable guidance keyed by the recoverable error key. Entity visibility
+# errors are snapshot-specific and are handled separately so they can include
+# concrete visible candidates for the requested domain.
 _RECORDER_GUIDANCE: dict[str, tuple[str, list[str]]] = {
-    ENTITY_NOT_VISIBLE: (
-        "Only snapshot-visible entities are queryable.",
-        ["List visible entities via execute_home_code (hass.states.async_all()) and retry with visible IDs."],
-    ),
     TIME_WINDOW_TOO_LARGE: (
         "The requested time window is too large.",
         ["Reduce the window to at most {max_hours} hours.", "Pass hours=<n> or a smaller start/end range."],
@@ -91,7 +88,7 @@ class _SafeHintDict(dict[str, str]):
 
 
 def _error_guidance(key: str, placeholders: Mapping[str, str]) -> tuple[str | None, list[str] | None]:
-    """Return (message, hints) for a recorder error key, formatting placeholders into hints."""
+    """Return (message, fix) for a recorder error key, formatting placeholders."""
     entry = _RECORDER_GUIDANCE.get(key)
     if entry is None:
         return None, None
@@ -100,10 +97,42 @@ def _error_guidance(key: str, placeholders: Mapping[str, str]) -> tuple[str | No
     return message, [template.format_map(values) for template in templates]
 
 
-def recorder_error_envelope(key: str, placeholders: TranslationPlaceholders) -> JsonObjectType:
+def _candidate_ids(snapshot: HomeSnapshot, requested_entity_id: str) -> list[str] | None:
+    """Return deterministic visible candidates for an invisible requested entity."""
+    domain = requested_entity_id.split(".", 1)[0]
+    resolution = resolve_target_entity(snapshot, requested_entity_id, domain)
+    if resolution.resolved is not None:
+        ids = [resolution.resolved]
+    elif resolution.candidates:
+        ids = [candidate.entity_id for candidate in resolution.candidates]
+    else:
+        candidates = candidates_for_domain(snapshot, domain, limit=_DISCOVERY_LIMIT + 1)
+        ids = [candidate.entity_id for candidate in candidates]
+    if not ids:
+        return None
+    ids = sorted(ids)
+    if len(ids) > _DISCOVERY_LIMIT:
+        return [*ids[: _DISCOVERY_LIMIT - 1], "..."]
+    return ids
+
+
+def recorder_error_envelope(
+    key: str,
+    placeholders: TranslationPlaceholders,
+    snapshot: HomeSnapshot | None = None,
+) -> JsonObjectType:
     """Build a recoverable recorder error envelope with actionable guidance."""
-    message, hints = _error_guidance(key, placeholders)
-    return tool_error_envelope(key, placeholders, message=message, hints=hints)
+    if key == ENTITY_NOT_VISIBLE:
+        entity_id = placeholders.get("entity_id", "the requested entity")
+        fix = _candidate_ids(snapshot, entity_id) if snapshot is not None else None
+        return tool_error_envelope(
+            key,
+            placeholders,
+            message=f"Entity '{entity_id}' is not visible to this LLM tool.",
+            fix=fix,
+        )
+    message, fix = _error_guidance(key, placeholders)
+    return tool_error_envelope(key, placeholders, message=message, fix=fix)
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,7 +206,7 @@ class _RecorderTool(llm.Tool):
         try:
             return await self._query(hass, snapshot, settings, deadline, data)
         except RecoverableToolError as err:
-            return recorder_error_envelope(err.key, err.placeholders)
+            return recorder_error_envelope(err.key, err.placeholders, snapshot)
         except Exception as err:  # noqa: BLE001 - recorder tools map unexpected query failures to envelopes
             mapped = tool_error_from_exception(err)
             if mapped is None:
@@ -338,40 +367,38 @@ def _truncate[T](values: list[T], limit: int) -> tuple[list[T], bool]:
     return (values[-limit:], True) if len(values) > limit else (values, False)
 
 
-def _state_row_to_dict(row: State | dict[str, object]) -> dict[str, object]:
-    """Convert a recorder history row to the SafeState-compatible history shape."""
+def _state_row_to_dict(row: State | dict[str, object]) -> tuple[list[object], str | None]:
+    """Convert a recorder history row to compact ``([time, state], unit)`` shape."""
     if isinstance(row, State):
-        return cast(
-            dict[str, object],
-            json_safe(
-                {
-                    "entity_id": row.entity_id,
-                    "state": row.state,
-                    "attributes": dict(row.attributes),
-                    "last_changed": row.last_changed.isoformat(),
-                    "last_updated": row.last_updated.isoformat(),
-                }
-            ),
-        )
+        unit = row.attributes.get("unit_of_measurement") or row.attributes.get("unit")
+        return [row.last_changed.isoformat(), row.state], str(unit) if unit is not None else None
 
     shaped = dict(row)
-    for key in ("last_changed", "last_updated"):
-        value = shaped.get(key)
-        if isinstance(value, datetime):
-            shaped[key] = value.isoformat()
-    return cast(dict[str, object], json_safe(shaped))
+    timestamp = shaped.get("last_changed") or shaped.get("last_updated")
+    if isinstance(timestamp, datetime):
+        timestamp = timestamp.isoformat()
+    attributes = shaped.get("attributes")
+    unit = None
+    if isinstance(attributes, Mapping):
+        unit = attributes.get("unit_of_measurement") or attributes.get("unit")
+    return [str(timestamp), shaped.get("state")], str(unit) if unit is not None else None
 
 
-def _statistic_row_to_dict(row: dict[str, object]) -> dict[str, object]:
-    """Convert recorder statistic timestamps to ISO strings before JSON shaping."""
+def _statistic_row_to_dict(row: dict[str, object]) -> list[object]:
+    """Convert one recorder statistic row to a compact timestamp/value array."""
     shaped = dict(row)
-    for key in ("start", "end", "last_reset"):
-        value = shaped.get(key)
-        if isinstance(value, datetime):
-            shaped[key] = dt_util.as_utc(value).isoformat()
-        elif isinstance(value, int | float):
-            shaped[key] = datetime.fromtimestamp(value, UTC).isoformat()
-    return cast(dict[str, object], json_safe(shaped))
+    timestamp = shaped.get("start") or shaped.get("end") or shaped.get("last_reset")
+    if isinstance(timestamp, datetime):
+        timestamp = dt_util.as_utc(timestamp).isoformat()
+    elif isinstance(timestamp, int | float):
+        timestamp = datetime.fromtimestamp(timestamp, UTC).isoformat()
+    value = shaped.get("state")
+    if value is None:
+        for key in ("mean", "sum", "min", "max"):
+            value = shaped.get(key)
+            if value is not None:
+                break
+    return [str(timestamp), value]
 
 
 @final
@@ -433,23 +460,28 @@ class GetHistoryTool(_RecorderTool):
 
         budget = max(1, MAX_HISTORY_STATES // len(entity_ids))
         truncated = False
-        entities: dict[str, list[dict[str, object]]] = {}
+        entities: dict[str, dict[str, object]] = {}
         for entity_id, states in result.items():
-            rows = [_state_row_to_dict(row) for row in states]
+            converted = [_state_row_to_dict(row) for row in states]
+            rows = [row for row, _unit in converted]
             rows, cut = _truncate(rows, budget)
             truncated = truncated or cut
-            entities[entity_id] = rows
+            entity: dict[str, object] = {"rows": rows}
+            unit = next((unit for _row, unit in converted if unit), None)
+            if unit:
+                entity["unit"] = unit
+            entities[entity_id] = entity
+
+        payload: dict[str, object] = {
+            "window": {"start": start.isoformat(), "end": end.isoformat()},
+            "entities": entities,
+        }
+        if truncated:
+            payload["truncated"] = True
 
         return cast(
             JsonObjectType,
-            json_safe(
-                {
-                    "status": "ok",
-                    "window": {"start": start.isoformat(), "end": end.isoformat()},
-                    "entities": entities,
-                    "truncated": truncated,
-                }
-            ),
+            json_safe(payload),
         )
 
 
@@ -516,24 +548,24 @@ class GetStatisticsTool(_RecorderTool):
 
         budget = max(1, MAX_STATISTICS_ROWS // len(statistic_ids))
         truncated = False
-        shaped_statistics: dict[str, list[dict[str, object]]] = {}
+        shaped_statistics: dict[str, dict[str, object]] = {}
         for statistic_id, rows in result.items():
             shaped_rows = [_statistic_row_to_dict(cast(dict[str, object], row)) for row in rows]
             shaped_rows, cut = _truncate(shaped_rows, budget)
             truncated = truncated or cut
-            shaped_statistics[statistic_id] = shaped_rows
+            shaped_statistics[statistic_id] = {"rows": shaped_rows}
+
+        payload: dict[str, object] = {
+            "window": {"start": start.isoformat(), "end": end.isoformat()},
+            "period": period,
+            "statistics": shaped_statistics,
+        }
+        if truncated:
+            payload["truncated"] = True
 
         return cast(
             JsonObjectType,
-            json_safe(
-                {
-                    "status": "ok",
-                    "window": {"start": start.isoformat(), "end": end.isoformat()},
-                    "period": period,
-                    "statistics": shaped_statistics,
-                    "truncated": truncated,
-                }
-            ),
+            json_safe(payload),
         )
 
 
@@ -589,15 +621,15 @@ class GetLogbookTool(_RecorderTool):
             functools.partial(processor.get_events, start_day=start, end_day=end),
         )
         entries, truncated = _truncate(entries, MAX_LOGBOOK_ENTRIES)
+        entries_payload = [dict(entry) for entry in entries]
+        payload: dict[str, object] = {
+            "window": {"start": start.isoformat(), "end": end.isoformat()},
+            "entries": entries_payload,
+        }
+        if truncated:
+            payload["truncated"] = True
 
         return cast(
             JsonObjectType,
-            json_safe(
-                {
-                    "status": "ok",
-                    "window": {"start": start.isoformat(), "end": end.isoformat()},
-                    "entries": entries,
-                    "truncated": truncated,
-                }
-            ),
+            json_safe(payload),
         )

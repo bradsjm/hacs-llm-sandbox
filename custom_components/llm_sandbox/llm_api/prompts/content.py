@@ -14,11 +14,10 @@ ACTIONS_ENABLED_PROMPT = (
     "that produce a response.\n"
     "- Calls run sequentially with no rollback; a later failure does not undo "
     "earlier calls.\n"
-    "- Each async_call costs one helper call; reads cost zero. Respect the "
-    "budget.\n"
-    "- Errors are returned as helper_error. If the service name is wrong, the "
-    "response lists valid services for the domain with brief schemas; correct and "
-    "retry.\n"
+    "- Action results are compact records with service, target, status, and "
+    "resolved_from or error when relevant.\n"
+    "- Errors include a specific message and may include fix candidates such as "
+    "valid domains, services, entities, or fields to correct in one retry.\n"
 )
 
 
@@ -76,22 +75,28 @@ def build_execute_home_code_description() -> str:
         "Execute bounded Python/Monty code against a frozen, read-only Home Assistant view. "
         "Read states and registries using the native Home Assistant patterns documented in the API prompt. "
         "Service-call availability follows the API prompt. "
-        "Returns {execution, output, printed, actions}. execution.status is "
-        "ok | code_error | helper_error | setup_error; use output only when status is ok. "
-        "printed holds captured print() lines. actions lists service calls with status, "
-        "response, and error details."
+        "Success returns {execution:{status:'ok'}, output:<data>} with printed only when print() emitted lines. "
+        "If output is empty because a literal entity id is missing, note gives one imperative retry hint naming "
+        "the missing id and a visible replacement. Errors return {execution:{status:'code_error'|'helper_error'|"
+        "'setup_error', kind?, message, fix?}, output:null}; message is the specific failure and fix lists "
+        "concrete candidate globals, attributes, services, domains, or entity ids to correct in one retry. "
+        "actions appears only when a service call was made and contains compact records "
+        "{service, target, status, resolved_from?, error?}."
     )
 
 
 def build_get_history_description() -> str:
     """Return the get_history tool description."""
     return (
-        "Return raw state-value history (each recorded state row) for visible "
+        "Return raw state-value history for visible "
         "entities over a bounded UTC window; use when you need how a state or "
         "attribute changed over time. "
         "Scope with entity_ids or HA-native selectors (area_id/device_id/floor_id/label_id/domain); "
         "size the window with hours=<n> or ISO start/end. "
-        "Returns {status, window, entities, truncated}."
+        "Success returns {window, entities}, where entities is keyed by entity_id and each value has "
+        "rows of [t, state] plus unit when known; truncated appears only when true. "
+        "Errors return {status:'error', error:{key, message, fix?}}; entity_not_visible fix names "
+        "concrete visible entity candidates."
     )
 
 
@@ -106,7 +111,10 @@ def build_get_statistics_description() -> str:
         "entity ID; external or non-entity statistic IDs are rejected. Scope with "
         "statistic_ids or HA-native selectors "
         "(area_id/device_id/floor_id/label_id/domain); size the window with hours=<n> or ISO start/end. "
-        "Returns {status, window, period, statistics, truncated}."
+        "Success returns {window, period, statistics}, where statistics is keyed by statistic/entity id and each "
+        "value has rows of [t, value]; truncated appears only when true. "
+        "Errors return {status:'error', error:{key, message, fix?}}; entity_not_visible fix names "
+        "concrete visible entity candidates."
     )
 
 
@@ -118,7 +126,10 @@ def build_get_logbook_description() -> str:
         "use for 'what happened with X', activity, or a timeline. "
         "Scope with entity_ids or HA-native selectors (area_id/device_id/floor_id/label_id/domain); "
         "size the window with hours=<n> or ISO start/end. "
-        "Returns {status, window, entries, truncated}."
+        "Success returns {window, entries}, where entries is a flat list of timeline records each carrying "
+        "its entity_id; truncated appears only when true. "
+        "Errors return {status:'error', error:{key, message, fix?}}; entity_not_visible fix names "
+        "concrete visible entity candidates."
     )
 
 
@@ -127,5 +138,6 @@ def build_get_camera_image_description() -> str:
     return (
         "Capture a single live frame from a visible camera or image entity and return it as an "
         "inline image for visual analysis. Use this to answer questions about what is currently "
-        "visible. Only entities visible under the configured scope can be captured."
+        "visible. Only entities visible under the configured scope can be captured. "
+        "Errors return {status:'error', error:{key, message, fix?}}."
     )

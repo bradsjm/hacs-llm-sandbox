@@ -60,7 +60,7 @@ from .facade_views import (
     SafeStateMachine,
     build_facades,
 )
-from .resolution import available_hint
+from .resolution import _DISCOVERY_LIMIT, candidates_for_domain, resolve_target_entity
 from .runtime import RuntimeContext, activate_runtime, clear_runtime
 
 MAX_MONTY_CODE_CHARS = 8000
@@ -207,11 +207,99 @@ def _referenced_missing(code: str, snapshot: HomeSnapshot) -> list[str]:
     return missing
 
 
+def _referenced_visible_state_id(code: str, snapshot: HomeSnapshot) -> str | None:
+    """Return the only visible literal state id read via ``states.get``/``states[...]``."""
+    try:
+        module = ast.parse(code)
+    except SyntaxError:
+        return None
+    visible: list[str] = []
+    seen: set[str] = set()
+
+    def _consider(literal: object) -> None:
+        if isinstance(literal, str) and literal in snapshot.states and literal not in seen:
+            seen.add(literal)
+            visible.append(literal)
+
+    for node in ast.walk(module):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            if node.func.attr == "get" and _states_root(node.func.value) and node.args:
+                _consider(_literal_str(node.args[0]))
+        elif isinstance(node, ast.Subscript) and _states_root(node.value):
+            _consider(_literal_str(node.slice))
+    return visible[0] if len(visible) == 1 else None
+
+
 def _literal_str(node: ast.AST) -> object:
     """Return the Python value of a string-literal AST node, else a sentinel."""
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return node.value
     return object()  # non-string / non-literal: never matches an entity id
+
+
+def _bounded_strings(values: list[str]) -> list[str]:
+    """Bound deterministic repair lists to the discovery limit plus overflow marker."""
+    if len(values) > _DISCOVERY_LIMIT:
+        return [*values[: _DISCOVERY_LIMIT - 1], "..."]
+    return values
+
+
+def _entity_candidates(snapshot: HomeSnapshot, requested_entity_id: str) -> list[str]:
+    """Return token-ranked visible entity candidates for a missing state id."""
+    domain = requested_entity_id.split(".", 1)[0] if "." in requested_entity_id else requested_entity_id
+    outcome = resolve_target_entity(snapshot, requested_entity_id, domain)
+    if outcome.resolved is not None:
+        return [outcome.resolved]
+    candidates = outcome.candidates or candidates_for_domain(snapshot, domain, limit=_DISCOVERY_LIMIT + 1)
+    return _bounded_strings([candidate.entity_id for candidate in candidates])
+
+
+def _missing_state_note(snapshot: HomeSnapshot, requested_entity_id: str) -> str:
+    """Return an imperative empty-result repair note for a missing state id."""
+    candidates = _entity_candidates(snapshot, requested_entity_id)
+    if candidates and candidates[0] != "...":
+        return f"No data: '{requested_entity_id}' does not exist. Use '{candidates[0]}' and re-run."
+    return f"No data: '{requested_entity_id}' does not exist and no visible replacement was found."
+
+
+def _strip_monty_diagnostic(message: str) -> str:
+    """Remove Monty code-frame lines and filenames from an executor-surfaced message."""
+    lines: list[str] = []
+    for line in message.splitlines():
+        stripped = line.strip()
+        if not stripped or "llm_sandbox_agent.py" in stripped or stripped.startswith("-->"):
+            continue
+        if set(stripped) <= {"^", "|", " ", "-"}:
+            continue
+        lines.append(stripped.replace("llm_sandbox_agent.py", ""))
+    return " ".join(" ".join(lines).split()) or "Code execution failed."
+
+
+def _read_path_fix(
+    kind: str,
+    message: str,
+    code: str,
+    snapshot: HomeSnapshot,
+    fallback_fix: list[str] | None,
+) -> tuple[str, list[str] | None]:
+    """Augment code-error repair candidates with snapshot-aware state/entity facts."""
+    missing = _referenced_missing(code, snapshot)
+    if kind == "AttributeError" and missing and ("NoneType" in message or "value is None" in message):
+        fix = _entity_candidates(snapshot, missing[0])
+        if fix:
+            return f"State '{missing[0]}' was not found; use one of: {', '.join(fix)}.", fix
+        return f"State '{missing[0]}' was not found; choose a visible entity id before reading its state.", None
+    if (
+        kind in {"AttributeError", "KeyError"}
+        and (entity_id := _referenced_visible_state_id(code, snapshot)) is not None
+    ):
+        state = snapshot.states[entity_id]
+        valid_names = ["state", *sorted(state.attributes)]
+        return (
+            f"Read '{entity_id}' using one of these valid fields or attributes: {', '.join(valid_names)}.",
+            valid_names,
+        )
+    return message, fallback_fix
 
 
 async def async_execute_home_code(
@@ -308,11 +396,13 @@ async def async_execute_home_code(
         refined_kind, refined_message, available_attributes = refine_code_error(
             specific.__class__.__name__, str(specific) or str(err), code
         )
+        clean_message = _strip_monty_diagnostic(refined_message)
+        clean_message, fix = _read_path_fix(refined_kind, clean_message, code, snapshot, available_attributes)
         return code_error_payload_for_state(
             kind=refined_kind,
-            message=refined_message,
+            message=clean_message,
             state=runtime.state,
-            available_attributes=available_attributes,
+            available_attributes=fix,
         )
     finally:
         # Capture print output even on success; CollectString.output is a
@@ -328,19 +418,12 @@ async def async_execute_home_code(
     # propagate the runtime contextvar to sync methods, so this is a code scan,
     # not a runtime record.)
     referenced_missing = _referenced_missing(code, snapshot)
-    execution_payload: dict[str, object] = {
-        "status": "ok",
-        "helper_calls": runtime.state.helper_calls,
-        "helper_call_limit": runtime.state.helper_call_limit,
-        "adjustments": list(runtime.state.adjustments),
-        "referenced_missing": referenced_missing,
-    }
+    execution_payload: dict[str, object] = {"status": "ok"}
+    payload: dict[str, object] = {"execution": execution_payload, "output": result}
     if referenced_missing and _is_empty_output(result):
-        domain = referenced_missing[0].split(".", 1)[0] if "." in referenced_missing[0] else referenced_missing[0]
-        execution_payload["available_hint"] = available_hint(snapshot, domain)
-    return {
-        "execution": execution_payload,
-        "output": result,
-        "printed": list(runtime.state.printed),
-        "actions": json_safe(runtime.state.actions),
-    }
+        payload["note"] = _missing_state_note(snapshot, referenced_missing[0])
+    if runtime.state.printed:
+        payload["printed"] = list(runtime.state.printed)
+    if runtime.state.actions:
+        payload["actions"] = json_safe(runtime.state.actions)
+    return payload

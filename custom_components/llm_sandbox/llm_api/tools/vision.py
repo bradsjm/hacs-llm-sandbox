@@ -79,7 +79,7 @@ class _SafeHintDict(dict[str, str]):
 
 
 def _error_guidance(key: str, placeholders: Mapping[str, str]) -> tuple[str | None, list[str] | None]:
-    """Return (message, hints) for a vision error key, formatting placeholders into hints."""
+    """Return (message, fix) for a vision error key, formatting placeholders."""
     entry = _VISION_GUIDANCE.get(key)
     if entry is None:
         return None, None
@@ -90,8 +90,15 @@ def _error_guidance(key: str, placeholders: Mapping[str, str]) -> tuple[str | No
 
 def _envelope(key: str, placeholders: TranslationPlaceholders) -> JsonObjectType:
     """Build a recoverable vision error envelope with actionable guidance."""
-    message, hints = _error_guidance(key, placeholders)
-    return tool_error_envelope(key, placeholders, message=message, hints=hints)
+    if key == ENTITY_NOT_VISIBLE:
+        entity_id = placeholders.get("entity_id", "the requested image entity")
+        return tool_error_envelope(
+            key,
+            placeholders,
+            message=f"Image entity '{entity_id}' is not visible to this LLM tool.",
+        )
+    message, fix = _error_guidance(key, placeholders)
+    return tool_error_envelope(key, placeholders, message=message, fix=fix)
 
 
 @final

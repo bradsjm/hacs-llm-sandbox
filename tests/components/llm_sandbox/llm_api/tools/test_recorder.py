@@ -30,15 +30,17 @@ async def test_history_returns_states_for_visible_entity(
 
     result = await _call_history(hass, recorder_entry, {"entity_ids": ["light.bedroom"]})
 
-    assert result["status"] == "ok"
     assert "light.bedroom" in result["entities"]
     assert isinstance(result["window"]["start"], str)
     assert isinstance(result["window"]["end"], str)
-    assert isinstance(result["truncated"], bool)
-    row = result["entities"]["light.bedroom"][-1]
-    assert "state" in row
-    assert "last_changed" in row
-    assert "last_updated" in row
+    assert "truncated" not in result
+    entity = result["entities"]["light.bedroom"]
+    assert set(entity) == {"rows"}
+    row = entity["rows"][-1]
+    assert isinstance(row, list)
+    assert len(row) == 2
+    assert isinstance(row[0], str)
+    assert isinstance(row[1], str)
 
 
 async def test_statistics_returns_rows_for_visible_statistic(
@@ -73,13 +75,13 @@ async def test_statistics_returns_rows_for_visible_statistic(
 
     result = await _call_statistics(hass, recorder_entry, {"statistic_ids": ["sensor.energy"], "period": "hour"})
 
-    assert result["status"] == "ok"
     assert result["period"] == "hour"
     assert "sensor.energy" in result["statistics"]
-    row = result["statistics"]["sensor.energy"][-1]
-    assert isinstance(row["start"], str)
-    assert isinstance(row["end"], str)
-    assert isinstance(row["sum"], int | float)
+    row = result["statistics"]["sensor.energy"]["rows"][-1]
+    assert isinstance(row, list)
+    assert len(row) == 2
+    assert isinstance(row[0], str)
+    assert isinstance(row[1], int | float)
 
 
 async def test_logbook_returns_entries_for_visible_entity(
@@ -94,7 +96,6 @@ async def test_logbook_returns_entries_for_visible_entity(
 
     result = await _call_logbook(hass, recorder_entry, {"entity_ids": ["light.bedroom"]})
 
-    assert result["status"] == "ok"
     assert isinstance(result["entries"], list)
     assert len(result["entries"]) >= 1
     row = result["entries"][-1]
@@ -111,6 +112,8 @@ async def test_logbook_unavailable_returns_error_key(
 
     assert result["status"] == "error"
     assert result["error"]["key"] == "logbook_unavailable"
+    assert isinstance(result["error"]["message"], str)
+    assert result["error"]["message"]
 
 
 @pytest.mark.parametrize(
@@ -133,6 +136,8 @@ async def test_recorder_absent_returns_error_key(
 
     assert result["status"] == "error"
     assert result["error"]["key"] == "recorder_unavailable"
+    assert isinstance(result["error"]["message"], str)
+    assert result["error"]["message"]
 
 
 @pytest.mark.parametrize(
@@ -159,8 +164,11 @@ async def test_non_visible_entity_rejected(
 
     assert result["status"] == "error"
     assert result["error"]["key"] == "entity_not_visible"
-    assert result["error"]["placeholders"]["entity_id"] == "light.living_room"
-    assert result["error"]["hints"]
+    assert isinstance(result["error"]["message"], str)
+    assert result["error"]["message"]
+    fix = result["error"]["fix"]
+    assert isinstance(fix, list)
+    assert fix
 
 
 @pytest.mark.parametrize(
@@ -195,7 +203,9 @@ async def test_window_too_large_rejected(
 
     assert result["status"] == "error"
     assert result["error"]["key"] == "time_window_too_large"
-    assert result["error"]["hints"]
+    assert isinstance(result["error"]["message"], str)
+    assert result["error"]["message"]
+    assert isinstance(result["error"]["fix"], list)
 
 
 async def test_history_window_clamped_to_default_when_omitted(
@@ -223,7 +233,6 @@ async def test_history_hours_sizes_window(
 
     result = await _call_history(hass, recorder_entry, {"entity_ids": ["light.bedroom"], "hours": 2})
 
-    assert result["status"] == "ok"
     start = dt_util.parse_datetime(cast(str, result["window"]["start"]))
     end = dt_util.parse_datetime(cast(str, result["window"]["end"]))
     assert start is not None
@@ -246,11 +255,9 @@ async def test_history_area_and_domain_selectors(
     assert bedroom is not None
 
     by_area = await _call_history(hass, recorder_entry, {"area_id": bedroom.id})
-    assert by_area["status"] == "ok"
     assert "light.bedroom" in by_area["entities"]
 
     by_domain = await _call_history(hass, recorder_entry, {"domain": "light"})
-    assert by_domain["status"] == "ok"
     assert "light.bedroom" in by_domain["entities"]
 
 
@@ -268,9 +275,8 @@ async def test_history_truncates_large_result(
 
     result = await _call_history(hass, recorder_entry, {"entity_ids": ["light.bedroom"]})
 
-    assert result["status"] == "ok"
     assert result["truncated"] is True
-    assert len(result["entities"]["light.bedroom"]) <= 3
+    assert len(result["entities"]["light.bedroom"]["rows"]) <= 3
 
 
 @pytest.mark.parametrize(
@@ -290,6 +296,8 @@ async def test_invalid_input_returns_invalid_tool_input(
 
     assert result["status"] == "error"
     assert result["error"]["key"] == "invalid_tool_input"
+    assert isinstance(result["error"]["message"], str)
+    assert result["error"]["message"]
 
 
 async def _call_history(

@@ -49,8 +49,8 @@ async def test_get_camera_image_rejects_non_visible_entity(
 
     assert result["status"] == "error"
     assert result["error"]["key"] == "entity_not_visible"
-    assert result["error"]["placeholders"]["entity_id"] == "camera.front_door"
-    assert result["error"]["hints"]
+    assert isinstance(result["error"]["message"], str)
+    assert result["error"]["message"]
 
 
 async def test_get_camera_image_rejects_oversized_capture(
@@ -68,7 +68,9 @@ async def test_get_camera_image_rejects_oversized_capture(
 
     assert result["status"] == "error"
     assert result["error"]["key"] == "image_too_large"
-    assert result["error"]["hints"]
+    assert isinstance(result["error"]["message"], str)
+    assert result["error"]["message"]
+    assert isinstance(result["error"]["fix"], list)
 
 
 async def test_get_camera_image_maps_capture_failure(
@@ -82,7 +84,9 @@ async def test_get_camera_image_maps_capture_failure(
 
     assert result["status"] == "error"
     assert result["error"]["key"] == "capture_failed"
-    assert result["error"]["hints"]
+    assert isinstance(result["error"]["message"], str)
+    assert result["error"]["message"]
+    assert isinstance(result["error"]["fix"], list)
 
 
 async def test_get_camera_image_rejects_invalid_tool_input(
@@ -94,7 +98,9 @@ async def test_get_camera_image_rejects_invalid_tool_input(
 
     assert result["status"] == "error"
     assert result["error"]["key"] == "invalid_tool_input"
-    assert result["error"]["hints"]
+    assert isinstance(result["error"]["message"], str)
+    assert result["error"]["message"]
+    assert isinstance(result["error"]["fix"], list)
 
 
 async def test_get_camera_image_rejects_unsupported_visible_domain(
@@ -108,7 +114,9 @@ async def test_get_camera_image_rejects_unsupported_visible_domain(
 
     assert result["status"] == "error"
     assert result["error"]["key"] == "unsupported_image_domain"
-    assert result["error"]["hints"]
+    assert isinstance(result["error"]["message"], str)
+    assert result["error"]["message"]
+    assert isinstance(result["error"]["fix"], list)
 
 
 def _seed_camera(hass: HomeAssistant) -> None:

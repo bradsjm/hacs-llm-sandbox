@@ -1,10 +1,8 @@
 """Runtime contracts for the Monty-backed LLM Sandbox facade runtime.
 
-Holds mechanically derived artifacts and programmatic data lists that must
-track the facade dataclasses:
+Holds mechanically derived artifacts that must track the facade dataclasses:
 
 - ``AVAILABLE_GLOBALS``: the global names exposed to Monty.
-- ``suggested_methods()``: programmatic data surfaced in code-error payloads.
 - ``MONTY_TYPE_STUBS``: code-generated from the facade dataclasses via
   ``get_type_hints``; consumed by the Monty type-checker.
 
@@ -36,37 +34,6 @@ AVAILABLE_GLOBALS = [
     "now",
     "llm_context",
 ]
-
-
-def suggested_methods() -> list[str]:
-    """Return suggested methods for code-error payloads."""
-    return [
-        "hass.states.get('<entity_id>')",
-        "hass.states.async_all('light')",
-        "er.async_entries_for_area(er.async_get(hass), '<area_id>')",
-        "er.async_entries_for_device(er.async_get(hass), '<device_id>')",
-        "list(device_registry.devices.values())",
-        "area_registry.async_get_area_by_name('<area_name>')",
-        "[(area.name, area.id) for area in area_registry.async_list_areas()]",
-        "[(f.name, f.floor_id) for f in floor_registry.async_list_floors()]",
-        "label_registry.async_get_label_by_name('<label_name>')",
-        "[(l.name, l.label_id) for l in label_registry.async_list_labels()]",
-        "category_registry.async_list_categories(scope='<scope>')",
-        "llm_context.get('area_id')",
-        "llm_context.get('floor_name')",
-        "device_registry.async_get('<device_id>')",
-        "repairs.async_active_issues()",
-        "repairs.async_get_issue('<domain>', '<issue_id>')",
-        "persistent_notifications.async_get_notifications()",
-        "persistent_notifications.async_get_notification('<notification_id>')",
-        "config_entries.async_entries('light')",
-        "config_entries.async_get_entry('<entry_id>')",
-        "hass.services.has_service('light', 'turn_on')",
-        "hass.services.async_services_for_domain('light')",
-        "hass.services.supports_response('light', 'turn_on')",
-        "await hass.services.async_call('<domain>', '<service>', {'<field>': <value>}, target={'entity_id': '<entity_id>'})  # performs the call",
-    ]
-
 
 # Builtin callables Monty runs natively but does not auto-declare to its
 # type-checker. Declaring them lets common LLM discovery patterns

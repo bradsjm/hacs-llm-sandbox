@@ -47,7 +47,7 @@ from ..snapshot.models import (
 from ..types import ActionRecord, ProposedAction, TranslationPlaceholders
 from .errors import HelperExecutionError
 from .executor_support import helper_response, json_safe
-from .resolution import CandidateTarget, available_hint, candidates_for_domain, resolve_target_entity
+from .resolution import _DISCOVERY_LIMIT, CandidateTarget, candidates_for_domain, resolve_target_entity
 from .runtime import require_runtime, require_snapshot
 
 _TARGET_SELECTOR_KEYS = frozenset(("entity_id", "device_id", "area_id", "label_id", "label", "floor_id"))
@@ -562,30 +562,49 @@ class SafeServiceRegistry:
     ) -> _PolicyBlock | None:
         """Evaluate snapshot-policy gates without raising; None means the call may proceed."""
         if not settings.actions_enabled:
-            return _PolicyBlock("actions_disabled", {})
+            return _PolicyBlock("actions_disabled", {}, message="Service calls are disabled for this sandbox.")
         if settings.action_domains and domain not in settings.action_domains:
-            return _PolicyBlock("action_domain_not_allowed", cast(TranslationPlaceholders, {"domain": domain}))
+            valid_domains = _bounded_strings(sorted(settings.action_domains))
+            return _PolicyBlock(
+                "action_domain_not_allowed",
+                cast(TranslationPlaceholders, {"domain": domain}),
+                message=_valid_domains_message(domain, valid_domains),
+                fix=valid_domains,
+            )
         if not self.has_service(domain, service):
+            if not self.services.get(domain):
+                valid_domains = _bounded_strings(sorted(self.services))
+                return _PolicyBlock(
+                    "service_not_found",
+                    cast(TranslationPlaceholders, {"domain": domain, "service": service}),
+                    message=_valid_domains_message(domain, valid_domains),
+                    fix=valid_domains,
+                )
+            valid_services = _bounded_strings(sorted(self.services[domain]))
             return _PolicyBlock(
                 "service_not_found",
                 cast(TranslationPlaceholders, {"domain": domain, "service": service}),
-                hints={"available_services": self.services_schema.get(domain, {})},
+                message=_valid_services_message(domain, service, valid_services),
+                fix=valid_services,
             )
         supports_response = self.services_supports_response[domain][service]
         if return_response and not blocking:
             return _PolicyBlock(
                 "service_response_requires_blocking",
                 cast(TranslationPlaceholders, {"blocking": "blocking=True"}),
+                message="Set blocking=True when requesting a service response.",
             )
         if supports_response == SupportsResponse.NONE.value and return_response:
             return _PolicyBlock(
                 "service_response_not_supported",
                 cast(TranslationPlaceholders, {"return_response": "return_response=True"}),
+                message=f"Service '{domain}.{service}' does not support return_response=True.",
             )
         if supports_response == SupportsResponse.ONLY.value and not return_response:
             return _PolicyBlock(
                 "service_lacks_response_request",
                 cast(TranslationPlaceholders, {"return_response": "return_response=True"}),
+                message=f"Service '{domain}.{service}' requires return_response=True.",
             )
         return None
 
@@ -623,10 +642,10 @@ class SafeServiceRegistry:
 
             def _block(
                 key: str,
-                placeholders: TranslationPlaceholders,
+                _placeholders: TranslationPlaceholders,
                 *,
                 message: str,
-                hints: Mapping[str, object] | None = None,
+                fix: list[str] | None = None,
             ) -> None:
                 # Policy blocks are non-raising: record an errored action and let
                 # the call return None so execution stays status="ok" with a
@@ -636,13 +655,13 @@ class SafeServiceRegistry:
                         _request_action(raw_target),
                         status="error",
                         response=None,
-                        error=_action_error(key, placeholders, message, hints=hints),
+                        error=_action_error(key, message, fix=fix),
                     )
                 )
 
             # Policy gate (non-raising).
             if (block := self._policy_block(settings, domain, service, blocking, return_response)) is not None:
-                _block(block.key, block.placeholders, message=block.key, hints=block.hints)
+                _block(block.key, block.placeholders, message=block.message, fix=block.fix)
                 return None
 
             # Target visibility resolution with auto-resolve.
@@ -652,7 +671,7 @@ class SafeServiceRegistry:
                     "service_target_not_visible",
                     cast(TranslationPlaceholders, {"entity_id": target_outcome.requested}),
                     message=target_outcome.hint,
-                    hints=target_outcome.candidates_hint,
+                    fix=target_outcome.fix,
                 )
                 return None
             resolved_target = target_outcome.target
@@ -671,8 +690,7 @@ class SafeServiceRegistry:
             if remaining <= 0:
                 error = _action_error(
                     "service_call_timeout",
-                    {"domain": domain, "service": service},
-                    "Service call timed out before execution",
+                    f"Service '{domain}.{service}' timed out before execution.",
                 )
                 record["status"] = "error"
                 record["error"] = error
@@ -684,7 +702,10 @@ class SafeServiceRegistry:
             try:
                 result = await asyncio.wait_for(runtime.invoke(action), timeout=remaining)
             except TimeoutError as err:
-                error = _action_error("service_call_timeout", {"domain": domain, "service": service}, str(err))
+                error = _action_error(
+                    "service_call_timeout",
+                    f"Service '{domain}.{service}' timed out during execution.",
+                )
                 record["status"] = "error"
                 record["error"] = error
                 raise HelperExecutionError(
@@ -695,9 +716,14 @@ class SafeServiceRegistry:
             except Exception as err:
                 helper_err = self._service_call_error(err, domain, service)
                 record["status"] = "error"
-                record["error"] = _action_error(helper_err.key, helper_err.placeholders, str(err))
+                record["error"] = _action_error(
+                    helper_err.key,
+                    f"Service '{domain}.{service}' failed validation or execution: {err.__class__.__name__}.",
+                    fix=_service_field_names(self.services_schema.get(domain, {}).get(service)),
+                )
                 raise helper_err from err
-            record["response"] = json_safe(result) if return_response else None
+            if return_response:
+                record["response"] = json_safe(result)
             return result
 
         return await helper_response(self._require_state(), "services.async_call", _call)
@@ -733,12 +759,13 @@ class SafeServiceRegistry:
                     adjustments.append(_target_entity_resolved_adjustment(entity_id, resolved_entity_id))
                 else:
                     candidates: tuple[CandidateTarget, ...] = outcome.candidates or candidates_for_domain(
-                        snapshot, resolve_domain
+                        snapshot, resolve_domain, limit=_DISCOVERY_LIMIT + 1
                     )
+                    fix = _candidate_ids(candidates)
                     return _UnresolvedTarget(
                         requested=entity_id,
-                        hint=available_hint(snapshot, resolve_domain),
-                        candidates_hint={"candidates": [candidate.entity_id for candidate in candidates]},
+                        hint=_target_not_found_message(entity_id, resolve_domain, fix),
+                        fix=fix,
                     )
         if "device_id" in target:
             supported_keys.append("device_id")
@@ -786,9 +813,11 @@ class SafeServiceRegistry:
         if entity_ids:
             return _ResolvedTarget({"entity_id": sorted(entity_ids)}, tuple(adjustments))
         if supported_values:
+            fallback_fix = _candidate_ids(candidates_for_domain(snapshot, domain, limit=_DISCOVERY_LIMIT + 1))
             return _UnresolvedTarget(
                 requested=supported_values[0],
-                hint="No visible entities resolved for the requested target.",
+                hint=_target_not_found_message(supported_values[0], domain, fallback_fix),
+                fix=fallback_fix,
             )
         if supported_keys:
             return _UnresolvedTarget(
@@ -821,7 +850,7 @@ class SafeServiceRegistry:
                 placeholders = {"domain": domain, "service": service, "reason": key}
         hints = None
         if (brief := self.services_schema.get(domain, {}).get(service)) is not None:
-            hints = {"available_services": {service: brief}}
+            hints = {"fields": _service_field_names(brief)}
         return HelperExecutionError("services.async_call", key, placeholders, hints=hints)
 
     def _require_state(self) -> Any:
@@ -1169,6 +1198,63 @@ def _target_values(value: object) -> list[str]:
     return [str(value)]
 
 
+def _bounded_strings(values: list[str]) -> list[str]:
+    """Bound deterministic repair lists to the discovery limit plus overflow marker."""
+    if len(values) > _DISCOVERY_LIMIT:
+        return [*values[: _DISCOVERY_LIMIT - 1], "..."]
+    return values
+
+
+def _candidate_ids(candidates: tuple[CandidateTarget, ...]) -> list[str]:
+    """Return bounded candidate entity ids for model repair."""
+    return _bounded_strings([candidate.entity_id for candidate in candidates])
+
+
+def _valid_domains_message(domain: str, valid_domains: list[str]) -> str:
+    """Return the compact domain-layer repair message."""
+    if valid_domains:
+        return f"Domain '{domain}' is not available. Valid domains: {', '.join(valid_domains)}."
+    return f"Domain '{domain}' is not available."
+
+
+def _valid_services_message(domain: str, service: str, valid_services: list[str]) -> str:
+    """Return the compact service-layer repair message."""
+    if valid_services:
+        return f"No service '{service}' on '{domain}'. Valid services: {', '.join(valid_services)}."
+    return f"No service '{service}' on '{domain}'."
+
+
+def _target_not_found_message(requested: str, domain: str, fix: list[str]) -> str:
+    """Return the compact target-layer repair message."""
+    if fix:
+        return f"Target '{requested}' not found in '{domain}'. Did you mean: {', '.join(fix)}."
+    return f"Target '{requested}' not found in '{domain}'."
+
+
+def _service_field_names(brief: ServiceSchemaBrief | None) -> list[str] | None:
+    """Return bounded field names from a service schema brief."""
+    if brief is None:
+        return None
+    fields = brief.get("fields", [])
+    if not isinstance(fields, list):
+        return None
+    names = sorted(str(field["name"]) for field in fields if isinstance(field, dict) and "name" in field)
+    return _bounded_strings(names) if names else None
+
+
+def _resolved_from_adjustments(adjustments: list[dict[str, object]]) -> str | None:
+    """Return the requested entity id when an entity-id rewrite was applied."""
+    for adjustment in adjustments:
+        if adjustment.get("key") != "target_entity_resolved":
+            continue
+        requested = adjustment.get("requested")
+        if isinstance(requested, Mapping):
+            entity_id = requested.get("entity_id")
+            if isinstance(entity_id, str):
+                return entity_id
+    return None
+
+
 def _extract_target_selectors(
     service_data: Mapping[str, object] | None,
     target: Mapping[str, object] | None,
@@ -1198,7 +1284,8 @@ class _PolicyBlock:
 
     key: str
     placeholders: TranslationPlaceholders
-    hints: Mapping[str, object] | None = None
+    message: str
+    fix: list[str] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1215,20 +1302,23 @@ class _UnresolvedTarget:
 
     requested: str
     hint: str
-    candidates_hint: Mapping[str, object] | None = None
+    fix: list[str] | None = None
 
 
 def _action_error(
     key: str,
-    placeholders: TranslationPlaceholders,
     message: str,
     *,
-    hints: Mapping[str, object] | None = None,
+    fix: list[str] | None = None,
 ) -> dict[str, object]:
     """Build the JSON-safe action error shape."""
-    error: dict[str, object] = {"key": key, "placeholders": placeholders, "message": message}
-    if hints is not None:
-        error["hints"] = hints
+    clean = " ".join(message.split())
+    error: dict[str, object] = {
+        "key": key,
+        "message": clean if clean and clean != key else f"Resolve '{key}' before retrying.",
+    }
+    if fix:
+        error["fix"] = fix
     return error
 
 
@@ -1242,18 +1332,19 @@ def _action_record(
 ) -> ActionRecord:
     """Build one mutable service action record."""
     record: ActionRecord = {
-        "domain": action["domain"],
-        "service": action["service"],
-        "service_data": action["service_data"],
+        "service": f"{action['domain']}.{action['service']}",
         "target": action["target"],
-        "blocking": action["blocking"],
-        "return_response": action["return_response"],
         "status": status,
-        "response": response,
-        "error": error,
     }
+    if response is not None:
+        record["response"] = response
+    if error is not None:
+        record["error"] = error
     if adjustments:
-        record["adjustments"] = adjustments
+        if (resolved_from := _resolved_from_adjustments(adjustments)) is not None:
+            record["resolved_from"] = resolved_from
+        else:
+            record["adjustments"] = adjustments
     return record
 
 

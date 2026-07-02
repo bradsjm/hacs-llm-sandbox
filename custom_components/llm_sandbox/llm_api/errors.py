@@ -16,39 +16,29 @@ class HelperErrorExecutionPayload(TypedDict):
     """Execution metadata for helper validation failures."""
 
     status: Literal["helper_error"]
-    helper: str
-    code: str
-    placeholders: TranslationPlaceholders
     message: str
-    helper_calls: int
-    helper_call_limit: int
-    available_globals: list[str]
-    suggested_methods: list[str]
-    adjustments: list[dict[str, object]]
+    kind: NotRequired[str]
+    fix: NotRequired[list[str]]
+    adjustments: NotRequired[list[dict[str, object]]]
 
 
 class CodeErrorExecutionPayload(TypedDict):
     """Execution metadata for Monty code failures."""
 
     status: Literal["code_error"]
-    kind: str
     message: str
-    helper_calls: int
-    helper_call_limit: int
-    available_globals: list[str]
-    suggested_methods: list[str]
-    adjustments: list[dict[str, object]]
-    available_attributes: NotRequired[list[str]]
-    location: NotRequired[dict[str, int]]
+    kind: NotRequired[str]
+    fix: NotRequired[list[str]]
+    adjustments: NotRequired[list[dict[str, object]]]
 
 
 class SetupErrorExecutionPayload(TypedDict):
     """Execution metadata for pre-execution setup failures."""
 
     status: Literal["setup_error"]
-    code: str
     message: str
-    placeholders: TranslationPlaceholders
+    kind: NotRequired[str]
+    fix: NotRequired[list[str]]
 
 
 class HelperErrorPayload(TypedDict):
@@ -56,9 +46,8 @@ class HelperErrorPayload(TypedDict):
 
     execution: HelperErrorExecutionPayload
     output: None
-    printed: list[str]
+    printed: NotRequired[list[str]]
     actions: NotRequired[list[ActionRecord]]
-    service_hints: NotRequired[Mapping[str, Any] | None]
 
 
 class CodeErrorPayload(TypedDict):
@@ -66,7 +55,7 @@ class CodeErrorPayload(TypedDict):
 
     execution: CodeErrorExecutionPayload
     output: None
-    printed: list[str]
+    printed: NotRequired[list[str]]
     actions: NotRequired[list[ActionRecord]]
 
 
@@ -75,7 +64,8 @@ class SetupErrorPayload(TypedDict):
 
     execution: SetupErrorExecutionPayload
     output: None
-    printed: list[str]
+    printed: NotRequired[list[str]]
+    actions: NotRequired[list[ActionRecord]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,85 +86,73 @@ class HelperExecutionError(Exception):
 def helper_error_payload(
     err: HelperExecutionError,
     *,
-    helper_calls: int,
-    helper_call_limit: int,
-    available_globals: list[str],
-    suggested_methods: list[str],
+    message: str,
+    kind: str | None = None,
+    fix: list[str] | None = None,
     adjustments: list[dict[str, object]],
     printed: list[str],
     actions: list[ActionRecord] | None = None,
-    service_hints: Mapping[str, Any] | None = None,
 ) -> HelperErrorPayload:
     """Return compact helper-error execution payload."""
-    payload: HelperErrorPayload = {
-        "execution": {
-            "status": "helper_error",
-            "helper": err.helper,
-            "code": err.key,
-            "placeholders": err.placeholders,
-            "message": err.key,
-            "helper_calls": helper_calls,
-            "helper_call_limit": helper_call_limit,
-            "available_globals": available_globals,
-            "suggested_methods": suggested_methods,
-            "adjustments": adjustments,
-        },
-        "output": None,
-        "printed": printed,
+    execution: HelperErrorExecutionPayload = {
+        "status": "helper_error",
+        "message": _message_or_key_fallback(message, err.key),
     }
-    if actions is not None:
+    if kind:
+        execution["kind"] = kind
+    if fix:
+        execution["fix"] = fix
+    if adjustments:
+        execution["adjustments"] = adjustments
+    payload: HelperErrorPayload = {
+        "execution": execution,
+        "output": None,
+    }
+    if printed:
+        payload["printed"] = printed
+    if actions:
         payload["actions"] = actions
-    payload["service_hints"] = service_hints
     return payload
 
 
 def code_error_payload(
     *,
-    kind: str,
+    kind: str | None,
     message: str,
-    helper_calls: int,
-    helper_call_limit: int,
-    available_globals: list[str],
-    suggested_methods: list[str],
     adjustments: list[dict[str, object]],
     printed: list[str],
     actions: list[ActionRecord] | None = None,
-    available_attributes: list[str] | None = None,
+    fix: list[str] | None = None,
 ) -> CodeErrorPayload:
     """Return compact code-error execution payload."""
-    payload: CodeErrorPayload = {
-        "execution": {
-            "status": "code_error",
-            "kind": kind,
-            "message": message,
-            "helper_calls": helper_calls,
-            "helper_call_limit": helper_call_limit,
-            "available_globals": available_globals,
-            "suggested_methods": suggested_methods,
-            "adjustments": adjustments,
-        },
-        "output": None,
-        "printed": printed,
+    execution: CodeErrorExecutionPayload = {
+        "status": "code_error",
+        "message": _message_or_key_fallback(message, kind),
     }
-    if actions is not None:
+    if kind:
+        execution["kind"] = kind
+    if fix:
+        execution["fix"] = fix
+    if adjustments:
+        execution["adjustments"] = adjustments
+    payload: CodeErrorPayload = {
+        "execution": execution,
+        "output": None,
+    }
+    if printed:
+        payload["printed"] = printed
+    if actions:
         payload["actions"] = actions
-    if available_attributes is not None:
-        payload["execution"]["available_attributes"] = available_attributes
     return payload
 
 
 def setup_error_payload(key: str, placeholders: TranslationPlaceholders) -> SetupErrorPayload:
     """Return compact setup-error execution payload."""
-    return {
-        "execution": {
-            "status": "setup_error",
-            "code": key,
-            "message": key,
-            "placeholders": _string_placeholders(placeholders),
-        },
-        "output": None,
-        "printed": [],
+    execution: SetupErrorExecutionPayload = {
+        "status": "setup_error",
+        "message": _message_or_key_fallback(_setup_error_message(placeholders), key),
     }
+    return {"execution": execution, "output": None}
 
 
 def helper_error_from_exception(err: Exception) -> HelperExecutionError | None:
@@ -189,20 +167,18 @@ def helper_error_from_exception(err: Exception) -> HelperExecutionError | None:
 
 def tool_error_envelope(
     key: str,
-    placeholders: TranslationPlaceholders,
+    _placeholders: TranslationPlaceholders,
     *,
     message: str | None = None,
-    hints: list[str] | None = None,
+    fix: list[str] | None = None,
 ) -> JsonObjectType:
     """Return a JSON-safe recoverable error envelope for LLM tool callers."""
     error: dict[str, Any] = {
         "key": key,
-        "placeholders": _string_placeholders(placeholders),
+        "message": _message_or_key_fallback(message, key),
     }
-    if message is not None:
-        error["message"] = message
-    if hints:
-        error["hints"] = hints
+    if fix:
+        error["fix"] = fix
     return cast(
         JsonObjectType,
         {
@@ -225,6 +201,23 @@ def tool_error_from_exception(err: Exception) -> tuple[str, TranslationPlacehold
     return None
 
 
+def _setup_error_message(placeholders: TranslationPlaceholders) -> str | None:
+    """Return a specific setup-error reason when the placeholders carry one."""
+    if reason := placeholders.get("error") or placeholders.get("reason"):
+        return f"Setup failed: {reason}."
+    return None
+
+
 def _string_placeholders(placeholders: Mapping[str, object]) -> TranslationPlaceholders:
     """Normalize placeholder values to the string-only translation contract."""
     return {str(key): str(value) for key, value in placeholders.items()}
+
+
+def _message_or_key_fallback(message: str | None, key: str | None) -> str:
+    """Return a clean one-sentence message that never echoes the stable key."""
+    clean = " ".join((message or "").split())
+    if clean and clean != key:
+        return clean
+    if key:
+        return f"Resolve the '{key}' error before retrying."
+    return "Fix the sandbox error before retrying."

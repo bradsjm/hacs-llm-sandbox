@@ -126,15 +126,9 @@ async def test_live_invocation_records_cleaned_resolved_ok_action() -> None:
     assert "context" not in harness.invoker.calls[0]
     assert harness.runtime.state.actions == [
         {
-            "domain": "light",
-            "service": "turn_on",
-            "service_data": {"brightness_pct": 80},
+            "service": "light.turn_on",
             "target": {"entity_id": ["light.bedroom"]},
-            "blocking": False,
-            "return_response": False,
             "status": "ok",
-            "response": None,
-            "error": None,
         }
     ]
 
@@ -165,15 +159,10 @@ async def test_return_response_records_service_response_on_success() -> None:
     ]
     assert harness.runtime.state.actions == [
         {
-            "domain": "light",
-            "service": "get_state",
-            "service_data": None,
+            "service": "light.get_state",
             "target": {"entity_id": ["light.bedroom"]},
-            "blocking": True,
-            "return_response": True,
             "status": "ok",
             "response": service_response,
-            "error": None,
         }
     ]
 
@@ -188,17 +177,15 @@ async def test_service_not_found_records_blocked_action_and_returns_none() -> No
     assert _action_statuses_via_state(harness) == ["error"]
     assert _action_keys_via_state(harness) == ["service_not_found"]
     action_error = cast(dict[str, object], harness.runtime.state.actions[0]["error"])
-    assert action_error["hints"] == {
-        "available_services": {
-            "get_state": LIGHT_GET_STATE_BRIEF,
-            "turn_on": LIGHT_TURN_ON_BRIEF,
-        }
-    }
+    assert isinstance(action_error["message"], str)
+    assert action_error["message"]
+    assert action_error["message"] != action_error["key"]
+    assert action_error["fix"] == ["get_state", "turn_on"]
     assert harness.invoker.calls == []
 
 
-async def test_service_validation_error_uses_translation_key_and_single_service_hint() -> None:
-    """Live validation failures keep HA's translation key and requested-service brief."""
+async def test_service_validation_error_uses_translation_key_and_message() -> None:
+    """Live validation failures keep HA's translation key and a specific message."""
     harness = _service_harness(
         invoker=RecordingInvoker(errors=[validation_error("invalid_light_target", {"entity_id": "light.bedroom"})])
     )
@@ -211,8 +198,9 @@ async def test_service_validation_error_uses_translation_key_and_single_service_
     )
 
     assert payload["execution"]["status"] == "helper_error"
-    assert payload["execution"]["code"] == "invalid_light_target"
-    assert _service_hints(payload) == {"available_services": {"turn_on": LIGHT_TURN_ON_BRIEF}}
+    assert isinstance(payload["execution"]["message"], str)
+    assert payload["execution"]["message"]
+    assert payload["execution"]["message"] != "invalid_light_target"
     assert _action_statuses(payload) == ["error"]
     assert _action_keys(payload) == ["invalid_light_target"]
 
@@ -229,7 +217,9 @@ async def test_voluptuous_invalid_is_service_call_failed_action_error() -> None:
     )
 
     assert payload["execution"]["status"] == "helper_error"
-    assert payload["execution"]["code"] == "service_call_failed"
+    assert isinstance(payload["execution"]["message"], str)
+    assert payload["execution"]["message"]
+    assert payload["execution"]["message"] != "service_call_failed"
     assert _action_statuses(payload) == ["error"]
     assert _action_keys(payload) == ["service_call_failed"]
 
@@ -246,7 +236,9 @@ async def test_expired_per_call_deadline_records_timeout_action_error() -> None:
     )
 
     assert payload["execution"]["status"] == "helper_error"
-    assert payload["execution"]["code"] == "service_call_timeout"
+    assert isinstance(payload["execution"]["message"], str)
+    assert payload["execution"]["message"]
+    assert payload["execution"]["message"] != "service_call_timeout"
     assert _action_statuses(payload) == ["error"]
     assert _action_keys(payload) == ["service_call_timeout"]
     assert harness.invoker.calls == []
@@ -264,12 +256,7 @@ async def test_explicit_hidden_entity_target_resolves_to_unique_visible_entity()
     )
 
     assert result is None
-    adjustment = _single_adjustment(harness.runtime.state.actions[0])
-    assert adjustment["key"] == "target_entity_resolved"
-    assert adjustment["retry_needed"] is False
-    assert "no retry needed" in str(adjustment["message"])
-    assert adjustment["requested"] == {"entity_id": "bedroom"}
-    assert adjustment["applied"] == {"entity_id": ["light.bedroom"]}
+    assert harness.runtime.state.actions[0]["resolved_from"] == "bedroom"
     assert harness.invoker.calls == [
         {
             "domain": "light",
@@ -297,10 +284,9 @@ async def test_service_data_entity_selector_bypass_is_cleaned_and_resolved() -> 
 
     assert result is None
     action = harness.runtime.state.actions[0]
-    assert action["service_data"] == {"brightness_pct": 25}
     assert action["target"] == {"entity_id": ["light.bedroom"]}
     assert action["status"] == "ok"
-    assert _adjustment_keys(action) == ["target_selector_moved", "target_entity_resolved"]
+    assert action["resolved_from"] == "bedroom"
     assert harness.invoker.calls == [
         {
             "domain": "light",
@@ -324,9 +310,15 @@ async def test_device_target_resolves_to_visible_entity_target_for_invocation() 
     )
 
     assert result is None
-    adjustment = _single_adjustment(harness.runtime.state.actions[0])
+    adjustments = harness.runtime.state.actions[0]["adjustments"]
+    assert isinstance(adjustments, list)
+    assert len(adjustments) == 1
+    adjustment = adjustments[0]
     assert adjustment["key"] == "target_selector_expanded"
+    assert adjustment["status"] == "applied"
     assert adjustment["retry_needed"] is False
+    assert isinstance(adjustment["message"], str)
+    assert adjustment["message"]
     assert adjustment["requested"] == {"device_id": "device-bedroom"}
     assert adjustment["applied"] == {"entity_id": ["light.bedroom"]}
     assert harness.invoker.calls == [
@@ -370,8 +362,9 @@ async def test_ambiguous_entity_target_blocks_with_candidates() -> None:
     assert _action_statuses_via_state(harness) == ["error"]
     assert _action_keys_via_state(harness) == ["service_target_not_visible"]
     action_error = cast(dict[str, object], harness.runtime.state.actions[0]["error"])
-    hints = cast(dict[str, object], action_error["hints"])
-    assert set(cast(list[str], hints["candidates"])) == {"switch.outlet", "switch.kitchen"}
+    assert isinstance(action_error["message"], str)
+    assert action_error["message"]
+    assert set(cast(list[str], action_error["fix"])) == {"switch.outlet", "switch.kitchen"}
     assert harness.invoker.calls == []
 
 
@@ -429,7 +422,9 @@ async def test_helper_error_payload_keeps_prior_success_and_failed_action() -> N
     payload = await _helper_error_for(harness, "light", "turn_on", target={"entity_id": "light.bedroom"})
 
     assert payload["execution"]["status"] == "helper_error"
-    assert payload["execution"]["code"] == "service_call_failed"
+    assert isinstance(payload["execution"]["message"], str)
+    assert payload["execution"]["message"]
+    assert payload["execution"]["message"] != "service_call_failed"
     assert _action_statuses(payload) == ["ok", "error"]
     assert _action_keys(payload) == [None, "service_call_failed"]
 
@@ -466,8 +461,9 @@ async def test_generic_service_exception_is_service_call_failed_helper_error() -
     )
 
     assert payload["execution"]["status"] == "helper_error"
-    assert payload["execution"]["code"] == "service_call_failed"
-    assert _service_hints(payload) == {"available_services": {"turn_on": LIGHT_TURN_ON_BRIEF}}
+    assert isinstance(payload["execution"]["message"], str)
+    assert payload["execution"]["message"]
+    assert payload["execution"]["message"] != "service_call_failed"
     assert _action_statuses(payload) == ["error"]
     assert _action_keys(payload) == ["service_call_failed"]
 
@@ -753,11 +749,6 @@ def _copy_mapping(value: object) -> object:
     return value
 
 
-def _service_hints(payload: HelperErrorPayload) -> Mapping[str, object] | None:
-    """Return helper service hints as a concrete mapping for assertions."""
-    return cast(Mapping[str, object] | None, payload.get("service_hints"))
-
-
 def _actions(payload: HelperErrorPayload) -> list[ActionRecord]:
     """Return action records from a helper-error payload."""
     actions = payload.get("actions")
@@ -830,7 +821,7 @@ def _adjustment_keys(action: ActionRecord) -> list[str]:
 
 def _action_key(action: ActionRecord) -> object:
     """Return the stable helper key for one action error, if present."""
-    error = action["error"]
+    error = action.get("error")
     if error is None:
         return None
     return cast(Mapping[str, object], error)["key"]

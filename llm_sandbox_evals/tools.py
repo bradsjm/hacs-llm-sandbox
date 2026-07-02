@@ -2,7 +2,7 @@
 
 import json
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from types import ModuleType
 from typing import cast
 
@@ -84,6 +84,23 @@ class RecordingInvoker:
         # Safety constraint: copy the proposed action and never call hass.services or any live callback.
         self.calls.append(dict(action))
         return None
+
+
+def _for_scoring(action: Mapping[str, object]) -> dict[str, object]:
+    """Normalize a recorded action so the frozen scorer can read domain/service separately.
+
+    Production compact records fold domain into service (``domain.service``); the
+    invoker's ProposedAction already carries separate domain/service. This split
+    is eval-only and never mutates the model-facing result.
+    """
+    normalized = dict(action)
+    if "domain" not in normalized:
+        service = normalized.get("service")
+        if isinstance(service, str) and "." in service:
+            domain, _, svc = service.partition(".")
+            normalized["domain"] = domain
+            normalized["service"] = svc
+    return normalized
 
 
 async def run_tool(
@@ -177,7 +194,7 @@ async def _run_execute(
             ok=False,
             tool_name=TOOL_EXECUTE_HOME_CODE,
             result=None,
-            recorded_actions=tuple(invoker.calls),
+            recorded_actions=tuple(_for_scoring(action) for action in invoker.calls),
             error=f"{type(err).__name__}: {err}",
         )
 
@@ -187,7 +204,7 @@ async def _run_execute(
         ok=True,
         tool_name=TOOL_EXECUTE_HOME_CODE,
         result=result_dict,
-        recorded_actions=tuple(actions),
+        recorded_actions=tuple(_for_scoring(action) for action in actions),
         error=None,
     )
 
@@ -197,19 +214,17 @@ def _run_history(tool_args: dict[str, object], case: EvalCase, snapshot: HomeSna
     try:
         entity_ids = resolve_entity_ids(snapshot, tool_args, "entity_ids")
     except RecoverableToolError as err:
-        return _recoverable_recorder_error(TOOL_GET_HISTORY, err)
+        return _recoverable_recorder_error(TOOL_GET_HISTORY, err, snapshot)
     start = _optional_string(tool_args.get("start"))
     end = _optional_string(tool_args.get("end"))
 
     fixture = get_home(case.home)
     history = _recorder_section(fixture, "history")
-    entities = {
-        entity_id: [row | {"entity_id": entity_id} for row in history.get(entity_id, [])] for entity_id in entity_ids
-    }
+    entities = {entity_id: _history_entity_payload(history.get(entity_id, [])) for entity_id in entity_ids}
     return ToolOutcome(
         ok=True,
         tool_name=TOOL_GET_HISTORY,
-        result={"status": "ok", "window": {"start": start, "end": end}, "entities": entities, "truncated": False},
+        result={"window": {"start": start, "end": end}, "entities": entities},
         recorded_actions=(),
         error=None,
     )
@@ -220,23 +235,24 @@ def _run_statistics(tool_args: dict[str, object], case: EvalCase, snapshot: Home
     try:
         statistic_ids = resolve_entity_ids(snapshot, tool_args, "statistic_ids")
     except RecoverableToolError as err:
-        return _recoverable_recorder_error(TOOL_GET_STATISTICS, err)
+        return _recoverable_recorder_error(TOOL_GET_STATISTICS, err, snapshot)
     start = _optional_string(tool_args.get("start"))
     end = _optional_string(tool_args.get("end"))
     period = str(tool_args.get("period", "hour"))
 
     fixture = get_home(case.home)
     statistics = _recorder_section(fixture, "statistics")
-    rows = {statistic_id: list(statistics.get(statistic_id, [])) for statistic_id in statistic_ids}
+    rows = {
+        statistic_id: {"rows": [_statistics_row(row) for row in statistics.get(statistic_id, [])]}
+        for statistic_id in statistic_ids
+    }
     return ToolOutcome(
         ok=True,
         tool_name=TOOL_GET_STATISTICS,
         result={
-            "status": "ok",
             "window": {"start": start, "end": end},
             "period": period,
             "statistics": rows,
-            "truncated": False,
         },
         recorded_actions=(),
         error=None,
@@ -248,17 +264,17 @@ def _run_logbook(tool_args: dict[str, object], case: EvalCase, snapshot: HomeSna
     try:
         entity_ids = resolve_entity_ids(snapshot, tool_args, "entity_ids")
     except RecoverableToolError as err:
-        return _recoverable_recorder_error(TOOL_GET_LOGBOOK, err)
+        return _recoverable_recorder_error(TOOL_GET_LOGBOOK, err, snapshot)
     start = _optional_string(tool_args.get("start"))
     end = _optional_string(tool_args.get("end"))
 
     fixture = get_home(case.home)
     logbook = _recorder_section(fixture, "logbook")
-    entries = [row for entity_id in entity_ids for row in logbook.get(entity_id, [])]
+    entries = [_logbook_entry(entity_id, row) for entity_id in entity_ids for row in logbook.get(entity_id, [])]
     return ToolOutcome(
         ok=True,
         tool_name=TOOL_GET_LOGBOOK,
-        result={"status": "ok", "window": {"start": start, "end": end}, "entries": entries, "truncated": False},
+        result={"window": {"start": start, "end": end}, "entries": entries},
         recorded_actions=(),
         error=None,
     )
@@ -280,12 +296,12 @@ def _optional_string(value: object) -> str | None:
     return str(value)
 
 
-def _recoverable_recorder_error(tool_name: str, err: RecoverableToolError) -> ToolOutcome:
+def _recoverable_recorder_error(tool_name: str, err: RecoverableToolError, snapshot: HomeSnapshot) -> ToolOutcome:
     """Map production recoverable recorder errors to eval response envelopes."""
     return ToolOutcome(
         ok=True,
         tool_name=tool_name,
-        result=cast(dict[str, object], recorder_error_envelope(err.key, err.placeholders)),
+        result=cast(dict[str, object], recorder_error_envelope(err.key, err.placeholders, snapshot)),
         recorded_actions=(),
         error=None,
     )
@@ -301,6 +317,45 @@ def _recorder_section(fixture: ModuleType, section: str) -> dict[str, list[dict[
     recorder = cast(Callable[[], dict[str, object]], fixture.recorder)
     data = recorder()
     return cast(dict[str, list[dict[str, object]]], data[section])
+
+
+def _history_entity_payload(rows: list[dict[str, object]]) -> dict[str, object]:
+    """Build the de-duplicated production history payload for one entity."""
+    converted = [_history_row(row) for row in rows]
+    entity: dict[str, object] = {"rows": [row for row, _unit in converted]}
+    unit = next((unit for _row, unit in converted if unit), None)
+    if unit is not None:
+        entity["unit"] = unit
+    return entity
+
+
+def _history_row(row: Mapping[str, object]) -> tuple[list[object], str | None]:
+    """Convert a fixture history row to ``([time, state], unit)``."""
+    timestamp = row.get("last_changed") or row.get("last_updated")
+    attributes = row.get("attributes")
+    unit = None
+    if isinstance(attributes, Mapping):
+        unit = attributes.get("unit_of_measurement") or attributes.get("unit")
+    return [str(timestamp), row.get("state")], str(unit) if unit is not None else None
+
+
+def _statistics_row(row: Mapping[str, object]) -> list[object]:
+    """Convert a fixture statistics row to the production ``[time, value]`` array."""
+    timestamp = row.get("start") or row.get("end") or row.get("last_reset")
+    value = row.get("state")
+    if value is None:
+        for key in ("mean", "sum", "min", "max"):
+            value = row.get(key)
+            if value is not None:
+                break
+    return [str(timestamp), value]
+
+
+def _logbook_entry(entity_id: str, row: Mapping[str, object]) -> dict[str, object]:
+    """Build one flat logbook entry with the scoped entity id retained."""
+    entry = dict(row)
+    entry["entity_id"] = entity_id
+    return entry
 
 
 def _dict_list(value: object) -> list[dict[str, object]]:
