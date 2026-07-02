@@ -148,6 +148,12 @@ def _add_eval_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPar
         help="max tool-calling turns per case before forcing a final answer (default: 5).",
     )
     eval_parser.add_argument(
+        "--model-timeout",
+        type=float,
+        metavar="SECONDS",
+        help="seconds to wait for one model generation before recording model_error (default: 75).",
+    )
+    eval_parser.add_argument(
         "--reasoning",
         metavar="LEVEL",
         help="reasoning effort forwarded to real models via LiteLLM "
@@ -280,6 +286,7 @@ def _run_eval(args: argparse.Namespace) -> int:
         runs_dir=args.runs_dir or base_config.runs_dir,
         concurrency=args.concurrency if args.concurrency else base_config.concurrency,
         max_turns=args.max_turns if args.max_turns else base_config.max_turns,
+        model_timeout=args.model_timeout if args.model_timeout else base_config.model_timeout,
         efficiency_k=base_config.efficiency_k,
         efficiency_floor=base_config.efficiency_floor,
         reasoning_effort=args.reasoning,
@@ -410,6 +417,7 @@ def _eval_banner(config: EvalConfig, case_count: int) -> str:
         f"  runs dir    : {config.runs_dir}\n"
         f"  concurrency : {config.concurrency}\n"
         f"  max turns   : {config.max_turns}\n"
+        f"  model timeout: {config.model_timeout:g}s\n"
         f"  reasoning   : {reasoning}\n\n"
         f"{_STUB_NOTE}\n"
     )

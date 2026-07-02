@@ -11,7 +11,7 @@ from custom_components.llm_sandbox.llm_api.prompts import PromptProfile, resolve
 from llm_sandbox_evals import cases, prompts
 from llm_sandbox_evals.config import EvalConfig
 from llm_sandbox_evals.homes import get_home
-from llm_sandbox_evals.models import ModelAdapter, get_adapter
+from llm_sandbox_evals.models import ModelAdapter, ModelResponseError, get_adapter
 from llm_sandbox_evals.prompts import load_candidates
 from llm_sandbox_evals.schema import (
     CandidateModelScore,
@@ -39,7 +39,7 @@ async def run_matrix(config: EvalConfig) -> RunResult:
 
     for candidate in candidates:
         for model_id in model_ids:
-            adapter = get_adapter(model_id, config.reasoning_effort)
+            adapter = get_adapter(model_id, config.reasoning_effort, model_timeout=config.model_timeout)
             _progress(f"[{candidate.id}/{model_id}] {len(selected_cases)} cases (concurrency={config.concurrency})")
             pair_traces = await _run_cases_for_pair(candidate, model_id, selected_cases, adapter, config, profile)
             traces.extend(pair_traces)
@@ -62,6 +62,8 @@ async def run_case(
     adapter: ModelAdapter,
     profile: PromptProfile,
     config: EvalConfig,
+    *,
+    raise_model_errors: bool = False,
 ) -> CaseTrace:
     """Run one matrix cell through the bounded native tool-calling agent loop."""
     prompt = ""
@@ -141,31 +143,13 @@ async def run_case(
             final_answer=final_answer,
             steps=tuple(steps),
         )
+    except ModelResponseError as err:
+        # Branch boundary: pair orchestration may choose to fail fast across remaining cases for the same model.
+        if raise_model_errors:
+            raise
+        return _error_trace(candidate, model_id, case, prompt, "model_error", err.detail)
     except Exception as err:  # noqa: BLE001 - harness isolates failures to the current matrix cell.
-        return CaseTrace(
-            case_id=case.id,
-            category=case.category,
-            candidate_id=candidate.id,
-            model_id=model_id,
-            score=0.0,
-            prompt=prompt,
-            raw_output="",
-            tool_call=None,
-            tool_result=None,
-            recorded_actions=(),
-            checks=(
-                CheckResult(
-                    name="harness_error",
-                    passed=False,
-                    required=True,
-                    feedback=f"{type(err).__name__}: {err}",
-                ),
-            ),
-            turns=0,
-            par_turns=case.par_turns,
-            final_answer="",
-            steps=(),
-        )
+        return _error_trace(candidate, model_id, case, prompt, "harness_error", f"{type(err).__name__}: {err}")
 
 
 async def _run_cases_for_pair(
@@ -178,11 +162,35 @@ async def _run_cases_for_pair(
 ) -> list[CaseTrace]:
     """Run all cases for one candidate/model pair with bounded concurrency."""
     semaphore = asyncio.Semaphore(max(1, config.concurrency))
+    model_error_lock = asyncio.Lock()
+    model_error: ModelResponseError | None = None
     total = len(selected_cases)
 
     async def _one(index: int, case: EvalCase) -> CaseTrace:
+        nonlocal model_error
         async with semaphore:
-            trace = await run_case(candidate, model_id, case, adapter, prompt_profile, config)
+            async with model_error_lock:
+                current_model_error = model_error
+            # Branch boundary: once a provider/model setup error is known, remaining cases should not call it again.
+            if current_model_error is not None:
+                trace = _error_trace(candidate, model_id, case, "", "model_error", current_model_error.detail)
+            else:
+                try:
+                    trace = await run_case(
+                        candidate,
+                        model_id,
+                        case,
+                        adapter,
+                        prompt_profile,
+                        config,
+                        raise_model_errors=True,
+                    )
+                except ModelResponseError as err:
+                    async with model_error_lock:
+                        if model_error is None:
+                            model_error = err
+                            _log_model_error(candidate, model_id, case, err)
+                    trace = _error_trace(candidate, model_id, case, "", "model_error", err.detail)
         _progress(f"  [{index + 1}/{total}] {case.id} score={trace.score:.2f} turns={trace.turns}")
         return trace
 
@@ -193,6 +201,51 @@ def _progress(message: str) -> None:
     """Write a progress line to stderr (ruff T201 forbids the print builtin)."""
     sys.stderr.write(message + "\n")
     sys.stderr.flush()
+
+
+def _log_model_error(candidate: PromptCandidate, model_id: str, case: EvalCase, err: ModelResponseError) -> None:
+    """Write detailed provider diagnostics once per failing candidate/model pair."""
+    _progress(
+        f"  model error for candidate={candidate.id} model={model_id} case={case.id}; "
+        "skipping remaining cases for this pair"
+    )
+    for line in err.detail.splitlines():
+        _progress(f"    {line}")
+
+
+def _error_trace(
+    candidate: PromptCandidate,
+    model_id: str,
+    case: EvalCase,
+    prompt: str,
+    check_name: str,
+    feedback: str,
+) -> CaseTrace:
+    """Return a zero-score trace for an infrastructure or provider failure."""
+    return CaseTrace(
+        case_id=case.id,
+        category=case.category,
+        candidate_id=candidate.id,
+        model_id=model_id,
+        score=0.0,
+        prompt=prompt,
+        raw_output=feedback,
+        tool_call=None,
+        tool_result=None,
+        recorded_actions=(),
+        checks=(
+            CheckResult(
+                name=check_name,
+                passed=False,
+                required=True,
+                feedback=feedback,
+            ),
+        ),
+        turns=0,
+        par_turns=case.par_turns,
+        final_answer="",
+        steps=(),
+    )
 
 
 def _select_cases(case_filters: list[str] | None, home_filters: list[str] | None) -> list[EvalCase]:

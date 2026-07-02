@@ -18,6 +18,7 @@ class EvalConfig:
     runs_dir: Path
     concurrency: int = 5
     max_turns: int = 5
+    model_timeout: float = 75.0
     efficiency_k: float = 0.25
     efficiency_floor: float = 0.1
     reasoning_effort: str | None = None

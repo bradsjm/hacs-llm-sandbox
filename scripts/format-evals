@@ -1,4 +1,4 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-uv run --group dev --group evals ruff format llm_sandbox_evals
+uv run --group dev --group evals ruff format llm_sandbox_evals tests/llm_sandbox_evals

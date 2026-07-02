@@ -33,7 +33,7 @@ EOF
 uv run --group dev --group evals python -m llm_sandbox_evals eval --models gpt-4o-mini,claude-haiku-4-5,stub
 ```
 
-Every candidate is evaluated against every model. The `Candidate x model means` table shows the matrix; candidates rank by mean score, tie-broken by the best **minimum-across-models** score (robustness to the worst model wins ties). A model call that fails (bad key, network) is captured as an error in that case's trace and scores `0.0` — it never aborts the run.
+Every candidate is evaluated against every model. The `Candidate x model means` table shows the matrix; candidates rank by mean score, tie-broken by the best **minimum-across-models** score (robustness to the worst model wins ties). A model call that fails (bad key, bad model id, network, or per-generation timeout) is captured as a `model_error` trace and scores `0.0`; the provider exception type/message, common LiteLLM metadata, response status/body when available, timeout details, and cause chain are printed to stderr. Remaining cases for that candidate/model pair are marked the same way without continuing to call the failing provider.
 
 ## Optimizing the prompt (DSPy COPRO)
 
@@ -70,7 +70,7 @@ uv run --group dev --group evals python -m llm_sandbox_evals eval \
 ## Commands
 
 ```
-python -m llm_sandbox_evals eval [--models id,...] [--candidates id,...] [--prompt-profile ID] [--cases id,...|category,...] [--concurrency N] [--reasoning LEVEL] [--runs-dir PATH]
+python -m llm_sandbox_evals eval [--models id,...] [--candidates id,...] [--prompt-profile ID] [--cases id,...|category,...] [--concurrency N] [--model-timeout SECONDS] [--reasoning LEVEL] [--runs-dir PATH]
 python -m llm_sandbox_evals optimize --target-model ID [--proposer-model ID] [--prompt-profile ID] [--breadth N] [--depth N] [--cases ...] [--cross-eval-models ...] [--target-reasoning LEVEL] [--proposer-reasoning LEVEL] [--reasoning LEVEL] [--runs-dir PATH]
 python -m llm_sandbox_evals report <run_id> [--runs-dir PATH]
 ```
@@ -82,13 +82,14 @@ python -m llm_sandbox_evals report <run_id> [--runs-dir PATH]
 - `--candidates` accepts `baseline` and `optimized:<path>` (a saved `optimized_candidate.json`).
 - `--prompt-profile PROFILE_ID` selects one production base prompt profile for the whole run (default: `standard`); it is not comma-separated and is separate from `--candidates`.
 - `--reasoning LEVEL` forwards a reasoning effort (e.g. `medium`/`high`, or `none` to disable a reasoning model) to real models via litellm. `optimize` adds `--target-reasoning` and `--proposer-reasoning` to control the target and proposer models independently (e.g. `--target-reasoning none --proposer-reasoning high`).
+- `--model-timeout SECONDS` bounds one model generation before recording `model_error` (default `75`). Slow free models may need a higher value or lower `--concurrency`.
 - Defaults: `--models stub`, `--candidates baseline`, `--prompt-profile standard`, all cases.
 
 ## Checks
 
 ```bash
 scripts/setup-evals        # uv sync --group dev --group evals
-scripts/check-evals        # ruff + mypy + offline stub eval (no API key, no dspy call)
+scripts/check-evals        # ruff + mypy + eval pytest + offline stub eval (no API key, no dspy call)
 scripts/format-evals       # ruff format
 scripts/optimize-evals     # DSPy COPRO run — needs API keys, costs model calls
 ```
