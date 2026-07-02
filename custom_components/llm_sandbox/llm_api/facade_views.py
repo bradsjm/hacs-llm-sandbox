@@ -864,22 +864,35 @@ class SafeLLMContext:
     floor_name: str | None
     type: str = "llm_context"
 
+    def _mapping(self) -> dict[str, object | None]:
+        """Return the bounded context fields exposed to Monty."""
+        return {
+            "type": self.type,
+            "platform": self.platform,
+            "context": self.context,
+            "language": self.language,
+            "assistant": self.assistant,
+            "device_id": self.device_id,
+            "area_id": self.area_id,
+            "area_name": self.area_name,
+            "floor_id": self.floor_id,
+            "floor_name": self.floor_name,
+        }
+
+    def get(self, key: str, default: object | None = None) -> object | None:
+        """Return a context field by name, or ``default`` when absent."""
+        return self._mapping().get(key, default)
+
+    def keys(self) -> list[str]:
+        """Return the available context field names as a concrete list."""
+        return list(self._mapping())
+
+    def items(self) -> list[tuple[str, object | None]]:
+        """Return the available context fields as concrete key/value tuples."""
+        return list(self._mapping().items())
+
     def __llm_sandbox_json__(self) -> JsonValueType:
-        return cast(
-            JsonValueType,
-            {
-                "type": self.type,
-                "platform": self.platform,
-                "context": self.context,
-                "language": self.language,
-                "assistant": self.assistant,
-                "device_id": self.device_id,
-                "area_id": self.area_id,
-                "area_name": self.area_name,
-                "floor_id": self.floor_id,
-                "floor_name": self.floor_name,
-            },
-        )
+        return cast(JsonValueType, self._mapping())
 
 
 # ---------------------------------------------------------------------------

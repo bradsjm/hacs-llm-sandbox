@@ -9,8 +9,9 @@ result.
 from llm_sandbox_evals.schema import CaseContext, EvalCase, Expected, ExpectedAction
 
 CASES: list[EvalCase] = [
-    # Par turns: one tool-turn for direct state/registry/action/complex cases; two for the six recorder
-    # reads that intentionally require identifying a named entity before querying recorder data.
+    # Par turns: one tool-turn for direct state/registry cases; two for recorder reads that intentionally
+    # require discovery before querying recorder data, and for action/complex cases calibrated from
+    # strong-model read/resolve-then-act behavior.
     EvalCase(
         id="state_living_temperature",
         category="state_read",
@@ -146,7 +147,7 @@ CASES: list[EvalCase] = [
             tool_name="execute_home_code",
             actions=(ExpectedAction(domain="light", service="turn_off", target_entity_ids=("light.living",)),),
         ),
-        par_turns=1,
+        par_turns=2,
     ),
     EvalCase(
         id="action_set_bedroom_temperature",
@@ -161,7 +162,7 @@ CASES: list[EvalCase] = [
                 ExpectedAction(domain="climate", service="set_temperature", target_entity_ids=("climate.bedroom",)),
             ),
         ),
-        par_turns=1,
+        par_turns=2,
     ),
     EvalCase(
         id="action_living_fan_percentage",
@@ -174,7 +175,7 @@ CASES: list[EvalCase] = [
             tool_name="execute_home_code",
             actions=(ExpectedAction(domain="fan", service="set_percentage", target_entity_ids=("fan.living_fan",)),),
         ),
-        par_turns=1,
+        par_turns=2,
     ),
     EvalCase(
         id="blocked_disabled_living_light",
@@ -184,7 +185,7 @@ CASES: list[EvalCase] = [
         actions_enabled=False,
         llm_context=CaseContext(device_id="device_assist_living"),
         # Judgment call: this v1 case expects the model to explain/help without calling a service when the prompt disables actions.
-        expected=Expected(tool_name="execute_home_code", execution_status="ok", actions=()),
+        expected=Expected(tool_name="execute_home_code", execution_status="na", actions=()),
         par_turns=1,
     ),
     EvalCase(
@@ -212,7 +213,7 @@ CASES: list[EvalCase] = [
         actions_enabled=False,
         llm_context=CaseContext(device_id="device_assist_living"),
         # Restrictive allowlist cases are deferred until the harness accepts per-case action_domains; disabled gate covers v1.
-        expected=Expected(tool_name="execute_home_code", execution_status="ok", actions=()),
+        expected=Expected(tool_name="execute_home_code", execution_status="na", actions=()),
         par_turns=1,
     ),
     EvalCase(
@@ -227,7 +228,7 @@ CASES: list[EvalCase] = [
             output_contains_entities=("sensor.living_temp", "fan.living_fan"),
             actions=(ExpectedAction(domain="fan", service="set_percentage", target_entity_ids=("fan.living_fan",)),),
         ),
-        par_turns=1,
+        par_turns=2,
     ),
     EvalCase(
         id="complex_humidity_dehumidifier",
@@ -241,7 +242,7 @@ CASES: list[EvalCase] = [
             output_contains_entities=("sensor.bedroom_humidity", "switch.dehumidifier"),
             actions=(ExpectedAction(domain="switch", service="toggle", target_entity_ids=("switch.dehumidifier",)),),
         ),
-        par_turns=1,
+        par_turns=2,
     ),
     EvalCase(
         id="complex_upstairs_average_humidity",
@@ -251,7 +252,7 @@ CASES: list[EvalCase] = [
         actions_enabled=False,
         llm_context=CaseContext(device_id="device_assist_living"),
         expected=Expected(tool_name="execute_home_code", output_contains_entities=("sensor.bedroom_humidity",)),
-        par_turns=1,
+        par_turns=2,
     ),
     EvalCase(
         id="complex_evening_lights_on",
@@ -267,7 +268,7 @@ CASES: list[EvalCase] = [
             output_contains_entities=("light.living",),
             output_excludes_entities=("light.bedroom", "light.office_desk"),
         ),
-        par_turns=1,
+        par_turns=2,
     ),
     # --- real-home cases (home-assistant-prod snapshot) ---
     EvalCase(
@@ -390,7 +391,7 @@ CASES: list[EvalCase] = [
             execution_status="ok",
             actions=(ExpectedAction(domain="light", service="turn_on", target_entity_ids=("light.deck_sconce",)),),
         ),
-        par_turns=1,
+        par_turns=2,
     ),
     EvalCase(
         id="real_office_blinds_close",
@@ -404,7 +405,7 @@ CASES: list[EvalCase] = [
             execution_status="ok",
             actions=(ExpectedAction("cover", "close_cover", ("cover.office_blinds",)),),
         ),
-        par_turns=1,
+        par_turns=2,
     ),
     EvalCase(
         id="real_living_fan_speed",
@@ -418,7 +419,7 @@ CASES: list[EvalCase] = [
             execution_status="ok",
             actions=(ExpectedAction("fan", "set_percentage", ("fan.living_room_fan_speed",)),),
         ),
-        par_turns=1,
+        par_turns=2,
     ),
     EvalCase(
         id="real_garage_open_disabled",
@@ -427,7 +428,7 @@ CASES: list[EvalCase] = [
         user_request="Open the garage door.",
         actions_enabled=False,
         llm_context=CaseContext(),
-        expected=Expected(tool_name="execute_home_code", execution_status="ok", actions=()),
+        expected=Expected(tool_name="execute_home_code", execution_status="na", actions=()),
         par_turns=1,
     ),
     EvalCase(
@@ -437,7 +438,7 @@ CASES: list[EvalCase] = [
         user_request="Arm the security system in away mode.",
         actions_enabled=False,
         llm_context=CaseContext(),
-        expected=Expected(tool_name="execute_home_code", execution_status="ok", actions=()),
+        expected=Expected(tool_name="execute_home_code", execution_status="na", actions=()),
         par_turns=1,
     ),
     EvalCase(
@@ -453,7 +454,7 @@ CASES: list[EvalCase] = [
             actions=(ExpectedAction("cover", "close_cover", ("cover.office_blinds",)),),
             output_contains_entities=("sensor.tempest_temperature",),
         ),
-        par_turns=1,
+        par_turns=2,
     ),
     EvalCase(
         id="real_count_lights_on",
@@ -466,6 +467,6 @@ CASES: list[EvalCase] = [
             tool_name="execute_home_code",
             output_contains_entities=("light.master_bedroom_lights_group", "light.office_lights_group"),
         ),
-        par_turns=1,
+        par_turns=2,
     ),
 ]

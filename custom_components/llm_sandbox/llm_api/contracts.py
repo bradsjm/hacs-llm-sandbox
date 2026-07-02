@@ -52,6 +52,8 @@ def suggested_methods() -> list[str]:
         "label_registry.async_get_label_by_name('<label_name>')",
         "[(l.name, l.label_id) for l in label_registry.async_list_labels()]",
         "category_registry.async_list_categories(scope='<scope>')",
+        "llm_context.get('area_id')",
+        "llm_context.get('floor_name')",
         "device_registry.async_get('<device_id>')",
         "repairs.async_active_issues()",
         "repairs.async_get_issue('<domain>', '<issue_id>')",
