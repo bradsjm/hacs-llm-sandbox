@@ -57,9 +57,14 @@ class Expected:
     evidence_contains_entities: tuple[str, ...] = ()
     evidence_excludes_entities: tuple[str, ...] = ()
     required_error_keys: tuple[str, ...] = ()
+    # Dotted paths that must appear in any tool result or recorded action.
+    required_result_paths: tuple[str, ...] = ()
     actions: tuple[ExpectedAction, ...] = ()
     # (start_iso, end_iso) recorder window expectation, or None when not a recorder case.
     recorder_window: tuple[str, str] | None = None
+    # Optional hard gates for metadata/no-retry cases.
+    max_tool_turns: int | None = None
+    max_successful_actions: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

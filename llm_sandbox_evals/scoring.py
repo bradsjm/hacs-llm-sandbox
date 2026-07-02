@@ -21,6 +21,7 @@ class TraceFacts:
     tool_names: tuple[str, ...]
     evidence_text: str
     evidence_entity_ids: frozenset[str]
+    result_path_values: tuple[object, ...]
     recorder_windows: tuple[tuple[datetime, datetime], ...]
     error_keys: frozenset[str]
 
@@ -81,8 +82,44 @@ def check_case(
             )
         )
 
+    if case.expected.required_result_paths:
+        missing_paths = [
+            path
+            for path in case.expected.required_result_paths
+            if not _has_result_path(facts.result_path_values, path)
+        ]
+        checks.append(
+            CheckResult(
+                name="required_result_paths",
+                passed=not missing_paths,
+                required=True,
+                feedback=f"missing={','.join(missing_paths)}",
+            )
+        )
+
     if case.expected.recorder_window is not None:
         checks.append(_recorder_window_check(case, facts))
+
+    if case.expected.max_tool_turns is not None:
+        checks.append(
+            CheckResult(
+                name="tool_turns_within_max",
+                passed=len(steps) <= case.expected.max_tool_turns,
+                required=True,
+                feedback=f"turns={len(steps)} max={case.expected.max_tool_turns}",
+            )
+        )
+
+    if case.expected.max_successful_actions is not None:
+        successful_actions = [action for action in recorded_actions if action.get("status") == "ok"]
+        checks.append(
+            CheckResult(
+                name="successful_actions_within_max",
+                passed=len(successful_actions) <= case.expected.max_successful_actions,
+                required=True,
+                feedback=f"actions={len(successful_actions)} max={case.expected.max_successful_actions}",
+            )
+        )
 
     # Branch boundary: execute-code status expectations are aggregated across all execute turns.
     if case.expected.execution_status != "na":
@@ -193,6 +230,7 @@ def _trace_facts(
     tool_names: list[str] = []
     evidence_parts: list[str] = []
     evidence_entity_ids: set[str] = set()
+    result_path_values: list[object] = []
     recorder_windows: list[tuple[datetime, datetime]] = []
     error_keys: set[str] = set()
 
@@ -202,6 +240,7 @@ def _trace_facts(
             evidence_entity_ids.update(_ids_from_tool_args(call.tool_args))
             result = step.tool_results[index] if index < len(step.tool_results) else None
             if result is not None:
+                result_path_values.append(result)
                 evidence_parts.append(json.dumps(result, sort_keys=True, default=str))
                 result_ids = _ids_from_result(result)
                 evidence_entity_ids.update(result_ids)
@@ -214,6 +253,7 @@ def _trace_facts(
                     recorder_windows.append(window)
 
     for action in recorded_actions:
+        result_path_values.append(action)
         evidence_parts.append(json.dumps(action, sort_keys=True, default=str))
         evidence_entity_ids.update(entity_ids_from_action(action, snapshot))
         error_key = _error_key(action)
@@ -224,9 +264,29 @@ def _trace_facts(
         tool_names=tuple(tool_names),
         evidence_text="\n".join(evidence_parts).lower(),
         evidence_entity_ids=frozenset(evidence_entity_ids),
+        result_path_values=tuple(result_path_values),
         recorder_windows=tuple(recorder_windows),
         error_keys=frozenset(error_keys),
     )
+
+
+def _has_result_path(values: tuple[object, ...], path: str) -> bool:
+    """Return whether any collected result/action contains a dotted path."""
+    parts = tuple(part for part in path.split(".") if part)
+    return bool(parts) and any(_value_has_path(value, parts) for value in values)
+
+
+def _value_has_path(value: object, parts: tuple[str, ...]) -> bool:
+    """Return whether value contains the path, treating sequences as any-match containers."""
+    if not parts:
+        return value is not None
+    head, *tail = parts
+    remaining = tuple(tail)
+    if isinstance(value, Mapping):
+        return head in value and _value_has_path(value[head], remaining)
+    if isinstance(value, Iterable) and not isinstance(value, (str, bytes, dict)):
+        return any(_value_has_path(item, parts) for item in value)
+    return False
 
 
 def _ids_from_tool_args(tool_args: Mapping[str, object]) -> set[str]:

@@ -58,7 +58,7 @@ while turns < (case.max_turns or config.max_turns):
     for call in step.tool_calls:
         outcome = await tools.run_tool(call, case, snapshot, profile, invoker=invoker)
         messages.append(tools.tool_result_message(call.id, outcome.result))
-checks = scoring.check_case(case, final_answer, recorded_actions, statuses, referenced_ids, snapshot, steps)
+checks = scoring.check_case(case, final_answer, recorded_actions, statuses, snapshot, steps)
 score  = scoring.score_case(checks, turns, case.par_turns, config.efficiency_k, config.efficiency_floor)
 ```
 
@@ -88,7 +88,7 @@ The harness owns the snapshot lifecycle (build once per case evaluation, pass to
 
 ## How To Extend
 
-- **Add a case:** append to `cases.CASES`. Reference a real fixture `home`; keep `expected` deterministic; set `par_turns` to the expected efficient tool-turn count. Recorder cases may use entity ids or supported selectors such as area/domain/device/floor/label in native tool args. Use `required_tool_names`, `required_tool_sequence`, `recorder_window`, `required_error_keys`, and `evidence_*` fields for multi-tool and recovery cases. Do not require final-answer entity mentions for action cases; score actions from recorded side effects and intermediate tool evidence.
+- **Add a case:** append to `cases.CASES`. Reference a real fixture `home`; keep `expected` deterministic; set `par_turns` to the expected efficient tool-turn count. Recorder cases may use entity ids or supported selectors such as area/domain/device/floor/label in native tool args. Use `required_tool_names`, `required_tool_sequence`, `recorder_window`, `required_error_keys`, `required_result_paths`, `max_tool_turns`, `max_successful_actions`, and `evidence_*` fields for multi-tool, recovery, and no-retry cases. Do not require final-answer entity mentions for action cases; score actions from recorded side effects and intermediate tool evidence.
 - **Add a fixture:** add `homes/<name>.py` with `snapshot()`/`recorder()` and `NAME`, then register in `homes/__init__.py`. Mirror `home_default.py`'s helpers (effective-area rule, sorted tuple `SnapshotIndexes`, nested `SafeContext`).
 - **Add a candidate:** add a `PromptCandidate` and expose via `prompts.load_candidates`. `baseline` is auto-built; unknown ids currently raise.
 - **Add a model:** no code needed — pass any litellm id to `--models`. To add a non-litellm backend, implement the `ModelAdapter` protocol and branch in `get_adapter`.

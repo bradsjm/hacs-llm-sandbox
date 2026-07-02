@@ -417,6 +417,118 @@ CASES: list[EvalCase] = [
         par_turns=3,
         max_turns=4,
     ),
+    # --- metadata-driven recovery cases ---
+    EvalCase(
+        id="recovery_recorder_entity_not_visible",
+        category="recovery",
+        home="home_default",
+        user_request=(
+            "Show history for sensor.living_room_temperature over the last 24 hours. "
+            "If get_history says that entity is not visible and suggests a fix, retry get_history directly with "
+            "the suggested entity ID."
+        ),
+        actions_enabled=False,
+        llm_context=CaseContext(device_id="device_assist_living"),
+        expected=Expected(
+            tool_name="get_history",
+            required_tool_sequence=("get_history", "get_history"),
+            execution_status="na",
+            output_contains_entities=("sensor.living_temp",),
+            evidence_contains_entities=("sensor.living_temp",),
+            required_error_keys=("entity_not_visible",),
+            required_result_paths=("error.fix",),
+            recorder_window=("2026-06-28T12:00:00+00:00", "2026-06-29T12:00:00+00:00"),
+            max_tool_turns=2,
+        ),
+        par_turns=2,
+        max_turns=3,
+    ),
+    EvalCase(
+        id="recovery_missing_state_note",
+        category="recovery",
+        home="home_minimal",
+        user_request=(
+            "Use execute_home_code to read hass.states.get('light.kitchen_main'). "
+            "If the tool returns no output with a note suggesting a visible replacement, retry with the suggested "
+            "entity and answer whether it is on."
+        ),
+        actions_enabled=False,
+        llm_context=CaseContext(device_id="device_assist_living"),
+        expected=Expected(
+            tool_name="execute_home_code",
+            required_tool_sequence=("execute_home_code", "execute_home_code"),
+            execution_status="ok",
+            output_contains_entities=("light.kitchen",),
+            evidence_contains_entities=("light.kitchen",),
+            required_result_paths=("note",),
+            max_tool_turns=2,
+        ),
+        par_turns=2,
+        max_turns=3,
+    ),
+    EvalCase(
+        id="recovery_service_target_not_visible",
+        category="recovery",
+        home="home_default",
+        user_request=(
+            "Turn off light.lounge. If the service target is not visible and the action error suggests valid "
+            "targets, retry the same light.turn_off service with the suggested living room light target."
+        ),
+        actions_enabled=True,
+        llm_context=CaseContext(device_id="device_assist_living"),
+        expected=Expected(
+            tool_name="execute_home_code",
+            required_tool_sequence=("execute_home_code", "execute_home_code"),
+            required_error_keys=("service_target_not_visible",),
+            required_result_paths=("actions.error.fix",),
+            actions=(ExpectedAction(domain="light", service="turn_off", target_entity_ids=("light.living",)),),
+            max_tool_turns=2,
+        ),
+        par_turns=2,
+        max_turns=3,
+    ),
+    EvalCase(
+        id="recovery_service_not_found",
+        category="recovery",
+        home="home_default",
+        user_request=(
+            "First call light.activate directly for the living room light without checking the service list. "
+            "If that service is not found and the action error suggests valid light services, retry with the "
+            "valid service that turns the light on."
+        ),
+        actions_enabled=True,
+        llm_context=CaseContext(device_id="device_assist_living"),
+        expected=Expected(
+            tool_name="execute_home_code",
+            required_tool_sequence=("execute_home_code", "execute_home_code"),
+            required_error_keys=("service_not_found",),
+            required_result_paths=("actions.error.fix",),
+            actions=(ExpectedAction(domain="light", service="turn_on", target_entity_ids=("light.living",)),),
+            max_tool_turns=2,
+        ),
+        par_turns=2,
+        max_turns=3,
+    ),
+    EvalCase(
+        id="recovery_no_retry_resolved_from",
+        category="recovery",
+        home="home_default",
+        user_request=(
+            "Use fan.set_percentage to set fan.living_room_fan to 50 percent. If the tool says the target was "
+            "resolved and the service succeeded, trust that success and do not call the tool again."
+        ),
+        actions_enabled=True,
+        llm_context=CaseContext(device_id="device_assist_living"),
+        expected=Expected(
+            tool_name="execute_home_code",
+            required_result_paths=("actions.resolved_from",),
+            actions=(ExpectedAction(domain="fan", service="set_percentage", target_entity_ids=("fan.living_fan",)),),
+            max_tool_turns=1,
+            max_successful_actions=1,
+        ),
+        par_turns=1,
+        max_turns=3,
+    ),
     # --- real-home cases (home-assistant-prod snapshot) ---
     EvalCase(
         id="real_outside_temp",
