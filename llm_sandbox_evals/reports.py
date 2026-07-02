@@ -136,6 +136,7 @@ def _result_line(trace: CaseTrace) -> dict[str, object]:
         "model_id": trace.model_id,
         "score": trace.score,
         "turns": trace.turns,
+        "par_turns": trace.par_turns,
         "checks": [{"name": check.name, "passed": check.passed, "required": check.required} for check in trace.checks],
     }
 
