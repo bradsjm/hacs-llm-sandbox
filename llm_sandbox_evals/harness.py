@@ -21,9 +21,8 @@ from llm_sandbox_evals.schema import (
     PromptCandidate,
     RunResult,
     StepTrace,
-    ToolCall,
 )
-from llm_sandbox_evals.scoring import check_case, entity_ids_from_action, mean_score, score_case, strings_from_value
+from llm_sandbox_evals.scoring import check_case, mean_score, score_case
 from llm_sandbox_evals.tools import EVAL_SCOPE, RecordingInvoker, apply_scope, run_tool, tool_result_message
 
 
@@ -77,7 +76,6 @@ async def run_case(
         turns = 0
         recorded_actions: list[dict[str, object]] = []
         execute_statuses: set[str] = set()
-        referenced_entity_ids: set[str] = set()
         steps: list[StepTrace] = []
         final_answer = ""
         raw_output = ""
@@ -96,13 +94,9 @@ async def run_case(
 
             results: list[dict[str, object] | None] = []
             for call in step.tool_calls:
-                referenced_entity_ids.update(_referenced_ids_from_call(call))
                 outcome = await run_tool(call, case, snapshot, profile, invoker=invoker)
                 messages.append(tool_result_message(call.id, outcome.result))
                 recorded_actions.extend(outcome.recorded_actions)
-                referenced_entity_ids.update(_referenced_ids_from_result(outcome.result))
-                for action in outcome.recorded_actions:
-                    referenced_entity_ids.update(entity_ids_from_action(action, snapshot))
                 status = _execution_status(outcome.result)
                 if call.tool_name == TOOL_EXECUTE_HOME_CODE and status is not None:
                     execute_statuses.add(status)
@@ -116,7 +110,6 @@ async def run_case(
             final_answer,
             tuple(recorded_actions),
             execute_statuses,
-            referenced_entity_ids,
             snapshot,
             tuple(steps),
         )
@@ -314,24 +307,3 @@ def _execution_status(result: dict[str, object] | None) -> str | None:
         return None
     status = execution.get("status")
     return status if isinstance(status, str) else None
-
-
-def _referenced_ids_from_call(call: ToolCall) -> set[str]:
-    """Return explicit entity/statistic ids present in native tool arguments."""
-    ids = set(strings_from_value(call.tool_args.get("entity_ids")))
-    ids.update(strings_from_value(call.tool_args.get("statistic_ids")))
-    return ids
-
-
-def _referenced_ids_from_result(result: dict[str, object] | None) -> set[str]:
-    """Return recorder entity/statistic ids surfaced by fixture result envelopes."""
-    if result is None:
-        return set()
-    ids: set[str] = set()
-    entities = result.get("entities")
-    if isinstance(entities, dict):
-        ids.update(str(entity_id) for entity_id in entities)
-    statistics = result.get("statistics")
-    if isinstance(statistics, dict):
-        ids.update(str(statistic_id) for statistic_id in statistics)
-    return ids

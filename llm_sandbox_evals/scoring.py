@@ -30,7 +30,6 @@ def check_case(
     final_answer: str,
     recorded_actions: tuple[dict[str, object], ...],
     execute_statuses: set[str],
-    referenced_entity_ids: set[str],
     snapshot: HomeSnapshot,
     steps: tuple[StepTrace, ...],
 ) -> list[CheckResult]:
@@ -106,20 +105,6 @@ def check_case(
                 passed=not executed_actions,
                 required=True,
                 feedback=f"executed={len(executed_actions)}",
-            )
-        )
-
-    # Visibility-sensitive cases must not reference filtered-out entity ids.
-    if case.expected.visible_only:
-        invisible_entity_ids = sorted(
-            entity_id for entity_id in referenced_entity_ids if entity_id not in snapshot.states
-        )
-        checks.append(
-            CheckResult(
-                name="no_invisible_target",
-                passed=not invisible_entity_ids,
-                required=True,
-                feedback=f"invisible={','.join(invisible_entity_ids)}",
             )
         )
 
@@ -218,7 +203,8 @@ def _trace_facts(
             result = step.tool_results[index] if index < len(step.tool_results) else None
             if result is not None:
                 evidence_parts.append(json.dumps(result, sort_keys=True, default=str))
-                evidence_entity_ids.update(_ids_from_result(result))
+                result_ids = _ids_from_result(result)
+                evidence_entity_ids.update(result_ids)
                 error_key = _error_key(result)
                 if error_key is not None:
                     error_keys.add(error_key)

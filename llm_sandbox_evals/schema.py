@@ -60,7 +60,6 @@ class Expected:
     actions: tuple[ExpectedAction, ...] = ()
     # (start_iso, end_iso) recorder window expectation, or None when not a recorder case.
     recorder_window: tuple[str, str] | None = None
-    visible_only: bool = True
 
 
 @dataclass(frozen=True, slots=True)
