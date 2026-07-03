@@ -20,6 +20,7 @@ can let Home Assistant make the final live decision.
 """
 
 from collections.abc import Mapping
+from typing import cast
 
 from ..snapshot.models import (
     HomeSnapshot,
@@ -33,6 +34,7 @@ from ..snapshot.models import (
 __all__ = (
     "entities_for_service",
     "field_filter_matches",
+    "raw_service_field_names",
     "service_accepts_domain",
     "service_field_names",
     "service_targets_entity",
@@ -239,15 +241,22 @@ def service_field_names(
     brief = snapshot.services_schema.get(domain, {}).get(service)
     if not isinstance(brief, Mapping):
         return None
-    raw_fields = brief.get("fields")
-    if not isinstance(raw_fields, list):
-        return None
     supported: list[str] = []
-    for raw_field in raw_fields:
-        name = raw_field.get("name")
-        if not isinstance(name, str):
-            continue
+    for raw_field in raw_service_field_names(brief):
+        name = cast(str, raw_field["name"])
         field_filter = raw_field.get("filter")
-        if not isinstance(field_filter, Mapping) or field_filter_matches(field_filter, state, entry):
+        if not isinstance(field_filter, Mapping) or field_filter_matches(
+            cast(ServiceFieldFilter, field_filter), state, entry
+        ):
             supported.append(name)
     return tuple(supported)
+
+
+def raw_service_field_names(brief: Mapping[str, object]) -> tuple[dict[str, object], ...]:
+    """Return named service-field dicts from a captured schema brief."""
+    raw_fields = brief.get("fields")
+    if not isinstance(raw_fields, list):
+        return ()
+    return tuple(
+        raw_field for raw_field in raw_fields if isinstance(raw_field, dict) and isinstance(raw_field.get("name"), str)
+    )

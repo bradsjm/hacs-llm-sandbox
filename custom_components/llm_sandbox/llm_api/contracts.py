@@ -11,29 +11,7 @@ Static LLM-facing prose lives in ``prompts.py``.
 
 from typing import Any
 
-AVAILABLE_GLOBALS = [
-    "hass",
-    "states",
-    "er",
-    "dr",
-    "ar",
-    "fr",
-    "lr",
-    "cr",
-    "entity_registry",
-    "device_registry",
-    "area_registry",
-    "floor_registry",
-    "label_registry",
-    "category_registry",
-    "repairs",
-    "persistent_notifications",
-    "config_entries",
-    "date",
-    "datetime",
-    "now",
-    "llm_context",
-]
+from .facade_registry import ATTRIBUTE_REACHABLE_RECORDS, AVAILABLE_GLOBALS, FACADE_CLASSES
 
 # Builtin callables Monty runs natively but does not auto-declare to its
 # type-checker. Declaring them lets common LLM discovery patterns
@@ -61,41 +39,6 @@ def _build_monty_type_stubs() -> str:
     from dataclasses import fields
     from types import UnionType
     from typing import get_args, get_origin, get_type_hints
-
-    from ..snapshot.models import (
-        SafeAreaEntry,
-        SafeCategoryEntry,
-        SafeConfig,
-        SafeConfigEntry,
-        SafeContext,
-        SafeDeviceEntry,
-        SafeFloorEntry,
-        SafeIssueEntry,
-        SafeLabelEntry,
-        SafeNotificationEntry,
-        SafeRegistryEntry,
-        SafeState,
-        SafeUnitSystem,
-    )
-    from .facade_views import (
-        SafeAreaRegistry,
-        SafeCategoryRegistry,
-        SafeConfigEntries,
-        SafeDate,
-        SafeDateFacade,
-        SafeDateTime,
-        SafeDateTimeFacade,
-        SafeDeviceRegistry,
-        SafeEntityRegistry,
-        SafeFloorRegistry,
-        SafeHass,
-        SafeIssueRegistry,
-        SafeLabelRegistry,
-        SafeLLMContext,
-        SafeNotificationRegistry,
-        SafeServiceRegistry,
-        SafeStateMachine,
-    )
 
     def _format_type(annotation: object) -> str:
         if annotation is Any:
@@ -165,38 +108,7 @@ def _build_monty_type_stubs() -> str:
             return [f"class {cls.__name__}:", "    pass"]
         return [f"class {cls.__name__}:", *body]
 
-    all_classes = [
-        SafeContext,
-        SafeState,
-        SafeRegistryEntry,
-        SafeDeviceEntry,
-        SafeAreaEntry,
-        SafeFloorEntry,
-        SafeLabelEntry,
-        SafeCategoryEntry,
-        SafeIssueEntry,
-        SafeNotificationEntry,
-        SafeConfigEntry,
-        SafeUnitSystem,
-        SafeConfig,
-        SafeStateMachine,
-        SafeServiceRegistry,
-        SafeEntityRegistry,
-        SafeDeviceRegistry,
-        SafeAreaRegistry,
-        SafeFloorRegistry,
-        SafeLabelRegistry,
-        SafeCategoryRegistry,
-        SafeIssueRegistry,
-        SafeNotificationRegistry,
-        SafeConfigEntries,
-        SafeHass,
-        SafeDate,
-        SafeDateTime,
-        SafeDateFacade,
-        SafeDateTimeFacade,
-        SafeLLMContext,
-    ]
+    all_classes = [*ATTRIBUTE_REACHABLE_RECORDS, *FACADE_CLASSES]
 
     sections: list[str] = ["from typing import Any, Mapping", ""]
     for cls in all_classes:

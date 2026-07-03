@@ -50,12 +50,13 @@ from .executor_support import helper_response, json_safe
 from .resolution import (
     _DISCOVERY_LIMIT,
     CandidateTarget,
+    bounded_strings,
     candidates_for_domain,
     rank_candidates_for_service,
     resolve_target_entity,
 )
 from .runtime import require_runtime, require_snapshot
-from .target_matching import entities_for_service, service_accepts_domain, services_for_entity
+from .target_matching import entities_for_service, raw_service_field_names, service_accepts_domain, services_for_entity
 
 _TARGET_SELECTOR_KEYS = frozenset(("entity_id", "device_id", "area_id", "label_id", "label", "floor_id"))
 
@@ -603,7 +604,7 @@ class SafeServiceRegistry:
         if not settings.actions_enabled:
             return _PolicyBlock("actions_disabled", {}, message="Service calls are disabled for this sandbox.")
         if settings.action_domains and domain not in settings.action_domains:
-            valid_domains = _bounded_strings(sorted(settings.action_domains))
+            valid_domains = bounded_strings(sorted(settings.action_domains))
             return _PolicyBlock(
                 "action_domain_not_allowed",
                 cast(TranslationPlaceholders, {"domain": domain}),
@@ -612,14 +613,14 @@ class SafeServiceRegistry:
             )
         if not self.has_service(domain, service):
             if not self.services.get(domain):
-                valid_domains = _bounded_strings(sorted(self.services))
+                valid_domains = bounded_strings(sorted(self.services))
                 return _PolicyBlock(
                     "service_not_found",
                     cast(TranslationPlaceholders, {"domain": domain, "service": service}),
                     message=_valid_domains_message(domain, valid_domains),
                     fix=valid_domains,
                 )
-            valid_services = _bounded_strings(sorted(self.services[domain]))
+            valid_services = bounded_strings(sorted(self.services[domain]))
             return _PolicyBlock(
                 "service_not_found",
                 cast(TranslationPlaceholders, {"domain": domain, "service": service}),
@@ -1323,19 +1324,12 @@ def _expand_target_entities(snapshot: HomeSnapshot, target: Mapping[str, object]
 
 def _bounded_entity_ids(entity_ids: tuple[str, ...] | list[str]) -> list[str]:
     """Bound a raw entity-id list to the discovery limit plus overflow marker."""
-    return _bounded_strings(sorted(entity_ids))
-
-
-def _bounded_strings(values: list[str]) -> list[str]:
-    """Bound deterministic repair lists to the discovery limit plus overflow marker."""
-    if len(values) > _DISCOVERY_LIMIT:
-        return [*values[: _DISCOVERY_LIMIT - 1], "..."]
-    return values
+    return bounded_strings(sorted(entity_ids))
 
 
 def _candidate_ids(candidates: tuple[CandidateTarget, ...]) -> list[str]:
     """Return bounded candidate entity ids for model repair."""
-    return _bounded_strings([candidate.entity_id for candidate in candidates])
+    return bounded_strings([candidate.entity_id for candidate in candidates])
 
 
 def _valid_domains_message(domain: str, valid_domains: list[str]) -> str:
@@ -1374,11 +1368,8 @@ def _service_field_names(brief: ServiceSchemaBrief | None) -> list[str] | None:
     """Return bounded field names from a service schema brief."""
     if brief is None:
         return None
-    fields = brief.get("fields", [])
-    if not isinstance(fields, list):
-        return None
-    names = sorted(str(field["name"]) for field in fields if isinstance(field, dict) and "name" in field)
-    return _bounded_strings(names) if names else None
+    names = sorted(str(field["name"]) for field in raw_service_field_names(brief))
+    return bounded_strings(names) if names else None
 
 
 def _resolved_from_adjustments(adjustments: list[dict[str, object]]) -> str | None:

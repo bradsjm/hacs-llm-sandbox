@@ -24,7 +24,7 @@ from ..executor_support import ExecutionState
 from ..facade_views import build_llm_context
 from ..prompts import build_execute_home_code_description
 from ..runtime import RuntimeContext
-from ._support import _require_loaded_entry, _require_loaded_entry_error
+from ._support import _require_loaded_entry_error, _require_sandbox_runtime
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -79,11 +79,7 @@ async def _execute(
     if setup_error is not None:
         key, placeholders = setup_error
         return cast(JsonObjectType, setup_error_payload(key, placeholders))
-    typed_entry = _require_loaded_entry(hass, entry_id)
-
-    runtime_data = typed_entry.runtime_data
-    assert runtime_data is not None
-    settings = runtime_data.settings
+    settings = _require_sandbox_runtime(hass, entry_id).settings
     code = cast(str, data["code"])
     deadline = time.monotonic() + settings.execution_timeout_seconds
 

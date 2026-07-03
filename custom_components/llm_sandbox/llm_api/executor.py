@@ -7,22 +7,7 @@ import pydantic_monty  # Required manifest dependency; do not convert to a dynam
 from homeassistant.exceptions import HomeAssistantError
 
 from ..const import DOMAIN
-from ..snapshot.models import (
-    HomeSnapshot,
-    SafeAreaEntry,
-    SafeCategoryEntry,
-    SafeConfig,
-    SafeConfigEntry,
-    SafeContext,
-    SafeDeviceEntry,
-    SafeFloorEntry,
-    SafeIssueEntry,
-    SafeLabelEntry,
-    SafeNotificationEntry,
-    SafeRegistryEntry,
-    SafeState,
-    SafeUnitSystem,
-)
+from ..snapshot.models import HomeSnapshot
 from . import await_normalization, result_binding
 from .builtin_normalization import normalize_builtins
 from .contracts import MONTY_TYPE_STUBS
@@ -40,27 +25,9 @@ from .executor_support import (
     underlying_exception,
     validation_error,
 )
-from .facade_views import (
-    SafeAreaRegistry,
-    SafeCategoryRegistry,
-    SafeConfigEntries,
-    SafeDate,
-    SafeDateFacade,
-    SafeDateTime,
-    SafeDateTimeFacade,
-    SafeDeviceRegistry,
-    SafeEntityRegistry,
-    SafeFloorRegistry,
-    SafeHass,
-    SafeIssueRegistry,
-    SafeLabelRegistry,
-    SafeLLMContext,
-    SafeNotificationRegistry,
-    SafeServiceRegistry,
-    SafeStateMachine,
-    build_facades,
-)
-from .resolution import _DISCOVERY_LIMIT, candidates_for_domain, resolve_target_entity
+from .facade_registry import MONTY_DATACLASS_REGISTRY
+from .facade_views import SafeLLMContext, build_facades
+from .resolution import _DISCOVERY_LIMIT, bounded_strings, candidates_for_domain, resolve_target_entity
 from .runtime import RuntimeContext, activate_runtime, clear_runtime
 
 MAX_MONTY_CODE_CHARS = 8000
@@ -74,43 +41,7 @@ _REFERENCE_TYPE_ERRORS = ("unresolved-reference", "used-when-not-defined")
 # Also reused by ``await_normalization`` to derive async/sync method names.
 # Every facade and record type the LLM can receive from a method call must be
 # registered so Monty knows how to type-check attribute access on it.
-DATACLASS_REGISTRY: list[type] = [
-    # Root + state machine + service registry
-    SafeHass,
-    SafeStateMachine,
-    SafeServiceRegistry,
-    # Registry instance facades
-    SafeEntityRegistry,
-    SafeDeviceRegistry,
-    SafeAreaRegistry,
-    SafeFloorRegistry,
-    SafeLabelRegistry,
-    SafeCategoryRegistry,
-    SafeIssueRegistry,
-    SafeNotificationRegistry,
-    SafeConfigEntries,
-    # LLM context
-    SafeLLMContext,
-    # Date/datetime facades (value types + class facades)
-    SafeDate,
-    SafeDateTime,
-    SafeDateFacade,
-    SafeDateTimeFacade,
-    # Record types returned by facade methods
-    SafeContext,
-    SafeState,
-    SafeConfig,
-    SafeUnitSystem,
-    SafeRegistryEntry,
-    SafeDeviceEntry,
-    SafeAreaEntry,
-    SafeFloorEntry,
-    SafeLabelEntry,
-    SafeCategoryEntry,
-    SafeIssueEntry,
-    SafeNotificationEntry,
-    SafeConfigEntry,
-]
+DATACLASS_REGISTRY = MONTY_DATACLASS_REGISTRY
 
 
 def _build_monty(
@@ -177,8 +108,8 @@ def _states_root(node: ast.AST) -> bool:
     )
 
 
-def _referenced_missing(code: str, snapshot: HomeSnapshot) -> list[str]:
-    """Entity ids read via literal ``states.get``/``states[...]`` that are absent.
+def _referenced_state_ids(code: str) -> list[str]:
+    """Entity ids read via literal ``states.get``/``states[...]``.
 
     Static analysis: Monty copies input objects and does not propagate the
     runtime contextvar to synchronous methods, so absent reads cannot be
@@ -190,13 +121,13 @@ def _referenced_missing(code: str, snapshot: HomeSnapshot) -> list[str]:
         module = ast.parse(code)
     except SyntaxError:
         return []
-    missing: list[str] = []
+    references: list[str] = []
     seen: set[str] = set()
 
     def _consider(literal: object) -> None:
-        if isinstance(literal, str) and literal not in seen and literal not in snapshot.states:
+        if isinstance(literal, str) and literal not in seen:
             seen.add(literal)
-            missing.append(literal)
+            references.append(literal)
 
     for node in ast.walk(module):
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
@@ -204,29 +135,17 @@ def _referenced_missing(code: str, snapshot: HomeSnapshot) -> list[str]:
                 _consider(_literal_str(node.args[0]))
         elif isinstance(node, ast.Subscript) and _states_root(node.value):
             _consider(_literal_str(node.slice))
-    return missing
+    return references
+
+
+def _referenced_missing(code: str, snapshot: HomeSnapshot) -> list[str]:
+    """Entity ids read via literal state access that are absent from the snapshot."""
+    return [entity_id for entity_id in _referenced_state_ids(code) if entity_id not in snapshot.states]
 
 
 def _referenced_visible_state_id(code: str, snapshot: HomeSnapshot) -> str | None:
     """Return the only visible literal state id read via ``states.get``/``states[...]``."""
-    try:
-        module = ast.parse(code)
-    except SyntaxError:
-        return None
-    visible: list[str] = []
-    seen: set[str] = set()
-
-    def _consider(literal: object) -> None:
-        if isinstance(literal, str) and literal in snapshot.states and literal not in seen:
-            seen.add(literal)
-            visible.append(literal)
-
-    for node in ast.walk(module):
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
-            if node.func.attr == "get" and _states_root(node.func.value) and node.args:
-                _consider(_literal_str(node.args[0]))
-        elif isinstance(node, ast.Subscript) and _states_root(node.value):
-            _consider(_literal_str(node.slice))
+    visible = [entity_id for entity_id in _referenced_state_ids(code) if entity_id in snapshot.states]
     return visible[0] if len(visible) == 1 else None
 
 
@@ -237,13 +156,6 @@ def _literal_str(node: ast.AST) -> object:
     return object()  # non-string / non-literal: never matches an entity id
 
 
-def _bounded_strings(values: list[str]) -> list[str]:
-    """Bound deterministic repair lists to the discovery limit plus overflow marker."""
-    if len(values) > _DISCOVERY_LIMIT:
-        return [*values[: _DISCOVERY_LIMIT - 1], "..."]
-    return values
-
-
 def _entity_candidates(snapshot: HomeSnapshot, requested_entity_id: str) -> list[str]:
     """Return token-ranked visible entity candidates for a missing state id."""
     domain = requested_entity_id.split(".", 1)[0] if "." in requested_entity_id else requested_entity_id
@@ -251,7 +163,7 @@ def _entity_candidates(snapshot: HomeSnapshot, requested_entity_id: str) -> list
     if outcome.resolved is not None:
         return [outcome.resolved]
     candidates = outcome.candidates or candidates_for_domain(snapshot, domain, limit=_DISCOVERY_LIMIT + 1)
-    return _bounded_strings([candidate.entity_id for candidate in candidates])
+    return bounded_strings([candidate.entity_id for candidate in candidates])
 
 
 def _missing_state_note(snapshot: HomeSnapshot, requested_entity_id: str) -> str:

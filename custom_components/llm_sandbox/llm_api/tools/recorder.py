@@ -39,13 +39,14 @@ from ...runtime import SandboxSettings
 from ...snapshot import build_snapshot
 from ...snapshot.models import HomeSnapshot
 from ...types import TranslationPlaceholders
+from .._hinting import error_guidance
 from ..errors import RecoverableToolError, tool_error_envelope, tool_error_from_exception
 from ..executor_support import json_safe
 from ..prompts import build_get_history_description, build_get_logbook_description, build_get_statistics_description
-from ..resolution import _DISCOVERY_LIMIT, candidates_for_domain, resolve_target_entity
+from ..resolution import _DISCOVERY_LIMIT, bounded_strings, candidates_for_domain, resolve_target_entity
 from ._aggregates import AGGREGATORS, AggregateFilters, AggregateMode, HistoryRow
 from ._cursor import _LOGBOOK_CURSOR_KEY, INVALID_CURSOR, Cursor, decode_cursor, encode_cursor, paginate_stream
-from ._support import _require_loaded_entry, _require_loaded_entry_error
+from ._support import _require_loaded_entry_error, _require_sandbox_runtime
 
 RECORDER_UNAVAILABLE = "recorder_unavailable"
 ENTITY_NOT_VISIBLE = "entity_not_visible"
@@ -94,23 +95,6 @@ _RECORDER_GUIDANCE: dict[str, tuple[str, list[str]]] = {
 }
 
 
-class _SafeHintDict(dict[str, str]):
-    """dict that keeps unknown ``{placeholder}`` tokens verbatim instead of raising."""
-
-    def __missing__(self, key: str) -> str:
-        return "{" + key + "}"
-
-
-def _error_guidance(key: str, placeholders: Mapping[str, str]) -> tuple[str | None, list[str] | None]:
-    """Return (message, fix) for a recorder error key, formatting placeholders."""
-    entry = _RECORDER_GUIDANCE.get(key)
-    if entry is None:
-        return None, None
-    message, templates = entry
-    values = _SafeHintDict({str(k): str(v) for k, v in placeholders.items()})
-    return message, [template.format_map(values) for template in templates]
-
-
 def _candidate_ids(snapshot: HomeSnapshot, requested_entity_id: str) -> list[str] | None:
     """Return deterministic visible candidates for an invisible requested entity."""
     domain = requested_entity_id.split(".", 1)[0]
@@ -124,10 +108,7 @@ def _candidate_ids(snapshot: HomeSnapshot, requested_entity_id: str) -> list[str
         ids = [candidate.entity_id for candidate in candidates]
     if not ids:
         return None
-    ids = sorted(ids)
-    if len(ids) > _DISCOVERY_LIMIT:
-        return [*ids[: _DISCOVERY_LIMIT - 1], "..."]
-    return ids
+    return bounded_strings(sorted(ids))
 
 
 def recorder_error_envelope(
@@ -145,7 +126,7 @@ def recorder_error_envelope(
             message=f"Entity '{entity_id}' is not visible to this LLM tool.",
             fix=fix,
         )
-    message, fix = _error_guidance(key, placeholders)
+    message, fix = error_guidance(_RECORDER_GUIDANCE, key, placeholders)
     return tool_error_envelope(key, placeholders, message=message, fix=fix)
 
 
@@ -193,10 +174,7 @@ class _RecorderTool(llm.Tool):
         if setup_error is not None:
             key, placeholders = setup_error
             return recorder_error_envelope(key, placeholders)
-        entry = _require_loaded_entry(hass, self.entry_id)
-        runtime_data = entry.runtime_data
-        assert runtime_data is not None
-        settings = runtime_data.settings
+        settings = _require_sandbox_runtime(hass, self.entry_id).settings
         # Build a fresh visible snapshot for every recorder tool call.
         snapshot = build_snapshot(
             hass,
@@ -354,6 +332,67 @@ def _clamp_window(
     return start, end
 
 
+def _resolve_window(
+    data: dict[str, object],
+    *,
+    default_hours: int,
+    max_hours: int,
+) -> tuple[datetime, datetime, Cursor]:
+    """Return the stable query window and decoded cursor for one recorder page."""
+    if (cursor_in := data.get("cursor")) is not None:
+        # Cursor window wins while paging so the continuation is stable.
+        cursor = decode_cursor(cursor_in)
+        return cursor.start, cursor.end, cursor
+    start, end = _clamp_window(
+        cast(datetime | None, data.get("start")),
+        cast(datetime | None, data.get("end")),
+        hours=cast(float | None, data.get("hours")),
+        default_hours=default_hours,
+        max_hours=max_hours,
+    )
+    return start, end, Cursor(start=start, end=end, cutoffs={})
+
+
+def _paginate_streams(
+    streams: Mapping[str, list[list[object]]],
+    *,
+    budget: int,
+    cutoffs: Mapping[str, str],
+) -> tuple[dict[str, list[list[object]]], dict[str, str]]:
+    """Page each timestamp-first stream independently and return next cutoffs."""
+    pages: dict[str, list[list[object]]] = {}
+    next_cutoffs: dict[str, str] = {}
+    for stream_id, rows in streams.items():
+        page, next_cutoff = paginate_stream(
+            rows,
+            ts_of=_row_timestamp,
+            budget=budget,
+            cutoff_iso=cutoffs.get(stream_id),
+        )
+        pages[stream_id] = page
+        if next_cutoff is not None:
+            # Exhausted streams are intentionally dropped from the next cutoff
+            # map; paging completes only when every stream is exhausted.
+            next_cutoffs[stream_id] = next_cutoff
+    return pages, next_cutoffs
+
+
+def _windowed_payload(
+    start: datetime,
+    end: datetime,
+    body: Mapping[str, object],
+    next_cursor: Cursor | None,
+) -> JsonObjectType:
+    """Return a JSON-safe recorder payload with a stable window envelope."""
+    payload: dict[str, object] = {
+        "window": {"start": start.isoformat(), "end": end.isoformat()},
+        **body,
+    }
+    if next_cursor is not None:
+        payload["next_cursor"] = encode_cursor(next_cursor)
+    return cast(JsonObjectType, json_safe(payload))
+
+
 async def _run_query[T](
     hass: HomeAssistant,
     deadline: float,
@@ -503,19 +542,11 @@ class GetHistoryTool(_RecorderTool):
         if aggregate is not None:
             return await _aggregate_history(hass, deadline, entity_ids, data, aggregate)
 
-        if (cursor_in := data.get("cursor")) is not None:
-            # Cursor window wins while paging so the continuation is stable.
-            cursor = decode_cursor(cursor_in)
-            start, end = cursor.start, cursor.end
-        else:
-            start, end = _clamp_window(
-                cast(datetime | None, data.get("start")),
-                cast(datetime | None, data.get("end")),
-                hours=cast(float | None, data.get("hours")),
-                default_hours=DEFAULT_HISTORY_WINDOW_HOURS,
-                max_hours=MAX_RECORDER_LOOKBACK_HOURS,
-            )
-            cursor = Cursor(start=start, end=end, cutoffs={})
+        start, end, cursor = _resolve_window(
+            data,
+            default_hours=DEFAULT_HISTORY_WINDOW_HOURS,
+            max_hours=MAX_RECORDER_LOOKBACK_HOURS,
+        )
         result = await _run_query(
             hass,
             deadline,
@@ -534,38 +565,27 @@ class GetHistoryTool(_RecorderTool):
             ),
         )
         budget = max(1, MAX_HISTORY_STATES // len(entity_ids))
-        entities: dict[str, dict[str, object]] = {}
-        next_cutoffs: dict[str, str] = {}
+        stream_rows: dict[str, list[list[object]]] = {}
+        stream_units: dict[str, str] = {}
         for entity_id, states in result.items():
             converted = [_state_row_to_dict(row, requested_attributes) for row in states]
-            rows = [row for row, _unit in converted]
-            # Per-entity cutoffs let multi-entity pages advance independently.
-            page, next_cutoff = paginate_stream(
-                rows,
-                ts_of=_row_timestamp,
-                budget=budget,
-                cutoff_iso=cursor.cutoffs.get(entity_id),
-            )
-            entity: dict[str, object] = {"rows": page}
+            stream_rows[entity_id] = [row for row, _unit in converted]
             unit = next((unit for _row, unit in converted if unit), None)
             if unit:
+                stream_units[entity_id] = unit
+        pages, next_cutoffs = _paginate_streams(stream_rows, budget=budget, cutoffs=cursor.cutoffs)
+        entities: dict[str, dict[str, object]] = {}
+        for entity_id, page in pages.items():
+            entity: dict[str, object] = {"rows": page}
+            if (unit := stream_units.get(entity_id)) is not None:
                 entity["unit"] = unit
             entities[entity_id] = entity
-            if next_cutoff is not None:
-                # Exhausted entities are intentionally dropped from the next
-                # cutoff map; paging completes only when all streams exhaust.
-                next_cutoffs[entity_id] = next_cutoff
 
-        payload: dict[str, object] = {
-            "window": {"start": start.isoformat(), "end": end.isoformat()},
-            "entities": entities,
-        }
-        if next_cutoffs:
-            payload["next_cursor"] = encode_cursor(Cursor(start=start, end=end, cutoffs=next_cutoffs))
-
-        return cast(
-            JsonObjectType,
-            json_safe(payload),
+        return _windowed_payload(
+            start,
+            end,
+            {"entities": entities},
+            Cursor(start=start, end=end, cutoffs=next_cutoffs) if next_cutoffs else None,
         )
 
 
@@ -678,10 +698,13 @@ class GetStatisticsTool(_RecorderTool):
         data: dict[str, object],
     ) -> JsonObjectType:
         statistic_ids = resolve_entity_ids(snapshot, data, "statistic_ids")
-        if (cursor_in := data.get("cursor")) is not None:
+        start, end, cursor = _resolve_window(
+            data,
+            default_hours=DEFAULT_STATISTICS_WINDOW_HOURS,
+            max_hours=MAX_STATISTICS_LOOKBACK_HOURS,
+        )
+        if data.get("cursor") is not None:
             # Cursor carries period and selected fields so pagination stays consistent.
-            cursor = decode_cursor(cursor_in)
-            start, end = cursor.start, cursor.end
             if cursor.period not in (None, "5minute", "hour", "day"):
                 raise RecoverableToolError(INVALID_CURSOR, {})
             period = cast(Literal["5minute", "hour", "day"], cursor.period or "hour")
@@ -695,13 +718,6 @@ class GetStatisticsTool(_RecorderTool):
             requested_types = cast(
                 tuple[StatisticValueType, ...] | None,
                 tuple(cast(list[str] | None, data.get("types")) or ()) or None,
-            )
-            start, end = _clamp_window(
-                cast(datetime | None, data.get("start")),
-                cast(datetime | None, data.get("end")),
-                hours=cast(float | None, data.get("hours")),
-                default_hours=DEFAULT_STATISTICS_WINDOW_HOURS,
-                max_hours=MAX_STATISTICS_LOOKBACK_HOURS,
             )
             cursor = Cursor(start=start, end=end, cutoffs={}, period=period, statistic_types=requested_types)
         query_types: set[StatisticQueryType] = (
@@ -725,34 +741,22 @@ class GetStatisticsTool(_RecorderTool):
         )
 
         budget = max(1, MAX_STATISTICS_ROWS // len(statistic_ids))
-        shaped_statistics: dict[str, dict[str, object]] = {}
-        next_cutoffs: dict[str, str] = {}
-        for statistic_id, rows in result.items():
-            shaped_rows = [_statistic_row_to_dict(cast(dict[str, object], row), requested_types) for row in rows]
-            # Per-statistic cutoffs let multiple statistics page independently.
-            page, next_cutoff = paginate_stream(
-                shaped_rows,
-                ts_of=_row_timestamp,
-                budget=budget,
-                cutoff_iso=cursor.cutoffs.get(statistic_id),
-            )
-            shaped_statistics[statistic_id] = {"rows": page, "fields": _statistic_fields(page)}
-            if next_cutoff is not None:
-                next_cutoffs[statistic_id] = next_cutoff
-
-        payload: dict[str, object] = {
-            "window": {"start": start.isoformat(), "end": end.isoformat()},
-            "period": period,
-            "statistics": shaped_statistics,
+        stream_rows = {
+            statistic_id: [_statistic_row_to_dict(cast(dict[str, object], row), requested_types) for row in rows]
+            for statistic_id, rows in result.items()
         }
-        if next_cutoffs:
-            payload["next_cursor"] = encode_cursor(
-                Cursor(start=start, end=end, cutoffs=next_cutoffs, period=period, statistic_types=requested_types)
-            )
+        pages, next_cutoffs = _paginate_streams(stream_rows, budget=budget, cutoffs=cursor.cutoffs)
+        shaped_statistics = {
+            statistic_id: {"rows": page, "fields": _statistic_fields(page)} for statistic_id, page in pages.items()
+        }
 
-        return cast(
-            JsonObjectType,
-            json_safe(payload),
+        return _windowed_payload(
+            start,
+            end,
+            {"period": period, "statistics": shaped_statistics},
+            Cursor(start=start, end=end, cutoffs=next_cutoffs, period=period, statistic_types=requested_types)
+            if next_cutoffs
+            else None,
         )
 
 
@@ -795,19 +799,11 @@ class GetLogbookTool(_RecorderTool):
         data: dict[str, object],
     ) -> JsonObjectType:
         entity_ids = resolve_entity_ids(snapshot, data, "entity_ids")
-        if (cursor_in := data.get("cursor")) is not None:
-            # Cursor window wins; pass the same scope while paging logbook.
-            cursor = decode_cursor(cursor_in)
-            start, end = cursor.start, cursor.end
-        else:
-            start, end = _clamp_window(
-                cast(datetime | None, data.get("start")),
-                cast(datetime | None, data.get("end")),
-                hours=cast(float | None, data.get("hours")),
-                default_hours=DEFAULT_LOGBOOK_WINDOW_HOURS,
-                max_hours=MAX_RECORDER_LOOKBACK_HOURS,
-            )
-            cursor = Cursor(start=start, end=end, cutoffs={})
+        start, end, cursor = _resolve_window(
+            data,
+            default_hours=DEFAULT_LOGBOOK_WINDOW_HOURS,
+            max_hours=MAX_RECORDER_LOOKBACK_HOURS,
+        )
         if LOGBOOK_DOMAIN not in hass.data:
             raise RecoverableToolError("logbook_unavailable", {})
 
@@ -828,16 +824,11 @@ class GetLogbookTool(_RecorderTool):
             budget=MAX_LOGBOOK_ENTRIES,
             cutoff_iso=cursor.cutoffs.get(_LOGBOOK_CURSOR_KEY),
         )
-        payload: dict[str, object] = {
-            "window": {"start": start.isoformat(), "end": end.isoformat()},
-            "entries": page_entries,
-        }
-        if next_cutoff is not None:
-            payload["next_cursor"] = encode_cursor(
-                Cursor(start=start, end=end, cutoffs={_LOGBOOK_CURSOR_KEY: next_cutoff})
-            )
-
-        return cast(
-            JsonObjectType,
-            json_safe(payload),
+        return _windowed_payload(
+            start,
+            end,
+            {"entries": page_entries},
+            Cursor(start=start, end=end, cutoffs={_LOGBOOK_CURSOR_KEY: next_cutoff})
+            if next_cutoff is not None
+            else None,
         )

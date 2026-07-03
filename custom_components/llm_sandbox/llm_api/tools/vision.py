@@ -7,7 +7,6 @@ passed into the Monty sandbox or any Monty-visible facade object.
 import base64
 import io
 import logging
-from collections.abc import Mapping
 from typing import cast, final, override
 
 import voluptuous as vol
@@ -30,10 +29,11 @@ from ...const import (
 from ...snapshot import build_snapshot
 from ...snapshot.models import HomeSnapshot
 from ...types import TranslationPlaceholders
+from .._hinting import error_guidance
 from ..errors import tool_error_envelope, tool_error_from_exception
 from ..prompts import build_get_camera_image_description
-from ..resolution import _DISCOVERY_LIMIT, candidates_for_domain, resolve_target_entity
-from ._support import _require_loaded_entry, _require_loaded_entry_error
+from ..resolution import _DISCOVERY_LIMIT, bounded_strings, candidates_for_domain, resolve_target_entity
+from ._support import _require_loaded_entry_error, _require_sandbox_runtime
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -63,23 +63,6 @@ _VISION_GUIDANCE: dict[str, tuple[str, list[str]]] = {
 }
 
 
-class _SafeHintDict(dict[str, str]):
-    """dict that keeps unknown ``{placeholder}`` tokens verbatim instead of raising."""
-
-    def __missing__(self, key: str) -> str:
-        return "{" + key + "}"
-
-
-def _error_guidance(key: str, placeholders: Mapping[str, str]) -> tuple[str | None, list[str] | None]:
-    """Return (message, fix) for a vision error key, formatting placeholders."""
-    entry = _VISION_GUIDANCE.get(key)
-    if entry is None:
-        return None, None
-    message, templates = entry
-    values = _SafeHintDict({str(k): str(v) for k, v in placeholders.items()})
-    return message, [template.format_map(values) for template in templates]
-
-
 def _image_candidate_ids(snapshot: HomeSnapshot, requested_entity_id: str) -> list[str] | None:
     """Return deterministic visible camera/image candidates for a bad image entity."""
     domain = requested_entity_id.split(".", 1)[0]
@@ -105,9 +88,7 @@ def _image_candidate_ids(snapshot: HomeSnapshot, requested_entity_id: str) -> li
 
     if not ids:
         return None
-    if len(ids) > _DISCOVERY_LIMIT:
-        return [*ids[: _DISCOVERY_LIMIT - 1], "..."]
-    return ids
+    return bounded_strings(ids)
 
 
 def _envelope(
@@ -134,7 +115,7 @@ def _envelope(
             message="Only camera.* and image.* entities can be captured.",
             fix=fix,
         )
-    message, fix = _error_guidance(key, placeholders)
+    message, fix = error_guidance(_VISION_GUIDANCE, key, placeholders)
     return tool_error_envelope(key, placeholders, message=message, fix=fix)
 
 
@@ -184,10 +165,7 @@ class GetCameraImageTool(llm.Tool):
         setup_error = _require_loaded_entry_error(hass, self.entry_id)
         if setup_error is not None:
             return tool_error_envelope(*setup_error)
-        entry = _require_loaded_entry(hass, self.entry_id)
-        runtime_data = entry.runtime_data
-        assert runtime_data is not None
-        settings = runtime_data.settings
+        settings = _require_sandbox_runtime(hass, self.entry_id).settings
         # Build a fresh visible snapshot for every live image read.
         snapshot = build_snapshot(
             hass,

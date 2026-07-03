@@ -11,7 +11,7 @@ from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 
 from ...const import DOMAIN
-from ...runtime import SandboxConfigEntry
+from ...runtime import SandboxConfigEntry, SandboxRuntime
 from ..errors import setup_error_payload
 
 
@@ -23,6 +23,14 @@ def _require_loaded_entry(hass: HomeAssistant, entry_id: str) -> SandboxConfigEn
         msg = setup_error_payload(key, placeholders)["execution"]["message"]
         raise RuntimeError(msg)
     return cast(SandboxConfigEntry, hass.config_entries.async_get_entry(entry_id))
+
+
+def _require_sandbox_runtime(hass: HomeAssistant, entry_id: str) -> SandboxRuntime:
+    """Return typed runtime data for a loaded LLM Sandbox config entry."""
+    entry = _require_loaded_entry(hass, entry_id)
+    runtime_data = entry.runtime_data
+    assert runtime_data is not None
+    return runtime_data
 
 
 def _require_loaded_entry_error(

@@ -17,11 +17,11 @@ from .target_matching import entities_for_service
 _DISCOVERY_LIMIT = 8
 
 
-@dataclass(frozen=True, slots=True)
-class ResolvedTarget:
-    """A single resolved service-call target entity id."""
-
-    entity_id: str
+def bounded_strings(values: list[str], limit: int = _DISCOVERY_LIMIT) -> list[str]:
+    """Bound deterministic repair lists to the discovery limit plus overflow marker."""
+    if len(values) > limit:
+        return [*values[: limit - 1], "..."]
+    return values
 
 
 @dataclass(frozen=True, slots=True)

@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from typing import Protocol, cast
 
 import pydantic_monty  # Required manifest dependency; do not convert to a dynamic import.
-from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from homeassistant.exceptions import ServiceValidationError
 from homeassistant.util.json import JsonValueType
 
 from ..const import DEFAULT_HELPER_CALL_BUDGET, DOMAIN
@@ -458,13 +458,3 @@ def validation_error(key: str, placeholders: TranslationPlaceholders) -> Service
         translation_key=key,
         translation_placeholders=placeholders,
     )
-
-
-def tool_setup_error(err: HomeAssistantError) -> None:
-    """Marker function reserved for future setup-error mapping.
-
-    Kept to preserve a stable import surface for callers that map setup errors
-    to tool envelopes; the MVP routes HomeAssistantError through
-    ``tool_error_from_exception`` directly.
-    """
-    raise err

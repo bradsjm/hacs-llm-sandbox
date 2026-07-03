@@ -10,61 +10,7 @@ import ast
 import inspect
 from dataclasses import fields
 
-from ..snapshot.models import (
-    SafeAreaEntry,
-    SafeCategoryEntry,
-    SafeConfigEntry,
-    SafeContext,
-    SafeDeviceEntry,
-    SafeFloorEntry,
-    SafeIssueEntry,
-    SafeLabelEntry,
-    SafeNotificationEntry,
-    SafeRegistryEntry,
-    SafeState,
-)
-from .facade_views import (
-    SafeAreaRegistry,
-    SafeCategoryRegistry,
-    SafeConfigEntries,
-    SafeDate,
-    SafeDateFacade,
-    SafeDateTime,
-    SafeDateTimeFacade,
-    SafeDeviceRegistry,
-    SafeEntityRegistry,
-    SafeFloorRegistry,
-    SafeHass,
-    SafeIssueRegistry,
-    SafeLabelRegistry,
-    SafeLLMContext,
-    SafeNotificationRegistry,
-    SafeServiceRegistry,
-    SafeStateMachine,
-)
-
-GLOBAL_TYPE_MAP: dict[str, type] = {
-    "hass": SafeHass,
-    "states": SafeStateMachine,
-    "er": SafeEntityRegistry,
-    "dr": SafeDeviceRegistry,
-    "ar": SafeAreaRegistry,
-    "fr": SafeFloorRegistry,
-    "lr": SafeLabelRegistry,
-    "cr": SafeCategoryRegistry,
-    "entity_registry": SafeEntityRegistry,
-    "device_registry": SafeDeviceRegistry,
-    "area_registry": SafeAreaRegistry,
-    "floor_registry": SafeFloorRegistry,
-    "label_registry": SafeLabelRegistry,
-    "category_registry": SafeCategoryRegistry,
-    "repairs": SafeIssueRegistry,
-    "persistent_notifications": SafeNotificationRegistry,
-    "config_entries": SafeConfigEntries,
-    "date": SafeDateFacade,
-    "datetime": SafeDateTimeFacade,
-    "llm_context": SafeLLMContext,
-}
+from .facade_registry import ATTRIBUTE_REACHABLE_RECORDS, FACADE_CLASSES, GLOBAL_TYPE_MAP
 
 _SUPPORTED_OPERATOR_DUNDERS = frozenset({"__getitem__", "__contains__", "__len__", "__iter__"})
 TYPE_NAME_RESOLVED = "type_name_resolved"
@@ -84,26 +30,7 @@ def public_surface(cls: type) -> frozenset[str]:
 
 def surface_for_class_name(name: str) -> frozenset[str] | None:
     """Return the public surface for a facade or snapshot record class name."""
-    classes_by_name = {
-        cls.__name__: cls
-        for cls in (
-            *GLOBAL_TYPE_MAP.values(),
-            SafeServiceRegistry,
-            SafeContext,
-            SafeState,
-            SafeRegistryEntry,
-            SafeDeviceEntry,
-            SafeAreaEntry,
-            SafeFloorEntry,
-            SafeLabelEntry,
-            SafeCategoryEntry,
-            SafeIssueEntry,
-            SafeNotificationEntry,
-            SafeConfigEntry,
-            SafeDate,
-            SafeDateTime,
-        )
-    }
+    classes_by_name = {cls.__name__: cls for cls in (*FACADE_CLASSES, *ATTRIBUTE_REACHABLE_RECORDS)}
     if (cls := classes_by_name.get(name)) is None:
         return None
     return public_surface(cls)

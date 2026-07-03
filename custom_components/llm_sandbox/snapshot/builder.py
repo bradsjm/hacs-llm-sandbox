@@ -281,11 +281,7 @@ def enrich_states(
         entry = entities.get(entity_id)
         if entry is None:
             continue
-        area_id = entry.area_id
-        if area_id is None and entry.device_id is not None:
-            device = devices.get(entry.device_id)
-            if device is not None:
-                area_id = device.area_id
+        area_id = _effective_area_id(entry, devices.get(entry.device_id) if entry.device_id is not None else None)
         enriched[entity_id] = replace(
             safe_state,
             area_id=area_id,
@@ -295,6 +291,11 @@ def enrich_states(
         )
     # Preserve any state-bearing entity without a registry entry (None join keys).
     return states | enriched
+
+
+def _effective_area_id(entry: SafeRegistryEntry, device: SafeDeviceEntry | None) -> str | None:
+    """Return the canonical entity-area override or inherited device area."""
+    return entry.area_id or (device.area_id if device is not None else None)
 
 
 def _safe_state(state: State) -> SafeState:
@@ -760,12 +761,9 @@ def _build_indexes(
     for entity_id, entry in entities.items():
         if entry.device_id:
             by_device.setdefault(entry.device_id, []).append(entity_id)
-        # Effective area: entity override wins, else device area.
-        effective_area = entry.area_id
-        if effective_area is None and entry.device_id is not None:
-            device = devices.get(entry.device_id)
-            if device is not None:
-                effective_area = device.area_id
+        effective_area = _effective_area_id(
+            entry, devices.get(entry.device_id) if entry.device_id is not None else None
+        )
         if effective_area is not None:
             by_area.setdefault(effective_area, []).append(entity_id)
         if entry.config_entry_id:

@@ -68,6 +68,9 @@ class SetupErrorPayload(TypedDict):
     actions: NotRequired[list[ActionRecord]]
 
 
+type _ExecutionStatus = Literal["helper_error", "code_error", "setup_error"]
+
+
 @dataclass(frozen=True, slots=True)
 class HelperExecutionError(Exception):
     """Recoverable helper failure surfaced as code-mode execution metadata."""
@@ -94,6 +97,40 @@ class RecoverableToolError(Exception):
         Exception.__init__(self, self.key)
 
 
+def _build_execution_payload(
+    status: _ExecutionStatus,
+    message: str,
+    *,
+    kind: str | None = None,
+    fix: list[str] | None = None,
+    adjustments: list[dict[str, object]] | None = None,
+) -> dict[str, object]:
+    """Return shared execution metadata for code/helper/setup errors."""
+    execution: dict[str, object] = {"status": status, "message": message}
+    if kind:
+        execution["kind"] = kind
+    if fix:
+        execution["fix"] = fix
+    if adjustments:
+        execution["adjustments"] = adjustments
+    return execution
+
+
+def _build_error_payload(
+    execution: dict[str, object],
+    *,
+    printed: list[str] | None = None,
+    actions: list[ActionRecord] | None = None,
+) -> dict[str, object]:
+    """Return shared top-level error envelope for execution failures."""
+    payload: dict[str, object] = {"execution": execution, "output": None}
+    if printed:
+        payload["printed"] = printed
+    if actions:
+        payload["actions"] = actions
+    return payload
+
+
 def helper_error_payload(
     err: HelperExecutionError,
     *,
@@ -105,25 +142,14 @@ def helper_error_payload(
     actions: list[ActionRecord] | None = None,
 ) -> HelperErrorPayload:
     """Return compact helper-error execution payload."""
-    execution: HelperErrorExecutionPayload = {
-        "status": "helper_error",
-        "message": _message_or_key_fallback(message, err.key),
-    }
-    if kind:
-        execution["kind"] = kind
-    if fix:
-        execution["fix"] = fix
-    if adjustments:
-        execution["adjustments"] = adjustments
-    payload: HelperErrorPayload = {
-        "execution": execution,
-        "output": None,
-    }
-    if printed:
-        payload["printed"] = printed
-    if actions:
-        payload["actions"] = actions
-    return payload
+    execution = _build_execution_payload(
+        "helper_error",
+        _message_or_key_fallback(message, err.key),
+        kind=kind,
+        fix=fix,
+        adjustments=adjustments,
+    )
+    return cast(HelperErrorPayload, _build_error_payload(execution, printed=printed, actions=actions))
 
 
 def code_error_payload(
@@ -136,34 +162,23 @@ def code_error_payload(
     fix: list[str] | None = None,
 ) -> CodeErrorPayload:
     """Return compact code-error execution payload."""
-    execution: CodeErrorExecutionPayload = {
-        "status": "code_error",
-        "message": _message_or_key_fallback(message, kind),
-    }
-    if kind:
-        execution["kind"] = kind
-    if fix:
-        execution["fix"] = fix
-    if adjustments:
-        execution["adjustments"] = adjustments
-    payload: CodeErrorPayload = {
-        "execution": execution,
-        "output": None,
-    }
-    if printed:
-        payload["printed"] = printed
-    if actions:
-        payload["actions"] = actions
-    return payload
+    execution = _build_execution_payload(
+        "code_error",
+        _message_or_key_fallback(message, kind),
+        kind=kind,
+        fix=fix,
+        adjustments=adjustments,
+    )
+    return cast(CodeErrorPayload, _build_error_payload(execution, printed=printed, actions=actions))
 
 
 def setup_error_payload(key: str, placeholders: TranslationPlaceholders) -> SetupErrorPayload:
     """Return compact setup-error execution payload."""
-    execution: SetupErrorExecutionPayload = {
-        "status": "setup_error",
-        "message": _message_or_key_fallback(_setup_error_message(placeholders), key),
-    }
-    return {"execution": execution, "output": None}
+    execution = _build_execution_payload(
+        "setup_error",
+        _message_or_key_fallback(_setup_error_message(placeholders), key),
+    )
+    return cast(SetupErrorPayload, _build_error_payload(execution))
 
 
 def helper_error_from_exception(err: Exception) -> HelperExecutionError | None:

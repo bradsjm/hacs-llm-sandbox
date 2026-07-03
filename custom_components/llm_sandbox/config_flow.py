@@ -1,6 +1,7 @@
 """Config flow for LLM Sandbox."""
 
-from typing import Any, final, override
+from collections.abc import Iterable
+from typing import Any, cast, final, override
 
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlow
@@ -31,17 +32,8 @@ from .const import (
     CONF_NAME,
     CONF_PROMPT_PROFILE,
     CONF_RESTRICT_TO_ASSIST_EXPOSED,
-    DEFAULT_ACTION_DOMAINS,
-    DEFAULT_ACTIONS_ENABLED,
     DEFAULT_ASSISTANT,
-    DEFAULT_EXCLUDE_CONFIG,
-    DEFAULT_EXCLUDE_DIAGNOSTIC,
-    DEFAULT_EXCLUDE_HIDDEN,
-    DEFAULT_EXECUTION_TIMEOUT_SECONDS,
-    DEFAULT_HELPER_CALL_BUDGET,
     DEFAULT_NAME,
-    DEFAULT_PROMPT_PROFILE,
-    DEFAULT_RESTRICT_TO_ASSIST_EXPOSED,
     DOMAIN,
     MAX_EXECUTION_TIMEOUT_SECONDS,
     MAX_HELPER_CALL_BUDGET,
@@ -53,6 +45,7 @@ from .const import (
     SECTION_VISIBILITY,
 )
 from .llm_api.prompts import PROFILE_OPTIONS
+from .runtime import option_value
 from .schema_helpers import flatten_section_data, section_schema_key
 
 type UserInput = dict[str, Any]
@@ -74,7 +67,7 @@ class LlmSandboxOptionsFlow(OptionsFlow):
         options = self.config_entry.options
         live_domains = sorted({eid.split(".", 1)[0] for eid in er.async_get(self.hass).entities})
         live_domain_set = set(live_domains)
-        selected_action_domains = list(options.get(CONF_ACTION_DOMAINS, DEFAULT_ACTION_DOMAINS))
+        selected_action_domains = list(cast(Iterable[str], option_value(options, CONF_ACTION_DOMAINS)))
         action_domain_options = [SelectOptionDict(value=d, label=d) for d in live_domains]
         for domain in reversed(selected_action_domains):
             # Preserve previously selected custom domains even when no entity currently exposes them.
@@ -84,7 +77,7 @@ class LlmSandboxOptionsFlow(OptionsFlow):
         prompt_fields: VolDictType = {
             vol.Required(
                 CONF_PROMPT_PROFILE,
-                default=options.get(CONF_PROMPT_PROFILE, DEFAULT_PROMPT_PROFILE),
+                default=option_value(options, CONF_PROMPT_PROFILE),
             ): SelectSelector(
                 SelectSelectorConfig(
                     options=[SelectOptionDict(value=p.id, label=p.label) for p in PROFILE_OPTIONS],
@@ -98,25 +91,25 @@ class LlmSandboxOptionsFlow(OptionsFlow):
         visibility_fields: VolDictType = {
             vol.Required(
                 CONF_RESTRICT_TO_ASSIST_EXPOSED,
-                default=options.get(CONF_RESTRICT_TO_ASSIST_EXPOSED, DEFAULT_RESTRICT_TO_ASSIST_EXPOSED),
+                default=option_value(options, CONF_RESTRICT_TO_ASSIST_EXPOSED),
             ): BooleanSelector(),
             vol.Required(
                 CONF_EXCLUDE_HIDDEN,
-                default=options.get(CONF_EXCLUDE_HIDDEN, DEFAULT_EXCLUDE_HIDDEN),
+                default=option_value(options, CONF_EXCLUDE_HIDDEN),
             ): BooleanSelector(),
             vol.Required(
                 CONF_EXCLUDE_CONFIG,
-                default=options.get(CONF_EXCLUDE_CONFIG, DEFAULT_EXCLUDE_CONFIG),
+                default=option_value(options, CONF_EXCLUDE_CONFIG),
             ): BooleanSelector(),
             vol.Required(
                 CONF_EXCLUDE_DIAGNOSTIC,
-                default=options.get(CONF_EXCLUDE_DIAGNOSTIC, DEFAULT_EXCLUDE_DIAGNOSTIC),
+                default=option_value(options, CONF_EXCLUDE_DIAGNOSTIC),
             ): BooleanSelector(),
         }
         actions_fields: VolDictType = {
             vol.Required(
                 CONF_ACTIONS_ENABLED,
-                default=options.get(CONF_ACTIONS_ENABLED, DEFAULT_ACTIONS_ENABLED),
+                default=option_value(options, CONF_ACTIONS_ENABLED),
             ): BooleanSelector(),
             vol.Required(
                 CONF_ACTION_DOMAINS,
@@ -133,7 +126,7 @@ class LlmSandboxOptionsFlow(OptionsFlow):
         execution_limits_fields: VolDictType = {
             vol.Required(
                 CONF_EXECUTION_TIMEOUT,
-                default=options.get(CONF_EXECUTION_TIMEOUT, DEFAULT_EXECUTION_TIMEOUT_SECONDS),
+                default=option_value(options, CONF_EXECUTION_TIMEOUT),
             ): NumberSelector(
                 NumberSelectorConfig(
                     min=MIN_EXECUTION_TIMEOUT_SECONDS,
@@ -145,7 +138,7 @@ class LlmSandboxOptionsFlow(OptionsFlow):
             ),
             vol.Required(
                 CONF_HELPER_CALL_BUDGET,
-                default=options.get(CONF_HELPER_CALL_BUDGET, DEFAULT_HELPER_CALL_BUDGET),
+                default=option_value(options, CONF_HELPER_CALL_BUDGET),
             ): NumberSelector(
                 NumberSelectorConfig(
                     min=MIN_HELPER_CALL_BUDGET,

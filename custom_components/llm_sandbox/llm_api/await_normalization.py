@@ -15,34 +15,13 @@ hand-maintained allowlist is required.
 import ast
 import inspect
 
+from .facade_registry import SYNC_SUBSCRIPT_GLOBALS
+
 AWAITED_ASYNC_CALLS = "awaited_async_calls"
 STRIPPED_AWAIT_FROM_SYNC = "stripped_await_from_sync"
 REWROTE_SYNC_SUBSCRIPT = "rewrote_sync_subscript"
 
-# Top-level globals exposed to Monty whose attribute access returns a plain
-# (non-coroutine) value. These cover the snapshot-backed facades: state machine,
-# unified registry facades, date/time facades, context, and the hass root.
-_SYNC_SUBSCRIPT_GLOBALS = frozenset(
-    {
-        "hass",
-        "states",
-        "er",
-        "dr",
-        "ar",
-        "fr",
-        "lr",
-        "cr",
-        "entity_registry",
-        "device_registry",
-        "area_registry",
-        "floor_registry",
-        "label_registry",
-        "category_registry",
-        "date",
-        "datetime",
-        "llm_context",
-    }
-)
+_SYNC_SUBSCRIPT_GLOBALS = SYNC_SUBSCRIPT_GLOBALS
 _VIEW_GLOBALS = _SYNC_SUBSCRIPT_GLOBALS
 
 
