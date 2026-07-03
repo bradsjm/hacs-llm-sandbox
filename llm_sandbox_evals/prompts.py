@@ -116,7 +116,7 @@ def tool_specs(candidate: PromptCandidate) -> list[ToolSpec]:
         ToolSpec(
             name=TOOL_GET_HISTORY,
             description=candidate.get_history_description,
-            parameters=_recorder_parameters(id_key="entity_ids"),
+            parameters=_recorder_parameters(id_key="entity_ids", include_attributes=True),
         ),
         ToolSpec(
             name=TOOL_GET_STATISTICS,
@@ -131,7 +131,12 @@ def tool_specs(candidate: PromptCandidate) -> list[ToolSpec]:
     ]
 
 
-def _recorder_parameters(*, id_key: str, include_period: bool = False) -> dict[str, object]:
+def _recorder_parameters(
+    *,
+    id_key: str,
+    include_period: bool = False,
+    include_attributes: bool = False,
+) -> dict[str, object]:
     """Build the shared recorder JSON Schema accepted by native function calling."""
     properties: dict[str, object] = {
         id_key: {"type": "array", "items": {"type": "string"}},
@@ -140,6 +145,9 @@ def _recorder_parameters(*, id_key: str, include_period: bool = False) -> dict[s
         "end": {"type": "string"},
     }
     properties.update({field_name: {"type": "string"} for field_name in RECORDER_SELECTOR_FIELD_NAMES})
+    # Branch boundary: history can opt in to selected state attributes per row.
+    if include_attributes:
+        properties["attributes"] = {"type": "array", "items": {"type": "string"}}
     # Branch boundary: statistics adds one aggregation-period enum.
     if include_period:
         properties["period"] = {"type": "string", "enum": ["5minute", "hour", "day"]}

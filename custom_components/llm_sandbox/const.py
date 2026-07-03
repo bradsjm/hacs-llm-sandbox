@@ -58,6 +58,7 @@ MAX_STATISTICS_ROWS: Final = 1000
 
 # Recorder-backed tool input caps.
 MAX_RECORDER_ENTITY_IDS: Final = 20
+MAX_HISTORY_ATTRIBUTES: Final = 10
 
 # Vision tool image budget and downscale defaults.
 DEFAULT_IMAGE_TARGET_WIDTH: Final = 1280

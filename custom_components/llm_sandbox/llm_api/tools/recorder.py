@@ -23,6 +23,7 @@ from ...const import (
     DEFAULT_HISTORY_WINDOW_HOURS,
     DEFAULT_LOGBOOK_WINDOW_HOURS,
     DEFAULT_STATISTICS_WINDOW_HOURS,
+    MAX_HISTORY_ATTRIBUTES,
     MAX_HISTORY_STATES,
     MAX_LOGBOOK_ENTRIES,
     MAX_RECORDER_ENTITY_IDS,
@@ -354,21 +355,35 @@ async def _run_query[T](
     return await asyncio.wait_for(get_instance(hass).async_add_executor_job(fn), timeout=remaining)
 
 
-def _state_row_to_dict(row: State | dict[str, object]) -> tuple[list[object], str | None]:
-    """Convert a recorder history row to compact ``([time, state], unit)`` shape."""
+def _state_row_to_dict(
+    row: State | dict[str, object],
+    attributes: list[str] | None = None,
+) -> tuple[list[object], str | None]:
+    """Convert a recorder history row to compact ``(row, unit)`` shape."""
     if isinstance(row, State):
         unit = row.attributes.get("unit_of_measurement") or row.attributes.get("unit")
-        return [row.last_changed.isoformat(), row.state], str(unit) if unit is not None else None
+        shaped_row: list[object] = [row.last_changed.isoformat(), row.state]
+        if attributes is not None:
+            # Attribute rows use a stable third element, omitting absent requested keys.
+            shaped_row.append({name: row.attributes[name] for name in attributes if name in row.attributes})
+        return shaped_row, str(unit) if unit is not None else None
 
     shaped = dict(row)
     timestamp = shaped.get("last_changed") or shaped.get("last_updated")
     if isinstance(timestamp, datetime):
         timestamp = timestamp.isoformat()
-    attributes = shaped.get("attributes")
+    row_attributes = shaped.get("attributes")
     unit = None
-    if isinstance(attributes, Mapping):
-        unit = attributes.get("unit_of_measurement") or attributes.get("unit")
-    return [str(timestamp), shaped.get("state")], str(unit) if unit is not None else None
+    if isinstance(row_attributes, Mapping):
+        unit = row_attributes.get("unit_of_measurement") or row_attributes.get("unit")
+    shaped_row = [str(timestamp), shaped.get("state")]
+    if attributes is not None:
+        # Keep the third row slot present even when none of the requested names exist.
+        present: dict[str, object] = {}
+        if isinstance(row_attributes, Mapping):
+            present = {name: row_attributes[name] for name in attributes if name in row_attributes}
+        shaped_row.append(present)
+    return shaped_row, str(unit) if unit is not None else None
 
 
 def _row_timestamp(row: list[object]) -> str:
@@ -421,6 +436,13 @@ class GetHistoryTool(_RecorderTool):
             vol.Optional("start", description="Window start (ISO-8601). Default now-1h."): _iso_datetime,
             vol.Optional("end", description="Window end (ISO-8601). Default now."): _iso_datetime,
             vol.Optional(
+                "attributes",
+                description=(
+                    "Optional attribute names to include per row. Each row then appends "
+                    "{name: value} for requested attributes present on that row; absent names are omitted."
+                ),
+            ): vol.All(cv.ensure_list, [str], vol.Length(min=1, max=MAX_HISTORY_ATTRIBUTES)),
+            vol.Optional(
                 "cursor",
                 description=(
                     "Opaque cursor from a prior next_cursor; pass it to fetch the next older page. "
@@ -440,6 +462,7 @@ class GetHistoryTool(_RecorderTool):
         data: dict[str, object],
     ) -> JsonObjectType:
         entity_ids = resolve_entity_ids(snapshot, data, "entity_ids")
+        requested_attributes = cast(list[str] | None, data.get("attributes"))
         if (cursor_in := data.get("cursor")) is not None:
             # Cursor window wins while paging so the continuation is stable.
             cursor = decode_cursor(cursor_in)
@@ -475,7 +498,7 @@ class GetHistoryTool(_RecorderTool):
         entities: dict[str, dict[str, object]] = {}
         next_cutoffs: dict[str, str] = {}
         for entity_id, states in result.items():
-            converted = [_state_row_to_dict(row) for row in states]
+            converted = [_state_row_to_dict(row, requested_attributes) for row in states]
             rows = [row for row, _unit in converted]
             # Per-entity cutoffs let multi-entity pages advance independently.
             page, next_cutoff = paginate_stream(

@@ -43,6 +43,54 @@ async def test_history_returns_states_for_visible_entity(
     assert isinstance(row[1], str)
 
 
+async def test_history_includes_requested_attributes(
+    hass: HomeAssistant,
+    recorder_entry: MockConfigEntry,
+) -> None:
+    """Requested attributes append a per-row dict; absent and unrequested names are omitted."""
+    start = dt_util.utcnow().isoformat()
+    hass.states.async_set(
+        "light.bedroom",
+        "off",
+        {"friendly_name": "Bedroom Light", "brightness": 64, "color_mode": "rgb"},
+    )
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+    hass.states.async_set(
+        "light.bedroom",
+        "on",
+        {"friendly_name": "Bedroom Light", "brightness": 128, "color_mode": "rgb"},
+    )
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    result = await _call_history(
+        hass,
+        recorder_entry,
+        {
+            "entity_ids": ["light.bedroom"],
+            "start": start,
+            "attributes": ["brightness", "color_mode", "missing_attr"],
+        },
+    )
+
+    row = result["entities"]["light.bedroom"]["rows"][-1]
+    assert isinstance(row, list)
+    assert len(row) == 3
+    assert isinstance(row[2], dict)
+    assert row[2] == {"brightness": 128, "color_mode": "rgb"}
+
+    missing_only = await _call_history(
+        hass,
+        recorder_entry,
+        {"entity_ids": ["light.bedroom"], "start": start, "attributes": ["missing_attr"]},
+    )
+    missing_row = missing_only["entities"]["light.bedroom"]["rows"][-1]
+    assert isinstance(missing_row, list)
+    assert len(missing_row) == 3
+    assert missing_row[2] == {}
+
+
 async def test_statistics_returns_rows_for_visible_statistic(
     hass: HomeAssistant,
     recorder_entry: MockConfigEntry,
@@ -380,6 +428,13 @@ async def test_malformed_cursor_returns_invalid_cursor(
     [
         pytest.param({"entity_ids": []}, id="empty-entity-list"),
         pytest.param({"entity_ids": ["not-an-entity"]}, id="malformed-entity-id"),
+        pytest.param(
+            {
+                "entity_ids": ["light.bedroom"],
+                "attributes": ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k"],
+            },
+            id="too-many-attributes",
+        ),
     ],
 )
 async def test_invalid_input_returns_invalid_tool_input(
