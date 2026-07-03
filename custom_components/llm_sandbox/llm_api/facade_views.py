@@ -640,12 +640,6 @@ class SafeServiceRegistry:
                 cast(TranslationPlaceholders, {"return_response": "return_response=True"}),
                 message=f"Service '{domain}.{service}' does not support return_response=True.",
             )
-        if supports_response == SupportsResponse.ONLY.value and not return_response:
-            return _PolicyBlock(
-                "service_lacks_response_request",
-                cast(TranslationPlaceholders, {"return_response": "return_response=True"}),
-                message=f"Service '{domain}.{service}' requires return_response=True.",
-            )
         return None
 
     def _target_capability_block(
@@ -702,8 +696,20 @@ class SafeServiceRegistry:
         """
 
         async def _call() -> object:
+            nonlocal blocking, return_response
+
             runtime = require_runtime(None)
             settings = runtime.settings
+            # Response-mode accommodation: any service that can return a response
+            # runs blocking with return_response=True, so the LLM never has to
+            # remember the flag. NONE services are untouched and still reject an
+            # erroneous return_response=True in the policy gate below.
+            if self.supports_response(domain, service) in (
+                SupportsResponse.ONLY.value,
+                SupportsResponse.OPTIONAL.value,
+            ):
+                blocking = True
+                return_response = True
             cleaned_service_data, merged_target, selector_adjustments = _extract_target_selectors(service_data, target)
             raw_target = cast(dict[str, object], json_safe(merged_target)) if merged_target is not None else None
 

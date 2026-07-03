@@ -13,6 +13,7 @@ from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import llm
+from homeassistant.util.json import JsonValueType
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 
@@ -607,28 +608,32 @@ result = "should not reach"
     assert result["actions"][0]["error"]["key"] == "service_not_found"
 
 
-async def test_response_required_service_without_return_response_records_error_action(
+async def test_response_required_service_without_return_response_records_ok_action(
     hass: HomeAssistant,
     loaded_entry: MockConfigEntry,
 ) -> None:
-    """Verify ONLY response services record an error when return_response is absent."""
+    """Verify ONLY response services run when return_response is absent."""
+    service_response: dict[str, JsonValueType] = {"required": True}
     hass.services.async_register(
         "test_response",
         "required",
-        lambda call: {},
+        lambda call: service_response,
         supports_response=SupportsResponse.ONLY,
     )
     code = """
-await hass.services.async_call("test_response", "required")
-result = "should not reach"
+result = await hass.services.async_call("test_response", "required")
 """
 
     result = await _run_code(hass, loaded_entry, code)
 
     assert result["execution"]["status"] == "ok"
-    assert result["output"] == "should not reach"
-    assert result["actions"][0]["status"] == "error"
-    assert result["actions"][0]["error"]["key"] == "service_lacks_response_request"
+    assert result["output"] == service_response
+    actions = result["actions"]
+    assert len(actions) == 1
+    action = actions[0]
+    assert action["service"] == "test_response.required"
+    assert action["status"] == "ok"
+    assert action["response"] == service_response
 
 
 async def test_no_response_service_with_return_response_records_error_action(
@@ -649,28 +654,32 @@ result = "should not reach"
     assert result["actions"][0]["error"]["key"] == "service_response_not_supported"
 
 
-async def test_return_response_without_blocking_records_error_action(
+async def test_optional_response_service_without_blocking_records_ok_action(
     hass: HomeAssistant,
     loaded_entry: MockConfigEntry,
 ) -> None:
-    """Verify return_response=True records an error when blocking is absent."""
+    """Verify OPTIONAL response services run when blocking is absent."""
+    service_response: dict[str, JsonValueType] = {"optional": True}
     hass.services.async_register(
         "test_response",
         "optional",
-        lambda call: {},
+        lambda call: service_response,
         supports_response=SupportsResponse.OPTIONAL,
     )
     code = """
-await hass.services.async_call("test_response", "optional", return_response=True)
-result = "should not reach"
+result = await hass.services.async_call("test_response", "optional", return_response=True)
 """
 
     result = await _run_code(hass, loaded_entry, code)
 
     assert result["execution"]["status"] == "ok"
-    assert result["output"] == "should not reach"
-    assert result["actions"][0]["status"] == "error"
-    assert result["actions"][0]["error"]["key"] == "service_response_requires_blocking"
+    assert result["output"] == service_response
+    actions = result["actions"]
+    assert len(actions) == 1
+    action = actions[0]
+    assert action["service"] == "test_response.optional"
+    assert action["status"] == "ok"
+    assert action["response"] == service_response
 
 
 async def test_response_required_service_with_return_response_records_action(

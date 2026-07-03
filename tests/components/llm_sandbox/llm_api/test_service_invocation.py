@@ -167,6 +167,50 @@ async def test_return_response_records_service_response_on_success() -> None:
     ]
 
 
+async def test_only_response_service_without_return_response_runs_with_response_flags() -> None:
+    """ONLY response services are invoked with the response flags accommodated."""
+    service_response = {"required": True}
+    harness = _service_harness(invoker=RecordingInvoker(responses=[service_response]))
+
+    result = await _ok_call(harness, "test_response", "required")
+
+    assert result == service_response
+    assert _action_statuses_via_state(harness) == ["ok"]
+    assert harness.runtime.state.actions[0]["response"] == service_response
+    assert harness.invoker.calls == [
+        {
+            "domain": "test_response",
+            "service": "required",
+            "service_data": None,
+            "target": None,
+            "blocking": True,
+            "return_response": True,
+        }
+    ]
+
+
+async def test_optional_response_service_without_return_response_runs_with_response_flags() -> None:
+    """OPTIONAL response services are invoked with the response flags accommodated."""
+    service_response = {"optional": True}
+    harness = _service_harness(invoker=RecordingInvoker(responses=[service_response]))
+
+    result = await _ok_call(harness, "test_response", "optional")
+
+    assert result == service_response
+    assert _action_statuses_via_state(harness) == ["ok"]
+    assert harness.runtime.state.actions[0]["response"] == service_response
+    assert harness.invoker.calls == [
+        {
+            "domain": "test_response",
+            "service": "optional",
+            "service_data": None,
+            "target": None,
+            "blocking": True,
+            "return_response": True,
+        }
+    ]
+
+
 async def test_service_not_found_records_blocked_action_and_returns_none() -> None:
     """Unknown services record a blocked action with domain-local schema hints."""
     harness = _service_harness()
@@ -492,56 +536,21 @@ async def test_action_domain_allowlist_blocks_unlisted_domain() -> None:
     assert harness.invoker.calls == []
 
 
-@pytest.mark.parametrize(
-    ("domain", "service", "blocking", "return_response", "expected_key"),
-    [
-        pytest.param(
-            "light",
-            "get_state",
-            False,
-            True,
-            "service_response_requires_blocking",
-            id="return-response-requires-blocking",
-        ),
-        pytest.param(
-            "light",
-            "turn_on",
-            True,
-            True,
-            "service_response_not_supported",
-            id="none-service-rejects-return-response",
-        ),
-        pytest.param(
-            "test_response",
-            "required",
-            False,
-            False,
-            "service_lacks_response_request",
-            id="only-service-requires-return-response",
-        ),
-    ],
-)
-async def test_response_flag_rules_record_blocked_action_and_returns_none(
-    domain: str,
-    service: str,
-    blocking: bool,
-    return_response: bool,
-    expected_key: str,
-) -> None:
-    """Response-mode contracts are enforced before live invocation."""
+async def test_no_response_service_rejects_return_response_and_returns_none() -> None:
+    """NONE response services still reject return_response=True before invocation."""
     harness = _service_harness()
 
     result = await _ok_call(
         harness,
-        domain,
-        service,
-        blocking=blocking,
-        return_response=return_response,
+        "light",
+        "turn_on",
+        blocking=True,
+        return_response=True,
     )
 
     assert result is None
     assert _action_statuses_via_state(harness) == ["error"]
-    assert _action_keys_via_state(harness) == [expected_key]
+    assert _action_keys_via_state(harness) == ["service_response_not_supported"]
     assert harness.invoker.calls == []
 
 
