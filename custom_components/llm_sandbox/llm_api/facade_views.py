@@ -56,6 +56,7 @@ from .resolution import (
     resolve_target_entity,
 )
 from .runtime import require_runtime, require_snapshot
+from .selector_expansion import AGGREGATE_SELECTOR_KEYS, expand_aggregate_selectors
 from .target_matching import entities_for_service, raw_service_field_names, service_accepts_domain, services_for_entity
 
 _TARGET_SELECTOR_KEYS = frozenset(("entity_id", "device_id", "area_id", "label_id", "label", "floor_id"))
@@ -830,7 +831,6 @@ class SafeServiceRegistry:
         if not target:
             return _ResolvedTarget(cast(dict[str, object] | None, json_safe(target)))
 
-        indexes = snapshot.indexes
         entity_ids: set[str] = set()
         supported_values: list[str] = []
         supported_keys: list[str] = []
@@ -862,48 +862,16 @@ class SafeServiceRegistry:
                         hint=_target_not_found_message(entity_id, resolve_domain, fix),
                         fix=fix,
                     )
-        if "device_id" in target:
-            supported_keys.append("device_id")
-            for device_id in _target_values(target["device_id"]):
-                supported_values.append(device_id)
-                resolved = indexes.entity_ids_by_device_id.get(device_id, ())
+        for selector in AGGREGATE_SELECTOR_KEYS:
+            if selector not in target:
+                continue
+            supported_keys.append(selector)
+            for requested in _target_values(target[selector]):
+                supported_values.append(requested)
+        for selector, requested_expansions in expand_aggregate_selectors(snapshot, target).items():
+            for requested, resolved in requested_expansions:
                 entity_ids.update(resolved)
-                if resolved:
-                    adjustments.append(_target_selector_expanded_adjustment("device_id", device_id, resolved))
-        if "area_id" in target:
-            supported_keys.append("area_id")
-            for area_id in _target_values(target["area_id"]):
-                supported_values.append(area_id)
-                resolved = indexes.entity_ids_by_area_id.get(area_id, ())
-                entity_ids.update(resolved)
-                if resolved:
-                    adjustments.append(_target_selector_expanded_adjustment("area_id", area_id, resolved))
-        if "label_id" in target:
-            supported_keys.append("label_id")
-            for label_id in _target_values(target["label_id"]):
-                supported_values.append(label_id)
-                resolved = indexes.entity_ids_by_label.get(label_id, ())
-                entity_ids.update(resolved)
-                if resolved:
-                    adjustments.append(_target_selector_expanded_adjustment("label_id", label_id, resolved))
-        if "label" in target:
-            supported_keys.append("label")
-            for label_id in _target_values(target["label"]):
-                supported_values.append(label_id)
-                resolved = indexes.entity_ids_by_label.get(label_id, ())
-                entity_ids.update(resolved)
-                if resolved:
-                    adjustments.append(_target_selector_expanded_adjustment("label", label_id, resolved))
-        if "floor_id" in target:
-            supported_keys.append("floor_id")
-            for floor_id in _target_values(target["floor_id"]):
-                supported_values.append(floor_id)
-                floor_entity_ids: list[str] = []
-                for area_id in indexes.area_ids_by_floor_id.get(floor_id, ()):
-                    floor_entity_ids.extend(indexes.entity_ids_by_area_id.get(area_id, ()))
-                entity_ids.update(floor_entity_ids)
-                if floor_entity_ids:
-                    adjustments.append(_target_selector_expanded_adjustment("floor_id", floor_id, floor_entity_ids))
+                adjustments.append(_target_selector_expanded_adjustment(selector, requested, resolved))
 
         if entity_ids:
             return _ResolvedTarget({"entity_id": sorted(entity_ids)}, tuple(adjustments))
@@ -1303,28 +1271,14 @@ def _expand_target_entities(snapshot: HomeSnapshot, target: Mapping[str, object]
     """
     if not isinstance(target, Mapping):
         return set()
-    indexes = snapshot.indexes
     entity_ids: set[str] = set()
     if "entity_id" in target:
         for entity_id in _target_values(target["entity_id"]):
             if entity_id in snapshot.states:
                 entity_ids.add(entity_id)
-    if "device_id" in target:
-        for device_id in _target_values(target["device_id"]):
-            entity_ids.update(indexes.entity_ids_by_device_id.get(device_id, ()))
-    if "area_id" in target:
-        for area_id in _target_values(target["area_id"]):
-            entity_ids.update(indexes.entity_ids_by_area_id.get(area_id, ()))
-    if "label_id" in target:
-        for label_id in _target_values(target["label_id"]):
-            entity_ids.update(indexes.entity_ids_by_label.get(label_id, ()))
-    if "label" in target:
-        for label_id in _target_values(target["label"]):
-            entity_ids.update(indexes.entity_ids_by_label.get(label_id, ()))
-    if "floor_id" in target:
-        for floor_id in _target_values(target["floor_id"]):
-            for area_id in indexes.area_ids_by_floor_id.get(floor_id, ()):
-                entity_ids.update(indexes.entity_ids_by_area_id.get(area_id, ()))
+    for requested_expansions in expand_aggregate_selectors(snapshot, target).values():
+        for _requested, resolved in requested_expansions:
+            entity_ids.update(resolved)
     return entity_ids
 
 

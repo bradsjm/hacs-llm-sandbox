@@ -44,6 +44,7 @@ from ..errors import RecoverableToolError, tool_error_envelope, tool_error_from_
 from ..executor_support import json_safe
 from ..prompts import build_get_history_description, build_get_logbook_description, build_get_statistics_description
 from ..resolution import _DISCOVERY_LIMIT, bounded_strings, candidates_for_domain, resolve_target_entity
+from ..selector_expansion import expand_aggregate_selectors
 from ._aggregates import AGGREGATORS, AggregateFilters, AggregateMode, HistoryRow
 from ._cursor import _LOGBOOK_CURSOR_KEY, INVALID_CURSOR, Cursor, decode_cursor, encode_cursor, paginate_stream
 from ._support import _require_loaded_entry_error, _require_sandbox_runtime
@@ -251,22 +252,19 @@ def resolve_entity_ids(snapshot: HomeSnapshot, data: dict[str, object], id_key: 
     snapshot-visible entities; ``domain`` filters the selector expansion and,
     when no IDs are given, expands across all visible states of that domain.
     """
-    indexes = snapshot.indexes
     explicit = [entity_id.lower() for entity_id in _as_list(data.get(id_key))]
     # Explicit IDs must each be visible (named in the error so the LLM can correct).
     _validate_visibility(snapshot, explicit)
     domains = {domain.lower() for domain in _as_list(data.get("domain"))}
 
     selector_ids: list[str] = []
-    for area_id in _as_list(data.get("area_id")):
-        selector_ids.extend(indexes.entity_ids_by_area_id.get(area_id, ()))
-    for device_id in _as_list(data.get("device_id")):
-        selector_ids.extend(indexes.entity_ids_by_device_id.get(device_id, ()))
-    for label_id in _as_list(data.get("label_id")):
-        selector_ids.extend(indexes.entity_ids_by_label.get(label_id, ()))
-    for floor_id in _as_list(data.get("floor_id")):
-        for area_id in indexes.area_ids_by_floor_id.get(floor_id, ()):
-            selector_ids.extend(indexes.entity_ids_by_area_id.get(area_id, ()))
+    for requested_expansions in expand_aggregate_selectors(
+        snapshot,
+        data,
+        selector_keys=("area_id", "device_id", "label_id", "floor_id"),
+    ).values():
+        for _requested, expanded_ids in requested_expansions:
+            selector_ids.extend(expanded_ids)
 
     def _domain_matches(entity_id: str) -> bool:
         return not domains or entity_id.split(".", 1)[0].lower() in domains
