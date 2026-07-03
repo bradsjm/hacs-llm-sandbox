@@ -1076,6 +1076,7 @@ class SafeDateTime:
     """
 
     iso: str
+    timestamp: float
     year: int
     month: int
     day: int
@@ -1174,6 +1175,7 @@ def _datetime_from_dt(dt: _datetime) -> SafeDateTime:
     """Build a SafeDateTime from a parsed datetime, preserving all components."""
     return SafeDateTime(
         iso=dt.isoformat(),
+        timestamp=dt.timestamp(),
         year=dt.year,
         month=dt.month,
         day=dt.day,

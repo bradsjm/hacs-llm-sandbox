@@ -18,6 +18,8 @@ from custom_components.llm_sandbox.snapshot.models import (
     SnapshotIndexes,
 )
 
+_TIMESTAMP = 1782691200.0
+
 
 @pytest.mark.parametrize(
     ("state_specs", "domain", "query", "expected_resolved", "expected_candidates"),
@@ -230,8 +232,11 @@ def _state(entity_id: str, name: str | None) -> SafeState:
         state="off",
         attributes={},
         last_changed="2026-06-29T00:00:00+00:00",
+        last_changed_timestamp=_TIMESTAMP,
         last_reported="2026-06-29T00:00:00+00:00",
+        last_reported_timestamp=_TIMESTAMP,
         last_updated="2026-06-29T00:00:00+00:00",
+        last_updated_timestamp=_TIMESTAMP,
         context=SafeContext(id="ctx", parent_id=None, user_id=None),
         area_id=None,
         device_id=None,

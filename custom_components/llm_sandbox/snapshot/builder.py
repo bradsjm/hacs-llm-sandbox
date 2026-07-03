@@ -313,8 +313,11 @@ def _safe_state(state: State) -> SafeState:
         state=state.state,
         attributes=dict(state.attributes),
         last_changed=state.last_changed.isoformat(),
+        last_changed_timestamp=state.last_changed.timestamp(),
         last_reported=_iso(getattr(state, "last_reported", None)),
+        last_reported_timestamp=_timestamp(getattr(state, "last_reported", None)),
         last_updated=state.last_updated.isoformat(),
+        last_updated_timestamp=state.last_updated.timestamp(),
         context=safe_context,
     )
 
@@ -811,6 +814,16 @@ def _iso(value: object) -> str | None:
     if callable(isoformat):
         return str(isoformat())
     return str(value)
+
+
+def _timestamp(value: object) -> float | None:
+    """Convert a datetime to a POSIX timestamp, preserving None."""
+    if value is None:
+        return None
+    timestamp = getattr(value, "timestamp", None)
+    if callable(timestamp):
+        return float(timestamp())
+    return None
 
 
 def _enum_value(value: object) -> str | None:

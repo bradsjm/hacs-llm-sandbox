@@ -70,11 +70,12 @@ class SafeContext(_JsonSafeRecord):
 class SafeState(_JsonSafeRecord):
     """Frozen view of a Home Assistant state object.
 
-    Carries HA-native state fields plus registry-derived join keys (effective
-    ``area_id``, ``device_id``, ``platform``, ``unique_id``) so an LLM can filter
-    by area/device without a manual state-to-registry join. The effective area
-    mirrors the snapshot index rule (``entity.area_id or device.area_id``) and is
-    ``None`` when no entity registry entry exists.
+    Carries HA-native state fields, POSIX timestamp mirrors for easy duration
+    math, plus registry-derived join keys (effective ``area_id``, ``device_id``,
+    ``platform``, ``unique_id``) so an LLM can filter by area/device without a
+    manual state-to-registry join. The effective area mirrors the snapshot index
+    rule (``entity.area_id or device.area_id``) and is ``None`` when no entity
+    registry entry exists.
     """
 
     entity_id: str
@@ -84,8 +85,11 @@ class SafeState(_JsonSafeRecord):
     state: str
     attributes: dict[str, object]
     last_changed: str
+    last_changed_timestamp: float
     last_reported: str | None
+    last_reported_timestamp: float | None
     last_updated: str
+    last_updated_timestamp: float
     context: SafeContext
     # Registry-derived join keys filled by ``enrich_states`` (effective area,
     # device, platform, unique_id). Default None so the base HA-native shape is

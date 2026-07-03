@@ -1,6 +1,7 @@
 """Richer frozen home fixture for registry, recorder, action, and complex eval cases."""
 
 from collections.abc import Mapping
+from datetime import datetime
 
 from custom_components.llm_sandbox.snapshot.builder import enrich_states
 from custom_components.llm_sandbox.snapshot.models import (
@@ -361,8 +362,11 @@ def _state(entity_id: str, state: str, name: str, last_changed: str, attributes:
         state=state,
         attributes={"friendly_name": name, **attributes},
         last_changed=last_changed,
+        last_changed_timestamp=datetime.fromisoformat(last_changed).timestamp(),
         last_reported=last_changed,
+        last_reported_timestamp=datetime.fromisoformat(last_changed).timestamp(),
         last_updated=last_changed,
+        last_updated_timestamp=datetime.fromisoformat(last_changed).timestamp(),
         context=SafeContext(id="ctx", parent_id=None, user_id=None),
     )
 

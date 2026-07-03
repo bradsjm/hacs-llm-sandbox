@@ -39,8 +39,11 @@ def _state(entity_id: str, attributes: Mapping[str, object] | None = None) -> Sa
         state="off",
         attributes=dict(attributes or {}),
         last_changed="t",
+        last_changed_timestamp=0.0,
         last_reported="t",
+        last_reported_timestamp=0.0,
         last_updated="t",
+        last_updated_timestamp=0.0,
         context=SafeContext(id="c", parent_id=None, user_id=None),
         area_id=None,
         device_id=None,
@@ -241,8 +244,14 @@ def test_service_field_names_filters_by_capability() -> None:
             "light": {
                 "turn_on": {
                     "fields": [
-                        {"name": "brightness", "filter": {"attribute": {"supported_color_modes": ["brightness", "color_temp"]}}},
-                        {"name": "color_temp_kelvin", "filter": {"attribute": {"supported_color_modes": ["color_temp"]}}},
+                        {
+                            "name": "brightness",
+                            "filter": {"attribute": {"supported_color_modes": ["brightness", "color_temp"]}},
+                        },
+                        {
+                            "name": "color_temp_kelvin",
+                            "filter": {"attribute": {"supported_color_modes": ["color_temp"]}},
+                        },
                         {"name": "effect"},
                     ],
                     "dynamic": False,

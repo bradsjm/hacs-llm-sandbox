@@ -2,6 +2,7 @@
 
 import json
 from collections.abc import Mapping
+from datetime import datetime
 from pathlib import Path
 from typing import NotRequired, TypedDict, cast
 
@@ -22,6 +23,7 @@ from homeassistant.core import SupportsResponse
 
 NAME: str = "home_real"
 CREATED_AT: str = "2026-06-29T12:00:00+00:00"
+CREATED_AT_TIMESTAMP: float = datetime.fromisoformat(CREATED_AT).timestamp()
 ENTRY_ID: str = "entry_real"
 
 type RecorderData = dict[str, object]
@@ -229,8 +231,11 @@ def _state(entity: EntityData) -> SafeState:
         state=entity["state"],
         attributes={"friendly_name": name, **entity["attributes"]},
         last_changed=CREATED_AT,
+        last_changed_timestamp=CREATED_AT_TIMESTAMP,
         last_reported=CREATED_AT,
+        last_reported_timestamp=CREATED_AT_TIMESTAMP,
         last_updated=CREATED_AT,
+        last_updated_timestamp=CREATED_AT_TIMESTAMP,
         context=SafeContext(id="ctx", parent_id=None, user_id=None),
     )
 

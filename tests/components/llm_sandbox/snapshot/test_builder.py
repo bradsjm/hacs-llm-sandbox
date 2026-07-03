@@ -1,5 +1,7 @@
 """Tests for the snapshot builder."""
 
+from datetime import datetime
+
 import pytest
 import voluptuous as vol
 from custom_components.llm_sandbox.snapshot import DEFAULT_SCOPE, SnapshotScope, build_snapshot
@@ -117,6 +119,13 @@ async def test_snapshot_datetimes_are_iso_strings(hass: HomeAssistant) -> None:
     assert isinstance(state.last_changed, str)
     assert "T" in state.last_changed
     assert isinstance(state.last_updated, str)
+    assert isinstance(state.last_changed_timestamp, float)
+    assert state.last_changed_timestamp == datetime.fromisoformat(state.last_changed).timestamp()
+    assert isinstance(state.last_updated_timestamp, float)
+    assert state.last_updated_timestamp == datetime.fromisoformat(state.last_updated).timestamp()
+    assert isinstance(state.last_reported_timestamp, float)
+    assert state.last_reported is not None
+    assert state.last_reported_timestamp == datetime.fromisoformat(state.last_reported).timestamp()
 
 
 async def test_snapshot_effective_area_index_uses_entity_override_then_device(hass: HomeAssistant) -> None:
@@ -256,13 +265,9 @@ async def test_snapshot_captures_service_target_and_field_capability_filters(has
     snapshot = build_snapshot(hass)
 
     assert snapshot.services_target["cover"]["stop_cover"] == {
-        "entity": [
-            {"domain": ["cover"], "device_class": [], "integration": None, "supported_features": [4]}
-        ]
+        "entity": [{"domain": ["cover"], "device_class": [], "integration": None, "supported_features": [4]}]
     }
-    fields = {
-        field["name"]: field for field in snapshot.services_schema["cover"]["stop_cover"]["fields"]
-    }
+    fields = {field["name"]: field for field in snapshot.services_schema["cover"]["stop_cover"]["fields"]}
     assert fields["color_temp_kelvin"]["filter"] == {"attribute": {"supported_color_modes": ["color_temp"]}}
 
 
