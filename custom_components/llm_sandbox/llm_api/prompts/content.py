@@ -94,7 +94,8 @@ def build_get_history_description() -> str:
         "Scope with entity_ids or HA-native selectors (area_id/device_id/floor_id/label_id/domain); "
         "size the window with hours=<n> or ISO start/end. "
         "Success returns {window, entities}, where entities is keyed by entity_id and each value has "
-        "rows of [t, state] plus unit when known; truncated appears only when true. "
+        "rows of [t, state] plus unit when known. The first page returns the newest rows; when more "
+        "remain, next_cursor appears — pass it back as cursor (omit window args) to fetch the next older page. "
         "Errors return {status:'error', error:{key, message, fix?}}; entity_not_visible fix names "
         "concrete visible entity candidates."
     )
@@ -112,7 +113,8 @@ def build_get_statistics_description() -> str:
         "statistic_ids or HA-native selectors "
         "(area_id/device_id/floor_id/label_id/domain); size the window with hours=<n> or ISO start/end. "
         "Success returns {window, period, statistics}, where statistics is keyed by statistic/entity id and each "
-        "value has rows of [t, value]; truncated appears only when true. "
+        "value has rows of [t, value]. The first page returns the newest rows; when more remain, "
+        "next_cursor appears — pass it back as cursor (omit window args) to fetch the next older page. "
         "Errors return {status:'error', error:{key, message, fix?}}; entity_not_visible fix names "
         "concrete visible entity candidates."
     )
@@ -127,7 +129,8 @@ def build_get_logbook_description() -> str:
         "Scope with entity_ids or HA-native selectors (area_id/device_id/floor_id/label_id/domain); "
         "size the window with hours=<n> or ISO start/end. "
         "Success returns {window, entries}, where entries is a flat list of timeline records each carrying "
-        "its entity_id; truncated appears only when true. "
+        "its entity_id. The first page returns the newest entries; when more remain, next_cursor appears — "
+        "pass it back as cursor (omit window args) to fetch the next older page. "
         "Errors return {status:'error', error:{key, message, fix?}}; entity_not_visible fix names "
         "concrete visible entity candidates."
     )

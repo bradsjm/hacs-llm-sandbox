@@ -4,7 +4,6 @@ import asyncio
 import functools
 import time
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Literal, cast, final, override
 
@@ -38,10 +37,11 @@ from ...runtime import SandboxSettings
 from ...snapshot import build_snapshot
 from ...snapshot.models import HomeSnapshot
 from ...types import TranslationPlaceholders
-from ..errors import tool_error_envelope, tool_error_from_exception
+from ..errors import RecoverableToolError, tool_error_envelope, tool_error_from_exception
 from ..executor_support import json_safe
 from ..prompts import build_get_history_description, build_get_logbook_description, build_get_statistics_description
 from ..resolution import _DISCOVERY_LIMIT, candidates_for_domain, resolve_target_entity
+from ._cursor import _LOGBOOK_CURSOR_KEY, INVALID_CURSOR, Cursor, decode_cursor, encode_cursor, paginate_stream
 from ._support import _require_loaded_entry, _require_loaded_entry_error
 
 RECORDER_UNAVAILABLE = "recorder_unavailable"
@@ -72,6 +72,10 @@ _RECORDER_GUIDANCE: dict[str, tuple[str, list[str]]] = {
     QUERY_FAILED: (
         "The recorder query failed.",
         ["Check the argument values; the recorder error was: {error}."],
+    ),
+    INVALID_CURSOR: (
+        "The pagination cursor is invalid or expired.",
+        ["Re-issue the original query without a cursor to start a new page sequence."],
     ),
     "invalid_tool_input": (
         "Invalid tool input.",
@@ -133,18 +137,6 @@ def recorder_error_envelope(
         )
     message, fix = _error_guidance(key, placeholders)
     return tool_error_envelope(key, placeholders, message=message, fix=fix)
-
-
-@dataclass(frozen=True, slots=True)
-class RecoverableToolError(Exception):
-    """Controlled recorder-tool failure converted to an error envelope."""
-
-    key: str
-    placeholders: TranslationPlaceholders
-
-    def __post_init__(self) -> None:
-        """Initialize Exception with the stable error key."""
-        Exception.__init__(self, self.key)
 
 
 def _iso_datetime(value: object) -> datetime:
@@ -362,11 +354,6 @@ async def _run_query[T](
     return await asyncio.wait_for(get_instance(hass).async_add_executor_job(fn), timeout=remaining)
 
 
-def _truncate[T](values: list[T], limit: int) -> tuple[list[T], bool]:
-    """Keep the most recent values when a result list exceeds its limit."""
-    return (values[-limit:], True) if len(values) > limit else (values, False)
-
-
 def _state_row_to_dict(row: State | dict[str, object]) -> tuple[list[object], str | None]:
     """Convert a recorder history row to compact ``([time, state], unit)`` shape."""
     if isinstance(row, State):
@@ -384,6 +371,11 @@ def _state_row_to_dict(row: State | dict[str, object]) -> tuple[list[object], st
     return [str(timestamp), shaped.get("state")], str(unit) if unit is not None else None
 
 
+def _row_timestamp(row: list[object]) -> str:
+    """Return the ISO timestamp in a compact ``[t, value]`` row."""
+    return str(row[0])
+
+
 def _statistic_row_to_dict(row: dict[str, object]) -> list[object]:
     """Convert one recorder statistic row to a compact timestamp/value array."""
     shaped = dict(row)
@@ -399,6 +391,14 @@ def _statistic_row_to_dict(row: dict[str, object]) -> list[object]:
             if value is not None:
                 break
     return [str(timestamp), value]
+
+
+def _logbook_when(entry: dict[str, object]) -> str:
+    """Return the ISO timestamp of a logbook entry for pagination."""
+    when = entry["when"]
+    if isinstance(when, datetime):
+        return dt_util.as_utc(when).isoformat()
+    return str(when)
 
 
 @final
@@ -420,6 +420,13 @@ class GetHistoryTool(_RecorderTool):
             ): _HOURS_ARG,
             vol.Optional("start", description="Window start (ISO-8601). Default now-1h."): _iso_datetime,
             vol.Optional("end", description="Window end (ISO-8601). Default now."): _iso_datetime,
+            vol.Optional(
+                "cursor",
+                description=(
+                    "Opaque cursor from a prior next_cursor; pass it to fetch the next older page. "
+                    "Omit on the first call."
+                ),
+            ): str,
         }
     )
 
@@ -433,13 +440,19 @@ class GetHistoryTool(_RecorderTool):
         data: dict[str, object],
     ) -> JsonObjectType:
         entity_ids = resolve_entity_ids(snapshot, data, "entity_ids")
-        start, end = _clamp_window(
-            cast(datetime | None, data.get("start")),
-            cast(datetime | None, data.get("end")),
-            hours=cast(float | None, data.get("hours")),
-            default_hours=DEFAULT_HISTORY_WINDOW_HOURS,
-            max_hours=MAX_RECORDER_LOOKBACK_HOURS,
-        )
+        if (cursor_in := data.get("cursor")) is not None:
+            # Cursor window wins while paging so the continuation is stable.
+            cursor = decode_cursor(cursor_in)
+            start, end = cursor.start, cursor.end
+        else:
+            start, end = _clamp_window(
+                cast(datetime | None, data.get("start")),
+                cast(datetime | None, data.get("end")),
+                hours=cast(float | None, data.get("hours")),
+                default_hours=DEFAULT_HISTORY_WINDOW_HOURS,
+                max_hours=MAX_RECORDER_LOOKBACK_HOURS,
+            )
+            cursor = Cursor(start=start, end=end, cutoffs={})
         result = await _run_query(
             hass,
             deadline,
@@ -459,25 +472,34 @@ class GetHistoryTool(_RecorderTool):
         )
 
         budget = max(1, MAX_HISTORY_STATES // len(entity_ids))
-        truncated = False
         entities: dict[str, dict[str, object]] = {}
+        next_cutoffs: dict[str, str] = {}
         for entity_id, states in result.items():
             converted = [_state_row_to_dict(row) for row in states]
             rows = [row for row, _unit in converted]
-            rows, cut = _truncate(rows, budget)
-            truncated = truncated or cut
-            entity: dict[str, object] = {"rows": rows}
+            # Per-entity cutoffs let multi-entity pages advance independently.
+            page, next_cutoff = paginate_stream(
+                rows,
+                ts_of=_row_timestamp,
+                budget=budget,
+                cutoff_iso=cursor.cutoffs.get(entity_id),
+            )
+            entity: dict[str, object] = {"rows": page}
             unit = next((unit for _row, unit in converted if unit), None)
             if unit:
                 entity["unit"] = unit
             entities[entity_id] = entity
+            if next_cutoff is not None:
+                # Exhausted entities are intentionally dropped from the next
+                # cutoff map; paging completes only when all streams exhaust.
+                next_cutoffs[entity_id] = next_cutoff
 
         payload: dict[str, object] = {
             "window": {"start": start.isoformat(), "end": end.isoformat()},
             "entities": entities,
         }
-        if truncated:
-            payload["truncated"] = True
+        if next_cutoffs:
+            payload["next_cursor"] = encode_cursor(Cursor(start=start, end=end, cutoffs=next_cutoffs))
 
         return cast(
             JsonObjectType,
@@ -510,6 +532,13 @@ class GetStatisticsTool(_RecorderTool):
             vol.Optional("period", default="hour", description="Aggregation bucket."): vol.In(
                 ("5minute", "hour", "day")
             ),
+            vol.Optional(
+                "cursor",
+                description=(
+                    "Opaque cursor from a prior next_cursor; pass it to fetch the next older page. "
+                    "Omit on the first call."
+                ),
+            ): str,
         }
     )
 
@@ -523,14 +552,23 @@ class GetStatisticsTool(_RecorderTool):
         data: dict[str, object],
     ) -> JsonObjectType:
         statistic_ids = resolve_entity_ids(snapshot, data, "statistic_ids")
-        period = cast(Literal["5minute", "hour", "day"], data["period"])
-        start, end = _clamp_window(
-            cast(datetime | None, data.get("start")),
-            cast(datetime | None, data.get("end")),
-            hours=cast(float | None, data.get("hours")),
-            default_hours=DEFAULT_STATISTICS_WINDOW_HOURS,
-            max_hours=MAX_STATISTICS_LOOKBACK_HOURS,
-        )
+        if (cursor_in := data.get("cursor")) is not None:
+            # Cursor carries period so bucket granularity remains consistent.
+            cursor = decode_cursor(cursor_in)
+            start, end = cursor.start, cursor.end
+            if cursor.period not in (None, "5minute", "hour", "day"):
+                raise RecoverableToolError(INVALID_CURSOR, {})
+            period = cast(Literal["5minute", "hour", "day"], cursor.period or "hour")
+        else:
+            period = cast(Literal["5minute", "hour", "day"], data["period"])
+            start, end = _clamp_window(
+                cast(datetime | None, data.get("start")),
+                cast(datetime | None, data.get("end")),
+                hours=cast(float | None, data.get("hours")),
+                default_hours=DEFAULT_STATISTICS_WINDOW_HOURS,
+                max_hours=MAX_STATISTICS_LOOKBACK_HOURS,
+            )
+            cursor = Cursor(start=start, end=end, cutoffs={}, period=period)
         result = await _run_query(
             hass,
             deadline,
@@ -547,21 +585,28 @@ class GetStatisticsTool(_RecorderTool):
         )
 
         budget = max(1, MAX_STATISTICS_ROWS // len(statistic_ids))
-        truncated = False
         shaped_statistics: dict[str, dict[str, object]] = {}
+        next_cutoffs: dict[str, str] = {}
         for statistic_id, rows in result.items():
             shaped_rows = [_statistic_row_to_dict(cast(dict[str, object], row)) for row in rows]
-            shaped_rows, cut = _truncate(shaped_rows, budget)
-            truncated = truncated or cut
-            shaped_statistics[statistic_id] = {"rows": shaped_rows}
+            # Per-statistic cutoffs let multiple statistics page independently.
+            page, next_cutoff = paginate_stream(
+                shaped_rows,
+                ts_of=_row_timestamp,
+                budget=budget,
+                cutoff_iso=cursor.cutoffs.get(statistic_id),
+            )
+            shaped_statistics[statistic_id] = {"rows": page}
+            if next_cutoff is not None:
+                next_cutoffs[statistic_id] = next_cutoff
 
         payload: dict[str, object] = {
             "window": {"start": start.isoformat(), "end": end.isoformat()},
             "period": period,
             "statistics": shaped_statistics,
         }
-        if truncated:
-            payload["truncated"] = True
+        if next_cutoffs:
+            payload["next_cursor"] = encode_cursor(Cursor(start=start, end=end, cutoffs=next_cutoffs, period=period))
 
         return cast(
             JsonObjectType,
@@ -588,6 +633,13 @@ class GetLogbookTool(_RecorderTool):
             ): _HOURS_ARG,
             vol.Optional("start", description="Window start (ISO-8601). Default now-24h."): _iso_datetime,
             vol.Optional("end", description="Window end (ISO-8601). Default now."): _iso_datetime,
+            vol.Optional(
+                "cursor",
+                description=(
+                    "Opaque cursor from a prior next_cursor; pass it to fetch the next older page. "
+                    "Omit on the first call."
+                ),
+            ): str,
         }
     )
 
@@ -601,13 +653,19 @@ class GetLogbookTool(_RecorderTool):
         data: dict[str, object],
     ) -> JsonObjectType:
         entity_ids = resolve_entity_ids(snapshot, data, "entity_ids")
-        start, end = _clamp_window(
-            cast(datetime | None, data.get("start")),
-            cast(datetime | None, data.get("end")),
-            hours=cast(float | None, data.get("hours")),
-            default_hours=DEFAULT_LOGBOOK_WINDOW_HOURS,
-            max_hours=MAX_RECORDER_LOOKBACK_HOURS,
-        )
+        if (cursor_in := data.get("cursor")) is not None:
+            # Cursor window wins; pass the same scope while paging logbook.
+            cursor = decode_cursor(cursor_in)
+            start, end = cursor.start, cursor.end
+        else:
+            start, end = _clamp_window(
+                cast(datetime | None, data.get("start")),
+                cast(datetime | None, data.get("end")),
+                hours=cast(float | None, data.get("hours")),
+                default_hours=DEFAULT_LOGBOOK_WINDOW_HOURS,
+                max_hours=MAX_RECORDER_LOOKBACK_HOURS,
+            )
+            cursor = Cursor(start=start, end=end, cutoffs={})
         if LOGBOOK_DOMAIN not in hass.data:
             raise RecoverableToolError("logbook_unavailable", {})
 
@@ -615,19 +673,27 @@ class GetLogbookTool(_RecorderTool):
         processor = EventProcessor(
             hass, event_types, entity_ids, None, None, timestamp=False, include_entity_name=True
         )
-        entries = await _run_query(
+        raw_entries = await _run_query(
             hass,
             deadline,
             functools.partial(processor.get_events, start_day=start, end_day=end),
         )
-        entries, truncated = _truncate(entries, MAX_LOGBOOK_ENTRIES)
-        entries_payload = [dict(entry) for entry in entries]
+        entries = [dict(entry) for entry in raw_entries]
+        # A logbook page is one flat stream keyed by the sentinel cutoff.
+        page_entries, next_cutoff = paginate_stream(
+            entries,
+            ts_of=_logbook_when,
+            budget=MAX_LOGBOOK_ENTRIES,
+            cutoff_iso=cursor.cutoffs.get(_LOGBOOK_CURSOR_KEY),
+        )
         payload: dict[str, object] = {
             "window": {"start": start.isoformat(), "end": end.isoformat()},
-            "entries": entries_payload,
+            "entries": page_entries,
         }
-        if truncated:
-            payload["truncated"] = True
+        if next_cutoff is not None:
+            payload["next_cursor"] = encode_cursor(
+                Cursor(start=start, end=end, cutoffs={_LOGBOOK_CURSOR_KEY: next_cutoff})
+            )
 
         return cast(
             JsonObjectType,

@@ -33,7 +33,7 @@ async def test_history_returns_states_for_visible_entity(
     assert "light.bedroom" in result["entities"]
     assert isinstance(result["window"]["start"], str)
     assert isinstance(result["window"]["end"], str)
-    assert "truncated" not in result
+    assert "next_cursor" not in result
     entity = result["entities"]["light.bedroom"]
     assert set(entity) == {"rows"}
     row = entity["rows"][-1]
@@ -261,22 +261,118 @@ async def test_history_area_and_domain_selectors(
     assert "light.bedroom" in by_domain["entities"]
 
 
-async def test_history_truncates_large_result(
+async def test_history_paginates_large_result(
     hass: HomeAssistant,
     recorder_entry: MockConfigEntry,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """History output keeps the newest rows and reports truncation."""
+    """History output keeps the newest page and exposes a cursor."""
     monkeypatch.setattr(recorder, "MAX_HISTORY_STATES", 3)
+    start = dt_util.utcnow().isoformat()
     for index in range(6):
         hass.states.async_set("light.bedroom", str(index), {"friendly_name": "Bedroom Light"})
         await hass.async_block_till_done()
         await get_instance(hass).async_block_till_done()
 
-    result = await _call_history(hass, recorder_entry, {"entity_ids": ["light.bedroom"]})
+    result = await _call_history(hass, recorder_entry, {"entity_ids": ["light.bedroom"], "start": start})
 
-    assert result["truncated"] is True
-    assert len(result["entities"]["light.bedroom"]["rows"]) <= 3
+    assert "next_cursor" in result
+    assert "truncated" not in result
+    assert _row_states(result["entities"]["light.bedroom"]["rows"]) == ["3", "4", "5"]
+
+
+async def test_history_pagination_walk_returns_older_page(
+    hass: HomeAssistant,
+    recorder_entry: MockConfigEntry,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """History cursor walks from newest rows to older rows."""
+    monkeypatch.setattr(recorder, "MAX_HISTORY_STATES", 3)
+    start = dt_util.utcnow().isoformat()
+    for index in range(6):
+        hass.states.async_set("light.bedroom", str(index), {"friendly_name": "Bedroom Light"})
+        await hass.async_block_till_done()
+        await get_instance(hass).async_block_till_done()
+
+    first = await _call_history(hass, recorder_entry, {"entity_ids": ["light.bedroom"], "start": start})
+    cursor = cast(str, first["next_cursor"])
+    second = await _call_history(hass, recorder_entry, {"entity_ids": ["light.bedroom"], "cursor": cursor})
+
+    assert _row_states(first["entities"]["light.bedroom"]["rows"]) == ["3", "4", "5"]
+    assert _row_states(second["entities"]["light.bedroom"]["rows"]) == ["0", "1", "2"]
+    assert "next_cursor" in second
+
+
+async def test_history_multi_entity_paginates_independently(
+    hass: HomeAssistant,
+    recorder_entry: MockConfigEntry,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """History cursor keeps independent page boundaries per entity."""
+    monkeypatch.setattr(recorder, "MAX_HISTORY_STATES", 6)
+    start = dt_util.utcnow().isoformat()
+    for index in range(6):
+        hass.states.async_set("light.bedroom", str(index), {"friendly_name": "Bedroom Light"})
+        hass.states.async_set("light.living_room", str(index), {"friendly_name": "Living Room Light"})
+        await hass.async_block_till_done()
+        await get_instance(hass).async_block_till_done()
+
+    first = await _call_history(
+        hass,
+        recorder_entry,
+        {"entity_ids": ["light.bedroom", "light.living_room"], "start": start},
+    )
+    cursor = cast(str, first["next_cursor"])
+    second = await _call_history(
+        hass,
+        recorder_entry,
+        {"entity_ids": ["light.bedroom", "light.living_room"], "cursor": cursor},
+    )
+
+    assert _row_states(first["entities"]["light.bedroom"]["rows"]) == ["3", "4", "5"]
+    assert _row_states(first["entities"]["light.living_room"]["rows"]) == ["3", "4", "5"]
+    assert _row_states(second["entities"]["light.bedroom"]["rows"]) == ["0", "1", "2"]
+    assert _row_states(second["entities"]["light.living_room"]["rows"]) == ["0", "1", "2"]
+    assert "next_cursor" in second
+
+
+@pytest.mark.parametrize(
+    ("tool_cls", "tool_name", "tool_args"),
+    [
+        pytest.param(
+            GetHistoryTool,
+            TOOL_GET_HISTORY,
+            {"entity_ids": ["light.bedroom"], "cursor": "not-a-valid-cursor"},
+            id="history",
+        ),
+        pytest.param(
+            GetStatisticsTool,
+            TOOL_GET_STATISTICS,
+            {"statistic_ids": ["light.bedroom"], "cursor": "not-a-valid-cursor"},
+            id="statistics",
+        ),
+        pytest.param(
+            GetLogbookTool,
+            TOOL_GET_LOGBOOK,
+            {"entity_ids": ["light.bedroom"], "cursor": "not-a-valid-cursor"},
+            id="logbook",
+        ),
+    ],
+)
+async def test_malformed_cursor_returns_invalid_cursor(
+    hass: HomeAssistant,
+    recorder_entry: MockConfigEntry,
+    tool_cls: type[GetHistoryTool | GetStatisticsTool | GetLogbookTool],
+    tool_name: str,
+    tool_args: dict[str, object],
+) -> None:
+    """A malformed cursor returns the stable invalid_cursor error key."""
+    result = await _call_tool(tool_cls(recorder_entry.entry_id), tool_name, hass, tool_args)
+
+    assert result["status"] == "error"
+    assert result["error"]["key"] == "invalid_cursor"
+    assert isinstance(result["error"]["message"], str)
+    assert result["error"]["message"]
 
 
 @pytest.mark.parametrize(
@@ -307,6 +403,11 @@ async def _call_history(
 ) -> JsonObjectType:
     """Call GetHistoryTool with a standard test LLM context."""
     return await _call_tool(GetHistoryTool(entry.entry_id), TOOL_GET_HISTORY, hass, tool_args)
+
+
+def _row_states(rows: list[list[object]]) -> list[str]:
+    """Return the state/value field from compact recorder rows."""
+    return [str(row[1]) for row in rows]
 
 
 async def _call_statistics(

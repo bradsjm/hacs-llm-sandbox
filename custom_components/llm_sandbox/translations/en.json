@@ -149,6 +149,9 @@
     },
     "query_failed": {
       "message": "The query failed: {error}"
+    },
+    "invalid_cursor": {
+      "message": "The pagination cursor is invalid or expired."
     }
   }
 }

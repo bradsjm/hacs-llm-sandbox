@@ -83,6 +83,18 @@ class HelperExecutionError(Exception):
         Exception.__init__(self, self.marker)
 
 
+@dataclass(frozen=True, slots=True)
+class RecoverableToolError(Exception):
+    """Controlled recorder-tool failure converted to an error envelope."""
+
+    key: str
+    placeholders: TranslationPlaceholders
+
+    def __post_init__(self) -> None:
+        """Initialize Exception with the stable error key."""
+        Exception.__init__(self, self.key)
+
+
 def helper_error_payload(
     err: HelperExecutionError,
     *,
