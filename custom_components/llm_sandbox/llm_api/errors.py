@@ -75,7 +75,6 @@ class HelperExecutionError(Exception):
     helper: str
     key: str
     placeholders: TranslationPlaceholders
-    hints: Mapping[str, Any] | None = None
     marker: str = field(default_factory=lambda: f"llm_sandbox_helper_error:{uuid4().hex}")
 
     def __post_init__(self) -> None:

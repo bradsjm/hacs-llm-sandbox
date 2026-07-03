@@ -939,10 +939,7 @@ class SafeServiceRegistry:
                 placeholders = {str(item_key): str(value) for item_key, value in raw_placeholders.items()}
             else:
                 placeholders = {"domain": domain, "service": service, "reason": key}
-        hints = None
-        if (brief := self.services_schema.get(domain, {}).get(service)) is not None:
-            hints = {"fields": _service_field_names(brief)}
-        return HelperExecutionError("services.async_call", key, placeholders, hints=hints)
+        return HelperExecutionError("services.async_call", key, placeholders)
 
     def _require_state(self) -> Any:
         """Return the active runtime's execution state for helper-call budgeting."""
