@@ -1,6 +1,5 @@
 """Monty-backed code executor for the LLM Sandbox facade runtime."""
 
-import ast
 import asyncio
 
 import pydantic_monty  # Required manifest dependency; do not convert to a dynamic import.
@@ -27,7 +26,13 @@ from .executor_support import (
 )
 from .facade_registry import MONTY_DATACLASS_REGISTRY
 from .facade_views import SafeLLMContext, build_facades
-from .resolution import _DISCOVERY_LIMIT, bounded_strings, candidates_for_domain, resolve_target_entity
+from .legacy_notes import (
+    LegacyNoteContext,
+    _entity_candidates,
+    _referenced_missing,
+    _referenced_visible_state_id,
+    compute_legacy_note,
+)
 from .runtime import RuntimeContext, activate_runtime, clear_runtime
 
 MAX_MONTY_CODE_CHARS = 8000
@@ -85,93 +90,6 @@ def _build_monty(
             type_check_stubs=MONTY_TYPE_STUBS,
             dataclass_registry=DATACLASS_REGISTRY,
         )
-
-
-def _is_empty_output(result: object) -> bool:
-    """True for ``None`` or an empty collection, but not scalar 0/False outputs."""
-    if result is None:
-        return True
-    if isinstance(result, list | dict | tuple | str | set):
-        return len(result) == 0
-    return False
-
-
-def _states_root(node: ast.AST) -> bool:
-    """Whether ``node`` is the ``states`` or ``hass.states`` expression."""
-    if isinstance(node, ast.Name):
-        return node.id == "states"
-    return (
-        isinstance(node, ast.Attribute)
-        and node.attr == "states"
-        and isinstance(node.value, ast.Name)
-        and node.value.id == "hass"
-    )
-
-
-def _referenced_state_ids(code: str) -> list[str]:
-    """Entity ids read via literal ``states.get``/``states[...]``.
-
-    Static analysis: Monty copies input objects and does not propagate the
-    runtime contextvar to synchronous methods, so absent reads cannot be
-    recorded inside ``states.get``. Scanning the submitted code for literal
-    entity-id reads catches the dominant case (an LLM-typed integration id) and
-    lets the executor self-describe available entities on an empty result.
-    """
-    try:
-        module = ast.parse(code)
-    except SyntaxError:
-        return []
-    references: list[str] = []
-    seen: set[str] = set()
-
-    def _consider(literal: object) -> None:
-        if isinstance(literal, str) and literal not in seen:
-            seen.add(literal)
-            references.append(literal)
-
-    for node in ast.walk(module):
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
-            if node.func.attr == "get" and _states_root(node.func.value) and node.args:
-                _consider(_literal_str(node.args[0]))
-        elif isinstance(node, ast.Subscript) and _states_root(node.value):
-            _consider(_literal_str(node.slice))
-    return references
-
-
-def _referenced_missing(code: str, snapshot: HomeSnapshot) -> list[str]:
-    """Entity ids read via literal state access that are absent from the snapshot."""
-    return [entity_id for entity_id in _referenced_state_ids(code) if entity_id not in snapshot.states]
-
-
-def _referenced_visible_state_id(code: str, snapshot: HomeSnapshot) -> str | None:
-    """Return the only visible literal state id read via ``states.get``/``states[...]``."""
-    visible = [entity_id for entity_id in _referenced_state_ids(code) if entity_id in snapshot.states]
-    return visible[0] if len(visible) == 1 else None
-
-
-def _literal_str(node: ast.AST) -> object:
-    """Return the Python value of a string-literal AST node, else a sentinel."""
-    if isinstance(node, ast.Constant) and isinstance(node.value, str):
-        return node.value
-    return object()  # non-string / non-literal: never matches an entity id
-
-
-def _entity_candidates(snapshot: HomeSnapshot, requested_entity_id: str) -> list[str]:
-    """Return token-ranked visible entity candidates for a missing state id."""
-    domain = requested_entity_id.split(".", 1)[0] if "." in requested_entity_id else requested_entity_id
-    outcome = resolve_target_entity(snapshot, requested_entity_id, domain)
-    if outcome.resolved is not None:
-        return [outcome.resolved]
-    candidates = outcome.candidates or candidates_for_domain(snapshot, domain, limit=_DISCOVERY_LIMIT + 1)
-    return bounded_strings([candidate.entity_id for candidate in candidates])
-
-
-def _missing_state_note(snapshot: HomeSnapshot, requested_entity_id: str) -> str:
-    """Return an imperative empty-result repair note for a missing state id."""
-    candidates = _entity_candidates(snapshot, requested_entity_id)
-    if candidates and candidates[0] != "...":
-        return f"No data: '{requested_entity_id}' does not exist. Use '{candidates[0]}' and re-run."
-    return f"No data: '{requested_entity_id}' does not exist and no visible replacement was found."
 
 
 def _strip_monty_diagnostic(message: str) -> str:
@@ -323,17 +241,12 @@ async def async_execute_home_code(
         clear_runtime()
 
     result = json_safe(output)
-    # Static scan for literal entity-id reads that are absent from the snapshot.
-    # An unguessable integration-specific id often surfaces as an empty result;
-    # when that happens, name the visible entities in the first referenced
-    # domain so the next call can recover. (Monty copies inputs and does not
-    # propagate the runtime contextvar to sync methods, so this is a code scan,
-    # not a runtime record.)
-    referenced_missing = _referenced_missing(code, snapshot)
     execution_payload: dict[str, object] = {"status": "ok"}
     payload: dict[str, object] = {"execution": execution_payload, "output": result}
-    if referenced_missing and _is_empty_output(result):
-        payload["note"] = _missing_state_note(snapshot, referenced_missing[0])
+    # Success-side notes are selected by an ordered static-analysis registry so
+    # future legacy HA patterns can be added without growing executor branches.
+    if note := compute_legacy_note(LegacyNoteContext(code=code, snapshot=snapshot, result=result)):
+        payload["note"] = note
     if runtime.state.printed:
         payload["printed"] = list(runtime.state.printed)
     if runtime.state.actions:
