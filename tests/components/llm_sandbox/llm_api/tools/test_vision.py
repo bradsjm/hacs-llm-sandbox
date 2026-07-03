@@ -43,6 +43,8 @@ async def test_get_camera_image_rejects_non_visible_entity(
 ) -> None:
     """Hidden cameras are rejected by the fresh snapshot visibility check."""
     _seed_camera(hass)
+    _seed_camera(hass, object_id="back_yard", name="Back Yard")
+    _seed_image(hass, object_id="porch_snapshot", name="Porch Snapshot")
     er.async_get(hass).async_update_entity("camera.front_door", hidden_by=er.RegistryEntryHider.USER)
 
     result = await _call_tool(hass, loaded_entry, {"image_entity": "camera.front_door"})
@@ -51,6 +53,23 @@ async def test_get_camera_image_rejects_non_visible_entity(
     assert result["error"]["key"] == "entity_not_visible"
     assert isinstance(result["error"]["message"], str)
     assert result["error"]["message"]
+    fix = cast(list[str], result["error"]["fix"])
+    assert "camera.back_yard" in fix
+    assert "image.porch_snapshot" in fix
+
+
+async def test_get_camera_image_offers_near_miss_candidate(
+    hass: HomeAssistant,
+    loaded_entry: MockConfigEntry,
+) -> None:
+    """A near-miss camera ID offers the visible token-matched candidate."""
+    _seed_camera(hass)
+
+    result = await _call_tool(hass, loaded_entry, {"image_entity": "camera.frontdoor"})
+
+    assert result["status"] == "error"
+    assert result["error"]["key"] == "entity_not_visible"
+    assert result["error"]["fix"] == ["camera.front_door"]
 
 
 async def test_get_camera_image_rejects_oversized_capture(
@@ -108,6 +127,7 @@ async def test_get_camera_image_rejects_unsupported_visible_domain(
     loaded_entry: MockConfigEntry,
 ) -> None:
     """Visible non-camera/image entities return unsupported_image_domain."""
+    _seed_camera(hass)
     hass.states.async_set("sensor.foo", "42", {"friendly_name": "Foo"})
 
     result = await _call_tool(hass, loaded_entry, {"image_entity": "sensor.foo"})
@@ -116,13 +136,20 @@ async def test_get_camera_image_rejects_unsupported_visible_domain(
     assert result["error"]["key"] == "unsupported_image_domain"
     assert isinstance(result["error"]["message"], str)
     assert result["error"]["message"]
-    assert isinstance(result["error"]["fix"], list)
+    fix = cast(list[str], result["error"]["fix"])
+    assert "camera.front_door" in fix
 
 
-def _seed_camera(hass: HomeAssistant) -> None:
+def _seed_camera(hass: HomeAssistant, *, object_id: str = "front_door", name: str = "Front Door") -> None:
     """Register a visible camera entity and set its live state."""
-    er.async_get(hass).async_get_or_create("camera", "test", "front_door", suggested_object_id="front_door")
-    hass.states.async_set("camera.front_door", "idle", {"friendly_name": "Front Door"})
+    er.async_get(hass).async_get_or_create("camera", "test", object_id, suggested_object_id=object_id)
+    hass.states.async_set(f"camera.{object_id}", "idle", {"friendly_name": name})
+
+
+def _seed_image(hass: HomeAssistant, *, object_id: str, name: str) -> None:
+    """Register a visible image entity and set its live state."""
+    er.async_get(hass).async_get_or_create("image", "test", object_id, suggested_object_id=object_id)
+    hass.states.async_set(f"image.{object_id}", "idle", {"entity_picture": "/api/image/test", "friendly_name": name})
 
 
 def _tiny_jpeg() -> bytes:

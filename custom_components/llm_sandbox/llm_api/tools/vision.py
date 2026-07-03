@@ -28,9 +28,11 @@ from ...const import (
     TOOL_GET_CAMERA_IMAGE,
 )
 from ...snapshot import build_snapshot
+from ...snapshot.models import HomeSnapshot
 from ...types import TranslationPlaceholders
 from ..errors import tool_error_envelope, tool_error_from_exception
 from ..prompts import build_get_camera_image_description
+from ..resolution import _DISCOVERY_LIMIT, candidates_for_domain, resolve_target_entity
 from ._support import _require_loaded_entry, _require_loaded_entry_error
 
 _LOGGER = logging.getLogger(__name__)
@@ -39,23 +41,13 @@ ENTITY_NOT_VISIBLE = "entity_not_visible"
 CAPTURE_FAILED = "capture_failed"
 IMAGE_TOO_LARGE = "image_too_large"
 UNSUPPORTED_IMAGE_DOMAIN = "unsupported_image_domain"
+_IMAGE_DOMAINS = ("camera", "image")
 
 # Actionable guidance keyed by the recoverable error key. Message/hints are
 # surfaced inline to the LLM so a follow-up call can succeed; stable keys stay
 # translated in en.json for the human-facing contract. Mirrors the recorder
 # tools' guidance contract so every recoverable tool error is self-remedying.
 _VISION_GUIDANCE: dict[str, tuple[str, list[str]]] = {
-    ENTITY_NOT_VISIBLE: (
-        "Only snapshot-visible entities are capturable.",
-        [
-            "List visible camera/image entities via execute_home_code "
-            "(hass.states.async_all()) and retry with a visible entity_id."
-        ],
-    ),
-    UNSUPPORTED_IMAGE_DOMAIN: (
-        "Only camera.* and image.* entities can be captured.",
-        ["Retry with a camera.* or image.* entity_id from the visible set."],
-    ),
     CAPTURE_FAILED: (
         "The live image capture failed.",
         ["Confirm {entity_id} is online and producing frames, then retry."],
@@ -88,14 +80,59 @@ def _error_guidance(key: str, placeholders: Mapping[str, str]) -> tuple[str | No
     return message, [template.format_map(values) for template in templates]
 
 
-def _envelope(key: str, placeholders: TranslationPlaceholders) -> JsonObjectType:
+def _image_candidate_ids(snapshot: HomeSnapshot, requested_entity_id: str) -> list[str] | None:
+    """Return deterministic visible camera/image candidates for a bad image entity."""
+    domain = requested_entity_id.split(".", 1)[0]
+    ids: list[str] = []
+
+    # Same-domain resolution preserves recorder-style near-miss hints for image
+    # entities while wrong-domain requests fall back to the full capturable set.
+    if domain in _IMAGE_DOMAINS:
+        resolution = resolve_target_entity(snapshot, requested_entity_id, domain)
+        if resolution.resolved is not None:
+            ids = [resolution.resolved]
+        elif resolution.candidates:
+            ids = sorted(candidate.entity_id for candidate in resolution.candidates)
+
+    # If no near-miss exists, offer the visible camera/image surface directly.
+    if not ids:
+        for image_domain in _IMAGE_DOMAINS:
+            ids.extend(
+                candidate.entity_id
+                for candidate in candidates_for_domain(snapshot, image_domain, limit=_DISCOVERY_LIMIT + 1)
+            )
+        ids = sorted(ids)
+
+    if not ids:
+        return None
+    if len(ids) > _DISCOVERY_LIMIT:
+        return [*ids[: _DISCOVERY_LIMIT - 1], "..."]
+    return ids
+
+
+def _envelope(
+    key: str,
+    placeholders: TranslationPlaceholders,
+    snapshot: HomeSnapshot | None = None,
+) -> JsonObjectType:
     """Build a recoverable vision error envelope with actionable guidance."""
     if key == ENTITY_NOT_VISIBLE:
-        entity_id = placeholders.get("entity_id", "the requested image entity")
+        entity_id = placeholders.get("entity_id")
+        fix = _image_candidate_ids(snapshot, entity_id) if snapshot is not None and entity_id is not None else None
         return tool_error_envelope(
             key,
             placeholders,
-            message=f"Image entity '{entity_id}' is not visible to this LLM tool.",
+            message="Only snapshot-visible camera/image entities are capturable.",
+            fix=fix,
+        )
+    if key == UNSUPPORTED_IMAGE_DOMAIN:
+        entity_id = placeholders.get("entity_id")
+        fix = _image_candidate_ids(snapshot, entity_id) if snapshot is not None and entity_id is not None else None
+        return tool_error_envelope(
+            key,
+            placeholders,
+            message="Only camera.* and image.* entities can be captured.",
+            fix=fix,
         )
     message, fix = _error_guidance(key, placeholders)
     return tool_error_envelope(key, placeholders, message=message, fix=fix)
@@ -161,12 +198,12 @@ class GetCameraImageTool(llm.Tool):
         image_entity = cast(str, data["image_entity"])
         # The fresh snapshot is the authority for whether this live read is allowed.
         if image_entity not in snapshot.states:
-            return _envelope(ENTITY_NOT_VISIBLE, {"entity_id": image_entity})
+            return _envelope(ENTITY_NOT_VISIBLE, {"entity_id": image_entity}, snapshot)
 
         domain = image_entity.split(".", 1)[0]
         # Only camera/image domains have a supported frame acquisition path.
         if domain not in {"camera", "image"}:
-            return _envelope(UNSUPPORTED_IMAGE_DOMAIN, {"entity_id": image_entity})
+            return _envelope(UNSUPPORTED_IMAGE_DOMAIN, {"entity_id": image_entity}, snapshot)
 
         target_width = int(cast(float, data["target_width"]))
         caption = cast(str | None, data.get("question"))
