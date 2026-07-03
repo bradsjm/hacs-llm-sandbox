@@ -21,6 +21,7 @@ from custom_components.llm_sandbox.llm_api.prompts import (
     resolve_profile,
 )
 from custom_components.llm_sandbox.llm_api.tools import RECORDER_SELECTOR_FIELD_NAMES
+from custom_components.llm_sandbox.llm_api.tools.recorder import STATISTIC_VALUE_TYPES
 from custom_components.llm_sandbox.snapshot.models import HomeSnapshot
 
 from llm_sandbox_evals.schema import EvalCase, PromptCandidate, ToolSpec
@@ -121,7 +122,7 @@ def tool_specs(candidate: PromptCandidate) -> list[ToolSpec]:
         ToolSpec(
             name=TOOL_GET_STATISTICS,
             description=candidate.get_statistics_description,
-            parameters=_recorder_parameters(id_key="statistic_ids", include_period=True),
+            parameters=_recorder_parameters(id_key="statistic_ids", include_period=True, include_types=True),
         ),
         ToolSpec(
             name=TOOL_GET_LOGBOOK,
@@ -136,6 +137,7 @@ def _recorder_parameters(
     id_key: str,
     include_period: bool = False,
     include_attributes: bool = False,
+    include_types: bool = False,
 ) -> dict[str, object]:
     """Build the shared recorder JSON Schema accepted by native function calling."""
     properties: dict[str, object] = {
@@ -151,6 +153,9 @@ def _recorder_parameters(
     # Branch boundary: statistics adds one aggregation-period enum.
     if include_period:
         properties["period"] = {"type": "string", "enum": ["5minute", "hour", "day"]}
+    # Branch boundary: statistics can opt in to selected aggregate value fields.
+    if include_types:
+        properties["types"] = {"type": "array", "items": {"type": "string", "enum": list(STATISTIC_VALUE_TYPES)}}
     return {"type": "object", "properties": properties, "additionalProperties": False}
 
 

@@ -23,7 +23,7 @@ Once enabled, the assistant gains five tools it can call during a conversation:
 | Tool | What it's for |
 | --- | --- |
 | **`execute_home_code`** | The assistant writes and runs a short Python snippet to read and reason over your home — current states, the entity/device/area/floor/label registries, repairs, persistent notifications, and (secret-stripped) config entries. |
-| **`get_history`** | Recorded **state history** — how a value changed over time (e.g. a temperature curve). Up to 24 hours. |
+| **`get_history`** | Recorded **state history** — raw changes up to 24 hours, or server-side summaries such as transitions and time-in-state up to 30 days. |
 | **`get_statistics`** | Pre-aggregated **long-term statistics** (mean / min / max) over a period. Up to 30 days. |
 | **`get_logbook`** | The **activity timeline** — what happened and why (e.g. "did the front door open after midnight?"). Up to 24 hours. |
 | **`get_camera_image`** | Captures a **live frame** from a camera or image entity so a multimodal model can look at it ("what's on the front porch right now?"). |

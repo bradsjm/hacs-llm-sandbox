@@ -28,8 +28,8 @@ _STANDARD = PromptProfile(
         "## Choosing a recorder tool\n"
         '- get_logbook: "what happened with X", activity, events, a timeline '
         "(human-readable).\n"
-        "- get_history: how an entity's state value changed over time (raw state "
-        "rows).\n"
+        "- get_history: how an entity's state value changed over time (raw rows or "
+        "server-side summaries such as counts/durations).\n"
         "- get_statistics: pre-aggregated statistics over a period (mean/min/max). "
         "Not for current values or entity discovery; use execute_home_code for "
         "those.\n"

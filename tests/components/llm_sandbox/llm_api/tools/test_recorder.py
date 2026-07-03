@@ -94,8 +94,10 @@ async def test_history_includes_requested_attributes(
 async def test_statistics_returns_rows_for_visible_statistic(
     hass: HomeAssistant,
     recorder_entry: MockConfigEntry,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Statistics returns long-term statistic rows for a visible statistic ID."""
+    monkeypatch.setattr(recorder, "MAX_STATISTICS_ROWS", 2)
     er.async_get(hass).async_get_or_create(
         "sensor",
         "test",
@@ -104,7 +106,7 @@ async def test_statistics_returns_rows_for_visible_statistic(
     )
     hass.states.async_set("sensor.energy", "12", {"friendly_name": "Energy", "state_class": "total"})
     await hass.async_block_till_done()
-    start = dt_util.utcnow().replace(minute=0, second=0, microsecond=0) - timedelta(hours=2)
+    start = dt_util.utcnow().replace(minute=0, second=0, microsecond=0) - timedelta(hours=5)
     get_instance(hass).async_import_statistics(
         StatisticMetaData(
             has_mean=True,
@@ -116,7 +118,16 @@ async def test_statistics_returns_rows_for_visible_statistic(
             unit_class=None,
             unit_of_measurement="kWh",
         ),
-        [StatisticData(start=start, mean=12.0, min=12.0, max=12.0, sum=12.0)],
+        [
+            StatisticData(
+                start=start + timedelta(hours=index),
+                mean=12.0 + index,
+                min=12.0 + index,
+                max=12.0 + index,
+                sum=120.0 + index,
+            )
+            for index in range(4)
+        ],
         Statistics,
     )
     await get_instance(hass).async_block_till_done()
@@ -129,7 +140,32 @@ async def test_statistics_returns_rows_for_visible_statistic(
     assert isinstance(row, list)
     assert len(row) == 2
     assert isinstance(row[0], str)
-    assert isinstance(row[1], int | float)
+    assert isinstance(row[1], dict)
+    assert result["statistics"]["sensor.energy"]["fields"] == ["sum"]
+
+    sum_only = await _call_statistics(
+        hass,
+        recorder_entry,
+        {"statistic_ids": ["sensor.energy"], "period": "hour", "types": ["sum"]},
+    )
+    sum_rows = sum_only["statistics"]["sensor.energy"]["rows"]
+    assert sum_rows
+    assert all(list(row[1]) == ["sum"] for row in sum_rows)
+    assert sum_only["statistics"]["sensor.energy"]["fields"] == ["sum"]
+    cursor = cast(str, sum_only["next_cursor"])
+    older_sums = await _call_statistics(
+        hass,
+        recorder_entry,
+        {"statistic_ids": ["sensor.energy"], "cursor": cursor},
+    )
+    older_rows = older_sums["statistics"]["sensor.energy"]["rows"]
+    assert older_rows
+    assert all(list(row[1]) == ["sum"] for row in older_rows)
+    assert older_sums["statistics"]["sensor.energy"]["fields"] == ["sum"]
+
+    invalid = await _call_statistics(hass, recorder_entry, {"statistic_ids": ["sensor.energy"], "types": ["bogus"]})
+    assert invalid["status"] == "error"
+    assert invalid["error"]["key"] == "invalid_tool_input"
 
 
 async def test_logbook_returns_entries_for_visible_entity(

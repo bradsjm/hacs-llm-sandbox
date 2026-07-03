@@ -23,6 +23,7 @@ from ...const import (
     DEFAULT_HISTORY_WINDOW_HOURS,
     DEFAULT_LOGBOOK_WINDOW_HOURS,
     DEFAULT_STATISTICS_WINDOW_HOURS,
+    MAX_HISTORY_AGGREGATE_LOOKBACK_HOURS,
     MAX_HISTORY_ATTRIBUTES,
     MAX_HISTORY_STATES,
     MAX_LOGBOOK_ENTRIES,
@@ -42,6 +43,7 @@ from ..errors import RecoverableToolError, tool_error_envelope, tool_error_from_
 from ..executor_support import json_safe
 from ..prompts import build_get_history_description, build_get_logbook_description, build_get_statistics_description
 from ..resolution import _DISCOVERY_LIMIT, candidates_for_domain, resolve_target_entity
+from ._aggregates import AGGREGATORS, AggregateFilters, AggregateMode, HistoryRow
 from ._cursor import _LOGBOOK_CURSOR_KEY, INVALID_CURSOR, Cursor, decode_cursor, encode_cursor, paginate_stream
 from ._support import _require_loaded_entry, _require_loaded_entry_error
 
@@ -49,6 +51,13 @@ RECORDER_UNAVAILABLE = "recorder_unavailable"
 ENTITY_NOT_VISIBLE = "entity_not_visible"
 TIME_WINDOW_TOO_LARGE = "time_window_too_large"
 QUERY_FAILED = "query_failed"
+type StatisticValueType = Literal["mean", "min", "max", "state", "sum"]
+type StatisticQueryType = Literal["change", "last_reset", "max", "mean", "min", "state", "sum"]
+
+STATISTIC_VALUE_TYPES: tuple[StatisticValueType, ...] = ("mean", "min", "max", "state", "sum")
+
+_DEFAULT_STATISTIC_VALUE_PRIORITY: tuple[StatisticValueType, ...] = ("state", "mean", "sum", "min", "max")
+_ALL_STAT_QUERY_TYPES: frozenset[StatisticQueryType] = frozenset({"last_reset", "max", "mean", "min", "state", "sum"})
 
 # Relative window size in hours, accepted by every recorder tool as an
 # alternative to absolute ISO start/end (the sandbox forbids timedelta math).
@@ -387,25 +396,40 @@ def _state_row_to_dict(
 
 
 def _row_timestamp(row: list[object]) -> str:
-    """Return the ISO timestamp in a compact ``[t, value]`` row."""
+    """Return the ISO timestamp in a compact timestamp-first row."""
     return str(row[0])
 
 
-def _statistic_row_to_dict(row: dict[str, object]) -> list[object]:
-    """Convert one recorder statistic row to a compact timestamp/value array."""
+def _statistic_row_to_dict(
+    row: dict[str, object], requested_types: tuple[StatisticValueType, ...] | None = None
+) -> list[object]:
+    """Convert one recorder statistic row to a compact timestamp/keyed-values array."""
     shaped = dict(row)
     timestamp = shaped.get("start") or shaped.get("end") or shaped.get("last_reset")
     if isinstance(timestamp, datetime):
         timestamp = dt_util.as_utc(timestamp).isoformat()
     elif isinstance(timestamp, int | float):
         timestamp = datetime.fromtimestamp(timestamp, UTC).isoformat()
-    value = shaped.get("state")
-    if value is None:
-        for key in ("mean", "sum", "min", "max"):
-            value = shaped.get(key)
-            if value is not None:
-                break
-    return [str(timestamp), value]
+    value_keys = requested_types or _DEFAULT_STATISTIC_VALUE_PRIORITY
+    values: dict[str, object] = {}
+    for key in value_keys:
+        value = shaped.get(key)
+        if value is None:
+            continue
+        values[key] = value
+        if requested_types is None:
+            break
+    return [str(timestamp), values]
+
+
+def _statistic_fields(rows: list[list[object]]) -> list[str]:
+    """Return sorted statistic value keys present in one shaped page."""
+    fields: set[str] = set()
+    for row in rows:
+        values = row[1]
+        if isinstance(values, Mapping):
+            fields.update(str(key) for key in values)
+    return sorted(fields)
 
 
 def _logbook_when(entry: dict[str, object]) -> str:
@@ -443,6 +467,18 @@ class GetHistoryTool(_RecorderTool):
                 ),
             ): vol.All(cv.ensure_list, [str], vol.Length(min=1, max=MAX_HISTORY_ATTRIBUTES)),
             vol.Optional(
+                "aggregate",
+                description="Optional server-side summary mode instead of raw rows.",
+            ): vol.In(tuple(AGGREGATORS)),
+            vol.Optional(
+                "from_state",
+                description="Optional count_transitions filter for the previous state.",
+            ): str,
+            vol.Optional(
+                "to_state",
+                description="Optional count_transitions filter for the next state.",
+            ): str,
+            vol.Optional(
                 "cursor",
                 description=(
                     "Opaque cursor from a prior next_cursor; pass it to fetch the next older page. "
@@ -463,6 +499,10 @@ class GetHistoryTool(_RecorderTool):
     ) -> JsonObjectType:
         entity_ids = resolve_entity_ids(snapshot, data, "entity_ids")
         requested_attributes = cast(list[str] | None, data.get("attributes"))
+        aggregate = cast(AggregateMode | None, data.get("aggregate"))
+        if aggregate is not None:
+            return await _aggregate_history(hass, deadline, entity_ids, data, aggregate)
+
         if (cursor_in := data.get("cursor")) is not None:
             # Cursor window wins while paging so the continuation is stable.
             cursor = decode_cursor(cursor_in)
@@ -493,7 +533,6 @@ class GetHistoryTool(_RecorderTool):
                 compressed_state_format=False,
             ),
         )
-
         budget = max(1, MAX_HISTORY_STATES // len(entity_ids))
         entities: dict[str, dict[str, object]] = {}
         next_cutoffs: dict[str, str] = {}
@@ -530,6 +569,62 @@ class GetHistoryTool(_RecorderTool):
         )
 
 
+async def _aggregate_history(
+    hass: HomeAssistant,
+    deadline: float,
+    entity_ids: list[str],
+    data: dict[str, object],
+    aggregate: AggregateMode,
+) -> JsonObjectType:
+    """Return a compact server-side history summary for aggregate mode."""
+    if data.get("attributes") is not None:
+        raise RecoverableToolError("invalid_tool_input", {"error": "aggregate cannot be combined with attributes"})
+    if data.get("cursor") is not None:
+        raise RecoverableToolError("invalid_tool_input", {"error": "aggregate cannot be combined with cursor"})
+
+    start, end = _clamp_window(
+        cast(datetime | None, data.get("start")),
+        cast(datetime | None, data.get("end")),
+        hours=cast(float | None, data.get("hours")),
+        default_hours=DEFAULT_HISTORY_WINDOW_HOURS,
+        max_hours=MAX_HISTORY_AGGREGATE_LOOKBACK_HOURS,
+    )
+    filters = AggregateFilters(
+        from_state=cast(str | None, data.get("from_state")),
+        to_state=cast(str | None, data.get("to_state")),
+    )
+
+    def _fetch_and_aggregate() -> dict[str, dict[str, object]]:
+        result = history.get_significant_states(
+            hass=hass,
+            start_time=start,
+            end_time=end,
+            entity_ids=entity_ids,
+            filters=None,
+            include_start_time_state=True,
+            significant_changes_only=True,
+            minimal_response=False,
+            no_attributes=False,
+            compressed_state_format=False,
+        )
+        aggregator = AGGREGATORS[aggregate]
+        return {
+            entity_id: aggregator(cast(list[HistoryRow], list(result.get(entity_id, ()))), start, end, filters)
+            for entity_id in entity_ids
+        }
+
+    summary = await _run_query(hass, deadline, _fetch_and_aggregate)
+    payload: dict[str, object] = {
+        "window": {"start": start.isoformat(), "end": end.isoformat()},
+        "mode": aggregate,
+        "summary": summary,
+    }
+    return cast(
+        JsonObjectType,
+        json_safe(payload),
+    )
+
+
 @final
 class GetStatisticsTool(_RecorderTool):
     """Return long-term recorder statistics for visible statistic IDs."""
@@ -556,6 +651,14 @@ class GetStatisticsTool(_RecorderTool):
                 ("5minute", "hour", "day")
             ),
             vol.Optional(
+                "types",
+                description="Optional statistic value fields to include per row.",
+            ): vol.All(
+                cv.ensure_list,
+                [vol.In(STATISTIC_VALUE_TYPES)],
+                vol.Length(min=1, max=len(STATISTIC_VALUE_TYPES)),
+            ),
+            vol.Optional(
                 "cursor",
                 description=(
                     "Opaque cursor from a prior next_cursor; pass it to fetch the next older page. "
@@ -576,14 +679,23 @@ class GetStatisticsTool(_RecorderTool):
     ) -> JsonObjectType:
         statistic_ids = resolve_entity_ids(snapshot, data, "statistic_ids")
         if (cursor_in := data.get("cursor")) is not None:
-            # Cursor carries period so bucket granularity remains consistent.
+            # Cursor carries period and selected fields so pagination stays consistent.
             cursor = decode_cursor(cursor_in)
             start, end = cursor.start, cursor.end
             if cursor.period not in (None, "5minute", "hour", "day"):
                 raise RecoverableToolError(INVALID_CURSOR, {})
             period = cast(Literal["5minute", "hour", "day"], cursor.period or "hour")
+            requested_types = cast(tuple[StatisticValueType, ...] | None, cursor.statistic_types)
+            if requested_types is not None and (
+                not requested_types or set(requested_types) - set(STATISTIC_VALUE_TYPES)
+            ):
+                raise RecoverableToolError(INVALID_CURSOR, {})
         else:
             period = cast(Literal["5minute", "hour", "day"], data["period"])
+            requested_types = cast(
+                tuple[StatisticValueType, ...] | None,
+                tuple(cast(list[str] | None, data.get("types")) or ()) or None,
+            )
             start, end = _clamp_window(
                 cast(datetime | None, data.get("start")),
                 cast(datetime | None, data.get("end")),
@@ -591,7 +703,12 @@ class GetStatisticsTool(_RecorderTool):
                 default_hours=DEFAULT_STATISTICS_WINDOW_HOURS,
                 max_hours=MAX_STATISTICS_LOOKBACK_HOURS,
             )
-            cursor = Cursor(start=start, end=end, cutoffs={}, period=period)
+            cursor = Cursor(start=start, end=end, cutoffs={}, period=period, statistic_types=requested_types)
+        query_types: set[StatisticQueryType] = (
+            set(cast(tuple[StatisticQueryType, ...], requested_types))
+            if requested_types is not None
+            else set(_ALL_STAT_QUERY_TYPES)
+        )
         result = await _run_query(
             hass,
             deadline,
@@ -603,7 +720,7 @@ class GetStatisticsTool(_RecorderTool):
                 statistic_ids=set(statistic_ids),
                 period=period,
                 units=None,
-                types={"last_reset", "max", "mean", "min", "state", "sum"},
+                types=query_types,
             ),
         )
 
@@ -611,7 +728,7 @@ class GetStatisticsTool(_RecorderTool):
         shaped_statistics: dict[str, dict[str, object]] = {}
         next_cutoffs: dict[str, str] = {}
         for statistic_id, rows in result.items():
-            shaped_rows = [_statistic_row_to_dict(cast(dict[str, object], row)) for row in rows]
+            shaped_rows = [_statistic_row_to_dict(cast(dict[str, object], row), requested_types) for row in rows]
             # Per-statistic cutoffs let multiple statistics page independently.
             page, next_cutoff = paginate_stream(
                 shaped_rows,
@@ -619,7 +736,7 @@ class GetStatisticsTool(_RecorderTool):
                 budget=budget,
                 cutoff_iso=cursor.cutoffs.get(statistic_id),
             )
-            shaped_statistics[statistic_id] = {"rows": page}
+            shaped_statistics[statistic_id] = {"rows": page, "fields": _statistic_fields(page)}
             if next_cutoff is not None:
                 next_cutoffs[statistic_id] = next_cutoff
 
@@ -629,7 +746,9 @@ class GetStatisticsTool(_RecorderTool):
             "statistics": shaped_statistics,
         }
         if next_cutoffs:
-            payload["next_cursor"] = encode_cursor(Cursor(start=start, end=end, cutoffs=next_cutoffs, period=period))
+            payload["next_cursor"] = encode_cursor(
+                Cursor(start=start, end=end, cutoffs=next_cutoffs, period=period, statistic_types=requested_types)
+            )
 
         return cast(
             JsonObjectType,

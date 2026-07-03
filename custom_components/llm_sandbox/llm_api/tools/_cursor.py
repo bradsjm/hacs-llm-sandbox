@@ -34,6 +34,7 @@ class Cursor:
     end: datetime
     cutoffs: dict[str, str]
     period: str | None = None
+    statistic_types: tuple[str, ...] | None = None
 
 
 def encode_cursor(cursor: Cursor) -> str:
@@ -46,6 +47,8 @@ def encode_cursor(cursor: Cursor) -> str:
     }
     if cursor.period is not None:
         payload["p"] = cursor.period
+    if cursor.statistic_types is not None:
+        payload["st"] = list(cursor.statistic_types)
     return base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")).decode(
         "ascii"
     )
@@ -72,10 +75,19 @@ def decode_cursor(value: object) -> Cursor:
         cutoffs = {str(k): str(v) for k, v in raw_cutoffs.items()}
         raw_period = obj.get("p")
         period = str(raw_period) if raw_period is not None else None
+        raw_statistic_types = obj.get("st")
+        statistic_types = None
+        if raw_statistic_types is not None:
+            # Cursor-carried statistic field projection must stay a bounded string list.
+            if not isinstance(raw_statistic_types, list) or not all(
+                isinstance(item, str) for item in raw_statistic_types
+            ):
+                raise ValueError("invalid cursor statistic types")
+            statistic_types = tuple(raw_statistic_types)
     except ValueError, KeyError, TypeError, binascii.Error:
         # Fail closed: any decode/version/shape problem restarts the sequence.
         raise RecoverableToolError(INVALID_CURSOR, {}) from None
-    return Cursor(start=start, end=end, cutoffs=cutoffs, period=period)
+    return Cursor(start=start, end=end, cutoffs=cutoffs, period=period, statistic_types=statistic_types)
 
 
 def paginate_stream[T](

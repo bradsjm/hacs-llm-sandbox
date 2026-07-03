@@ -22,6 +22,7 @@ from custom_components.llm_sandbox.llm_api.tools import (
     recorder_error_envelope,
     resolve_entity_ids,
 )
+from custom_components.llm_sandbox.llm_api.tools.recorder import STATISTIC_VALUE_TYPES
 from custom_components.llm_sandbox.runtime import SandboxSettings
 from custom_components.llm_sandbox.snapshot import finalize_snapshot
 from custom_components.llm_sandbox.snapshot.models import HomeSnapshot, SnapshotScope
@@ -35,6 +36,8 @@ EVAL_SCOPE: SnapshotScope = SnapshotScope(
     exclude_hidden=True,
     excluded_entity_categories=frozenset({"config", "diagnostic"}),
 )
+
+_DEFAULT_STATISTIC_VALUE_PRIORITY = ("state", "mean", "sum", "min", "max")
 
 
 def apply_scope(
@@ -239,11 +242,12 @@ def _run_statistics(tool_args: dict[str, object], case: EvalCase, snapshot: Home
     start = _optional_string(tool_args.get("start"))
     end = _optional_string(tool_args.get("end"))
     period = str(tool_args.get("period", "hour"))
+    requested_types = tuple(cast(list[str] | None, tool_args.get("types")) or ()) or None
 
     fixture = get_home(case.home)
     statistics = _recorder_section(fixture, "statistics")
     rows = {
-        statistic_id: {"rows": [_statistics_row(row) for row in statistics.get(statistic_id, [])]}
+        statistic_id: _statistics_payload(statistics.get(statistic_id, []), requested_types)
         for statistic_id in statistic_ids
     }
     return ToolOutcome(
@@ -339,16 +343,28 @@ def _history_row(row: Mapping[str, object]) -> tuple[list[object], str | None]:
     return [str(timestamp), row.get("state")], str(unit) if unit is not None else None
 
 
-def _statistics_row(row: Mapping[str, object]) -> list[object]:
-    """Convert a fixture statistics row to the production ``[time, value]`` array."""
+def _statistics_payload(rows: list[dict[str, object]], requested_types: tuple[str, ...] | None) -> dict[str, object]:
+    """Build the production statistics payload for one statistic id."""
+    shaped_rows = [_statistics_row(row, requested_types) for row in rows]
+    fields = sorted({key for row in shaped_rows if isinstance(row[1], Mapping) for key in row[1]})
+    return {"rows": shaped_rows, "fields": fields}
+
+
+def _statistics_row(row: Mapping[str, object], requested_types: tuple[str, ...] | None) -> list[object]:
+    """Convert a fixture statistics row to the production ``[time, {field: value}]`` array."""
     timestamp = row.get("start") or row.get("end") or row.get("last_reset")
-    value = row.get("state")
-    if value is None:
-        for key in ("mean", "sum", "min", "max"):
-            value = row.get(key)
-            if value is not None:
-                break
-    return [str(timestamp), value]
+    value_keys = requested_types or _DEFAULT_STATISTIC_VALUE_PRIORITY
+    values: dict[str, object] = {}
+    for key in value_keys:
+        if key not in STATISTIC_VALUE_TYPES:
+            continue
+        value = row.get(key)
+        if value is None:
+            continue
+        values[key] = value
+        if requested_types is None:
+            break
+    return [str(timestamp), values]
 
 
 def _logbook_entry(entity_id: str, row: Mapping[str, object]) -> dict[str, object]:
