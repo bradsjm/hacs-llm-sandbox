@@ -78,10 +78,7 @@ def build_execute_home_code_description() -> str:
         "Success returns {execution:{status:'ok'}, output:<data>} with printed only when print() emitted lines. "
         "If output is empty because a literal entity id is missing, note gives one imperative retry hint naming "
         "the missing id and a visible replacement. Errors return {execution:{status:'code_error'|'helper_error'|"
-        "'setup_error', kind?, message, fix?}, output:null}; message is the specific failure and fix lists "
-        "concrete candidate globals, attributes, services, domains, or entity ids to correct in one retry. "
-        "actions appears only when a service call was made and contains compact records "
-        "{service, target, status, resolved_from?, error?}."
+        "'setup_error', kind?, message, fix?}, output:null}; fix, when present, lists concrete retry candidates."
     )
 
 

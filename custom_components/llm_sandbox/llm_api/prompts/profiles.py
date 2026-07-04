@@ -164,16 +164,14 @@ _STANDARD = PromptProfile(
         "instead of importing helpers.\n"
         "- Builtins available: len, sum, min, max, sorted, dict, list, set, tuple, "
         "enumerate, zip, round, range, abs, any, all, map, filter, int, float, str, "
-        "bool. map()/filter() are rewritten to list comprehensions automatically.\n"
+        "bool. map()/filter() return lists.\n"
         "- Imports limited to json, math, re. Other modules (collections, "
         "statistics, itertools) are not available; use built-ins instead (e.g. "
         "sum()/len() for an average, a dict loop for counting).\n"
         "- No filesystem, network, OS/process, or pathlib/open calls.\n"
         "- dir, vars, setattr, delattr are not available.\n"
-        "- For time since a state changed, subtract numeric timestamps: "
-        'datetime.now().timestamp - hass.states["<entity_id>"].last_changed_timestamp '
-        "(seconds, float). State timestamps are also available as ISO strings "
-        "(last_changed/last_updated/last_reported) for datetime.fromisoformat().\n"
+        "- For durations, subtract numeric timestamps, e.g. "
+        'datetime.now().timestamp - hass.states["<entity_id>"].last_changed_timestamp.\n'
         "- The live hass object, event bus, config, auth, filesystem, network, and "
         "OS/process APIs are not exposed.\n"
     ),
