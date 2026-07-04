@@ -9,6 +9,7 @@ from ..runtime import SandboxSettings
 from ..snapshot.models import HomeSnapshot
 from ..types import ProposedAction
 from .executor_support import ExecutionState
+from .resolution_memory import ResolutionMemory
 
 
 class ServiceInvoker(Protocol):
@@ -33,6 +34,7 @@ class RuntimeContext:
     settings: SandboxSettings
     invoke: ServiceInvoker
     deadline: float = math.inf
+    memory: ResolutionMemory | None = None
 
 
 _ACTIVE_RUNTIME: ContextVar[RuntimeContext | None] = ContextVar("llm_sandbox_active_runtime", default=None)

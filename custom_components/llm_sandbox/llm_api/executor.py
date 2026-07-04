@@ -33,6 +33,7 @@ from .legacy_notes import (
     _referenced_visible_state_id,
     compute_legacy_note,
 )
+from .literal_resolution import substitute_remembered_literals
 from .runtime import RuntimeContext, activate_runtime, clear_runtime
 
 MAX_MONTY_CODE_CHARS = 8000
@@ -160,7 +161,8 @@ async def async_execute_home_code(
     # normalization resolves safe reflection syntax, then await normalization,
     # then last-expression promotion before append_result_expression checks
     # explicit ``result``.
-    datetime_code, datetime_labels = normalize_datetime_imports(code)
+    resolved_code, resolutions = substitute_remembered_literals(code, snapshot, runtime.memory)
+    datetime_code, datetime_labels = normalize_datetime_imports(resolved_code)
     builtin_code, builtin_labels = normalize_builtins(datetime_code)
     normalized_code, await_labels = await_normalization.normalize_awaits(builtin_code, DATACLASS_REGISTRY)
     promoted_code, promote_labels = result_binding.promote_last_expression_to_result(normalized_code)
@@ -224,10 +226,10 @@ async def async_execute_home_code(
                 return helper_error_payload_for_state(candidate, runtime.state)
         specific = underlying_exception(err)
         refined_kind, refined_message, available_attributes = refine_code_error(
-            specific.__class__.__name__, str(specific) or str(err), code
+            specific.__class__.__name__, str(specific) or str(err), resolved_code
         )
         clean_message = _strip_monty_diagnostic(refined_message)
-        clean_message, fix = _read_path_fix(refined_kind, clean_message, code, snapshot, available_attributes)
+        clean_message, fix = _read_path_fix(refined_kind, clean_message, resolved_code, snapshot, available_attributes)
         return code_error_payload_for_state(
             kind=refined_kind,
             message=clean_message,
@@ -243,9 +245,13 @@ async def async_execute_home_code(
     result = json_safe(output)
     execution_payload: dict[str, object] = {"status": "ok"}
     payload: dict[str, object] = {"execution": execution_payload, "output": result}
+    if resolutions:
+        payload["resolutions"] = [{"requested": item.requested, "applied": item.applied} for item in resolutions]
     # Success-side notes are selected by an ordered static-analysis registry so
     # future legacy HA patterns can be added without growing executor branches.
-    if note := compute_legacy_note(LegacyNoteContext(code=code, snapshot=snapshot, result=result)):
+    if note := compute_legacy_note(
+        LegacyNoteContext(code=resolved_code, snapshot=snapshot, result=result, memory=runtime.memory)
+    ):
         payload["note"] = note
     if runtime.state.printed:
         payload["printed"] = list(runtime.state.printed)

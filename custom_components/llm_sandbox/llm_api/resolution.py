@@ -4,14 +4,17 @@ Exact entity-id matches win. Otherwise, target resolution uses deterministic
 same-domain token containment (one token set is a subset of the other) over
 snapshot-derived ``object_id`` and ``name`` tokens. A unique match
 auto-resolves; ambiguous matches return candidates so the caller can
-self-describe available targets. This module never touches live Home Assistant
-objects and performs no I/O.
+self-describe available targets. Optional conversation memory is advisory only:
+it can reorder or break ties only for entity ids still present in the fresh
+snapshot candidate set. This module never touches live Home Assistant objects
+and performs no I/O.
 """
 
 import re
 from dataclasses import dataclass
 
 from ..snapshot.models import HomeSnapshot
+from .resolution_memory import ResolutionMemory
 from .target_matching import entities_for_service
 
 _DISCOVERY_LIMIT = 8
@@ -56,6 +59,8 @@ def resolve_target_entity(
     snapshot: HomeSnapshot,
     requested_entity_id: str,
     domain: str,
+    *,
+    memory: ResolutionMemory | None = None,
 ) -> TargetResolution:
     """Resolve by exact id or same-domain token containment over visible states."""
     # Exact visible entity ids are authoritative and bypass fuzzy matching.
@@ -99,6 +104,10 @@ def resolve_target_entity(
         )
     )
 
+    remembered = memory.lookup(requested_entity_id) if memory is not None else None
+    if remembered is not None and remembered in {candidate.entity_id for candidate in candidates}:
+        return TargetResolution(resolved=remembered)
+
     # A unique containment match is safe to auto-resolve deterministically.
     if len(candidates) == 1:
         return TargetResolution(resolved=candidates[0].entity_id)
@@ -111,8 +120,11 @@ def candidates_for_domain(
     snapshot: HomeSnapshot,
     domain: str,
     limit: int = _DISCOVERY_LIMIT,
+    *,
+    memory: ResolutionMemory | None = None,
 ) -> tuple[CandidateTarget, ...]:
     """Return visible candidate targets for a domain, ordered for discovery hints."""
+    remembered_rank = _remembered_rank(snapshot, domain, memory)
     candidates = sorted(
         (
             CandidateTarget(
@@ -123,7 +135,11 @@ def candidates_for_domain(
             for state in snapshot.states.values()
             if state.domain == domain
         ),
-        key=lambda candidate: (candidate.object_id, candidate.entity_id),
+        key=lambda candidate: (
+            remembered_rank.get(candidate.entity_id, len(remembered_rank)),
+            candidate.object_id,
+            candidate.entity_id,
+        ),
     )
     return tuple(candidates[:limit])
 
@@ -144,6 +160,9 @@ def rank_candidates_for_service(
     candidates: tuple[CandidateTarget, ...],
     domain: str,
     service: str,
+    *,
+    requested: str | None = None,
+    memory: ResolutionMemory | None = None,
 ) -> tuple[CandidateTarget, ...]:
     """Order candidates so entities the service targets sort first.
 
@@ -153,13 +172,20 @@ def rank_candidates_for_service(
     input unchanged (already deterministic) when the service has no target
     metadata, preserving HA as the final arbiter.
     """
-    matched = entities_for_service(snapshot, domain, service)
-    if not matched:
+    matched = set(entities_for_service(snapshot, domain, service))
+    remembered = memory.lookup(requested) if memory is not None and requested is not None else None
+    if remembered is not None and remembered not in {candidate.entity_id for candidate in candidates}:
+        remembered = None
+    if not matched and remembered is None:
         return candidates
     return tuple(
         sorted(
             candidates,
-            key=lambda candidate: (candidate.entity_id not in matched, candidate.entity_id),
+            key=lambda candidate: (
+                candidate.entity_id != remembered,
+                candidate.entity_id not in matched,
+                candidate.entity_id,
+            ),
         )
     )
 
@@ -167,3 +193,20 @@ def rank_candidates_for_service(
 def _tokens(text: str) -> frozenset[str]:
     """Return lowercase alphanumeric tokens from text."""
     return frozenset(re.findall(r"[a-z0-9]+", text.lower()))
+
+
+def _remembered_rank(
+    snapshot: HomeSnapshot,
+    domain: str,
+    memory: ResolutionMemory | None,
+) -> dict[str, int]:
+    """Return fresh-snapshot-valid remembered entity ordering for ``domain``."""
+    if memory is None:
+        return {}
+    ranked: dict[str, int] = {}
+    for entity_id in memory.remembered_entity_ids():
+        state = snapshot.states.get(entity_id)
+        if state is None or state.domain != domain or entity_id in ranked:
+            continue
+        ranked[entity_id] = len(ranked)
+    return ranked

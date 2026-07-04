@@ -835,6 +835,7 @@ class SafeServiceRegistry:
         supported_values: list[str] = []
         supported_keys: list[str] = []
         adjustments: list[dict[str, object]] = []
+        memory = require_runtime(None).memory
 
         if "entity_id" in target:
             supported_keys.append("entity_id")
@@ -844,18 +845,24 @@ class SafeServiceRegistry:
                     entity_ids.add(entity_id)
                     continue
                 resolve_domain = entity_id.split(".", 1)[0] if "." in entity_id else domain
-                outcome = resolve_target_entity(snapshot, entity_id, resolve_domain)
+                outcome = resolve_target_entity(snapshot, entity_id, resolve_domain, memory=memory)
                 if outcome.is_resolved:
                     resolved_entity_id = cast(str, outcome.resolved)
                     entity_ids.add(resolved_entity_id)
+                    if memory is not None and resolved_entity_id != entity_id:
+                        # Persist only after the fresh snapshot resolver chose a
+                        # visible entity id for this requested target literal.
+                        memory.record(entity_id, resolved_entity_id)
                     adjustments.append(_target_entity_resolved_adjustment(entity_id, resolved_entity_id))
                 else:
                     candidates: tuple[CandidateTarget, ...] = outcome.candidates or candidates_for_domain(
-                        snapshot, resolve_domain, limit=_DISCOVERY_LIMIT + 1
+                        snapshot, resolve_domain, limit=_DISCOVERY_LIMIT + 1, memory=memory
                     )
                     if service is not None:
                         # Target-aware ranking: entities the service accepts sort first.
-                        candidates = rank_candidates_for_service(snapshot, candidates, resolve_domain, service)
+                        candidates = rank_candidates_for_service(
+                            snapshot, candidates, resolve_domain, service, requested=entity_id, memory=memory
+                        )
                     fix = _candidate_ids(candidates)
                     return _UnresolvedTarget(
                         requested=entity_id,
@@ -876,9 +883,11 @@ class SafeServiceRegistry:
         if entity_ids:
             return _ResolvedTarget({"entity_id": sorted(entity_ids)}, tuple(adjustments))
         if supported_values:
-            fallback_candidates = candidates_for_domain(snapshot, domain, limit=_DISCOVERY_LIMIT + 1)
+            fallback_candidates = candidates_for_domain(snapshot, domain, limit=_DISCOVERY_LIMIT + 1, memory=memory)
             if service is not None:
-                fallback_candidates = rank_candidates_for_service(snapshot, fallback_candidates, domain, service)
+                fallback_candidates = rank_candidates_for_service(
+                    snapshot, fallback_candidates, domain, service, requested=supported_values[0], memory=memory
+                )
             fallback_fix = _candidate_ids(fallback_candidates)
             return _UnresolvedTarget(
                 requested=supported_values[0],

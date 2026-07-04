@@ -79,7 +79,8 @@ async def _execute(
     if setup_error is not None:
         key, placeholders = setup_error
         return cast(JsonObjectType, setup_error_payload(key, placeholders))
-    settings = _require_sandbox_runtime(hass, entry_id).settings
+    sandbox_runtime = _require_sandbox_runtime(hass, entry_id)
+    settings = sandbox_runtime.settings
     code = cast(str, data["code"])
     deadline = time.monotonic() + settings.execution_timeout_seconds
 
@@ -123,6 +124,7 @@ async def _execute(
         settings=settings,
         invoke=_invoke,
         deadline=deadline,
+        memory=sandbox_runtime.memory_store.for_context(llm_context),
     )
 
     result = await async_execute_home_code(

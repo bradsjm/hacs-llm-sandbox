@@ -11,6 +11,7 @@ from dataclasses import dataclass
 
 from ..snapshot.models import HomeSnapshot
 from .resolution import _DISCOVERY_LIMIT, bounded_strings, candidates_for_domain, resolve_target_entity
+from .resolution_memory import ResolutionMemory
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,6 +21,7 @@ class LegacyNoteContext:
     code: str
     snapshot: HomeSnapshot
     result: object
+    memory: ResolutionMemory | None = None
 
 
 type LegacyNoteChecker = Callable[[LegacyNoteContext], str | None]
@@ -50,7 +52,7 @@ def _missing_state_checker(ctx: LegacyNoteContext) -> str | None:
     """Preserve the existing empty-result note for literal missing state ids."""
     referenced_missing = _referenced_missing(ctx.code, ctx.snapshot)
     if referenced_missing and _is_empty_output(ctx.result):
-        return _missing_state_note(ctx.snapshot, referenced_missing[0])
+        return _missing_state_note(ctx.snapshot, referenced_missing[0], ctx.memory)
     return None
 
 
@@ -168,19 +170,34 @@ def _literal_str(node: ast.AST) -> object:
     return object()  # non-string / non-literal: never matches an entity id
 
 
-def _entity_candidates(snapshot: HomeSnapshot, requested_entity_id: str) -> list[str]:
+def _entity_candidates(
+    snapshot: HomeSnapshot,
+    requested_entity_id: str,
+    *,
+    memory: ResolutionMemory | None = None,
+) -> list[str]:
     """Return token-ranked visible entity candidates for a missing state id."""
     domain = requested_entity_id.split(".", 1)[0] if "." in requested_entity_id else requested_entity_id
-    outcome = resolve_target_entity(snapshot, requested_entity_id, domain)
+    outcome = resolve_target_entity(snapshot, requested_entity_id, domain, memory=memory)
     if outcome.resolved is not None:
         return [outcome.resolved]
-    candidates = outcome.candidates or candidates_for_domain(snapshot, domain, limit=_DISCOVERY_LIMIT + 1)
+    candidates = outcome.candidates or candidates_for_domain(
+        snapshot, domain, limit=_DISCOVERY_LIMIT + 1, memory=memory
+    )
     return bounded_strings([candidate.entity_id for candidate in candidates])
 
 
-def _missing_state_note(snapshot: HomeSnapshot, requested_entity_id: str) -> str:
+def _missing_state_note(
+    snapshot: HomeSnapshot,
+    requested_entity_id: str,
+    memory: ResolutionMemory | None,
+) -> str:
     """Return an imperative empty-result repair note for a missing state id."""
-    candidates = _entity_candidates(snapshot, requested_entity_id)
+    candidates = _entity_candidates(snapshot, requested_entity_id, memory=memory)
     if candidates and candidates[0] != "...":
+        if memory is not None:
+            # Remember the offered visible fix so a repeated literal can be
+            # substituted during the next execution against a fresh snapshot.
+            memory.record(requested_entity_id, candidates[0])
         return f"No data: '{requested_entity_id}' does not exist. Use '{candidates[0]}' and re-run."
     return f"No data: '{requested_entity_id}' does not exist and no visible replacement was found."

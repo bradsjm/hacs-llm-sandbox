@@ -1,7 +1,7 @@
 """Typed runtime data for LLM Sandbox config entries."""
 
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import cast
 
 from homeassistant.config_entries import ConfigEntry
@@ -28,6 +28,7 @@ from .const import (
     DEFAULT_RESTRICT_TO_ASSIST_EXPOSED,
 )
 from .llm_api.prompts import PromptProfile, resolve_profile
+from .llm_api.resolution_memory import ResolutionMemoryStore
 from .snapshot import SnapshotScope
 
 type SandboxConfigEntry = ConfigEntry[SandboxRuntime]
@@ -97,8 +98,10 @@ class SandboxRuntime:
     """Per-entry runtime data stored on the config entry.
 
     The LLM Sandbox integration builds a fresh snapshot per tool call, so the
-    only per-entry state is the resolved settings; there is no background
-    manager, coordinator, or scheduler.
+    only cross-call state is the resolved settings plus a small advisory
+    conversation resolution cache; there is no background manager, coordinator,
+    or scheduler.
     """
 
     settings: SandboxSettings
+    memory_store: ResolutionMemoryStore = field(default_factory=ResolutionMemoryStore)

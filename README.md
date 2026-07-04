@@ -100,7 +100,7 @@ The safety model rests on two ideas: a **frozen snapshot** and an **isolated san
 
 3. **Reads are always allowed; control is gated.** Reading state and history works out of the box. Calling services (turning things on/off) is **off by default**. When you enable it, every single call is re-checked against that request's snapshot: the domain must be allowed, the target must be visible, and it must fit within the call budget. Calls run through a private path that never hands the live Home Assistant object to the sandbox.
 
-4. **A forgiveness layer fixes common mistakes.** The assistant's code passes through a normalization step that silently repairs harmless variations — a missing `await`, an imported `datetime`, a forgotten `result =` — so the assistant succeeds on the first try instead of burning retries (and tokens) on trivial errors.
+4. **A forgiveness layer fixes common mistakes.** The assistant's code passes through a normalization step that silently repairs harmless variations — a missing `await`, an imported `datetime`, a forgotten `result =` — so the assistant succeeds on the first try instead of burning retries (and tokens) on trivial errors. When the tool has already offered or applied an entity-id fix in the same conversation, it can also prefer that still-visible entity in later resolution and transparently report remembered literal rewrites in `resolutions`.
 
 ## Things to know before you install
 
