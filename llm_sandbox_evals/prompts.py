@@ -17,6 +17,7 @@ from custom_components.llm_sandbox.llm_api.prompts import (
     build_get_logbook_description,
     build_get_statistics_description,
     compose_system_prompt,
+    render_home_inventory,
     render_request_location,
     resolve_profile,
 )
@@ -87,7 +88,15 @@ def load_candidates(candidate_ids: list[str], prompt_profile_id: str) -> list[Pr
 def render_messages(candidate: PromptCandidate, case: EvalCase, snapshot: HomeSnapshot) -> list[dict[str, object]]:
     """Render provider messages for the native tool-calling agent loop."""
     location_section = _request_location_section(case.llm_context.device_id, snapshot)
-    system = compose_system_prompt(candidate.api_prompt, case.actions_enabled, location_section)
+    # Eval recorder tools are fixture-backed, so recorder and logbook are always
+    # available in this prompt rendering path.
+    inventory_section = render_home_inventory(snapshot, recorder_available=True, logbook_available=True)
+    system = compose_system_prompt(
+        candidate.api_prompt,
+        case.actions_enabled,
+        location_section=location_section,
+        inventory_section=inventory_section,
+    )
     return [{"role": "system", "content": system}, {"role": "user", "content": case.user_request}]
 
 

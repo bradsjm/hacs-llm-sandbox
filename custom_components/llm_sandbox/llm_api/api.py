@@ -11,8 +11,10 @@ from homeassistant.helpers import llm
 
 from ..const import DEFAULT_PROMPT_PROFILE, DOMAIN
 from ..runtime import SandboxConfigEntry
-from .prompts import compose_system_prompt, render_request_location, resolve_profile
+from ..snapshot import build_snapshot
+from .prompts import compose_system_prompt, render_home_inventory, render_request_location, resolve_profile
 from .tools import ExecuteHomeCodeTool, GetCameraImageTool, GetHistoryTool, GetLogbookTool, GetStatisticsTool
+from .tools.recorder import logbook_available, recorder_available
 
 
 def async_register_llm_api(hass: HomeAssistant, entry: SandboxConfigEntry) -> None:
@@ -40,6 +42,9 @@ class LlmSandboxAPI(llm.API):
         entry = self._hass.config_entries.async_get_entry(self.entry_id)
         actions_enabled = False
         base_prompt = resolve_profile(DEFAULT_PROMPT_PROFILE).base_prompt
+        inventory_section: str | None = None
+        recorder_ok = recorder_available(self._hass)
+        logbook_ok = logbook_available(self._hass)
         # Missing, wrong-domain, unloaded, or uninitialized entries get a conservative prompt.
         if (
             entry is not None
@@ -50,28 +55,63 @@ class LlmSandboxAPI(llm.API):
             typed_entry = cast(SandboxConfigEntry, entry)
             runtime_data = typed_entry.runtime_data
             assert runtime_data is not None
-            actions_enabled = runtime_data.settings.actions_enabled
-            base_prompt = runtime_data.settings.prompt_profile.base_prompt
+            settings = runtime_data.settings
+            actions_enabled = settings.actions_enabled
+            base_prompt = settings.prompt_profile.base_prompt
+            # This prompt-time snapshot is only an advisory inventory digest;
+            # every tool call still builds its own fresh validated snapshot.
+            snapshot = build_snapshot(
+                self._hass,
+                scope=settings.scope,
+                anchor_device_id=llm_context.device_id,
+            )
+            inventory_section = render_home_inventory(
+                snapshot,
+                recorder_available=recorder_ok,
+                logbook_available=logbook_ok,
+            )
         return llm.APIInstance(
             api=self,
-            api_prompt=_build_api_prompt(self._hass, llm_context, base_prompt, actions_enabled),
+            api_prompt=_build_api_prompt(
+                self._hass,
+                llm_context,
+                base_prompt,
+                actions_enabled,
+                inventory_section=inventory_section,
+            ),
             llm_context=llm_context,
-            tools=[
-                ExecuteHomeCodeTool(self.entry_id),
-                GetHistoryTool(self.entry_id),
-                GetStatisticsTool(self.entry_id),
-                GetLogbookTool(self.entry_id),
-                GetCameraImageTool(self.entry_id),
-            ],
+            tools=_build_tools(self.entry_id, recorder_ok=recorder_ok, logbook_ok=logbook_ok),
         )
 
 
 def _build_api_prompt(
-    hass: HomeAssistant, llm_context: llm.LLMContext, base_prompt: str, actions_enabled: bool
+    hass: HomeAssistant,
+    llm_context: llm.LLMContext,
+    base_prompt: str,
+    actions_enabled: bool,
+    *,
+    inventory_section: str | None = None,
 ) -> str:
-    """Return the base API prompt plus concise initiating-location context."""
+    """Return the base API prompt plus concise dynamic request context."""
     location_prompt = _request_location_prompt(hass, llm_context.device_id)
-    return compose_system_prompt(base_prompt, actions_enabled, location_prompt)
+    return compose_system_prompt(
+        base_prompt,
+        actions_enabled,
+        location_section=location_prompt,
+        inventory_section=inventory_section,
+    )
+
+
+def _build_tools(entry_id: str, *, recorder_ok: bool, logbook_ok: bool) -> list[llm.Tool]:
+    """Return the per-request tools in stable order, omitting unavailable recorder tools."""
+    tools: list[llm.Tool] = [ExecuteHomeCodeTool(entry_id)]
+    if recorder_ok:
+        tools.append(GetHistoryTool(entry_id))
+        tools.append(GetStatisticsTool(entry_id))
+        if logbook_ok:
+            tools.append(GetLogbookTool(entry_id))
+    tools.append(GetCameraImageTool(entry_id))
+    return tools
 
 
 def _request_location_prompt(hass: HomeAssistant, device_id: str | None) -> str | None:

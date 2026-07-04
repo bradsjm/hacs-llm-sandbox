@@ -159,6 +159,16 @@ def recorder_error_envelope(
     return tool_error_envelope(key, placeholders, message=message, fix=fix)
 
 
+def recorder_available(hass: HomeAssistant) -> bool:
+    """Return whether the recorder integration has a live recorder instance."""
+    return DATA_INSTANCE in hass.data
+
+
+def logbook_available(hass: HomeAssistant) -> bool:
+    """Return whether the logbook integration has registered its runtime config."""
+    return LOGBOOK_DOMAIN in hass.data
+
+
 def _iso_datetime(value: object) -> datetime:
     """Validate an ISO datetime string or datetime object and return UTC-aware datetime."""
     if isinstance(value, datetime):
@@ -196,7 +206,7 @@ class _RecorderTool(llm.Tool):
                 raise
             return recorder_error_envelope(*mapped)
 
-        if not _recorder_available(hass):
+        if not recorder_available(hass):
             return recorder_error_envelope(RECORDER_UNAVAILABLE, {})
 
         setup_error = _require_loaded_entry_error(hass, self.entry_id)
@@ -232,11 +242,6 @@ class _RecorderTool(llm.Tool):
     ) -> JsonObjectType:
         """Run the concrete recorder query."""
         raise NotImplementedError
-
-
-def _recorder_available(hass: HomeAssistant) -> bool:
-    """Return whether the recorder integration has an active instance."""
-    return DATA_INSTANCE in hass.data
 
 
 def _validate_visibility(snapshot: HomeSnapshot, ids: list[str]) -> None:
@@ -857,7 +862,7 @@ class GetLogbookTool(_RecorderTool):
             default_hours=DEFAULT_LOGBOOK_WINDOW_HOURS,
             max_hours=MAX_RECORDER_LOOKBACK_HOURS,
         )
-        if LOGBOOK_DOMAIN not in hass.data:
+        if not logbook_available(hass):
             raise RecoverableToolError("logbook_unavailable", {})
 
         event_types = async_determine_event_types(hass, entity_ids, None)
