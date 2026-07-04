@@ -164,8 +164,8 @@ async def async_execute_home_code(
     builtin_code, builtin_labels = normalize_builtins(datetime_code)
     normalized_code, await_labels = await_normalization.normalize_awaits(builtin_code, DATACLASS_REGISTRY)
     promoted_code, promote_labels = result_binding.promote_last_expression_to_result(normalized_code)
-    executable_code = result_binding.append_result_expression(promoted_code)
-    runtime.state.normalizations = [*datetime_labels, *builtin_labels, *await_labels, *promote_labels]
+    executable_code, append_labels = result_binding.append_result_expression(promoted_code)
+    runtime.state.normalizations = [*datetime_labels, *builtin_labels, *await_labels, *promote_labels, *append_labels]
 
     # Build facade globals from the snapshot.
     facade_inputs = build_facades(snapshot)

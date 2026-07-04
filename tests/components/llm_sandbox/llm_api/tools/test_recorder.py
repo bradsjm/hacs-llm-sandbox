@@ -345,6 +345,66 @@ async def test_history_area_and_domain_selectors(
     assert "light.bedroom" in by_domain["entities"]
 
 
+async def test_history_pure_domain_still_expands(
+    hass: HomeAssistant,
+    recorder_entry: MockConfigEntry,
+) -> None:
+    """A bare domain with no IDs and no location selectors still widens to all matches."""
+    hass.states.async_set("light.bedroom", "on", {"friendly_name": "Bedroom Light"})
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    result = await _call_history(hass, recorder_entry, {"domain": "light"})
+
+    assert "light.bedroom" in result["entities"]
+
+
+async def test_history_bad_area_with_domain_does_not_widen(
+    hass: HomeAssistant,
+    recorder_entry: MockConfigEntry,
+) -> None:
+    """A typo'd area_id plus domain errors with candidates instead of widening to all lights."""
+    from homeassistant.helpers import area_registry as ar
+
+    hass.states.async_set("light.bedroom", "on", {"friendly_name": "Bedroom Light"})
+    hass.states.async_set("light.living_room", "on", {"friendly_name": "Living Room Light"})
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    bedroom = ar.async_get(hass).async_get_area_by_name("Bedroom")
+    assert bedroom is not None
+
+    result = await _call_history(hass, recorder_entry, {"area_id": "kichen-typo", "domain": "light"})
+
+    assert result["status"] == "error"
+    assert result["error"]["key"] == "selector_no_match"
+    assert isinstance(result["error"]["message"], str)
+    assert result["error"]["message"]
+    fix = result["error"]["fix"]
+    assert isinstance(fix, list)
+    # The valid area id is surfaced so the LLM can correct the typo.
+    assert bedroom.id in fix
+
+
+async def test_history_bad_area_without_domain_errors(
+    hass: HomeAssistant,
+    recorder_entry: MockConfigEntry,
+) -> None:
+    """A typo'd area_id alone errors with candidates rather than a generic message."""
+    from homeassistant.helpers import area_registry as ar
+
+    bedroom = ar.async_get(hass).async_get_area_by_name("Bedroom")
+    assert bedroom is not None
+
+    result = await _call_history(hass, recorder_entry, {"area_id": "kichen-typo"})
+
+    assert result["status"] == "error"
+    assert result["error"]["key"] == "selector_no_match"
+    fix = result["error"]["fix"]
+    assert isinstance(fix, list)
+    assert bedroom.id in fix
+
+
 async def test_history_paginates_large_result(
     hass: HomeAssistant,
     recorder_entry: MockConfigEntry,
@@ -418,6 +478,37 @@ async def test_history_multi_entity_paginates_independently(
     assert _row_states(second["entities"]["light.bedroom"]["rows"]) == ["0", "1", "2"]
     assert _row_states(second["entities"]["light.living_room"]["rows"]) == ["0", "1", "2"]
     assert "next_cursor" in second
+
+
+async def test_history_multi_entity_asymmetric_exhaustion_no_duplicates(
+    hass: HomeAssistant,
+    recorder_entry: MockConfigEntry,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An early-exhausted stream yields empty later pages instead of duplicate rows."""
+    monkeypatch.setattr(recorder, "MAX_HISTORY_STATES", 4)
+    start = dt_util.utcnow().isoformat()
+    # light.bedroom has many rows (spans pages); light.living_room has one (exhausts page 1).
+    for index in range(6):
+        hass.states.async_set("light.bedroom", str(index), {"friendly_name": "Bedroom Light"})
+        await hass.async_block_till_done()
+        await get_instance(hass).async_block_till_done()
+    hass.states.async_set("light.living_room", "only", {"friendly_name": "Living Room Light"})
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    entity_ids = ["light.bedroom", "light.living_room"]
+    first = await _call_history(hass, recorder_entry, {"entity_ids": entity_ids, "start": start})
+    assert "next_cursor" in first
+    # living_room had rows on page 1 and is now exhausted.
+    assert first["entities"]["light.living_room"]["rows"]
+
+    second = await _call_history(hass, recorder_entry, {"entity_ids": entity_ids, "cursor": first["next_cursor"]})
+
+    # The exhausted stream must return an empty page, not re-emit its newest rows as duplicates.
+    assert second["entities"]["light.living_room"]["rows"] == []
+    # The non-exhausted stream still advances.
+    assert second["entities"]["light.bedroom"]["rows"]
 
 
 @pytest.mark.parametrize(

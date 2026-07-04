@@ -103,7 +103,9 @@ def paginate_stream[T](
     timestamp of the page's oldest row becomes the next resume boundary only
     when older rows still remain. Exact timestamp ties at a page boundary are
     excluded on the next page; adding a tiebreaker would overcomplicate these
-    recorder streams where exact boundary ties are rare.
+    recorder streams where exact boundary ties are rare. The multi-stream pager
+    passes the empty string ``""`` as the cutoff of an exhausted stream; since
+    ``ts < ""`` is always false, that yields an empty page rather than a re-emit.
     """
     # Page > 1: drop everything at or newer than the resume boundary.
     remaining = [row for row in rows if ts_of(row) < cutoff_iso] if cutoff_iso is not None else list(rows)

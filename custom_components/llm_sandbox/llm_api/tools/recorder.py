@@ -51,6 +51,7 @@ from ._support import _require_loaded_entry_error, _require_sandbox_runtime
 
 RECORDER_UNAVAILABLE = "recorder_unavailable"
 ENTITY_NOT_VISIBLE = "entity_not_visible"
+SELECTOR_NO_MATCH = "selector_no_match"
 TIME_WINDOW_TOO_LARGE = "time_window_too_large"
 QUERY_FAILED = "query_failed"
 type StatisticValueType = Literal["mean", "min", "max", "state", "sum"]
@@ -112,6 +113,24 @@ def _candidate_ids(snapshot: HomeSnapshot, requested_entity_id: str) -> list[str
     return bounded_strings(sorted(ids))
 
 
+def _selector_candidate_ids(snapshot: HomeSnapshot, selectors: str) -> list[str] | None:
+    """Return bounded candidate ids for the provided location selector field names."""
+    id_pools: list[str] = []
+    for field in selectors.split(", "):
+        # Match the snapshot id universe for each requested selector type.
+        if field == "area_id":
+            id_pools.extend(snapshot.areas)
+        elif field == "device_id":
+            id_pools.extend(snapshot.devices)
+        elif field == "floor_id":
+            id_pools.extend(snapshot.floors)
+        elif field == "label_id":
+            id_pools.extend(snapshot.labels)
+    if not id_pools:
+        return None
+    return bounded_strings(sorted(set(id_pools)))
+
+
 def recorder_error_envelope(
     key: str,
     placeholders: TranslationPlaceholders,
@@ -125,6 +144,15 @@ def recorder_error_envelope(
             key,
             placeholders,
             message=f"Entity '{entity_id}' is not visible to this LLM tool.",
+            fix=fix,
+        )
+    if key == SELECTOR_NO_MATCH:
+        selectors = placeholders.get("selectors", "")
+        fix = _selector_candidate_ids(snapshot, selectors) if snapshot is not None else None
+        return tool_error_envelope(
+            key,
+            placeholders,
+            message=f"Selector(s) {selectors or 'requested'} matched no visible entities.",
             fix=fix,
         )
     message, fix = error_guidance(_RECORDER_GUIDANCE, key, placeholders)
@@ -231,6 +259,9 @@ def _as_list(value: object) -> list[str]:
 
 # HA-native target selectors accepted as an alternative to enumerated IDs.
 RECORDER_SELECTOR_FIELD_NAMES = ("area_id", "device_id", "floor_id", "label_id", "domain")
+# Location-backed selectors resolved through snapshot indexes; ``domain`` is a
+# filter, not a location selector, so it is excluded from selector-presence checks.
+_LOCATION_SELECTOR_FIELDS = ("area_id", "device_id", "floor_id", "label_id")
 _SELECTOR_FIELD_DESCRIPTIONS: dict[str, str] = {
     "area_id": "Area ID(s) to scope the query.",
     "device_id": "Device ID(s) to scope the query.",
@@ -248,14 +279,20 @@ def resolve_entity_ids(snapshot: HomeSnapshot, data: dict[str, object], id_key: 
     """Resolve explicit IDs plus HA-native selectors to visible entity IDs.
 
     Explicit IDs are validated for visibility (an invisible one names itself in
-    the error). Selector expansion (area/device/floor/label) keeps only
-    snapshot-visible entities; ``domain`` filters the selector expansion and,
-    when no IDs are given, expands across all visible states of that domain.
+    the error). Location selectors (area/device/floor/label) expand to visible
+    entities and union across selector types. A selector that is present but
+    matches nothing raises ``selector_no_match`` with candidate ids rather than
+    widening (e.g. a typo'd ``area_id`` plus ``domain`` would otherwise silently
+    expand to every matching-domain entity in the home). ``domain`` filters the
+    resolved set and, when no IDs or selectors are given, expands across all
+    visible states of that domain.
     """
     explicit = [entity_id.lower() for entity_id in _as_list(data.get(id_key))]
     # Explicit IDs must each be visible (named in the error so the LLM can correct).
     _validate_visibility(snapshot, explicit)
     domains = {domain.lower() for domain in _as_list(data.get("domain"))}
+    provided_selectors = [field for field in _LOCATION_SELECTOR_FIELDS if _as_list(data.get(field))]
+    selector_present = bool(provided_selectors)
 
     selector_ids: list[str] = []
     for requested_expansions in expand_aggregate_selectors(
@@ -265,6 +302,15 @@ def resolve_entity_ids(snapshot: HomeSnapshot, data: dict[str, object], id_key: 
     ).values():
         for _requested, expanded_ids in requested_expansions:
             selector_ids.extend(expanded_ids)
+
+    # A present selector resolving to nothing is a naming error (e.g. a typo'd
+    # area_id), not a cue to widen. Name the selector and surface candidate ids
+    # so the LLM can correct, mirroring the explicit-id visibility error.
+    if selector_present and not selector_ids:
+        raise RecoverableToolError(
+            SELECTOR_NO_MATCH,
+            {"selectors": ", ".join(provided_selectors)},
+        )
 
     def _domain_matches(entity_id: str) -> bool:
         return not domains or entity_id.split(".", 1)[0].lower() in domains
@@ -282,8 +328,8 @@ def resolve_entity_ids(snapshot: HomeSnapshot, data: dict[str, object], id_key: 
             continue
         seen.add(entity_id)
         resolved.append(entity_id)
-    # Pure-domain scope with no IDs expands across all visible matching states.
-    if not resolved and domains:
+    # Pure-domain scope with no IDs and no selectors expands across all visible matching states.
+    if not resolved and domains and not selector_present:
         for entity_id in snapshot.states:
             if _domain_matches(entity_id):
                 resolved.append(entity_id)
@@ -357,7 +403,14 @@ def _paginate_streams(
     budget: int,
     cutoffs: Mapping[str, str],
 ) -> tuple[dict[str, list[list[object]]], dict[str, str]]:
-    """Page each timestamp-first stream independently and return next cutoffs."""
+    """Page each timestamp-first stream independently and return next cutoffs.
+
+    Exhausted streams carry the ``""`` sentinel instead of being dropped, so a
+    later page treats them as empty (``ts < ""`` is always false) rather than
+    re-querying them as brand-new and re-emitting their newest rows as
+    duplicates. When every stream is sentinel-exhausted the map collapses to
+    ``{}`` so callers' ``if next_cutoffs`` checks stop paging.
+    """
     pages: dict[str, list[list[object]]] = {}
     next_cutoffs: dict[str, str] = {}
     for stream_id, rows in streams.items():
@@ -368,10 +421,12 @@ def _paginate_streams(
             cutoff_iso=cutoffs.get(stream_id),
         )
         pages[stream_id] = page
-        if next_cutoff is not None:
-            # Exhausted streams are intentionally dropped from the next cutoff
-            # map; paging completes only when every stream is exhausted.
-            next_cutoffs[stream_id] = next_cutoff
+        # "" sentinel marks an exhausted stream so it yields an empty page next
+        # time instead of being re-queried from scratch.
+        next_cutoffs[stream_id] = next_cutoff if next_cutoff is not None else ""
+    # Collapse to {} once every stream is exhausted so paging terminates.
+    if next_cutoffs and all(cutoff == "" for cutoff in next_cutoffs.values()):
+        return pages, {}
     return pages, next_cutoffs
 
 

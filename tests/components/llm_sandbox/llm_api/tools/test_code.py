@@ -837,6 +837,39 @@ result = {
     assert output["type_name"] == "SafeFloorRegistry"
 
 
+async def test_conditional_dead_result_branch_promotes_trailing_expression(
+    hass: HomeAssistant,
+    loaded_entry: MockConfigEntry,
+) -> None:
+    """A ``result =`` in a dead branch must not suppress a trailing expression."""
+    code = """
+if False:
+    result = 1
+2 + 3
+"""
+
+    result = await _run_code(hass, loaded_entry, code)
+
+    assert result["execution"]["status"] == "ok"
+    assert result["output"] == 5
+
+
+async def test_conditional_result_never_bound_defaults_to_none(
+    hass: HomeAssistant,
+    loaded_entry: MockConfigEntry,
+) -> None:
+    """A conditional ``result =`` that never binds yields None, not a NameError."""
+    code = """
+if False:
+    result = 1
+"""
+
+    result = await _run_code(hass, loaded_entry, code)
+
+    assert result["execution"]["status"] == "ok"
+    assert result["output"] is None
+
+
 async def test_datetime_now_isoformat(
     hass: HomeAssistant,
     loaded_entry: MockConfigEntry,

@@ -129,6 +129,9 @@
     "entity_not_visible": {
       "message": "Entity {entity_id} is not available."
     },
+    "selector_no_match": {
+      "message": "Selector(s) {selectors} matched no visible entities."
+    },
     "capture_failed": {
       "message": "Unable to capture image from {entity_id}."
     },
