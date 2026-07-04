@@ -62,47 +62,134 @@ def build_snapshot(
     anchor_device_id: str | None = None,
 ) -> HomeSnapshot:
     """Build a frozen snapshot of states, registries, and services."""
+    return _build_snapshot(hass, scope=scope, anchor_device_id=anchor_device_id, flavor="full")
+
+
+def build_recorder_snapshot(
+    hass: HomeAssistant,
+    scope: SnapshotScope = DEFAULT_SCOPE,
+    anchor_device_id: str | None = None,
+) -> HomeSnapshot:
+    """Build a fresh, recorder-focused snapshot with selector indexes."""
+    return _build_snapshot(hass, scope=scope, anchor_device_id=anchor_device_id, flavor="recorder")
+
+
+def build_vision_snapshot(
+    hass: HomeAssistant,
+    scope: SnapshotScope = DEFAULT_SCOPE,
+    anchor_device_id: str | None = None,
+) -> HomeSnapshot:
+    """Build a fresh, vision-focused snapshot containing only visible states and config."""
+    return _build_snapshot(hass, scope=scope, anchor_device_id=anchor_device_id, flavor="vision")
+
+
+def _build_snapshot(
+    hass: HomeAssistant,
+    *,
+    scope: SnapshotScope,
+    anchor_device_id: str | None,
+    flavor: str,
+) -> HomeSnapshot:
+    """Build one snapshot flavor from live HA data without retaining live objects."""
+    live_states = hass.states.async_all()
     entity_registry = er.async_get(hass)
-    device_registry = dr.async_get(hass)
-    area_registry = ar.async_get(hass)
-    floor_registry = fr.async_get(hass)
-    label_registry = lr.async_get(hass)
-    category_registry = cr_core.async_get(hass)
-    issue_registry = ir.async_get(hass)
+    live_entities = entity_registry.entities
 
-    states = {s.entity_id: _safe_state(s) for s in hass.states.async_all()}
-    entities = {entry.entity_id: _safe_entity(entry) for entry in entity_registry.entities.values()}
-    devices = {device.id: _safe_device(device) for device in device_registry.devices.values()}
-    areas = {area.id: _safe_area(area) for area in area_registry.async_list_areas()}
-    floors = {floor.floor_id: _safe_floor(floor) for floor in floor_registry.async_list_floors()}
-    labels = {label.label_id: _safe_label(label) for label in label_registry.async_list_labels()}
-    categories = {
-        scope: {cid: _safe_category(scope, cat) for cid, cat in entries.items()}
-        for scope, entries in category_registry.categories.items()
-    }
-    issues = [_safe_issue(issue) for issue in issue_registry.issues.values()]
-    notification_store = hass.data.get(PERSISTENT_NOTIFICATION_DOMAIN)
-    notifications = (
-        [_safe_notification(notification) for notification in notification_store.values()]
-        if isinstance(notification_store, dict)
-        else []
-    )
-    config_entries = [_safe_config_entry(entry) for entry in hass.config_entries.async_entries()]
+    # Visibility is decided from live state ids plus live registry metadata before
+    # any Safe* materialization, so narrow snapshots never allocate excluded records.
+    visible = _visible_entity_ids_from_live(hass, live_states, live_entities, scope)
+    visible_states = [state for state in live_states if state.entity_id in visible]
 
-    service_catalog, service_response, services_schema, services_target = _safe_services(hass)
+    entities: dict[str, SafeRegistryEntry] = {}
+    devices: dict[str, SafeDeviceEntry] = {}
+    areas: dict[str, SafeAreaEntry] = {}
+    floors: dict[str, SafeFloorEntry] = {}
+    labels: dict[str, SafeLabelEntry] = {}
+    indexes = _empty_indexes()
+    live_visible_entities: dict[str, er.RegistryEntry] = {}
+    live_selected_devices: dict[str, dr.DeviceEntry] = {}
 
-    # Visibility restrictions always run through one combined predicate so the
-    # no-restrictions scope still derives from state-bearing entities.
-    visible = _visible_entity_ids(hass, states, entities, scope)
-    states, entities, devices, areas, floors, indexes = _finalize_snapshot_collections(
-        states,
-        entities,
-        devices,
-        areas,
-        floors,
-        visible=visible,
-        anchor_device_id=anchor_device_id,
-    )
+    if flavor != "vision":
+        device_registry = dr.async_get(hass)
+        area_registry = ar.async_get(hass)
+        floor_registry = fr.async_get(hass)
+        label_registry = lr.async_get(hass)
+
+        live_visible_entities = {
+            entity_id: entry for entity_id in visible if (entry := live_entities.get(entity_id)) is not None
+        }
+        device_ids: set[str] = {entry.device_id for entry in live_visible_entities.values() if entry.device_id}
+        # Force-include the initiating device so snapshot-based location works.
+        if anchor_device_id is not None:
+            device_ids.add(anchor_device_id)
+        live_selected_devices = {
+            device_id: device
+            for device_id in device_ids
+            if (device := device_registry.async_get(device_id)) is not None
+        }
+
+        area_ids: set[str] = {device.area_id for device in live_selected_devices.values() if device.area_id}
+        area_ids.update(entry.area_id for entry in live_visible_entities.values() if entry.area_id)
+        live_selected_areas = {area.id: area for area in area_registry.async_list_areas() if area.id in area_ids}
+
+        floor_ids: set[str] = {area.floor_id for area in live_selected_areas.values() if area.floor_id}
+        live_selected_floors = {
+            floor.floor_id: floor for floor in floor_registry.async_list_floors() if floor.floor_id in floor_ids
+        }
+
+        entities = {entity_id: _safe_entity(entry) for entity_id, entry in live_visible_entities.items()}
+        devices = {device_id: _safe_device(device) for device_id, device in live_selected_devices.items()}
+        areas = {area_id: _safe_area(area) for area_id, area in live_selected_areas.items()}
+        floors = {floor_id: _safe_floor(floor) for floor_id, floor in live_selected_floors.items()}
+        indexes = _build_indexes(entities, devices, areas)
+
+        if flavor == "full":
+            labels = {label.label_id: _safe_label(label) for label in label_registry.async_list_labels()}
+        else:
+            label_ids: set[str] = set()
+            for entry in live_visible_entities.values():
+                label_ids.update(entry.labels)
+            for device in live_selected_devices.values():
+                label_ids.update(device.labels)
+            labels = {
+                label.label_id: _safe_label(label)
+                for label in label_registry.async_list_labels()
+                if label.label_id in label_ids
+            }
+
+    states: dict[str, SafeState] = {}
+    for state in visible_states:
+        live_entry = live_visible_entities.get(state.entity_id)
+        live_device = None
+        if live_entry is not None and live_entry.device_id is not None:
+            live_device = live_selected_devices.get(live_entry.device_id)
+        states[state.entity_id] = _safe_state(state, live_entry, live_device)
+
+    if flavor == "full":
+        category_registry = cr_core.async_get(hass)
+        issue_registry = ir.async_get(hass)
+        categories = {
+            scope_name: {cid: _safe_category(scope_name, cat) for cid, cat in entries.items()}
+            for scope_name, entries in category_registry.categories.items()
+        }
+        issues = [_safe_issue(issue) for issue in issue_registry.issues.values()]
+        notification_store = hass.data.get(PERSISTENT_NOTIFICATION_DOMAIN)
+        notifications = (
+            [_safe_notification(notification) for notification in notification_store.values()]
+            if isinstance(notification_store, dict)
+            else []
+        )
+        config_entries = [_safe_config_entry(entry) for entry in hass.config_entries.async_entries()]
+        service_catalog, service_response, services_schema, services_target = _safe_services(hass)
+    else:
+        service_catalog = {}
+        service_response = {}
+        services_schema = {}
+        services_target = {}
+        categories = {}
+        issues = []
+        notifications = []
+        config_entries = []
 
     return HomeSnapshot(
         created_at=dt_util.utcnow().isoformat(),
@@ -208,6 +295,20 @@ def _visible_entity_ids(
     return {entity_id for entity_id in states if _passes_visibility(hass, entities.get(entity_id), entity_id, scope)}
 
 
+def _visible_entity_ids_from_live(
+    hass: HomeAssistant,
+    states: list[State],
+    entities: Mapping[str, er.RegistryEntry],
+    scope: SnapshotScope,
+) -> set[str]:
+    """Return visible state-bearing entity ids using live registry metadata."""
+    return {
+        state.entity_id
+        for state in states
+        if _passes_live_visibility(hass, entities.get(state.entity_id), state.entity_id, scope)
+    }
+
+
 def _passes_visibility(
     hass: HomeAssistant,
     entry: SafeRegistryEntry | None,
@@ -225,6 +326,25 @@ def _passes_visibility(
     if scope.exclude_hidden and entry.hidden_by is not None:
         return False
     return entry.entity_category not in scope.excluded_entity_categories
+
+
+def _passes_live_visibility(
+    hass: HomeAssistant,
+    entry: er.RegistryEntry | None,
+    entity_id: str,
+    scope: SnapshotScope,
+) -> bool:
+    """Whether an entity passes every enabled restriction before safe conversion."""
+    # Assist exposure: delegate to HA's exposure logic (sync @callback; may
+    # idempotently persist computed exposure, matching HA's default_agent).
+    if scope.restrict_to_assist_exposed and not async_should_expose(hass, scope.assistant, entity_id):
+        return False
+    # Registry-characteristic checks do not apply to state-only entities.
+    if entry is None:
+        return True
+    if scope.exclude_hidden and entry.hidden_by is not None:
+        return False
+    return _enum_value(entry.entity_category) not in scope.excluded_entity_categories
 
 
 def _derive_collections(
@@ -298,7 +418,11 @@ def _effective_area_id(entry: SafeRegistryEntry, device: SafeDeviceEntry | None)
     return entry.area_id or (device.area_id if device is not None else None)
 
 
-def _safe_state(state: State) -> SafeState:
+def _safe_state(
+    state: State,
+    entry: er.RegistryEntry | None = None,
+    device: dr.DeviceEntry | None = None,
+) -> SafeState:
     """Convert a live HA state into a frozen safe state record."""
     context = state.context
     safe_context = SafeContext(
@@ -306,6 +430,7 @@ def _safe_state(state: State) -> SafeState:
         parent_id=context.parent_id if context else None,
         user_id=context.user_id if context else None,
     )
+    area_id = entry.area_id or (device.area_id if device is not None else None) if entry is not None else None
     return SafeState(
         entity_id=state.entity_id,
         domain=state.domain,
@@ -320,6 +445,10 @@ def _safe_state(state: State) -> SafeState:
         last_updated=state.last_updated.isoformat(),
         last_updated_timestamp=state.last_updated.timestamp(),
         context=safe_context,
+        area_id=area_id,
+        device_id=entry.device_id if entry is not None else None,
+        platform=entry.platform if entry is not None else None,
+        unique_id=entry.unique_id if entry is not None else None,
     )
 
 
@@ -524,10 +653,11 @@ def _safe_services(
         schema_values: dict[str, ServiceSchemaBrief] = {}
         target_values: dict[str, ServiceTargetBrief] = {}
         for service_name, service in domain_services.items():
+            description = async_get_cached_service_description(hass, domain, service_name)
             names.append(service_name)
             response_values[service_name] = service.supports_response.value
-            schema_values[service_name] = _service_schema_brief(hass, domain, service_name, service.schema)
-            target_brief = _service_target_brief(hass, domain, service_name)
+            schema_values[service_name] = _service_schema_brief(description, service.schema)
+            target_brief = _service_target_brief(description)
             if target_brief is not None:
                 target_values[service_name] = target_brief
         services[domain] = tuple(sorted(names))
@@ -539,9 +669,7 @@ def _safe_services(
 
 
 def _service_schema_brief(
-    hass: HomeAssistant,
-    domain: str,
-    service_name: str,
+    description: object,
     schema: object,
 ) -> ServiceSchemaBrief:
     """Build a JSON-safe brief for one service schema."""
@@ -558,7 +686,7 @@ def _service_schema_brief(
     if not isinstance(raw_schema, dict):
         return {"fields": [], "dynamic": True}
 
-    description_fields = _service_description_fields(hass, domain, service_name)
+    description_fields = _service_description_fields(description)
     fields: list[ServiceFieldBrief] = []
     dynamic = False
     for key, validator in raw_schema.items():
@@ -590,9 +718,8 @@ def _service_schema_brief(
     return {"fields": fields, "dynamic": dynamic}
 
 
-def _service_description_fields(hass: HomeAssistant, domain: str, service_name: str) -> dict[str, dict[str, object]]:
+def _service_description_fields(description: object) -> dict[str, dict[str, object]]:
     """Return cached services.yaml fields for a service, if HA has them."""
-    description = async_get_cached_service_description(hass, domain, service_name)
     if not isinstance(description, dict):
         return {}
     fields = description.get("fields")
@@ -633,9 +760,7 @@ def _service_field_filter(field_description: Mapping[str, object]) -> ServiceFie
 
 
 def _service_target_brief(
-    hass: HomeAssistant,
-    domain: str,
-    service_name: str,
+    description: object,
 ) -> ServiceTargetBrief | None:
     """Build a JSON-safe target brief mirroring HA's automation matching input.
 
@@ -645,7 +770,6 @@ def _service_target_brief(
     is captured as ``{"entity": []}`` (matches any entity); a service without any
     ``target`` returns ``None`` (not entity-targeting, excluded from discovery).
     """
-    description = async_get_cached_service_description(hass, domain, service_name)
     if not isinstance(description, dict):
         return None
     target = description.get("target")
@@ -794,6 +918,19 @@ def _build_indexes(
         entity_ids_by_label=_freeze_index(by_label),
         device_ids_by_label=_freeze_index(device_by_label),
         area_ids_by_floor_id=_freeze_index(area_by_floor),
+    )
+
+
+def _empty_indexes() -> SnapshotIndexes:
+    """Return an empty index set for snapshot flavors that omit registry joins."""
+    return SnapshotIndexes(
+        entity_ids_by_device_id={},
+        entity_ids_by_area_id={},
+        device_ids_by_area_id={},
+        entity_ids_by_config_entry_id={},
+        entity_ids_by_label={},
+        device_ids_by_label={},
+        area_ids_by_floor_id={},
     )
 
 

@@ -4,7 +4,13 @@ from datetime import datetime
 
 import pytest
 import voluptuous as vol
-from custom_components.llm_sandbox.snapshot import DEFAULT_SCOPE, SnapshotScope, build_snapshot
+from custom_components.llm_sandbox.snapshot import (
+    DEFAULT_SCOPE,
+    SnapshotScope,
+    build_recorder_snapshot,
+    build_snapshot,
+    build_vision_snapshot,
+)
 from homeassistant.components.homeassistant.const import DATA_EXPOSED_ENTITIES
 from homeassistant.components.homeassistant.exposed_entities import ExposedEntities, async_expose_entity
 from homeassistant.core import HomeAssistant, SupportsResponse
@@ -12,6 +18,8 @@ from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import floor_registry as fr
+from homeassistant.helpers import label_registry as lr
+from homeassistant.helpers.service import async_set_service_schema
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 DEFAULT_PRODUCT_SCOPE = SnapshotScope(
@@ -172,6 +180,16 @@ async def test_snapshot_effective_area_index_uses_entity_override_then_device(ha
     assert "light.override_light" in bedroom_entities
     assert "light.override_light" not in living_room_entities
     assert "light.inherit_light" in living_room_entities
+    override_state = snapshot.states["light.override_light"]
+    inherited_state = snapshot.states["light.inherit_light"]
+    assert override_state.area_id == bedroom.id
+    assert override_state.device_id == device.id
+    assert override_state.platform == "test"
+    assert override_state.unique_id == "override_light"
+    assert inherited_state.area_id == living_room.id
+    assert inherited_state.device_id == device.id
+    assert inherited_state.platform == "test"
+    assert inherited_state.unique_id == "inherit_light"
 
 
 async def test_snapshot_service_catalog(hass: HomeAssistant) -> None:
@@ -241,8 +259,6 @@ async def test_snapshot_service_schema_plain_keys_are_optional(hass: HomeAssista
 
 async def test_snapshot_captures_service_target_and_field_capability_filters(hass: HomeAssistant) -> None:
     """Service target entity-filters and per-field capability filters are captured."""
-    from homeassistant.helpers.service import async_set_service_schema
-
     hass.services.async_register(
         "cover",
         "stop_cover",
@@ -269,6 +285,51 @@ async def test_snapshot_captures_service_target_and_field_capability_filters(has
     }
     fields = {field["name"]: field for field in snapshot.services_schema["cover"]["stop_cover"]["fields"]}
     assert fields["color_temp_kelvin"]["filter"] == {"attribute": {"supported_color_modes": ["color_temp"]}}
+
+
+async def test_snapshot_reuses_service_description_for_schema_and_target(
+    hass: HomeAssistant,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A full snapshot looks up each service description once while preserving metadata."""
+    calls: list[tuple[str, str]] = []
+
+    hass.services.async_register(
+        "cover",
+        "set_position",
+        lambda call: None,
+        schema=vol.Schema({vol.Optional("position"): int}),
+    )
+    async_set_service_schema(
+        hass,
+        "cover",
+        "set_position",
+        {
+            "target": {"entity": [{"domain": ["cover"]}]},
+            "fields": {"position": {"description": "Position", "filter": {"supported_features": [4]}}},
+        },
+    )
+    await hass.async_block_till_done()
+
+    from custom_components.llm_sandbox.snapshot import builder
+
+    original = builder.async_get_cached_service_description
+
+    def _counting_description(hass_arg: HomeAssistant, domain: str, service_name: str) -> object:
+        calls.append((domain, service_name))
+        return original(hass_arg, domain, service_name)
+
+    monkeypatch.setattr(builder, "async_get_cached_service_description", _counting_description)
+
+    snapshot = build_snapshot(hass)
+
+    assert calls.count(("cover", "set_position")) == 1
+    assert snapshot.services_target["cover"]["set_position"] == {
+        "entity": [{"domain": ["cover"], "device_class": [], "integration": None, "supported_features": []}]
+    }
+    fields = {field["name"]: field for field in snapshot.services_schema["cover"]["set_position"]["fields"]}
+    assert fields["position"]["description"] == "Position"
+    assert fields["position"]["filter"] == {"supported_features": [4]}
 
 
 async def test_snapshot_omits_services_target_for_non_entity_services(hass: HomeAssistant) -> None:
@@ -551,6 +612,79 @@ async def test_build_snapshot_anchor_unknown_device_id_is_safe(hass: HomeAssista
 
     assert "sensor.visible_value" in snapshot.states
     assert "does-not-exist" not in snapshot.devices
+
+
+async def test_build_recorder_snapshot_keeps_selector_surface_without_admin_metadata(hass: HomeAssistant) -> None:
+    """Recorder snapshots keep visible selector data but omit services/admin surfaces."""
+    floor_id, area_id, device_id = _add_area_device(hass, "Pantry")
+    label = lr.async_get(hass).async_create("Recorder Visible", color="blue")
+    device_registry = dr.async_get(hass)
+    entity_registry = er.async_get(hass)
+    device_registry.async_update_device(device_id, labels={label.label_id})
+    _add_entity(hass, "sensor.pantry_temperature", "pantry_temperature", device_id=device_id)
+    entity_registry.async_update_entity("sensor.pantry_temperature", labels={label.label_id})
+    _add_entity(hass, "sensor.hidden_temperature", "hidden_temperature", hidden_by=er.RegistryEntryHider.USER)
+    anchor_floor_id, anchor_area_id, anchor_device_id = _add_area_device(hass, "Recorder Anchor")
+    hass.services.async_register("light", "turn_on", lambda call: None)
+    MockConfigEntry(domain="test_secret", title="Secret").add_to_hass(hass)
+    await hass.async_block_till_done()
+
+    snapshot = build_recorder_snapshot(hass, scope=DEFAULT_PRODUCT_SCOPE, anchor_device_id=anchor_device_id)
+
+    assert set(snapshot.states) == {"sensor.pantry_temperature"}
+    assert set(snapshot.entities) == {"sensor.pantry_temperature"}
+    assert device_id in snapshot.devices
+    assert area_id in snapshot.areas
+    assert floor_id in snapshot.floors
+    assert anchor_device_id in snapshot.devices
+    assert anchor_area_id in snapshot.areas
+    assert anchor_floor_id in snapshot.floors
+    assert snapshot.indexes.entity_ids_by_device_id[device_id] == ("sensor.pantry_temperature",)
+    assert snapshot.indexes.entity_ids_by_area_id[area_id] == ("sensor.pantry_temperature",)
+    assert snapshot.indexes.entity_ids_by_label[label.label_id] == ("sensor.pantry_temperature",)
+    assert snapshot.indexes.device_ids_by_label[label.label_id] == (device_id,)
+    assert label.label_id in snapshot.labels
+    assert snapshot.services == {}
+    assert snapshot.services_supports_response == {}
+    assert snapshot.services_schema == {}
+    assert snapshot.services_target == {}
+    assert snapshot.categories == {}
+    assert snapshot.issues == []
+    assert snapshot.notifications == []
+    assert snapshot.config_entries == []
+
+
+async def test_build_vision_snapshot_keeps_visible_states_only(hass: HomeAssistant) -> None:
+    """Vision snapshots contain visible state/config data and empty unused surfaces."""
+    _add_entity(hass, "camera.front_door", "front_door")
+    _add_entity(hass, "image.porch_snapshot", "porch_snapshot")
+    _add_entity(hass, "camera.hidden", "hidden", hidden_by=er.RegistryEntryHider.USER)
+    hass.services.async_register("camera", "snapshot", lambda call: None)
+    await hass.async_block_till_done()
+
+    snapshot = build_vision_snapshot(hass, scope=DEFAULT_PRODUCT_SCOPE)
+
+    assert set(snapshot.states) == {"camera.front_door", "image.porch_snapshot"}
+    assert snapshot.entities == {}
+    assert snapshot.devices == {}
+    assert snapshot.areas == {}
+    assert snapshot.floors == {}
+    assert snapshot.labels == {}
+    assert snapshot.categories == {}
+    assert snapshot.issues == []
+    assert snapshot.notifications == []
+    assert snapshot.config_entries == []
+    assert snapshot.services == {}
+    assert snapshot.services_supports_response == {}
+    assert snapshot.services_schema == {}
+    assert snapshot.services_target == {}
+    assert snapshot.indexes.entity_ids_by_device_id == {}
+    assert snapshot.indexes.entity_ids_by_area_id == {}
+    assert snapshot.indexes.device_ids_by_area_id == {}
+    assert snapshot.indexes.entity_ids_by_config_entry_id == {}
+    assert snapshot.indexes.entity_ids_by_label == {}
+    assert snapshot.indexes.device_ids_by_label == {}
+    assert snapshot.indexes.area_ids_by_floor_id == {}
 
 
 async def test_build_snapshot_filtered_collections_have_no_orphans(hass: HomeAssistant) -> None:

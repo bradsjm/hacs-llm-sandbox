@@ -63,6 +63,7 @@ async def test_history_includes_requested_attributes(
     )
     await hass.async_block_till_done()
     await get_instance(hass).async_block_till_done()
+    await get_instance(hass).async_block_till_done()
 
     result = await _call_history(
         hass,
@@ -253,6 +254,26 @@ async def test_non_visible_entity_rejected(
     fix = result["error"]["fix"]
     assert isinstance(fix, list)
     assert fix
+
+
+async def test_recorder_snapshot_visibility_is_fresh_per_call(
+    hass: HomeAssistant,
+    recorder_entry: MockConfigEntry,
+) -> None:
+    """Recorder tools rebuild visibility on each call instead of reusing an old snapshot."""
+    registry = er.async_get(hass)
+    registry.async_get_or_create("light", "test", "fresh_visibility", suggested_object_id="fresh_visibility")
+    hass.states.async_set("light.fresh_visibility", "on", {"friendly_name": "Fresh Visibility"})
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    first = await _call_history(hass, recorder_entry, {"entity_ids": ["light.fresh_visibility"]})
+    registry.async_update_entity("light.fresh_visibility", hidden_by=er.RegistryEntryHider.USER)
+    second = await _call_history(hass, recorder_entry, {"entity_ids": ["light.fresh_visibility"]})
+
+    assert "light.fresh_visibility" in first["entities"]
+    assert second["status"] == "error"
+    assert second["error"]["key"] == "entity_not_visible"
 
 
 @pytest.mark.parametrize(

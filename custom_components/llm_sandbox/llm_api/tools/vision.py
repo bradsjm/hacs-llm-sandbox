@@ -26,7 +26,7 @@ from ...const import (
     MIN_IMAGE_TARGET_WIDTH,
     TOOL_GET_CAMERA_IMAGE,
 )
-from ...snapshot import build_snapshot
+from ...snapshot import build_vision_snapshot
 from ...snapshot.models import HomeSnapshot
 from ...types import TranslationPlaceholders
 from .._hinting import error_guidance
@@ -167,7 +167,7 @@ class GetCameraImageTool(llm.Tool):
             return tool_error_envelope(*setup_error)
         settings = _require_sandbox_runtime(hass, self.entry_id).settings
         # Build a fresh visible snapshot for every live image read.
-        snapshot = build_snapshot(
+        snapshot = build_vision_snapshot(
             hass,
             scope=settings.scope,
             anchor_device_id=llm_context.device_id,

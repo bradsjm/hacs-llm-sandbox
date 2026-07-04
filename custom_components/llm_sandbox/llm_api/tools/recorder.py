@@ -36,7 +36,7 @@ from ...const import (
     TOOL_GET_STATISTICS,
 )
 from ...runtime import SandboxSettings
-from ...snapshot import build_snapshot
+from ...snapshot import build_recorder_snapshot
 from ...snapshot.models import HomeSnapshot
 from ...types import TranslationPlaceholders
 from .._hinting import error_guidance
@@ -215,7 +215,7 @@ class _RecorderTool(llm.Tool):
             return recorder_error_envelope(key, placeholders)
         settings = _require_sandbox_runtime(hass, self.entry_id).settings
         # Build a fresh visible snapshot for every recorder tool call.
-        snapshot = build_snapshot(
+        snapshot = build_recorder_snapshot(
             hass,
             scope=settings.scope,
             anchor_device_id=llm_context.device_id,

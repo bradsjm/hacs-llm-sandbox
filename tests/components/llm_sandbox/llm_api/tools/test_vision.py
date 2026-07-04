@@ -58,6 +58,22 @@ async def test_get_camera_image_rejects_non_visible_entity(
     assert "image.porch_snapshot" in fix
 
 
+async def test_get_camera_image_visibility_is_fresh_per_call(
+    hass: HomeAssistant,
+    loaded_entry: MockConfigEntry,
+) -> None:
+    """The vision tool rebuilds visibility on each live image request."""
+    _seed_camera(hass)
+    with patch.object(vision, "_async_get_camera_image", return_value=(_tiny_jpeg(), "image/jpeg")):
+        first = await _call_tool(hass, loaded_entry, {"image_entity": "camera.front_door"})
+        er.async_get(hass).async_update_entity("camera.front_door", hidden_by=er.RegistryEntryHider.USER)
+        second = await _call_tool(hass, loaded_entry, {"image_entity": "camera.front_door"})
+
+    assert first["_type"] == "ha_multimodal_tool_result"
+    assert second["status"] == "error"
+    assert second["error"]["key"] == "entity_not_visible"
+
+
 async def test_get_camera_image_offers_near_miss_candidate(
     hass: HomeAssistant,
     loaded_entry: MockConfigEntry,
