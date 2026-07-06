@@ -169,31 +169,3 @@ class CaseTrace:
     par_turns: int
     final_answer: str
     steps: tuple[StepTrace, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class CandidateModelScore:
-    """Aggregated scores for one candidate/model pair."""
-
-    candidate_id: str
-    model_id: str
-    mean: float
-    mean_turns: float
-    per_category: dict[str, float]
-    case_scores: dict[str, float]
-    # Authored prompt sizes; defaults keep old run.json files loadable.
-    api_prompt_chars: int = 0
-    prompt_chars: int = 0
-
-
-@dataclass(frozen=True, slots=True)
-class RunResult:
-    """Complete result for one eval matrix run."""
-
-    run_id: str
-    created_at: str
-    candidate_ids: list[str]
-    model_ids: list[str]
-    case_ids: list[str]
-    traces: list[CaseTrace]
-    scores: list[CandidateModelScore]

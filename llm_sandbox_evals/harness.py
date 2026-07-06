@@ -1,124 +1,23 @@
-"""Matrix orchestration for dev-only multi-turn eval runs."""
+"""Multi-turn eval task body reused by native experiments and DSPy."""
 
-import asyncio
 import json
-import sys
-from datetime import UTC, datetime
-from typing import Protocol
 
 from custom_components.llm_sandbox.const import TOOL_EXECUTE_HOME_CODE
-from custom_components.llm_sandbox.llm_api.prompts import PromptProfile, resolve_profile
+from custom_components.llm_sandbox.llm_api.prompts import PromptProfile
 
 from llm_sandbox_evals import cases, prompts
 from llm_sandbox_evals.config import EvalConfig
 from llm_sandbox_evals.homes import get_home
-from llm_sandbox_evals.models import ModelAdapter, ModelResponseError, get_adapter
-from llm_sandbox_evals.prompts import candidate_prompt_sizes, load_candidates
+from llm_sandbox_evals.models import ModelAdapter, ModelResponseError
 from llm_sandbox_evals.schema import (
-    CandidateModelScore,
     CaseTrace,
     CheckResult,
     EvalCase,
     PromptCandidate,
-    RunResult,
     StepTrace,
 )
-from llm_sandbox_evals.scoring import check_case, mean_score, score_case
+from llm_sandbox_evals.scoring import check_case, score_case
 from llm_sandbox_evals.tools import EVAL_SCOPE, RecordingInvoker, apply_scope, run_tool, tool_result_message
-
-
-class ProgressReporter(Protocol):
-    """Observer for matrix progress events emitted by the harness."""
-
-    def pair_started(self, *, candidate_id: str, model_id: str, total: int, concurrency: int) -> None:
-        """Report that one candidate/model pair is starting."""
-        ...
-
-    def case_finished(
-        self,
-        *,
-        candidate_id: str,
-        model_id: str,
-        case_id: str,
-        index: int,
-        total: int,
-        score: float,
-        turns: int,
-    ) -> None:
-        """Report that one case has finished."""
-        ...
-
-    def model_error(self, *, candidate_id: str, model_id: str, case_id: str, detail: str) -> None:
-        """Report detailed provider diagnostics for one candidate/model pair."""
-        ...
-
-
-class PlainProgressReporter:
-    """Default progress reporter that preserves the original stderr line format."""
-
-    def pair_started(self, *, candidate_id: str, model_id: str, total: int, concurrency: int) -> None:
-        """Write one candidate/model pair start line."""
-        _progress(f"[{candidate_id}/{model_id}] {total} cases (concurrency={concurrency})")
-
-    def case_finished(
-        self,
-        *,
-        candidate_id: str,
-        model_id: str,
-        case_id: str,
-        index: int,
-        total: int,
-        score: float,
-        turns: int,
-    ) -> None:
-        """Write one case completion line."""
-        del candidate_id, model_id
-        _progress(f"  [{index + 1}/{total}] {case_id} score={score:.2f} turns={turns}")
-
-    def model_error(self, *, candidate_id: str, model_id: str, case_id: str, detail: str) -> None:
-        """Write provider diagnostics once per failing candidate/model pair."""
-        _progress(
-            f"  model error for candidate={candidate_id} model={model_id} case={case_id}; "
-            "skipping remaining cases for this pair"
-        )
-        for line in detail.splitlines():
-            _progress(f"    {line}")
-
-
-async def run_matrix(config: EvalConfig, reporter: ProgressReporter | None = None) -> RunResult:
-    """Run the candidate x model x case matrix and return all traces/scores."""
-    run_id = datetime.now(UTC).strftime("%Y%m%d-%H%M%S-%f")
-    created_at = datetime.now(UTC).isoformat()
-    progress = PlainProgressReporter() if reporter is None else reporter
-    profile = resolve_profile(config.prompt_profile)
-    candidates = load_candidates(config.candidates, config.prompt_profile)
-    selected_cases = _select_cases(config.cases, config.homes)
-    model_ids = list(config.models)
-    traces: list[CaseTrace] = []
-
-    for candidate in candidates:
-        for model_id in model_ids:
-            adapter = get_adapter(model_id, config.reasoning_effort, model_timeout=config.model_timeout)
-            progress.pair_started(
-                candidate_id=candidate.id,
-                model_id=model_id,
-                total=len(selected_cases),
-                concurrency=config.concurrency,
-            )
-            pair_traces = await _run_cases_for_pair(
-                candidate, model_id, selected_cases, adapter, config, profile, progress
-            )
-            traces.extend(pair_traces)
-
-    return RunResult(
-        run_id=run_id,
-        created_at=created_at,
-        candidate_ids=[candidate.id for candidate in candidates],
-        model_ids=model_ids,
-        case_ids=[case.id for case in selected_cases],
-        traces=traces,
-        scores=_score_matrix(traces, candidates, model_ids, selected_cases),
-    )
 
 
 async def run_case(
@@ -128,8 +27,6 @@ async def run_case(
     adapter: ModelAdapter,
     profile: PromptProfile,
     config: EvalConfig,
-    *,
-    raise_model_errors: bool = False,
 ) -> CaseTrace:
     """Run one matrix cell through the bounded native tool-calling agent loop."""
     prompt = ""
@@ -209,78 +106,10 @@ async def run_case(
             steps=tuple(steps),
         )
     except ModelResponseError as err:
-        # Branch boundary: pair orchestration may choose to fail fast across remaining cases for the same model.
-        if raise_model_errors:
-            raise
+        # Branch boundary: provider failures are isolated to the current native evaluation case.
         return _error_trace(candidate, model_id, case, prompt, "model_error", err.detail)
     except Exception as err:  # noqa: BLE001 - harness isolates failures to the current matrix cell.
         return _error_trace(candidate, model_id, case, prompt, "harness_error", f"{type(err).__name__}: {err}")
-
-
-async def _run_cases_for_pair(
-    candidate: PromptCandidate,
-    model_id: str,
-    selected_cases: list[EvalCase],
-    adapter: ModelAdapter,
-    config: EvalConfig,
-    prompt_profile: PromptProfile,
-    reporter: ProgressReporter | None = None,
-) -> list[CaseTrace]:
-    """Run all cases for one candidate/model pair with bounded concurrency."""
-    progress = PlainProgressReporter() if reporter is None else reporter
-    semaphore = asyncio.Semaphore(max(1, config.concurrency))
-    model_error_lock = asyncio.Lock()
-    model_error: ModelResponseError | None = None
-    total = len(selected_cases)
-
-    async def _one(index: int, case: EvalCase) -> CaseTrace:
-        nonlocal model_error
-        async with semaphore:
-            async with model_error_lock:
-                current_model_error = model_error
-            # Branch boundary: once a provider/model setup error is known, remaining cases should not call it again.
-            if current_model_error is not None:
-                trace = _error_trace(candidate, model_id, case, "", "model_error", current_model_error.detail)
-            else:
-                try:
-                    trace = await run_case(
-                        candidate,
-                        model_id,
-                        case,
-                        adapter,
-                        prompt_profile,
-                        config,
-                        raise_model_errors=True,
-                    )
-                except ModelResponseError as err:
-                    async with model_error_lock:
-                        if model_error is None:
-                            model_error = err
-                            progress.model_error(
-                                candidate_id=candidate.id,
-                                model_id=model_id,
-                                case_id=case.id,
-                                detail=err.detail,
-                            )
-                    trace = _error_trace(candidate, model_id, case, "", "model_error", err.detail)
-        progress.case_finished(
-            candidate_id=candidate.id,
-            model_id=model_id,
-            case_id=case.id,
-            index=index,
-            total=total,
-            score=trace.score,
-            turns=trace.turns,
-        )
-        return trace
-
-    return await asyncio.gather(*[_one(i, case) for i, case in enumerate(selected_cases)])
-
-
-def _progress(message: str) -> None:
-    """Write a progress line to stderr (ruff T201 forbids the print builtin)."""
-    sys.stderr.write(message + "\n")
-    sys.stderr.flush()
 
 
 def _error_trace(
@@ -331,46 +160,6 @@ def _select_cases(case_filters: list[str] | None, home_filters: list[str] | None
 
     requested = set(case_filters)
     return [case for case in selected if case.id in requested or case.category in requested]
-
-
-def _score_matrix(
-    traces: list[CaseTrace],
-    candidates: list[PromptCandidate],
-    model_ids: list[str],
-    selected_cases: list[EvalCase],
-) -> list[CandidateModelScore]:
-    """Aggregate case traces into deterministic candidate/model summaries."""
-    scores: list[CandidateModelScore] = []
-    categories = list(dict.fromkeys(case.category for case in selected_cases))
-    traces_by_pair = {(trace.candidate_id, trace.model_id, trace.case_id): trace for trace in traces}
-
-    for candidate in candidates:
-        api_prompt_chars, prompt_chars = candidate_prompt_sizes(candidate)
-        for model_id in model_ids:
-            case_scores: dict[str, float] = {}
-            per_category: dict[str, float] = {}
-            pair_traces: list[CaseTrace] = []
-            for case in selected_cases:
-                trace = traces_by_pair.get((candidate.id, model_id, case.id))
-                case_scores[case.id] = 0.0 if trace is None else trace.score
-                if trace is not None:
-                    pair_traces.append(trace)
-            for category in categories:
-                category_scores = [case_scores[case.id] for case in selected_cases if case.category == category]
-                per_category[category] = mean_score(category_scores)
-            scores.append(
-                CandidateModelScore(
-                    candidate_id=candidate.id,
-                    model_id=model_id,
-                    mean=mean_score(list(case_scores.values())),
-                    mean_turns=mean_score([float(trace.turns) for trace in pair_traces]),
-                    per_category=per_category,
-                    case_scores=case_scores,
-                    api_prompt_chars=api_prompt_chars,
-                    prompt_chars=prompt_chars,
-                )
-            )
-    return scores
 
 
 def _execution_status(result: dict[str, object] | None) -> str | None:

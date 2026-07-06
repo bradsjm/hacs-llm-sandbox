@@ -2,7 +2,7 @@
 
 ## Project Identity
 
-`llm_sandbox_evals/` is a **development-only** package at repo root that evaluates the `llm_sandbox` LLM tools (`execute_home_code`, `get_history`, `get_statistics`, `get_logbook`). It runs a bounded, multi-turn native tool-calling agent loop against **frozen** `HomeSnapshot` fixtures (hand-built in Python — no JSON deserializer exists), executes the **real** `async_execute_home_code` for code cases, scores final outcomes with turn efficiency, and ranks prompt candidates across a matrix of language models.
+`llm_sandbox_evals/` is a **development-only** package at repo root that evaluates the `llm_sandbox` LLM tools (`execute_home_code`, `get_history`, `get_statistics`, `get_logbook`). It runs a bounded, multi-turn native tool-calling agent loop against **frozen** `HomeSnapshot` fixtures (hand-built in Python — no JSON deserializer exists), executes the **real** `async_execute_home_code` for code cases, scores final outcomes with turn efficiency, and ranks prompt candidates across a matrix of language models through native `pydantic_evals` `Dataset` / `EvaluationReport` reporting.
 
 It is **not** part of the integration runtime. See `README.md` for usage.
 
@@ -25,7 +25,7 @@ Prioritize improving accomdating reasonable intent over increasing prompting len
 - **Never** pass a live `HomeAssistant` object, live registries, event bus, auth, config, filesystem, network, or OS/process API into the tool runner. The only service seam is `RecordingInvoker` (`tools.py`), which records the `ProposedAction` and returns `None` — it never calls `hass.services.async_call`.
 - Build a **fresh** `HomeSnapshot` per case evaluation; never cache or mutate fixtures.
 - The recorder tools are **emulated** from fixture `recorder()` data, never a live database.
-- Keep eval dependencies **isolated**: `litellm`, `dspy`, and `rich` live only in `[dependency-groups] evals`. Never add them to `[project] dependencies`, `manifest.json`, or any `custom_components/**` import. `custom_components/**` is read-only.
+- Keep eval dependencies **isolated**: `litellm`, `pydantic-evals[logfire]`, `dspy`, and `rich` live only in `[dependency-groups] evals`. Never add them to `[project] dependencies`, `manifest.json`, or any `custom_components/**` import. `custom_components/**` is read-only.
 - Keep `scripts/check` (the integration check) untouched; this package has its own `scripts/*-evals`.
 - The DSPy optimizer is dev-only. Keep `dspy` imports inside `optimize_dspy.py` and the lazy CLI optimize handler so eval/report/stub paths import without DSPy.
 - No fallbacks unless explicitly approved.
@@ -39,11 +39,11 @@ Prioritize improving accomdating reasonable intent over increasing prompting len
 - Optimize: `uv run --group dev --group evals python -m llm_sandbox_evals optimize --target-model <real-model>`
 - Report: `uv run --group dev --group evals python -m llm_sandbox_evals report <run_id>`
 
-Note: eval runs need **both** groups (`dev` provides `homeassistant`, `evals` provides `litellm`). Artifacts go to the gitignored `eval_data/runs/`.
+Note: eval runs need **both** groups (`dev` provides `homeassistant`, `evals` provides `litellm` and `pydantic-evals`). Artifacts go to the gitignored `eval_data/runs/`; each native eval run writes `report.json`. Pass `--logfire` to enable optional Pydantic Logfire export when `LOGFIRE_TOKEN` is available.
 
 ## Architecture And Data Flow
 
-The harness (`harness.run_matrix`) runs, per `(candidate, model, case)`:
+The native experiment builds a `pydantic_evals.Dataset` with one case per `(candidate, model, case)` matrix cell, then evaluates each cell through `harness.run_case`:
 
 ```
 profile  = resolve_profile(config.prompt_profile)         # selected production prompt profile
@@ -60,9 +60,10 @@ while turns < (case.max_turns or config.max_turns):
         messages.append(tools.tool_result_message(call.id, outcome.result))
 checks = scoring.check_case(case, final_answer, recorded_actions, statuses, snapshot, steps)
 score  = scoring.score_case(checks, turns, case.par_turns, config.efficiency_k, config.efficiency_floor)
+report = dataset.evaluate(task, name="matrix", max_concurrency=config.concurrency)
 ```
 
-The harness owns the snapshot lifecycle (build once per case evaluation, pass to render/run/score). Tool turns may contain one or more native tool calls. Correct outcomes score `1.0` at or under the case's `par_turns`, then decay by `efficiency_k` per extra tool-turn down to `efficiency_floor`; failed required outcome gates score `0.0`. The real executor activates/clears its own runtime contextvars internally — the harness does **not** call `activate_runtime`/`clear_runtime`.
+The harness owns the snapshot lifecycle (build once per case evaluation, pass to render/run/score). Tool turns may contain one or more native tool calls. Correct outcomes score `1.0` at or under the case's `par_turns`, then decay by `efficiency_k` per extra tool-turn down to `efficiency_floor`; failed required outcome gates score `0.0`. The native `EvaluationReport` carries the per-cell scores, deterministic check labels, candidate ranking, candidate x model means, and overall mean. The real executor activates/clears its own runtime contextvars internally — the harness does **not** call `activate_runtime`/`clear_runtime`.
 
 ### Module map
 
@@ -74,10 +75,10 @@ The harness owns the snapshot lifecycle (build once per case evaluation, pass to
 - `models.py` — `ModelAdapter` protocol, `StubAdapter` (offline, deterministic multi-turn validator), `LiteLLMAdapter` (any provider, lazy import), `get_adapter(id)`.
 - `tools.py` — `run_tool(tool_call, case, snapshot, prompt_profile, invoker=...) -> ToolOutcome`. Real executor path + fixture-backed recorder emulators matching production response shapes + `RecordingInvoker`; `tool_result_message(...)` serializes bounded tool results for the next model turn.
 - `scoring.py` — `check_case(...)`, `score_case(...)`, `mean_score(...)`. Outcome gates + turn-efficiency scoring.
-- `harness.py` — `run_case(...) -> CaseTrace`, `run_matrix(config) -> RunResult`; `ProgressReporter` keeps terminal UI pluggable while the harness stays rich-free.
-- `reports.py` — `write_run(...)`, `render_leaderboard(...)`, `load_run_json(...)` (for `report`), shared display row aggregation, trace filename helpers.
-- `tui.py` — Rich live progress and saved leaderboard/failure tables for interactive `eval`/`report` runs.
-- `html_report.py` — stdlib-only `report.html` generator from saved run artifacts.
+- `harness.py` — `run_case(...) -> CaseTrace`; the bounded per-cell task body reused by native experiments and DSPy.
+- `experiment.py` — native `pydantic_evals` `Dataset` construction, deterministic `SandboxOutcome` evaluator, report-level candidate/model analyses, and `run_matrix(...) -> EvaluationReport`.
+- `reports.py` — `write_report_json(...)`, `load_report_payload(...)`, and `render_report_summary(...)` for the single saved `report.json` artifact.
+- `logfire_config.py` — optional Pydantic Logfire configuration used only when `eval --logfire` is passed.
 - `optimize_dspy.py` — DSPy COPRO prompt optimizer that exports optimized `PromptCandidate` artifacts and reuses the real harness metric path.
 - `cli.py` / `__main__.py` — `eval`, `report`, and `optimize` subcommands.
 

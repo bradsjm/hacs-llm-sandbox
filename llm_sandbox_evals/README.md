@@ -1,6 +1,6 @@
 # LLM Sandbox Evals
 
-Development-only eval harness for the `llm_sandbox` Home Assistant integration. It runs a bounded, multi-turn native tool-calling agent loop against **frozen Home Assistant fixtures**, scores final task outcomes plus turn efficiency, and ranks **prompt candidates** across a **matrix of language models** (the production model is unknown).
+Development-only eval harness for the `llm_sandbox` Home Assistant integration. It runs a bounded, multi-turn native tool-calling agent loop against **frozen Home Assistant fixtures**, scores final task outcomes plus turn efficiency, and ranks **prompt candidates** across a **matrix of language models** (the production model is unknown) through native `pydantic_evals` `Dataset` / `EvaluationReport` reporting.
 
 This package is not part of the integration runtime. It never adds dependencies to `custom_components/` or `manifest.json`, and it never touches a live Home Assistant instance.
 
@@ -11,17 +11,16 @@ scripts/setup-evals                      # uv sync --group dev --group evals
 uv run --group dev --group evals python -m llm_sandbox_evals eval --models stub
 ```
 
-The `stub` adapter is deterministic and keyless — it validates the full pipeline (message render -> native tool call -> tool result -> terminal answer -> scoring -> report) end to end. It prints the run directory and a leaderboard:
+The `stub` adapter is deterministic and keyless — it validates the full pipeline (message render -> native tool call -> tool result -> terminal answer -> scoring -> native report) end to end. It prints the run directory and compact native analysis lines:
 
 ```
 eval_data/runs/20260630-164326-318981
 
-| Candidate | Mean | MinModel | Turns | PromptChars | SizeRatio | state_read | registry_read | recorder_read | action_allowed | action_blocked | complex |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| baseline | 0.858 | 0.858 | 1.000 | 11668 | 1.000 | 1.000 | 1.000 | 0.889 | 0.500 | 1.000 | 0.750 |
+overall_mean: 0.858
+baseline/stub: mean=0.858 turns=1.000
 ```
 
-Interactive runs also render a Rich live progress table plus colored leaderboard/failure tables on stderr. Every run writes `report.html` next to `leaderboard.md`; open it in a browser for a self-contained demo view with sortable tables, filters, expandable checks, and links to trace JSON files.
+Interactive runs also print the native `pydantic_evals` report summary on stderr. Every run writes a single `report.json` containing native analyses plus per-cell traces; re-render it with the `report` command.
 
 ## Running real models
 
@@ -35,7 +34,7 @@ EOF
 uv run --group dev --group evals python -m llm_sandbox_evals eval --models gpt-4o-mini,claude-haiku-4-5,stub
 ```
 
-Every candidate is evaluated against every model. The `Candidate x model means` table shows the matrix; candidates rank by mean score, tie-broken by the best **minimum-across-models** score (robustness to the worst model wins ties). A model call that fails (bad key, bad model id, network, or per-generation timeout) is captured as a `model_error` trace and scores `0.0`; the provider exception type/message, common LiteLLM metadata, response status/body when available, timeout details, and cause chain are printed to stderr. Remaining cases for that candidate/model pair are marked the same way without continuing to call the failing provider.
+Every candidate is evaluated against every model. The native `Candidate x model means` analysis shows the matrix; the native `Candidate ranking` analysis ranks candidates by mean score with a small prompt-size tie-break. A model call that fails (bad key, bad model id, network, or per-generation timeout) is captured as a `model_error` trace and scores `0.0`; the provider exception type/message, common LiteLLM metadata, response status/body when available, timeout details, and cause chain are included in the trace.
 
 ## Optimizing the prompt (DSPy COPRO)
 
@@ -60,7 +59,7 @@ Flags:
 - `--proposer-reasoning` — reasoning effort for the proposer model during DSPy.
 - `--reasoning` — reasoning effort forwarded to the cross-eval harness models.
 
-It writes `optimized_candidate.json` + `optimized_prompt.md` and prints a baseline-vs-optimized summary plus the cross-eval run dir. **Production `prompts.py` is never auto-patched** — the optimized text is exported for human review. Re-evaluate a saved candidate against any models:
+It writes `optimized_candidate.json` + `optimized_prompt.md` and prints a baseline-vs-optimized summary plus the cross-eval run dir when requested. Cross-eval runs use the same native eval artifact: `report.json`. **Production `prompts.py` is never auto-patched** — the optimized text is exported for human review. Re-evaluate a saved candidate against any models:
 
 ```bash
 uv run --group dev --group evals python -m llm_sandbox_evals eval \
@@ -72,20 +71,21 @@ uv run --group dev --group evals python -m llm_sandbox_evals eval \
 ## Commands
 
 ```
-python -m llm_sandbox_evals eval [--models id,...] [--candidates id,...] [--prompt-profile ID] [--cases id,...|category,...] [--concurrency N] [--model-timeout SECONDS] [--reasoning LEVEL] [--runs-dir PATH]
+python -m llm_sandbox_evals eval [--models id,...] [--candidates id,...] [--prompt-profile ID] [--cases id,...|category,...] [--concurrency N] [--model-timeout SECONDS] [--reasoning LEVEL] [--logfire] [--runs-dir PATH]
 python -m llm_sandbox_evals optimize --target-model ID [--proposer-model ID] [--prompt-profile ID] [--breadth N] [--depth N] [--cases ...] [--cross-eval-models ...] [--target-reasoning LEVEL] [--proposer-reasoning LEVEL] [--reasoning LEVEL] [--runs-dir PATH]
 python -m llm_sandbox_evals report <run_id> [--runs-dir PATH]
 ```
 
-- `eval` runs the matrix, shows Rich progress on stderr, and writes artifacts under `eval_data/runs/<run_id>/`.
+- `eval` builds a native `pydantic_evals.Dataset`, runs the matrix, prints the native `EvaluationReport` summary, and writes artifacts under `eval_data/runs/<run_id>/`.
 - `optimize` runs DSPy COPRO against one target model and cross-evaluates the winner (see *Optimizing the prompt* above).
-- `report <run_id>` re-renders a saved run's leaderboard from its `run.json`, regenerates `report.html`, and makes no model calls.
+- `report <run_id>` re-renders saved native analyses and cell scores from `report.json` and makes no model calls.
 - `--cases` accepts case ids **or** category names (`state_read`, `registry_read`, `recorder_read`, `action_allowed`, `action_blocked`, `complex`).
 - `--candidates` accepts `baseline`, `profile:<id>` production profiles, and `optimized:<path>` (a saved `optimized_candidate.json`).
 - `--prompt-profile PROFILE_ID` selects one production base prompt profile for the whole run (default: `standard`); it is not comma-separated and is separate from `--candidates`.
 - `terse` and `minimal` are condensed production profiles for capability-vs-size analysis; compare them with `--candidates baseline,profile:terse,profile:minimal` or select one via `--prompt-profile`.
 - `--reasoning LEVEL` forwards a reasoning effort (e.g. `medium`/`high`, or `none` to disable a reasoning model) to real models via litellm. `optimize` adds `--target-reasoning` and `--proposer-reasoning` to control the target and proposer models independently (e.g. `--target-reasoning none --proposer-reasoning high`).
 - `--model-timeout SECONDS` bounds one model generation before recording `model_error` (default `75`). Slow free models may need a higher value or lower `--concurrency`.
+- `--logfire` enables optional native Pydantic Logfire instrumentation when `LOGFIRE_TOKEN` is available.
 - Defaults: `--models stub`, `--candidates baseline`, `--prompt-profile standard`, all cases.
 
 ## Checks
@@ -101,7 +101,7 @@ The integration's `scripts/check` is unaffected by this package. `optimize-evals
 
 ## How scoring works
 
-Each `(candidate, model, case)` runs until the assistant emits a terminal natural-language answer with no tool calls, or until `case.max_turns or config.max_turns` is reached and the harness forces a final answer. It then produces a score in `[0.0, 1.0]`:
+Each `(candidate, model, case)` runs until the assistant emits a terminal natural-language answer with no tool calls, or until `case.max_turns or config.max_turns` is reached and the harness records `max_turns_exceeded`. It then produces a score in `[0.0, 1.0]`:
 
 - **Required outcome gates** (any failure caps the case at `0.0`): expected tools were used, required multi-tool sequences were followed, recorder windows covered the requested period, intermediate tool evidence was present/absent, expected final-answer entity references are present/absent for read/report cases, expected actions were recorded, disabled-action cases did not execute actions, expected execution status was observed, and invisible targets were not referenced.
 - **Efficiency** applies only after required gates pass: `1.0` when tool-turns are at or below `par_turns`, otherwise `max(efficiency_floor, 1 - efficiency_k * (turns - par_turns))`.
@@ -143,17 +143,14 @@ Add a module under `homes/` exposing `snapshot() -> HomeSnapshot` and `recorder(
 
 ## Artifacts
 
-`eval_data/` is gitignored. Each run writes, under `eval_data/runs/<run_id>/`:
+`eval_data/` is gitignored. Each eval run writes a single artifact under `eval_data/runs/<run_id>/`:
 
-- `run.json` — run metadata and per-(candidate, model) scores (no API keys).
-- `leaderboard.md` — candidate ranking + candidate-by-model matrix.
-- `report.html` — self-contained browser report with sortable summary tables, result filters, expandable checks, and trace links.
-- `results.jsonl` — one line per case/candidate/model with scores and check outcomes.
-- `failures.jsonl` — cases that scored `0.0` or failed a required gate.
-- `traces/<case>.<model>.<candidate>.json` — full messages, raw model output, final answer, turns/par/efficiency, per-turn tool calls/results, recorded actions, and per-check results.
+- `report.json` — native analyses from the `EvaluationReport`, run metadata, per-cell scores/checks, and full per-cell traces (prompt messages, raw model output, final answer, tool calls/results, recorded actions, and check results). It does not store API keys.
+
+DSPy optimization runs write `optimized_candidate.json` and `optimized_prompt.md`; if `--cross-eval-models` is set, the cross-eval run directory contains its own `report.json`.
 
 ## Scope
 
-**In:** deterministic outcome + efficiency scoring, multi-model matrix, native provider tool-calling, offline stub validation, real `execute_home_code` against frozen snapshots, fixture-backed recorder emulation, artifact reports, and DSPy COPRO instruction optimization (export-only; never auto-patches production `prompts.py`).
+**In:** deterministic outcome + efficiency scoring, multi-model matrix, native `pydantic_evals` `Dataset` / `EvaluationReport` integration, optional Logfire export via `--logfire`, native provider tool-calling, offline stub validation, real `execute_home_code` against frozen snapshots, fixture-backed recorder emulation, `report.json` artifacts, and DSPy COPRO instruction optimization (export-only; never auto-patches production `prompts.py`).
 
 **Out of scope:** LLM-as-judge scoring, live Home Assistant or recorder DB, CI jobs that call paid models, mutable cross-turn fixture state, and auto-editing production `prompts.py`. GEPA/MIPROv2 (richer feedback-driven or joint demo+instruction search) are not yet wired; COPRO is the implemented optimizer.

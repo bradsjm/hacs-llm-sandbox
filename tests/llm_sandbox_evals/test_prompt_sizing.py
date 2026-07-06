@@ -1,13 +1,9 @@
-import json
-from pathlib import Path
-
 import pytest
 from custom_components.llm_sandbox.const import DEFAULT_PROMPT_PROFILE, TOOL_GET_HISTORY
 from custom_components.llm_sandbox.llm_api.tools._aggregates import AGGREGATORS
 from llm_sandbox_evals.optimize_dspy import size_penalized_utility
 from llm_sandbox_evals.prompts import baseline_candidate, candidate_prompt_sizes, function_schemas, load_candidates
-from llm_sandbox_evals.reports import load_run_json, render_leaderboard_from_scores
-from llm_sandbox_evals.schema import CandidateModelScore, PromptCandidate
+from llm_sandbox_evals.schema import PromptCandidate
 
 
 def test_load_candidates_accepts_profile_candidate() -> None:
@@ -88,90 +84,3 @@ def test_size_penalized_utility(
 
     assert utility == pytest.approx(expected)
     assert (utility < score) is expected_less_than_score
-
-
-def test_leaderboard_ranks_smaller_api_prompt_first_for_equal_mean() -> None:
-    scores = [
-        CandidateModelScore(
-            candidate_id="big",
-            model_id="stub",
-            mean=0.5,
-            mean_turns=1.0,
-            per_category={"intent": 0.5},
-            case_scores={"case": 0.5},
-            api_prompt_chars=1000,
-            prompt_chars=2000,
-        ),
-        CandidateModelScore(
-            candidate_id="small",
-            model_id="stub",
-            mean=0.5,
-            mean_turns=1.0,
-            per_category={"intent": 0.5},
-            case_scores={"case": 0.5},
-            api_prompt_chars=500,
-            prompt_chars=1000,
-        ),
-    ]
-
-    out = render_leaderboard_from_scores(
-        scores=scores,
-        run_id="t",
-        created_at="t",
-        case_count=1,
-        candidate_ids=["big", "small"],
-        model_ids=["stub"],
-    )
-
-    assert out.index("small") < out.index("big")
-    assert "PromptChars" in out
-    assert "SizeRatio" in out
-
-
-@pytest.mark.parametrize(
-    ("score_fields", "expected_api_prompt_chars", "expected_prompt_chars"),
-    [
-        pytest.param(
-            {"api_prompt_chars": 7271, "prompt_chars": 10156},
-            7271,
-            10156,
-            id="with-sizes",
-        ),
-        pytest.param({}, 0, 0, id="legacy-defaults"),
-    ],
-)
-def test_load_run_json_preserves_prompt_sizes(
-    tmp_path: Path,
-    score_fields: dict[str, object],
-    expected_api_prompt_chars: int,
-    expected_prompt_chars: int,
-) -> None:
-    run_json = tmp_path / "run.json"
-    run_json.write_text(
-        json.dumps(
-            {
-                "run_id": "run",
-                "created_at": "2026-07-02T00:00:00+00:00",
-                "candidate_ids": ["candidate"],
-                "model_ids": ["stub"],
-                "case_count": 1,
-                "scores": [
-                    {
-                        "candidate_id": "candidate",
-                        "model_id": "stub",
-                        "mean": 0.75,
-                        "mean_turns": 1.0,
-                        "per_category": {"intent": 0.75},
-                        "case_scores": {"case": 0.75},
-                        **score_fields,
-                    }
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    _run_id, _created_at, _case_count, _candidate_ids, _model_ids, scores = load_run_json(run_json)
-
-    assert scores[0].api_prompt_chars == expected_api_prompt_chars
-    assert scores[0].prompt_chars == expected_prompt_chars

@@ -13,12 +13,11 @@ from typing import Any
 import dspy
 from custom_components.llm_sandbox.llm_api.prompts import PromptProfile, resolve_profile
 
-from llm_sandbox_evals import prompts, reports
+from llm_sandbox_evals import experiment, prompts, reports
 from llm_sandbox_evals.config import EvalConfig
-from llm_sandbox_evals.harness import _select_cases, run_case, run_matrix
+from llm_sandbox_evals.harness import _select_cases, run_case
 from llm_sandbox_evals.models import get_adapter, litellm_reasoning_kwargs
 from llm_sandbox_evals.schema import EvalCase, PromptCandidate
-from llm_sandbox_evals.scoring import mean_score
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,23 +147,25 @@ def run_optimize(config: EvalConfig) -> OptimizerResult:
     cross_eval_run_dir: Path | None = None
     # Branch boundary: cross-evaluation is optional because it can multiply paid model calls.
     if config.cross_eval_models:
-        cross_result = asyncio.run(
-            run_matrix(
-                EvalConfig(
-                    models=config.cross_eval_models,
-                    candidates=["baseline", f"optimized:{candidate_path}"],
-                    prompt_profile=config.prompt_profile,
-                    cases=config.cases,
-                    homes=config.homes,
-                    runs_dir=config.runs_dir,
-                    max_turns=config.max_turns,
-                    efficiency_k=config.efficiency_k,
-                    efficiency_floor=config.efficiency_floor,
-                    reasoning_effort=config.reasoning_effort,
-                )
-            )
+        cross_config = EvalConfig(
+            models=config.cross_eval_models,
+            candidates=["baseline", f"optimized:{candidate_path}"],
+            prompt_profile=config.prompt_profile,
+            cases=config.cases,
+            homes=config.homes,
+            runs_dir=config.runs_dir,
+            max_turns=config.max_turns,
+            efficiency_k=config.efficiency_k,
+            efficiency_floor=config.efficiency_floor,
+            reasoning_effort=config.reasoning_effort,
         )
-        cross_eval_run_dir = reports.write_run(cross_result, config.runs_dir)
+        cross_report = asyncio.run(experiment.run_matrix(cross_config))
+        cross_eval_run_dir = reports.write_report_json(
+            cross_report,
+            cross_config,
+            run_id=datetime.now(UTC).strftime("%Y%m%d-%H%M%S-%f"),
+            created_at=datetime.now(UTC).isoformat(),
+        )
 
     baseline_prompt_chars, baseline_authored = prompts.candidate_prompt_sizes(baseline)
     _ = baseline_authored
@@ -254,11 +255,7 @@ def save_candidate(candidate: PromptCandidate, path: Path) -> None:
 def _candidate_mean(config: EvalConfig) -> float:
     """Run one candidate/model matrix and return its mean, isolating evaluation failures."""
     try:
-        result = asyncio.run(run_matrix(config))
+        report = asyncio.run(experiment.run_matrix(config))
     except Exception:  # noqa: BLE001 - summary scoring should not hide an exported optimizer artifact.
         return 0.0
-    if not result.scores:
-        return 0.0
-    if len(result.scores) == 1:
-        return result.scores[0].mean
-    return mean_score([score.mean for score in result.scores])
+    return experiment.overall_mean(report)

@@ -1,230 +1,110 @@
-"""Artifact writing and leaderboard rendering for eval runs.
-
-The ``report`` CLI command reloads ``run.json`` for leaderboard data. That file
-stores enough metadata plus serialized ``CandidateModelScore`` objects to render
-the same leaderboard without loading full prompts or per-case traces.
-"""
+"""Single-artifact persistence for native pydantic-evals reports."""
 
 import json
-import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from llm_sandbox_evals.schema import CandidateModelScore, CaseTrace, RunResult
+from pydantic_evals.reporting import EvaluationReport, ReportCase
 
-_SAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9_.-]")
+from llm_sandbox_evals.config import EvalConfig
+from llm_sandbox_evals.experiment import MatrixCellMeta, MatrixCellRef
+from llm_sandbox_evals.schema import CaseTrace
+
 _INTEGRATION_MANIFEST = Path(__file__).resolve().parent.parent / "custom_components" / "llm_sandbox" / "manifest.json"
-# Two candidate means within this epsilon are treated as equal quality and tie-broken by smaller prompt size.
-_SIZE_TIE_EPSILON = 0.005
 
 
 @dataclass(frozen=True, slots=True)
-class CandidateRow:
-    """Display-ready aggregate row for one prompt candidate."""
+class ReportPayload:
+    """Persisted report.json payload used by the no-model-calls report subcommand."""
 
-    candidate_id: str
-    mean: float
-    min_model: float
-    mean_turns: float
-    category_means: dict[str, float]
-    prompt_chars: int
-    api_prompt_chars: int
-    size_ratio: float
-
-
-@dataclass(frozen=True, slots=True)
-class MatrixRow:
-    """Display-ready aggregate row for one candidate/model pair."""
-
-    candidate_id: str
-    model_id: str
-    mean: float
-    mean_turns: float
+    run_id: str
+    created_at: str
+    integration_version: str
+    candidate_ids: list[str]
+    model_ids: list[str]
+    case_count: int
+    analyses: list[dict[str, object]]
+    cells: list[dict[str, object]]
 
 
-def write_run(result: RunResult, runs_dir: Path) -> Path:
-    """Write run artifacts and return the created run directory."""
-    run_dir = runs_dir / result.run_id
-    traces_dir = run_dir / "traces"
-    traces_dir.mkdir(parents=True, exist_ok=False)
-
-    run_json = _run_json(result)
-    (run_dir / "run.json").write_text(json.dumps(run_json, indent=2) + "\n", encoding="utf-8")
-    (run_dir / "leaderboard.md").write_text(render_leaderboard(result), encoding="utf-8")
-
-    result_lines: list[dict[str, object]] = []
-    failure_lines: list[dict[str, object]] = []
-    for trace in result.traces:
-        result_line = _result_line(trace)
-        result_lines.append(result_line)
-        # Branch boundary: failures are zero scores or any failed required check.
-        if trace.score == 0.0 or any(check.required and not check.passed for check in trace.checks):
-            failure_lines.append(result_line)
-        trace_path = traces_dir / trace_filename(trace.case_id, trace.model_id, trace.candidate_id)
-        trace_path.write_text(json.dumps(_trace_json(trace), indent=2, sort_keys=True) + "\n", encoding="utf-8")
-
-    _write_jsonl(run_dir / "results.jsonl", result_lines)
-    _write_jsonl(run_dir / "failures.jsonl", failure_lines)
-    from llm_sandbox_evals.html_report import write_html
-
-    write_html(run_dir)
+def write_report_json(
+    report: EvaluationReport[MatrixCellRef, CaseTrace, MatrixCellMeta],
+    config: EvalConfig,
+    *,
+    run_id: str,
+    created_at: str,
+) -> Path:
+    """Write the single report.json artifact and return its run directory."""
+    run_dir = config.runs_dir / run_id
+    run_dir.mkdir(parents=True, exist_ok=False)
+    cells = [_cell_json(case) for case in report.cases]
+    payload = ReportPayload(
+        run_id=run_id,
+        created_at=created_at,
+        integration_version=_integration_version(),
+        candidate_ids=_ordered_values(cells, "candidate_id"),
+        model_ids=_ordered_values(cells, "model_id"),
+        case_count=len(_ordered_values(cells, "case_id")),
+        analyses=[analysis.model_dump(mode="json") for analysis in report.analyses],
+        cells=cells,
+    )
+    (run_dir / "report.json").write_text(
+        json.dumps(asdict(payload), indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     return run_dir
 
 
-def render_leaderboard(result: RunResult) -> str:
-    """Render a plain-Markdown leaderboard from a full run result."""
-    return render_leaderboard_from_scores(
-        scores=result.scores,
-        run_id=result.run_id,
-        created_at=result.created_at,
-        case_count=len(result.case_ids),
-        candidate_ids=result.candidate_ids,
-        model_ids=result.model_ids,
-    )
-
-
-def render_leaderboard_from_scores(
-    *,
-    scores: list[CandidateModelScore],
-    run_id: str,
-    created_at: str,
-    case_count: int,
-    candidate_ids: list[str],
-    model_ids: list[str],
-) -> str:
-    """Render a leaderboard from serialized score summaries in ``run.json``."""
-    categories = score_categories(scores)
-    lines = [f"# Eval leaderboard {run_id}", "", f"Created: {created_at}", f"Cases: {case_count}", ""]
-    lines.extend(_candidate_table(scores, candidate_ids, model_ids, categories))
-    lines.extend(("", "## Candidate x model means", ""))
-    lines.extend(_model_matrix_table(scores, candidate_ids, model_ids))
-    return "\n".join(lines) + "\n"
-
-
-def score_categories(scores: list[CandidateModelScore]) -> list[str]:
-    """Return categories present in score summaries, preserving first-seen order."""
-    categories: list[str] = []
-    for score in scores:
-        for category in score.per_category:
-            if category not in categories:
-                categories.append(category)
-    return categories
-
-
-def candidate_rows(
-    scores: list[CandidateModelScore], candidate_ids: list[str], model_ids: list[str]
-) -> list[CandidateRow]:
-    """Return sorted candidate aggregate rows shared by all report renderers."""
-    categories = score_categories(scores)
-    score_map = {(score.candidate_id, score.model_id): score for score in scores}
-    candidate_prompt_chars: dict[str, int] = {}
-    for candidate_id in candidate_ids:
-        candidate_scores = [
-            score_map[(candidate_id, model_id)] for model_id in model_ids if (candidate_id, model_id) in score_map
-        ]
-        candidate_prompt_chars[candidate_id] = candidate_scores[0].prompt_chars if candidate_scores else 0
-
-    baseline_prompt_chars = candidate_prompt_chars.get("baseline", max(candidate_prompt_chars.values(), default=0))
-    if baseline_prompt_chars == 0:
-        baseline_prompt_chars = 1
-
-    rows: list[CandidateRow] = []
-    for candidate_id in candidate_ids:
-        candidate_scores = [
-            score_map[(candidate_id, model_id)] for model_id in model_ids if (candidate_id, model_id) in score_map
-        ]
-        prompt_chars = candidate_prompt_chars[candidate_id]
-        api_prompt_chars = candidate_scores[0].api_prompt_chars if candidate_scores else 0
-        category_means: dict[str, float] = {}
-        for category in categories:
-            category_values = [
-                score.per_category[category] for score in candidate_scores if category in score.per_category
-            ]
-            category_means[category] = _mean(category_values)
-
-        # State mutation point: rows are the shared contract for every display renderer.
-        rows.append(
-            CandidateRow(
-                candidate_id=candidate_id,
-                mean=_mean([case_score for score in candidate_scores for case_score in score.case_scores.values()]),
-                min_model=min((score.mean for score in candidate_scores), default=0.0),
-                mean_turns=_mean([score.mean_turns for score in candidate_scores]),
-                category_means=category_means,
-                prompt_chars=prompt_chars,
-                api_prompt_chars=api_prompt_chars,
-                size_ratio=prompt_chars / baseline_prompt_chars,
-            )
-        )
-
-    rows.sort(
-        key=lambda row: (
-            -round(row.mean / _SIZE_TIE_EPSILON),
-            row.api_prompt_chars,
-            -row.min_model,
-        )
-    )
-    return rows
-
-
-def matrix_rows(scores: list[CandidateModelScore], candidate_ids: list[str], model_ids: list[str]) -> list[MatrixRow]:
-    """Return candidate/model aggregate rows in deterministic matrix order."""
-    score_map = {(score.candidate_id, score.model_id): score for score in scores}
-    rows: list[MatrixRow] = []
-    for candidate_id in candidate_ids:
-        for model_id in model_ids:
-            score = score_map.get((candidate_id, model_id))
-            rows.append(
-                MatrixRow(
-                    candidate_id=candidate_id,
-                    model_id=model_id,
-                    mean=0.0 if score is None else score.mean,
-                    mean_turns=0.0 if score is None else score.mean_turns,
-                )
-            )
-    return rows
-
-
-def load_results(results_jsonl: Path) -> list[dict[str, object]]:
-    """Load ``results.jsonl`` rows for simple downstream inspection."""
-    rows: list[dict[str, object]] = []
-    for line in results_jsonl.read_text(encoding="utf-8").splitlines():
-        # Branch boundary: tolerate blank lines in manually edited/copied jsonl files.
-        if not line.strip():
-            continue
-        decoded = json.loads(line)
-        if isinstance(decoded, dict):
-            rows.append(dict(decoded))
-    return rows
-
-
-def load_run_json(run_json: Path) -> tuple[str, str, int, list[str], list[str], list[CandidateModelScore]]:
-    """Load leaderboard metadata and score summaries from ``run.json``."""
-    decoded = json.loads(run_json.read_text(encoding="utf-8"))
+def load_report_payload(run_dir: Path) -> ReportPayload:
+    """Load a saved native report payload."""
+    decoded = json.loads((run_dir / "report.json").read_text(encoding="utf-8"))
     if not isinstance(decoded, dict):
-        raise ValueError("run.json must contain a JSON object")
-
-    return (
-        _string_field(decoded, "run_id"),
-        _string_field(decoded, "created_at"),
-        _int_field(decoded, "case_count"),
-        _string_list(decoded.get("candidate_ids")),
-        _string_list(decoded.get("model_ids")),
-        _scores_field(decoded.get("scores")),
+        raise ValueError("report.json must contain a JSON object")
+    return ReportPayload(
+        run_id=_string_field(decoded, "run_id"),
+        created_at=_string_field(decoded, "created_at"),
+        integration_version=_string_field(decoded, "integration_version"),
+        candidate_ids=_string_list(decoded.get("candidate_ids")),
+        model_ids=_string_list(decoded.get("model_ids")),
+        case_count=_int_field(decoded, "case_count"),
+        analyses=_dict_list(decoded.get("analyses")),
+        cells=_dict_list(decoded.get("cells")),
     )
 
 
-def _run_json(result: RunResult) -> dict[str, object]:
-    """Build metadata-only run.json content; prompts stay in trace files."""
-    return {
-        "run_id": result.run_id,
-        "created_at": result.created_at,
-        "integration_version": _integration_version(),
-        "candidate_ids": result.candidate_ids,
-        "model_ids": result.model_ids,
-        "case_ids": result.case_ids,
-        "case_count": len(result.case_ids),
-        "scores": [asdict(score) for score in result.scores],
-    }
+def render_report_summary(payload: ReportPayload) -> str:
+    """Render saved analyses and cell scores as plain text without model calls."""
+    lines = [
+        f"Eval report {payload.run_id}",
+        f"Created: {payload.created_at}",
+        f"Cases: {payload.case_count}",
+        "",
+    ]
+    for analysis in payload.analyses:
+        title = str(analysis.get("title", "Analysis"))
+        analysis_type = analysis.get("type")
+        lines.extend([title, "-" * len(title)])
+        if analysis_type == "scalar":
+            lines.append(str(analysis.get("value", "")))
+        elif analysis_type == "table":
+            raw_columns = analysis.get("columns", [])
+            columns = [str(column) for column in raw_columns] if isinstance(raw_columns, list) else []
+            rows = analysis.get("rows", [])
+            lines.append("\t".join(columns))
+            if isinstance(rows, list):
+                for row in rows:
+                    if isinstance(row, list):
+                        lines.append("\t".join(str(value) for value in row))
+        lines.append("")
+    lines.append("Cells")
+    lines.append("-----")
+    for cell in payload.cells:
+        score = cell.get("score", 0.0)
+        score_float = float(score) if isinstance(score, int | float) else 0.0
+        lines.append(
+            f"{cell.get('candidate_id')}/{cell.get('model_id')}/{cell.get('case_id')}: "
+            f"score={score_float:.3f} turns={cell.get('turns')}"
+        )
+    return "\n".join(lines) + "\n"
 
 
 def _integration_version() -> str:
@@ -232,29 +112,31 @@ def _integration_version() -> str:
     decoded = json.loads(_INTEGRATION_MANIFEST.read_text(encoding="utf-8"))
     if not isinstance(decoded, dict):
         raise ValueError("manifest.json must contain a JSON object")
-
     version = decoded.get("version")
     if not isinstance(version, str):
         raise ValueError("manifest.json field 'version' must be a string")
     return version
 
 
-def _result_line(trace: CaseTrace) -> dict[str, object]:
-    """Build one compact results/failures JSONL row."""
+def _cell_json(report_case: ReportCase[MatrixCellRef, CaseTrace, MatrixCellMeta]) -> dict[str, object]:
+    trace: CaseTrace = report_case.output
+    metadata = report_case.metadata or {}
+    score = report_case.scores.get("score")
     return {
-        "case_id": trace.case_id,
-        "category": trace.category,
-        "candidate_id": trace.candidate_id,
-        "model_id": trace.model_id,
-        "score": trace.score,
+        "case_id": str(metadata["case_id"]),
+        "category": str(metadata["category"]),
+        "candidate_id": str(metadata["candidate_id"]),
+        "model_id": str(metadata["model_id"]),
+        "score": 0.0 if score is None else float(score.value),
         "turns": trace.turns,
-        "par_turns": trace.par_turns,
+        "par_turns": int(metadata["par_turns"]),
         "checks": [{"name": check.name, "passed": check.passed, "required": check.required} for check in trace.checks],
+        "trace": _trace_json(trace),
     }
 
 
 def _trace_json(trace: CaseTrace) -> dict[str, object]:
-    """Build one full per-trace artifact."""
+    """Build one full per-cell trace artifact inside report.json."""
     return {
         "case_id": trace.case_id,
         "category": trace.category,
@@ -274,134 +156,36 @@ def _trace_json(trace: CaseTrace) -> dict[str, object]:
     }
 
 
-def _write_jsonl(path: Path, rows: list[dict[str, object]]) -> None:
-    """Write JSONL rows with deterministic key order."""
-    path.write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in rows), encoding="utf-8")
-
-
-def trace_filename(case_id: str, model_id: str, candidate_id: str) -> str:
-    """Return the filesystem-safe trace filename for one matrix cell."""
-    parts = (_sanitize(case_id), _sanitize(model_id), _sanitize(candidate_id))
-    return f"{parts[0]}.{parts[1]}.{parts[2]}.json"
-
-
-def _sanitize(value: str) -> str:
-    """Replace unsafe filename characters with underscores."""
-    return _SAFE_FILENAME_RE.sub("_", value)
-
-
-def _candidate_table(
-    scores: list[CandidateModelScore],
-    candidate_ids: list[str],
-    model_ids: list[str],
-    categories: list[str],
-) -> list[str]:
-    """Render candidate ranking rows."""
-    rows = candidate_rows(scores, candidate_ids, model_ids)
-    header = ["Candidate", "Mean", "MinModel", "Turns", "PromptChars", "SizeRatio", *categories]
-    lines = [_markdown_row(header), _markdown_separator(len(header))]
+def _ordered_values(rows: list[dict[str, object]], key: str) -> list[str]:
+    values: list[str] = []
     for row in rows:
-        lines.append(
-            _markdown_row(
-                [
-                    row.candidate_id,
-                    _format_score(row.mean),
-                    _format_score(row.min_model),
-                    _format_score(row.mean_turns),
-                    str(int(row.prompt_chars)),
-                    _format_score(row.size_ratio),
-                    *[_format_score(row.category_means[cat]) for cat in categories],
-                ]
-            )
-        )
-    return lines
-
-
-def _model_matrix_table(
-    scores: list[CandidateModelScore], candidate_ids: list[str], model_ids: list[str]
-) -> list[str]:
-    """Render per-candidate/per-model mean and turns rows."""
-    header = ["Candidate", "Model", "Mean", "Turns"]
-    lines = [_markdown_row(header), _markdown_separator(len(header))]
-    for row in matrix_rows(scores, candidate_ids, model_ids):
-        lines.append(
-            _markdown_row(
-                [
-                    row.candidate_id,
-                    row.model_id,
-                    _format_score(row.mean),
-                    _format_score(row.mean_turns),
-                ]
-            )
-        )
-    return lines
-
-
-def _markdown_row(values: list[str]) -> str:
-    """Render one Markdown table row."""
-    return "| " + " | ".join(values) + " |"
-
-
-def _markdown_separator(column_count: int) -> str:
-    """Render one Markdown table separator row."""
-    return "| " + " | ".join("---" for _ in range(column_count)) + " |"
-
-
-def _format_score(value: float) -> str:
-    """Format scores consistently for reports."""
-    return f"{value:.3f}"
-
-
-def _mean(values: list[float]) -> float:
-    """Return the arithmetic mean for report-only aggregations."""
-    if not values:
-        return 0.0
-    return sum(values) / len(values)
+        value = str(row[key])
+        if value not in values:
+            values.append(value)
+    return values
 
 
 def _string_field(data: dict[str, object], key: str) -> str:
     value = data.get(key)
     if not isinstance(value, str):
-        raise ValueError(f"run.json field {key!r} must be a string")
+        raise ValueError(f"report.json field {key!r} must be a string")
     return value
 
 
 def _int_field(data: dict[str, object], key: str) -> int:
     value = data.get(key)
     if not isinstance(value, int):
-        raise ValueError(f"run.json field {key!r} must be an integer")
+        raise ValueError(f"report.json field {key!r} must be an integer")
     return value
 
 
 def _string_list(value: object) -> list[str]:
     if not isinstance(value, list):
-        raise ValueError("run.json field must be a list")
+        raise ValueError("report.json field must be a list")
     return [item for item in value if isinstance(item, str)]
 
 
-def _scores_field(value: object) -> list[CandidateModelScore]:
+def _dict_list(value: object) -> list[dict[str, object]]:
     if not isinstance(value, list):
-        raise ValueError("run.json field 'scores' must be a list")
-    scores: list[CandidateModelScore] = []
-    for item in value:
-        if not isinstance(item, dict):
-            raise ValueError("run.json score entries must be objects")
-        scores.append(
-            CandidateModelScore(
-                candidate_id=_string_field(item, "candidate_id"),
-                model_id=_string_field(item, "model_id"),
-                mean=float(item.get("mean", 0.0)),
-                mean_turns=float(item.get("mean_turns", 0.0)),
-                per_category=_float_map(item.get("per_category")),
-                case_scores=_float_map(item.get("case_scores")),
-                api_prompt_chars=int(item.get("api_prompt_chars", 0)),
-                prompt_chars=int(item.get("prompt_chars", 0)),
-            )
-        )
-    return scores
-
-
-def _float_map(value: object) -> dict[str, float]:
-    if not isinstance(value, dict):
-        raise ValueError("run.json score maps must be objects")
-    return {str(key): float(item) for key, item in value.items() if isinstance(item, int | float)}
+        raise ValueError("report.json field must be a list")
+    return [dict(item) for item in value if isinstance(item, dict)]

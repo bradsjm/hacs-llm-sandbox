@@ -1,0 +1,236 @@
+from collections.abc import Sequence
+from pathlib import Path
+from typing import cast
+
+import pytest
+from custom_components.llm_sandbox.const import DEFAULT_PROMPT_PROFILE
+from llm_sandbox_evals.config import EvalConfig
+from llm_sandbox_evals.experiment import MatrixCellRef, build_dataset, run_matrix
+from llm_sandbox_evals.models import ModelAdapter, ModelResponseError, StubAdapter
+from llm_sandbox_evals.schema import (
+    AgentStep,
+    CaseContext,
+    CaseTrace,
+    CheckResult,
+    EvalCase,
+    Expected,
+    PromptCandidate,
+)
+from pydantic_evals.reporting.analyses import ScalarResult, TableResult
+
+from llm_sandbox_evals import experiment, reports
+
+
+async def test_run_matrix_stub_slice_writes_reloadable_report_json(tmp_path: Path) -> None:
+    config = _config(tmp_path, cases=["state_living_temperature"])
+
+    report = await run_matrix(config)
+    run_dir = reports.write_report_json(
+        report,
+        config,
+        run_id="stub-slice",
+        created_at="2026-07-06T00:00:00+00:00",
+    )
+    payload = reports.load_report_payload(run_dir)
+
+    assert len(report.cases) == 1
+    assert payload.run_id == "stub-slice"
+    assert payload.candidate_ids == ["baseline"]
+    assert payload.model_ids == ["stub"]
+    assert payload.case_count == 1
+    assert [(cell["candidate_id"], cell["model_id"], cell["case_id"]) for cell in payload.cells] == [
+        ("baseline", "stub", "state_living_temperature")
+    ]
+    assert cast(float, payload.cells[0]["score"]) == pytest.approx(1.0)
+    rendered = reports.render_report_summary(payload)
+    assert "stub-slice" in rendered
+    assert "baseline/stub/state_living_temperature" in rendered
+
+
+async def test_sandbox_outcome_reports_score_required_gate_and_model_error_label(tmp_path: Path) -> None:
+    config = _config(tmp_path, cases=None)
+    dataset = build_dataset(config, [_candidate("candidate-a")], [_case("case-a", "state_read")])
+
+    async def task(cell: MatrixCellRef) -> CaseTrace:
+        return _trace(
+            cell,
+            score=0.25,
+            checks=(
+                CheckResult("tool_used", True, True, ""),
+                CheckResult("domain_goal", False, True, "missing required outcome"),
+                CheckResult("model_error", False, True, "provider failed"),
+            ),
+        )
+
+    report = await dataset.evaluate(task, name="sandbox-outcome", progress=False, retry_task=None)
+    report_case = report.cases[0]
+
+    assert report_case.scores["score"].value == pytest.approx(0.25)
+    assert report_case.scores["score"].reason == "failed: domain_goal, model_error"
+    assert report_case.assertions["required_gates_passed"].value is False
+    assert report_case.assertions["required_gates_passed"].reason == "domain_goal, model_error"
+    assert report_case.labels["model_error"].value == "true"
+
+
+async def test_candidate_matrix_report_aggregates_candidate_model_and_category_means(tmp_path: Path) -> None:
+    config = _config(tmp_path, models=["model-a", "model-b"], cases=None)
+    candidates = [_candidate("baseline", api_prompt="baseline prompt"), _candidate("compact", api_prompt="short")]
+    selected_cases = [_case("case-state", "state_read"), _case("case-recorder", "recorder_read", par_turns=2)]
+    dataset = build_dataset(config, candidates, selected_cases)
+    outcomes = {
+        ("baseline", "model-a", "case-state"): (0.8, 1),
+        ("baseline", "model-a", "case-recorder"): (0.6, 3),
+        ("baseline", "model-b", "case-state"): (0.4, 1),
+        ("baseline", "model-b", "case-recorder"): (0.2, 1),
+        ("compact", "model-a", "case-state"): (0.9, 1),
+        ("compact", "model-a", "case-recorder"): (0.7, 1),
+        ("compact", "model-b", "case-state"): (0.8, 2),
+        ("compact", "model-b", "case-recorder"): (0.8, 2),
+    }
+
+    async def task(cell: MatrixCellRef) -> CaseTrace:
+        score, turns = outcomes[(cell.candidate_id, cell.model_id, cell.case_id)]
+        return _trace(cell, score=score, turns=turns)
+
+    report = await dataset.evaluate(task, name="candidate-matrix", progress=False, retry_task=None)
+    ranking = _table(report.analyses, "Candidate ranking")
+    pair_means = _table(report.analyses, "Candidate x model means")
+    overall = _scalar(report.analyses, "Overall mean score")
+
+    assert ranking.columns == [
+        "Candidate",
+        "Mean",
+        "MinModel",
+        "Turns",
+        "PromptChars",
+        "SizeRatio",
+        "state_read",
+        "recorder_read",
+    ]
+    assert ranking.rows[0][:4] == ["compact", 0.8, 0.8, 1.5]
+    assert ranking.rows[1][:4] == ["baseline", 0.5, 0.3, 1.5]
+    assert pair_means.rows == [
+        ["baseline", "model-a", 0.7, 2.0],
+        ["baseline", "model-b", 0.3, 1.0],
+        ["compact", "model-a", 0.8, 1.0],
+        ["compact", "model-b", 0.8, 2.0],
+    ]
+    assert overall.value == pytest.approx(0.65)
+
+
+async def test_run_matrix_keeps_scoring_other_models_when_one_model_errors(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        experiment,
+        "get_adapter",
+        _adapter_factory({"bad-model": FailingAdapter(), "stub": StubAdapter()}),
+    )
+    config = _config(tmp_path, models=["bad-model", "stub"], cases=["state_living_temperature"])
+
+    report = await run_matrix(config)
+    traces_by_model = {case.output.model_id: case.output for case in report.cases}
+
+    assert set(traces_by_model) == {"bad-model", "stub"}
+    assert traces_by_model["bad-model"].score == 0.0
+    assert [check.name for check in traces_by_model["bad-model"].checks] == ["model_error"]
+    assert traces_by_model["stub"].score == pytest.approx(1.0)
+
+
+class FailingAdapter:
+    async def respond(
+        self,
+        model_id: str,
+        messages: list[dict[str, object]],
+        tools: list[dict[str, object]],
+    ) -> AgentStep:
+        _ = (model_id, messages, tools)
+        raise ModelResponseError("provider rejected model", detail="provider rejected model")
+
+
+def _adapter_factory(adapters: dict[str, ModelAdapter]) -> object:
+    def adapter_for(
+        model_id: str,
+        reasoning_effort: str | None = None,
+        *,
+        model_timeout: float = 75.0,
+    ) -> ModelAdapter:
+        _ = (reasoning_effort, model_timeout)
+        return adapters[model_id]
+
+    return adapter_for
+
+
+def _config(
+    runs_dir: Path,
+    *,
+    models: list[str] | None = None,
+    cases: list[str] | None = None,
+) -> EvalConfig:
+    return EvalConfig(
+        models=models or ["stub"],
+        candidates=["baseline"],
+        prompt_profile=DEFAULT_PROMPT_PROFILE,
+        cases=cases,
+        homes=None,
+        runs_dir=runs_dir,
+        concurrency=1,
+    )
+
+
+def _candidate(candidate_id: str, *, api_prompt: str = "prompt") -> PromptCandidate:
+    return PromptCandidate(
+        id=candidate_id,
+        api_prompt=api_prompt,
+        execute_home_code_description="execute",
+        get_history_description="history",
+        get_statistics_description="statistics",
+        get_logbook_description="logbook",
+    )
+
+
+def _case(case_id: str, category: str, *, par_turns: int = 1) -> EvalCase:
+    return EvalCase(
+        id=case_id,
+        category=category,
+        home="home_default",
+        user_request="exercise native experiment aggregation",
+        actions_enabled=False,
+        llm_context=CaseContext(),
+        expected=Expected(tool_name="execute_home_code"),
+        par_turns=par_turns,
+    )
+
+
+def _trace(
+    cell: MatrixCellRef,
+    *,
+    score: float,
+    checks: tuple[CheckResult, ...] = (CheckResult("tool_used", True, True, ""),),
+    turns: int = 1,
+) -> CaseTrace:
+    return CaseTrace(
+        case_id=cell.case_id,
+        category=cell.category,
+        candidate_id=cell.candidate_id,
+        model_id=cell.model_id,
+        score=score,
+        prompt="[]",
+        raw_output="{}",
+        tool_call=None,
+        tool_result=None,
+        recorded_actions=(),
+        checks=checks,
+        turns=turns,
+        par_turns=cell.par_turns,
+        final_answer="done",
+        steps=(),
+    )
+
+
+def _table(analyses: Sequence[object], title: str) -> TableResult:
+    return next(analysis for analysis in analyses if isinstance(analysis, TableResult) and analysis.title == title)
+
+
+def _scalar(analyses: Sequence[object], title: str) -> ScalarResult:
+    return next(analysis for analysis in analyses if isinstance(analysis, ScalarResult) and analysis.title == title)

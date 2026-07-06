@@ -10,16 +10,16 @@ artifact explanations, and next steps — is written to ``stderr`` so piping
 import argparse
 import asyncio
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 from custom_components.llm_sandbox.llm_api.prompts import resolve_profile
 from dotenv import load_dotenv
+from rich.console import Console
 
+from llm_sandbox_evals import experiment, reports
 from llm_sandbox_evals.config import EvalConfig, load_config
-from llm_sandbox_evals.harness import _select_cases, run_matrix
-from llm_sandbox_evals.html_report import write_html
-from llm_sandbox_evals.reports import load_results, load_run_json, render_leaderboard_from_scores, write_run
-from llm_sandbox_evals.tui import LiveReporter, render_failures, render_leaderboard, stderr_console
+from llm_sandbox_evals.harness import _select_cases
 
 _STUB_NOTE = (
     '"stub" is a keyless, deterministic pipeline-checker: great for verifying the\n'
@@ -92,7 +92,7 @@ def _add_eval_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPar
             "Run the eval matrix: for every (prompt candidate x language model x test case),\n"
             "ask the model to use the available tools over one or more turns against a\n"
             "frozen Home Assistant snapshot, and score the result in 0.0-1.0. Artifacts are written under the\n"
-            "runs directory; the leaderboard is printed to stdout."
+            "runs directory; a native pydantic-evals summary is printed to stdout."
         ),
         epilog=(
             "Notes:\n"
@@ -162,15 +162,20 @@ def _add_eval_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPar
         "(e.g. minimal/low/medium/high, or none to disable a reasoning model). "
         "Ignored by 'stub'.",
     )
+    eval_parser.add_argument(
+        "--logfire",
+        action="store_true",
+        help="send evaluation traces and analyses to Pydantic Logfire when LOGFIRE_TOKEN is set.",
+    )
 
 
 def _add_report_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     """Register the `report` subcommand parser."""
     report_parser = subparsers.add_parser(
         "report",
-        help="re-render a saved run's leaderboard",
+        help="re-render a saved native report",
         description=(
-            "Reload a saved run.json and render its leaderboard without re-running any "
+            "Reload a saved report.json and render its analyses without re-running any "
             "model. No API keys are used and no model calls are made."
         ),
     )
@@ -296,7 +301,7 @@ def _run_eval(args: argparse.Namespace) -> int:
         prompt_profile=prompt_profile,
         cases=_csv_arg(args.cases) if args.cases is not None else base_config.cases,
         homes=base_config.homes,
-        runs_dir=args.runs_dir or base_config.runs_dir,
+        runs_dir=Path(args.runs_dir) if args.runs_dir else base_config.runs_dir,
         concurrency=args.concurrency if args.concurrency else base_config.concurrency,
         max_turns=args.max_turns if args.max_turns else base_config.max_turns,
         model_timeout=args.model_timeout if args.model_timeout else base_config.model_timeout,
@@ -307,68 +312,42 @@ def _run_eval(args: argparse.Namespace) -> int:
     selected_cases = _select_cases(config.cases, config.homes)
     _say(_eval_banner(config, len(selected_cases)))
 
-    console = stderr_console()
-    with LiveReporter(console) as reporter:
-        result = asyncio.run(run_matrix(config, reporter=reporter))
-    run_dir = write_run(result, config.runs_dir)
+    report = asyncio.run(experiment.run_matrix(config, logfire_enabled=args.logfire))
+    run_id = _derive_run_id()
+    created_at = datetime.now(UTC).isoformat()
+    run_dir = reports.write_report_json(report, config, run_id=run_id, created_at=created_at)
     _say(_eval_footer(run_dir))
-    render_leaderboard(
-        console,
-        scores=result.scores,
-        run_id=result.run_id,
-        created_at=result.created_at,
-        case_count=len(result.case_ids),
-        candidate_ids=result.candidate_ids,
-        model_ids=result.model_ids,
+    report.print(
+        console=Console(stderr=True),
+        include_output=False,
+        include_expected_output=False,
+        include_durations=True,
     )
-    render_failures(console, load_results(run_dir / "results.jsonl"))
 
-    # stdout stays machine-readable: the run directory then the leaderboard.
-    sys.stdout.write(f"{run_dir}\n\n")
-    sys.stdout.write((run_dir / "leaderboard.md").read_text(encoding="utf-8"))
+    # stdout stays machine-readable: the run directory and compact native analysis facts.
+    sys.stdout.write(f"run_dir: {run_dir}\n")
+    sys.stdout.write("\n".join(experiment.matrix_summary_lines(report)) + "\n")
     return 0
 
 
 def _run_report(args: argparse.Namespace) -> int:
     """Load a saved run.json and render its leaderboard."""
     base_config = load_config()
-    runs_dir = args.runs_dir or base_config.runs_dir
+    runs_dir = Path(args.runs_dir) if args.runs_dir else base_config.runs_dir
     run_id = args.run_id_option or args.run_id
     # Branch boundary: report needs exactly one run id source.
     if run_id is None:
         sys.stderr.write("error: report requires a run_id\n")
         return 2
 
-    run_json = runs_dir / run_id / "run.json"
-    if not run_json.exists():
-        sys.stderr.write(f"error: run not found: {run_json}\n")
+    report_json = runs_dir / run_id / "report.json"
+    if not report_json.exists():
+        sys.stderr.write(f"error: run not found: {report_json}\n")
         return 1
 
-    _say("(llm sandbox evals) re-rendering the leaderboard from saved scores (no model calls).\n")
-    loaded_run_id, created_at, case_count, candidate_ids, model_ids, scores = load_run_json(run_json)
-    html_path = write_html(run_json.parent)
-    console = stderr_console()
-    render_leaderboard(
-        console,
-        scores=scores,
-        run_id=loaded_run_id,
-        created_at=created_at,
-        case_count=case_count,
-        candidate_ids=candidate_ids,
-        model_ids=model_ids,
-    )
-    render_failures(console, load_results(run_json.parent / "results.jsonl"))
-    _say(f"HTML report: {html_path}\n")
-    sys.stdout.write(
-        render_leaderboard_from_scores(
-            scores=scores,
-            run_id=loaded_run_id,
-            created_at=created_at,
-            case_count=case_count,
-            candidate_ids=candidate_ids,
-            model_ids=model_ids,
-        )
-    )
+    _say("(llm sandbox evals) re-rendering the native report summary from report.json (no model calls).\n")
+    payload = reports.load_report_payload(report_json.parent)
+    sys.stdout.write(reports.render_report_summary(payload))
     return 0
 
 
@@ -390,7 +369,7 @@ def _run_optimize(args: argparse.Namespace) -> int:
         prompt_profile=prompt_profile,
         cases=_csv_arg(args.cases) if args.cases is not None else base_config.cases,
         homes=None,
-        runs_dir=args.runs_dir or base_config.runs_dir,
+        runs_dir=Path(args.runs_dir) if args.runs_dir else base_config.runs_dir,
         reasoning_effort=args.reasoning,
         target_model=args.target_model,
         proposer_model=args.proposer_model,
@@ -454,8 +433,8 @@ def _eval_banner(config: EvalConfig, case_count: int) -> str:
         "  1. renders native tool-calling messages and function schemas,\n"
         "  2. lets the model use available tools over one or more bounded turns, and\n"
         "  3. scores the final outcome plus turn efficiency in 0.0-1.0.\n\n"
-        "Candidates rank by mean score; ties break toward the candidate that holds up\n"
-        'best on the worst model (the "MinModel" column). A higher mean is better.\n\n'
+        "Candidates rank by mean score; native pydantic-evals analyses include\n"
+        "candidate ranking and candidate x model means. A higher mean is better.\n\n"
         "Config:\n"
         f"  models      : {', '.join(config.models)}\n"
         f"  candidates  : {', '.join(config.candidates)}\n"
@@ -474,15 +453,10 @@ def _eval_footer(run_dir: Path) -> str:
     """Build the post-run artifacts/next-steps footer for `eval`."""
     return (
         f"\nWrote artifacts to {run_dir}:\n"
-        "  run.json          run metadata + per-(candidate,model) scores (no API keys)\n"
-        "  leaderboard.md    the table printed below\n"
-        "  report.html       self-contained browser report for demos\n"
-        "  results.jsonl     one row per (case, candidate, model) with per-check outcomes\n"
-        "  failures.jsonl    subset scoring 0.0 or failing a required gate\n"
-        "  traces/*.json     full prompt, model output, tool result, actions per cell\n\n"
-        "Re-render just the leaderboard later (no model calls):\n"
+        "  report.json       native analyses + per-cell traces (no API keys)\n\n"
+        "Re-render the saved summary later (no model calls):\n"
         f"  python -m llm_sandbox_evals report {run_dir.name}\n\n"
-        "Leaderboard (ranked by mean; MinModel = worst-model robustness):\n"
+        "Native pydantic-evals report:\n"
     )
 
 
@@ -534,7 +508,7 @@ def _optimize_footer(
     # Branch boundary: cross-eval is optional and may not have run.
     if cross_eval_run_dir is not None:
         cross_eval_line = (
-            f"\n  cross-eval leaderboard: {cross_eval_run_dir / 'leaderboard.md'}\n"
+            f"\n  cross-eval report: {cross_eval_run_dir / 'report.json'}\n"
             "    (baseline vs optimized across the requested model matrix)"
         )
     return (
@@ -562,6 +536,11 @@ def _say(text: str) -> None:
     if text:
         sys.stderr.write(text if text.endswith("\n") else text + "\n")
     sys.stderr.flush()
+
+
+def _derive_run_id() -> str:
+    """Return a filesystem-friendly run id."""
+    return datetime.now(UTC).strftime("%Y%m%d-%H%M%S-%f")
 
 
 def _csv_arg(value: str | None) -> list[str] | None:
