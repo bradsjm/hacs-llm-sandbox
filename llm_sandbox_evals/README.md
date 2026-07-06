@@ -109,22 +109,27 @@ Each `(candidate, model, case)` runs until the assistant emits a terminal natura
 
 ## Adding cases
 
-Edit `cases.py` and append to `CASES: list[EvalCase]`. Each case references a fixture by `home` name and pins the action setting, the initiating context, and deterministic expectations:
+Edit `data/cases.yaml`. It is a native `pydantic_evals.Dataset` file with one authored `Case` per eval case (`name` mirrors `inputs.id`); `cases.py` loads it with `Dataset.from_file()` and exposes the stable `CASES: list[EvalCase]` surface. Each case references a fixture by `home` name and pins the action setting, the initiating context, and deterministic expectations:
 
-```python
-EvalCase(
-    id="my_case",
-    category="state_read",
-    home="home_default",
-    user_request="What is the living room temperature?",
-    actions_enabled=False,
-    llm_context=CaseContext(),
-    expected=Expected(
-        tool_name="execute_home_code",
-        output_contains_entities=("sensor.living_temp",),
-    ),
-    par_turns=1,
-),
+```yaml
+name: llm_sandbox_cases
+cases:
+- name: my_case
+  inputs:
+    id: my_case
+    category: state_read
+    home: home_default
+    user_request: What is the living room temperature?
+    actions_enabled: false
+    llm_context:
+      platform: test
+      device_id: null
+      language: en
+    expected:
+      tool_name: execute_home_code
+      output_contains_entities:
+      - sensor.living_temp
+    par_turns: 1
 ```
 
 Categories: `state_read`, `registry_read`, `recorder_read`, `action_allowed`, `action_blocked`, `complex`, `recovery`. The `expected.tool_name` must match a production tool constant (`execute_home_code`, `get_history`, `get_statistics`, `get_logbook`) and is enforced as the primary expected tool. Use `required_tool_names` and `required_tool_sequence` for multi-tool cases, `recorder_window` for bounded recorder coverage, `required_error_keys` and `required_result_paths` for recovery metadata, `max_tool_turns` / `max_successful_actions` for no-retry gates, and `evidence_contains_entities` / `evidence_excludes_entities` for tool-call/tool-result evidence. Final-answer entity checks are for read/report cases; action cases may finish with a simple acknowledgement and should be scored through recorded actions plus intermediate evidence. Set `par_turns` to the efficient tool-turn target for the case. Recorder cases can be solved with explicit ids or supported selectors (`entity_ids`/`statistic_ids`, `area_id`, `device_id`, `floor_id`, `label_id`, `domain`, bounded time window args) through native function calling.
