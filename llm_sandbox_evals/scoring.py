@@ -97,6 +97,17 @@ def check_case(
             )
         )
 
+    if case.expected.required_tool_arg_values:
+        has_required_arg_values = _has_tool_arg_values(steps, case.expected.required_tool_arg_values)
+        checks.append(
+            CheckResult(
+                name="required_tool_arg_values",
+                passed=has_required_arg_values,
+                required=True,
+                feedback=f"required={','.join(path for path, _expected_value in case.expected.required_tool_arg_values)}",
+            )
+        )
+
     if case.expected.recorder_window is not None:
         checks.append(_recorder_window_check(case, facts))
 
@@ -107,6 +118,17 @@ def check_case(
                 passed=len(steps) <= case.expected.max_tool_turns,
                 required=True,
                 feedback=f"turns={len(steps)} max={case.expected.max_tool_turns}",
+            )
+        )
+
+    if case.expected.max_tool_calls is not None:
+        tool_call_count = sum(len(step.tool_calls) for step in steps)
+        checks.append(
+            CheckResult(
+                name="tool_calls_within_max",
+                passed=tool_call_count <= case.expected.max_tool_calls,
+                required=True,
+                feedback=f"calls={tool_call_count} max={case.expected.max_tool_calls}",
             )
         )
 
@@ -274,6 +296,30 @@ def _has_result_path(values: tuple[object, ...], path: str) -> bool:
     """Return whether any collected result/action contains a dotted path."""
     parts = tuple(part for part in path.split(".") if part)
     return bool(parts) and any(_value_has_path(value, parts) for value in values)
+
+
+def _has_tool_arg_values(steps: tuple[StepTrace, ...], required_values: tuple[tuple[str, object], ...]) -> bool:
+    """Return whether one observed tool call has every required dotted arg value."""
+    required_parts = tuple(
+        (tuple(part for part in path.split(".") if part), expected) for path, expected in required_values
+    )
+    if not required_parts or any(not parts for parts, _expected in required_parts):
+        return False
+    for step in steps:
+        for call in step.tool_calls:
+            if all(_value_at_path(call.tool_args, parts) == (True, expected) for parts, expected in required_parts):
+                return True
+    return False
+
+
+def _value_at_path(value: object, parts: tuple[str, ...]) -> tuple[bool, object | None]:
+    """Return a mapping value at a dotted path without inventing defaults for missing keys."""
+    if not parts:
+        return (True, value)
+    head, *tail = parts
+    if not isinstance(value, Mapping) or head not in value:
+        return (False, None)
+    return _value_at_path(value[head], tuple(tail))
 
 
 def _value_has_path(value: object, parts: tuple[str, ...]) -> bool:

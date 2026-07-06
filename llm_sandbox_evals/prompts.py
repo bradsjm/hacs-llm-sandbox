@@ -22,6 +22,7 @@ from custom_components.llm_sandbox.llm_api.prompts import (
     resolve_profile,
 )
 from custom_components.llm_sandbox.llm_api.tools import RECORDER_SELECTOR_FIELD_NAMES
+from custom_components.llm_sandbox.llm_api.tools._aggregates import AGGREGATORS
 from custom_components.llm_sandbox.llm_api.tools.recorder import STATISTIC_VALUE_TYPES
 from custom_components.llm_sandbox.snapshot.models import HomeSnapshot
 
@@ -126,7 +127,11 @@ def tool_specs(candidate: PromptCandidate) -> list[ToolSpec]:
         ToolSpec(
             name=TOOL_GET_HISTORY,
             description=candidate.get_history_description,
-            parameters=_recorder_parameters(id_key="entity_ids", include_attributes=True),
+            parameters=_recorder_parameters(
+                id_key="entity_ids",
+                include_attributes=True,
+                include_history_aggregates=True,
+            ),
         ),
         ToolSpec(
             name=TOOL_GET_STATISTICS,
@@ -146,6 +151,7 @@ def _recorder_parameters(
     id_key: str,
     include_period: bool = False,
     include_attributes: bool = False,
+    include_history_aggregates: bool = False,
     include_types: bool = False,
 ) -> dict[str, object]:
     """Build the shared recorder JSON Schema accepted by native function calling."""
@@ -159,6 +165,11 @@ def _recorder_parameters(
     # Branch boundary: history can opt in to selected state attributes per row.
     if include_attributes:
         properties["attributes"] = {"type": "array", "items": {"type": "string"}}
+    # Branch boundary: history can request server-side state aggregates and filters.
+    if include_history_aggregates:
+        properties["aggregate"] = {"type": "string", "enum": list(AGGREGATORS)}
+        properties["from_state"] = {"type": "string"}
+        properties["to_state"] = {"type": "string"}
     # Branch boundary: statistics adds one aggregation-period enum.
     if include_period:
         properties["period"] = {"type": "string", "enum": ["5minute", "hour", "day"]}

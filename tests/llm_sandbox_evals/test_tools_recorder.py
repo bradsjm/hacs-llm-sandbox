@@ -48,6 +48,63 @@ def test_history_aggregate_envelopes_match_production_shape(
     }
 
 
+@pytest.mark.parametrize(
+    ("aggregate", "to_state", "expected_summary"),
+    [
+        pytest.param(
+            "first_seen",
+            "on",
+            {"first_seen": {"state": "on", "at": "2026-06-29T01:00:00+00:00"}},
+            id="first-seen-on",
+        ),
+        pytest.param(
+            "last_seen",
+            "on",
+            {"last_seen": {"state": "on", "at": "2026-06-29T03:00:00+00:00"}},
+            id="last-seen-on",
+        ),
+        pytest.param("last_seen", "unavailable", {"last_seen": None}, id="last-seen-missing"),
+    ],
+)
+def test_history_seen_aggregates_filter_to_state(
+    monkeypatch: pytest.MonkeyPatch,
+    aggregate: str,
+    to_state: str,
+    expected_summary: dict[str, object | None],
+) -> None:
+    _stub_recorder(
+        monkeypatch,
+        {
+            "history": {
+                _LIVING_LIGHT: [
+                    _history_state_row("off", "2026-06-29T00:00:00+00:00"),
+                    _history_state_row("on", "2026-06-29T01:00:00+00:00"),
+                    _history_state_row("off", "2026-06-29T02:00:00+00:00"),
+                    _history_state_row("on", "2026-06-29T03:00:00+00:00"),
+                ]
+            },
+            "statistics": {},
+            "logbook": {},
+        },
+    )
+
+    result = _result(
+        eval_tools._run_history(
+            {
+                "entity_ids": [_LIVING_LIGHT],
+                "start": "2026-06-29T00:00:00+00:00",
+                "end": "2026-06-29T04:00:00+00:00",
+                "aggregate": aggregate,
+                "to_state": to_state,
+            },
+            _case(TOOL_GET_HISTORY),
+            _snapshot(),
+        )
+    )
+
+    assert result["summary"] == {_LIVING_LIGHT: expected_summary}
+
+
 def test_history_raw_cursor_round_trip_returns_next_older_rows(monkeypatch: pytest.MonkeyPatch) -> None:
     timestamps = _ascending_timestamps(MAX_HISTORY_STATES + 205)
     _stub_recorder(
@@ -257,6 +314,10 @@ def _history_rows(timestamps: list[str]) -> list[dict[str, object]]:
         }
         for index, timestamp in enumerate(timestamps)
     ]
+
+
+def _history_state_row(state: str, timestamp: str) -> dict[str, object]:
+    return {"state": state, "attributes": {}, "last_changed": timestamp, "last_updated": timestamp}
 
 
 def _statistics_rows(timestamps: list[str]) -> list[dict[str, object]]:

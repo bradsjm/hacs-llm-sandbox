@@ -192,7 +192,8 @@ def build_get_history_description() -> str:
         "remain, next_cursor appears — pass it back as cursor (omit window args) to fetch the next older page. "
         "Pass aggregate=count_transitions|time_in_state|state_counts|first_seen|last_seen|on_duration "
         "to return {window, mode, summary} with no rows, cursor, or attributes; aggregate windows may be "
-        "larger than raw history. count_transitions may include from_state/to_state filters. "
+        "larger than raw history. count_transitions may include from_state/to_state filters; "
+        "first_seen/last_seen may include to_state to find when a specific state first or last appeared. "
         "Errors return {status:'error', error:{key, message, fix?}}; entity_not_visible fix names "
         "concrete visible entity candidates."
     )

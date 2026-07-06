@@ -114,6 +114,14 @@ def _stub_initial_calls(user_request: str) -> tuple[ToolCall, ...]:
         return (_call(1, TOOL_EXECUTE_HOME_CODE, {"code": 'result = states.get("sensor.living_temp")'}),)
     if "living room temperature has been above 25" in lowered:
         return (_call(1, TOOL_GET_HISTORY, {"entity_ids": ["sensor.living_temp"], **_last_day_window()}),)
+    if "light.living last turn on" in lowered or "light.living last turned on" in lowered:
+        return (
+            _call(
+                1,
+                TOOL_GET_HISTORY,
+                {"entity_ids": ["light.living"], "aggregate": "last_seen", "to_state": "on", **_last_day_window()},
+            ),
+        )
     if "living room light turned on today" in lowered:
         return (_call(1, TOOL_GET_LOGBOOK, {"entity_ids": ["light.living"], **_today_window()}),)
     if "living room light on right now" in lowered and "last change" in lowered:

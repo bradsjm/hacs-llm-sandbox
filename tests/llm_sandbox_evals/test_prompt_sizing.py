@@ -2,9 +2,10 @@ import json
 from pathlib import Path
 
 import pytest
-from custom_components.llm_sandbox.const import DEFAULT_PROMPT_PROFILE
+from custom_components.llm_sandbox.const import DEFAULT_PROMPT_PROFILE, TOOL_GET_HISTORY
+from custom_components.llm_sandbox.llm_api.tools._aggregates import AGGREGATORS
 from llm_sandbox_evals.optimize_dspy import size_penalized_utility
-from llm_sandbox_evals.prompts import candidate_prompt_sizes, load_candidates
+from llm_sandbox_evals.prompts import baseline_candidate, candidate_prompt_sizes, function_schemas, load_candidates
 from llm_sandbox_evals.reports import load_run_json, render_leaderboard_from_scores
 from llm_sandbox_evals.schema import CandidateModelScore, PromptCandidate
 
@@ -54,6 +55,18 @@ def test_candidate_prompt_sizes_counts_api_and_authored_prompt_text() -> None:
 
     assert api_prompt_chars == 3
     assert authored_prompt_chars == 11
+
+
+def test_get_history_function_schema_exposes_aggregate_filters() -> None:
+    schemas = function_schemas(baseline_candidate())
+    history_schema = next(schema for schema in schemas if schema["function"]["name"] == TOOL_GET_HISTORY)
+
+    parameters = history_schema["function"]["parameters"]
+    assert parameters["additionalProperties"] is False
+    properties = parameters["properties"]
+    assert properties["aggregate"] == {"type": "string", "enum": list(AGGREGATORS)}
+    assert properties["from_state"] == {"type": "string"}
+    assert properties["to_state"] == {"type": "string"}
 
 
 @pytest.mark.parametrize(

@@ -862,6 +862,27 @@ CASES: list[EvalCase] = [
         par_turns=2,
     ),
     EvalCase(
+        id="recorder_aggregate_last_seen_to_state",
+        category="recorder_read",
+        home="home_default",
+        user_request=(
+            "When did light.living last turn on over the last 24 hours? Use get_history with aggregate last_seen "
+            "and to_state=on, and do not page raw history rows."
+        ),
+        actions_enabled=False,
+        llm_context=CaseContext(),
+        expected=Expected(
+            tool_name="get_history",
+            execution_status="na",
+            output_contains_entities=("light.living",),
+            required_result_paths=("summary", "mode"),
+            required_tool_arg_values=(("aggregate", "last_seen"), ("to_state", "on")),
+            recorder_window=("2026-06-28T12:00:00+00:00", "2026-06-29T12:00:00+00:00"),
+            max_tool_calls=1,
+        ),
+        par_turns=2,
+    ),
+    EvalCase(
         id="recorder_aggregate_time_in_state",
         category="recorder_read",
         home="home_default",

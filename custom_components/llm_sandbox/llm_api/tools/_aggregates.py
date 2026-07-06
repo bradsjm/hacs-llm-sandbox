@@ -88,9 +88,10 @@ def first_seen(
     rows: list[HistoryRow],
     _start: datetime,
     _end: datetime,
-    _filters: AggregateFilters,
+    filters: AggregateFilters,
 ) -> AggregateSummary:
     """Return the first state row observed for the query."""
+    rows = _rows_matching_to_state(rows, filters)
     return {"first_seen": _seen(rows[0]) if rows else None}
 
 
@@ -98,9 +99,10 @@ def last_seen(
     rows: list[HistoryRow],
     _start: datetime,
     _end: datetime,
-    _filters: AggregateFilters,
+    filters: AggregateFilters,
 ) -> AggregateSummary:
     """Return the last state row observed for the query."""
+    rows = _rows_matching_to_state(rows, filters)
     return {"last_seen": _seen(rows[-1]) if rows else None}
 
 
@@ -156,6 +158,13 @@ def _state_periods(rows: list[HistoryRow], start: datetime, end: datetime) -> li
 def _seen(row: HistoryRow) -> dict[str, str]:
     """Return the compact seen-state shape for first/last aggregate modes."""
     return {"state": _row_state(row), "at": _row_time(row).isoformat()}
+
+
+def _rows_matching_to_state(rows: list[HistoryRow], filters: AggregateFilters) -> list[HistoryRow]:
+    """Return rows matching the requested target state, or all rows when unfiltered."""
+    if filters.to_state is None:
+        return rows
+    return [row for row in rows if _row_state(row) == filters.to_state]
 
 
 def _row_state(row: HistoryRow) -> str:

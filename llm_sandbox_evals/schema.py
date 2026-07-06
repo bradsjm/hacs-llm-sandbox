@@ -59,12 +59,15 @@ class Expected:
     required_error_keys: tuple[str, ...] = ()
     # Dotted paths that must appear in any tool result or recorded action.
     required_result_paths: tuple[str, ...] = ()
+    # Dotted tool_args paths that must all equal the expected JSON-compatible values on one observed tool call.
+    required_tool_arg_values: tuple[tuple[str, object], ...] = ()
     actions: tuple[ExpectedAction, ...] = ()
     # (start_iso, end_iso) recorder window expectation, or None when not a recorder case.
     recorder_window: tuple[str, str] | None = None
     # Optional hard gates for metadata/no-retry cases.
     max_tool_turns: int | None = None
     max_successful_actions: int | None = None
+    max_tool_calls: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
