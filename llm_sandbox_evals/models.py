@@ -1,12 +1,11 @@
 """Model adapters for native tool-calling eval turns."""
 
 import asyncio
-import importlib
 import json
 import re
 import time
-from collections.abc import Awaitable, Callable
-from typing import Protocol, cast
+from collections.abc import Sequence
+from typing import Literal, Protocol, cast
 
 from custom_components.llm_sandbox.const import (
     TOOL_EXECUTE_HOME_CODE,
@@ -14,6 +13,21 @@ from custom_components.llm_sandbox.const import (
     TOOL_GET_LOGBOOK,
     TOOL_GET_STATISTICS,
 )
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelMessagesTypeAdapter,
+    ModelRequest,
+    ModelResponse,
+    ModelResponsePart,
+    SystemPromptPart,
+    TextPart,
+    ToolCallPart,
+    ToolReturnPart,
+    UserPromptPart,
+)
+from pydantic_ai.models import ModelRequestParameters
+from pydantic_ai.settings import ModelSettings
+from pydantic_ai.tools import ToolDefinition
 
 from llm_sandbox_evals.schema import AgentStep, ToolCall
 
@@ -21,19 +35,8 @@ _ENTITY_ID_RE = re.compile(r"\b[a-z_]+\.[a-z0-9_]+\b")
 _FIXED_END = "2026-06-29T12:00:00+00:00"
 _FIXED_START = "2026-06-28T12:00:00+00:00"
 _FIXED_TODAY_START = "2026-06-29T00:00:00+00:00"
-_LITELLM_TIMEOUT_BUFFER = 5.0
-
-
-def litellm_reasoning_kwargs(*, temperature: float, reasoning_effort: str | None) -> dict[str, object]:
-    """Map decoding intent onto litellm kwargs honoring the reasoning contract."""
-    # Branch boundary: no reasoning requested -> deterministic temperature only.
-    if reasoning_effort is None:
-        return {"temperature": temperature}
-    kwargs: dict[str, object] = {"extra_body": {"reasoning_effort": reasoning_effort}}
-    # Branch boundary: explicit no-reasoning keeps deterministic decoding.
-    if reasoning_effort == "none":
-        kwargs["temperature"] = temperature
-    return kwargs
+_ReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh"]
+_PYDANTIC_AI_RESPONSE_KEY = "_pydantic_ai_response"
 
 
 class ModelAdapter(Protocol):
@@ -213,11 +216,11 @@ def _all_tool_content(messages: list[dict[str, object]]) -> str | None:
     return "\n".join(contents)
 
 
-class LiteLLMAdapter:
-    """Adapter for real models routed through LiteLLM."""
+class PydanticAIAdapter:
+    """Adapter for real models routed through Pydantic AI direct model requests."""
 
     def __init__(self, reasoning_effort: str | None = None, *, model_timeout: float = 75.0) -> None:
-        """Store model-call options forwarded to LiteLLM."""
+        """Store model-call options forwarded to Pydantic AI."""
         self._reasoning_effort = reasoning_effort
         self._model_timeout = model_timeout
 
@@ -227,31 +230,29 @@ class LiteLLMAdapter:
         messages: list[dict[str, object]],
         tools: list[dict[str, object]],
     ) -> AgentStep:
-        """Call LiteLLM and normalize one assistant message into an AgentStep."""
+        """Call Pydantic AI and normalize one assistant message into an AgentStep."""
+        start = time.monotonic()
         try:
-            litellm = importlib.import_module("litellm")
-            _quiet_litellm(litellm)
-            acompletion = cast(Callable[..., Awaitable[object]], litellm.__dict__["acompletion"])
-            start = time.monotonic()
-            litellm_timeout = max(1.0, self._model_timeout - _LITELLM_TIMEOUT_BUFFER)
-            kwargs: dict[str, object] = {
-                "model": model_id,
-                "messages": messages,
-                "tools": tools,
-                "tool_choice": "auto",
-                "timeout": litellm_timeout,
-                "num_retries": 0,
-            }
-            kwargs.update(litellm_reasoning_kwargs(temperature=0.0, reasoning_effort=self._reasoning_effort))
-            response = await asyncio.wait_for(acompletion(**kwargs), timeout=self._model_timeout)
-            return _step_from_litellm_response(response)
+            from pydantic_ai.direct import model_request
+
+            pydantic_messages = _to_pydantic_ai_messages(messages)
+            tool_defs = _to_tool_definitions(tools)
+            response = await asyncio.wait_for(
+                model_request(
+                    model_id,
+                    pydantic_messages,
+                    model_settings=reasoning_model_settings(model_id, self._reasoning_effort),
+                    model_request_parameters=_request_parameters(tool_defs),
+                ),
+                timeout=self._model_timeout,
+            )
+            return _step_from_model_response(response)
         except TimeoutError as err:
             raise ModelResponseError(
-                f"LiteLLM completion timed out after {self._model_timeout:g} seconds",
+                f"Pydantic AI completion timed out after {self._model_timeout:g} seconds",
                 detail=_timeout_error_detail(
                     model_id=model_id,
                     model_timeout=self._model_timeout,
-                    litellm_timeout=litellm_timeout,
                     elapsed=time.monotonic() - start,
                 ),
             ) from err
@@ -267,51 +268,188 @@ def get_adapter(model_id: str, reasoning_effort: str | None = None, *, model_tim
     # Branch boundary: the stub adapter is a first-class offline model for keyless verification.
     if model_id == "stub":
         return StubAdapter()
-    return LiteLLMAdapter(reasoning_effort=reasoning_effort, model_timeout=model_timeout)
+    return PydanticAIAdapter(reasoning_effort=reasoning_effort, model_timeout=model_timeout)
 
 
-def _step_from_litellm_response(response: object) -> AgentStep:
-    """Extract ``choices[0].message`` from a LiteLLM response object."""
-    choices = getattr(response, "choices", None)
-    if not isinstance(choices, list) or not choices:
-        raise ValueError("LiteLLM response did not include choices")
+def _to_pydantic_ai_messages(messages: list[dict[str, object]]) -> list[ModelMessage]:
+    """Translate OpenAI-shaped harness messages into Pydantic AI messages."""
+    translated: list[ModelMessage] = []
+    tool_names_by_id: dict[str, str] = {}
+    for message in messages:
+        role = message.get("role")
+        content = message.get("content")
+        text = content if isinstance(content, str) else ""
+        if role == "system":
+            translated.append(ModelRequest(parts=[SystemPromptPart(content=text)]))
+            continue
+        if role == "user":
+            translated.append(ModelRequest(parts=[UserPromptPart(content=text)]))
+            continue
+        if role == "assistant":
+            native_response = _native_response_from_message(message)
+            # Branch boundary: real Pydantic AI turns replay the native response so reasoning/provider metadata survives.
+            if native_response is not None:
+                _remember_tool_names(native_response.parts, tool_names_by_id)
+                translated.append(native_response)
+                continue
+            parts: list[TextPart | ToolCallPart] = []
+            if text:
+                parts.append(TextPart(content=text))
+            for tool_call in _assistant_tool_call_parts(message.get("tool_calls"), tool_names_by_id):
+                parts.append(tool_call)
+            translated.append(ModelResponse(parts=parts))
+            continue
+        if role == "tool":
+            tool_call_id = str(message.get("tool_call_id") or "")
+            # Branch boundary: OpenAI tool messages omit the name; recover it from the prior assistant turn.
+            tool_name = tool_names_by_id.get(tool_call_id, "unknown_tool")
+            translated.append(
+                ModelRequest(parts=[ToolReturnPart(tool_name=tool_name, content=text, tool_call_id=tool_call_id)])
+            )
+    return translated
 
-    message = getattr(choices[0], "message", None)
-    content = _message_value(message, "content")
-    text = content if isinstance(content, str) else ""
-    raw_tool_calls = _message_value(message, "tool_calls")
-    tool_calls = _parse_tool_calls(raw_tool_calls)
-    assistant_message: dict[str, object] = {"role": "assistant", "content": text}
-    # Branch boundary: replay tool_calls verbatim enough for provider continuation.
-    if isinstance(raw_tool_calls, list):
-        assistant_message["tool_calls"] = [_plain_tool_call(item) for item in raw_tool_calls]
+
+def _native_response_from_message(message: dict[str, object]) -> ModelResponse | None:
+    """Return the stored native Pydantic AI response for an assistant message, when present."""
+    raw_response = message.get(_PYDANTIC_AI_RESPONSE_KEY)
+    # Branch boundary: stub/tests and pre-native histories still use the OpenAI-shaped reconstruction path.
+    if raw_response is None:
+        return None
+    restored = ModelMessagesTypeAdapter.validate_python([raw_response])
+    response = restored[0]
+    if not isinstance(response, ModelResponse):
+        raise TypeError("stored Pydantic AI assistant message is not a ModelResponse")
+    return response
+
+
+def _remember_tool_names(parts: Sequence[ModelResponsePart], tool_names_by_id: dict[str, str]) -> None:
+    """Remember native tool call names so following OpenAI-shaped tool returns can be named."""
+    for part in parts:
+        if isinstance(part, ToolCallPart) and part.tool_call_id is not None:
+            tool_names_by_id[part.tool_call_id] = part.tool_name
+
+
+def _assistant_tool_call_parts(raw_tool_calls: object, tool_names_by_id: dict[str, str]) -> list[ToolCallPart]:
+    """Translate replayed assistant tool calls and remember ids for subsequent tool returns."""
+    if not isinstance(raw_tool_calls, list):
+        return []
+    parts: list[ToolCallPart] = []
+    for index, item in enumerate(raw_tool_calls):
+        if not isinstance(item, dict):
+            continue
+        function = item.get("function")
+        if not isinstance(function, dict):
+            continue
+        name = function.get("name")
+        if not isinstance(name, str):
+            continue
+        arguments = function.get("arguments")
+        args = _json_object(arguments) if isinstance(arguments, str) else {}
+        tool_call_id = str(item.get("id") or f"call-{index}")
+        tool_names_by_id[tool_call_id] = name
+        parts.append(ToolCallPart(tool_name=name, args=args, tool_call_id=tool_call_id))
+    return parts
+
+
+def _to_tool_definitions(tools: list[dict[str, object]]) -> list[ToolDefinition]:
+    """Translate OpenAI function schemas into Pydantic AI tool definitions."""
+    definitions: list[ToolDefinition] = []
+    for tool in tools:
+        function = tool.get("function")
+        if tool.get("type") != "function" or not isinstance(function, dict):
+            continue
+        name = function.get("name")
+        description = function.get("description")
+        parameters = function.get("parameters")
+        if not isinstance(name, str) or not isinstance(parameters, dict):
+            continue
+        definitions.append(
+            ToolDefinition(
+                name=name,
+                description=description if isinstance(description, str) else None,
+                parameters_json_schema=parameters,
+            )
+        )
+    return definitions
+
+
+def _request_parameters(tool_defs: list[ToolDefinition]) -> ModelRequestParameters:
+    """Build Pydantic AI request parameters for harness-owned tool execution."""
+    # Installed Pydantic AI 2.5.0 expects function_tools as list[ToolDefinition].
+    return ModelRequestParameters(function_tools=tool_defs, allow_text_output=True)
+
+
+def _step_from_model_response(response: ModelResponse) -> AgentStep:
+    """Extract text and tool calls from a Pydantic AI model response."""
+    text_parts: list[str] = []
+    tool_calls: list[ToolCall] = []
+    replay_tool_calls: list[dict[str, object]] = []
+    for index, part in enumerate(response.parts):
+        if isinstance(part, TextPart):
+            text_parts.append(part.content)
+            continue
+        if isinstance(part, ToolCallPart):
+            tool_args = part.args_as_dict()
+            call_id = part.tool_call_id or f"call-{index}"
+            tool_calls.append(ToolCall(id=call_id, tool_name=part.tool_name, tool_args=tool_args))
+            replay_tool_calls.append(
+                {
+                    "id": call_id,
+                    "type": "function",
+                    "function": {"name": part.tool_name, "arguments": json.dumps(tool_args, sort_keys=True)},
+                }
+            )
+    text = "".join(text_parts)
+    native_response = _dump_native_response(response)
+    assistant_message: dict[str, object] = {
+        "role": "assistant",
+        "content": text,
+        _PYDANTIC_AI_RESPONSE_KEY: native_response,
+    }
+    # Branch boundary: replay tool calls only when the provider requested tool execution.
+    if replay_tool_calls:
+        assistant_message["tool_calls"] = replay_tool_calls
     return AgentStep(
-        tool_calls=tool_calls, text=text, assistant_message=assistant_message, raw=json.dumps(assistant_message)
+        tool_calls=tuple(tool_calls),
+        text=text,
+        assistant_message=assistant_message,
+        raw=json.dumps(native_response, sort_keys=True),
     )
 
 
-def _quiet_litellm(litellm: object) -> None:
-    """Disable LiteLLM debug chatter so eval stderr is owned by the harness."""
-    for name, value in (("suppress_debug_info", True), ("set_verbose", False)):
-        if hasattr(litellm, name):
-            setattr(litellm, name, value)
+def _dump_native_response(response: ModelResponse) -> dict[str, object]:
+    """Serialize one Pydantic AI response for native next-turn replay and JSON artifacts."""
+    dumped = ModelMessagesTypeAdapter.dump_python([response], mode="json")[0]
+    if not isinstance(dumped, dict):
+        raise TypeError("serialized Pydantic AI response is not a JSON object")
+    return dumped
+
+
+def reasoning_model_settings(model_id: str, reasoning_effort: str | None) -> ModelSettings | None:
+    """Return provider-specific reasoning settings for Pydantic AI model ids."""
+    # Branch boundary: no reasoning requested preserves the old deterministic eval default.
+    if reasoning_effort is None:
+        return ModelSettings(temperature=0.0)
+    # Branch boundary: explicit no-reasoning keeps deterministic decoding for compatible providers.
+    if reasoning_effort == "none":
+        return ModelSettings(temperature=0.0)
+    effort = cast(_ReasoningEffort, reasoning_effort)
+    # Branch boundary: OpenRouter exposes an effort-shaped reasoning setting.
+    if model_id.startswith("openrouter:"):
+        from pydantic_ai.models.openrouter import OpenRouterModelSettings
+
+        return OpenRouterModelSettings(openrouter_reasoning={"effort": effort})
+    # Branch boundary: OpenAI Responses exposes a native reasoning effort setting.
+    if model_id.startswith(("openai:", "openai-chat:")):
+        from pydantic_ai.models.openai import OpenAIResponsesModelSettings
+
+        return OpenAIResponsesModelSettings(openai_reasoning_effort=effort)
+    return None
 
 
 def _provider_error_detail(err: BaseException, *, model_id: str) -> str:
-    """Return useful LiteLLM/provider diagnostics without dumping request payloads."""
+    """Return useful provider diagnostics without dumping request payloads."""
     lines = [f"requested model: {model_id}", _exception_line(err)]
-    metadata = _exception_metadata(err)
-    if metadata:
-        lines.append("provider metadata: " + ", ".join(metadata))
-
-    response = getattr(err, "response", None)
-    response_status = getattr(response, "status_code", None)
-    response_text = getattr(response, "text", None)
-    if response_status is not None:
-        lines.append(f"response status: {response_status}")
-    if isinstance(response_text, str) and response_text:
-        lines.append("response body: " + _limit_detail(response_text))
-
     cause = err.__cause__ or err.__context__
     while cause is not None:
         lines.append("caused by: " + _exception_line(cause))
@@ -319,16 +457,15 @@ def _provider_error_detail(err: BaseException, *, model_id: str) -> str:
     return "\n".join(lines)
 
 
-def _timeout_error_detail(*, model_id: str, model_timeout: float, litellm_timeout: float, elapsed: float) -> str:
+def _timeout_error_detail(*, model_id: str, model_timeout: float, elapsed: float) -> str:
     """Return an actionable diagnostic when the provider never returns a response."""
     return "\n".join(
         (
             f"requested model: {model_id}",
             f"model generation exceeded the eval timeout after {elapsed:.1f}s",
             f"eval model timeout: {model_timeout:g}s",
-            f"per-request timeout sent to LiteLLM: {litellm_timeout:g}s",
-            "OpenRouter did not return an HTTP status or response body before this timeout",
-            "OpenRouter's global status page can still be healthy when an individual free-model generation queues or runs this long",
+            "the provider did not return an HTTP status or response body before this timeout",
+            "a provider's global status page can still be healthy when an individual generation queues or runs this long",
             "increase --model-timeout for slow/free models, lower --concurrency, or use the paid/non-free model id if you need reliable eval throughput",
         )
     )
@@ -339,16 +476,6 @@ def _exception_line(err: BaseException) -> str:
     return f"{type(err).__module__}.{type(err).__name__}: {err}"
 
 
-def _exception_metadata(err: BaseException) -> list[str]:
-    """Extract common LiteLLM provider metadata from exception attributes."""
-    metadata: list[str] = []
-    for name in ("status_code", "llm_provider", "model", "code", "param"):
-        value = getattr(err, name, None)
-        if value is not None:
-            metadata.append(f"{name}={value!r}")
-    return metadata
-
-
 def _limit_detail(value: str) -> str:
     """Bound provider response details so one failing model does not flood stderr."""
     compact = " ".join(value.split())
@@ -357,45 +484,13 @@ def _limit_detail(value: str) -> str:
     return compact[:1000] + "..."
 
 
-def _parse_tool_calls(raw_tool_calls: object) -> tuple[ToolCall, ...]:
-    """Parse provider tool calls into the eval harness contract."""
-    if not isinstance(raw_tool_calls, list):
-        return ()
-    parsed: list[ToolCall] = []
-    for index, item in enumerate(raw_tool_calls):
-        function = _message_value(item, "function")
-        name = _message_value(function, "name")
-        arguments = _message_value(function, "arguments")
-        if not isinstance(name, str):
-            continue
-        try:
-            decoded = json.loads(arguments) if isinstance(arguments, str) and arguments else {}
-        except json.JSONDecodeError:
-            decoded = {}
-        tool_args = dict(decoded) if isinstance(decoded, dict) else {}
-        call_id = _message_value(item, "id")
-        parsed.append(ToolCall(id=str(call_id or f"call-{index}"), tool_name=name, tool_args=tool_args))
-    return tuple(parsed)
-
-
-def _plain_tool_call(item: object) -> dict[str, object]:
-    """Convert one LiteLLM tool-call object to a replayable plain dict."""
-    function = _message_value(item, "function")
-    return {
-        "id": str(_message_value(item, "id") or ""),
-        "type": str(_message_value(item, "type") or "function"),
-        "function": {
-            "name": str(_message_value(function, "name") or ""),
-            "arguments": str(_message_value(function, "arguments") or "{}"),
-        },
-    }
-
-
-def _message_value(message: object, key: str) -> object:
-    """Read a key from either provider dicts or LiteLLM message objects."""
-    if isinstance(message, dict):
-        return message.get(key)
-    return getattr(message, key, None)
+def _json_object(value: str) -> dict[str, object]:
+    """Decode a JSON object string for tool arguments."""
+    try:
+        decoded = json.loads(value) if value else {}
+    except json.JSONDecodeError:
+        return {}
+    return decoded if isinstance(decoded, dict) else {}
 
 
 def _first_user_content(messages: list[dict[str, object]]) -> str:

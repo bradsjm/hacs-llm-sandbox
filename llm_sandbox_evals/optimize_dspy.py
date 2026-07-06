@@ -16,7 +16,7 @@ from custom_components.llm_sandbox.llm_api.prompts import PromptProfile, resolve
 from llm_sandbox_evals import experiment, prompts, reports
 from llm_sandbox_evals.config import EvalConfig
 from llm_sandbox_evals.harness import _select_cases, run_case
-from llm_sandbox_evals.models import get_adapter, litellm_reasoning_kwargs
+from llm_sandbox_evals.models import get_adapter
 from llm_sandbox_evals.schema import EvalCase, PromptCandidate
 
 
@@ -64,21 +64,22 @@ def run_optimize(config: EvalConfig) -> OptimizerResult:
     baseline = prompts.baseline_candidate(config.prompt_profile)
     target_lm = dspy.LM(
         model=target,
-        **litellm_reasoning_kwargs(temperature=0.0, reasoning_effort=config.target_reasoning_effort),
+        **_dspy_reasoning_kwargs(temperature=0.0, reasoning_effort=config.target_reasoning_effort),
     )
     # Configure the global default LM as a defensive default; actual scoring runs through the real
     # adapter in run_case (get_adapter(target_model)), not through dspy's configured LM.
     dspy.configure(lm=target_lm)
     prompt_lm = dspy.LM(
         model=proposer,
-        **litellm_reasoning_kwargs(temperature=1.0, reasoning_effort=config.proposer_reasoning_effort),
+        **_dspy_reasoning_kwargs(temperature=1.0, reasoning_effort=config.proposer_reasoning_effort),
     )
 
     selected_cases = _select_cases(config.cases, config.homes)
     trainset = [
         dspy.Example(context=case.user_request, case=case).with_inputs("context", "case") for case in selected_cases
     ]
-    student = _PromptInstructionStudent(baseline, target, profile, config)
+    pydantic_target = _to_pydantic_ai_model_id(target)
+    student = _PromptInstructionStudent(baseline, pydantic_target, profile, config)
     copro = dspy.COPRO(
         prompt_model=prompt_lm,
         metric=_make_metric(),
@@ -102,7 +103,7 @@ def run_optimize(config: EvalConfig) -> OptimizerResult:
 
     baseline_mean = _candidate_mean(
         EvalConfig(
-            models=[target],
+            models=[pydantic_target],
             candidates=["baseline"],
             prompt_profile=config.prompt_profile,
             cases=config.cases,
@@ -116,7 +117,7 @@ def run_optimize(config: EvalConfig) -> OptimizerResult:
     )
     optimized_mean = _candidate_mean(
         EvalConfig(
-            models=[target],
+            models=[pydantic_target],
             candidates=[f"optimized:{candidate_path}"],
             prompt_profile=config.prompt_profile,
             cases=config.cases,
@@ -131,7 +132,7 @@ def run_optimize(config: EvalConfig) -> OptimizerResult:
     # Branch boundary: this adds one full case-suite pass on the target model, increasing paid model-call cost.
     optimized_full_mean = _candidate_mean(
         EvalConfig(
-            models=[target],
+            models=[pydantic_target],
             candidates=[f"optimized:{candidate_path}"],
             prompt_profile=config.prompt_profile,
             cases=None,
@@ -148,7 +149,7 @@ def run_optimize(config: EvalConfig) -> OptimizerResult:
     # Branch boundary: cross-evaluation is optional because it can multiply paid model calls.
     if config.cross_eval_models:
         cross_config = EvalConfig(
-            models=config.cross_eval_models,
+            models=[_to_pydantic_ai_model_id(model) for model in config.cross_eval_models],
             candidates=["baseline", f"optimized:{candidate_path}"],
             prompt_profile=config.prompt_profile,
             cases=config.cases,
@@ -237,6 +238,39 @@ def _make_metric() -> Callable[..., float]:
             return 0.0
 
     return metric
+
+
+def _dspy_reasoning_kwargs(*, temperature: float, reasoning_effort: str | None) -> dict[str, object]:
+    """Map DSPy decoding intent onto its litellm-backed kwargs."""
+    # Branch boundary: DSPy's dspy.LM is litellm-backed, so this remains local to the optimize path.
+    if reasoning_effort is None:
+        return {"temperature": temperature}
+    kwargs: dict[str, object] = {"extra_body": {"reasoning_effort": reasoning_effort}}
+    # Branch boundary: explicit no-reasoning keeps deterministic decoding.
+    if reasoning_effort == "none":
+        kwargs["temperature"] = temperature
+    return kwargs
+
+
+def _to_pydantic_ai_model_id(model_id: str) -> str:
+    """Translate optimize-only DSPy model ids to Pydantic AI ids for eval scoring."""
+    # Branch boundary: already in Pydantic AI provider-prefixed format.
+    if ":" in model_id:
+        return model_id
+    slash_provider, has_slash, slash_model = model_id.partition("/")
+    # Branch boundary: DSPy/LiteLLM uses provider/model while Pydantic AI uses provider:model.
+    if has_slash and slash_provider in {"anthropic", "cohere", "groq", "mistral", "openai", "openrouter", "xai"}:
+        return f"{slash_provider}:{slash_model}"
+    if has_slash and slash_provider in {"gemini", "google"}:
+        return f"google:{slash_model}"
+    # Branch boundary: common provider short ids used by optimizer flags.
+    if model_id.startswith(("gpt-", "o1", "o3", "o4")):
+        return "openai:" + model_id
+    if model_id.startswith("claude-"):
+        return "anthropic:" + model_id
+    if model_id.startswith("gemini-"):
+        return "google:" + model_id
+    return model_id
 
 
 def save_candidate(candidate: PromptCandidate, path: Path) -> None:

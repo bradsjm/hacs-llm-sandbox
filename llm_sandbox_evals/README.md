@@ -24,21 +24,23 @@ Interactive runs also print the native `pydantic_evals` report summary on stderr
 
 ## Running real models
 
-Any [LiteLLM](https://github.com/BerriAI/litellm) model id works; API keys are read from the environment (e.g. `OPENAI_API_KEY`). A `.env` file in the repo root is auto-loaded by the CLI (shell exports take precedence over `.env`), and `.env` is gitignored.
+Any Pydantic AI provider-prefixed model id works, such as `openai:gpt-4o-mini`, `anthropic:claude-haiku-4-5`, or `openrouter:openai/gpt-4o-mini`; API keys are read from the environment (for example `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, `GOOGLE_API_KEY`, or `GEMINI_API_KEY`). A `.env` file in the repo root is auto-loaded by the CLI (shell exports take precedence over `.env`), and `.env` is gitignored.
 
 ```bash
 cat > .env <<'EOF'
 OPENAI_API_KEY=sk-...
 ANTHROPIC_API_KEY=sk-ant-...
 EOF
-uv run --group dev --group evals python -m llm_sandbox_evals eval --models gpt-4o-mini,claude-haiku-4-5,stub
+uv run --group dev --group evals python -m llm_sandbox_evals eval --models openai:gpt-4o-mini,anthropic:claude-haiku-4-5,stub
 ```
 
-Every candidate is evaluated against every model. The native `Candidate x model means` analysis shows the matrix; the native `Candidate ranking` analysis ranks candidates by mean score with a small prompt-size tie-break. A model call that fails (bad key, bad model id, network, or per-generation timeout) is captured as a `model_error` trace and scores `0.0`; the provider exception type/message, common LiteLLM metadata, response status/body when available, timeout details, and cause chain are included in the trace.
+Every candidate is evaluated against every model. The native `Candidate x model means` analysis shows the matrix; the native `Candidate ranking` analysis ranks candidates by mean score with a small prompt-size tie-break. A model call that fails (bad key, bad model id, network, or per-generation timeout) is captured as a `model_error` trace and scores `0.0`; the provider exception type/message, timeout details, and cause chain are included in the trace.
 
 ## Optimizing the prompt (DSPy COPRO)
 
 The `optimize` command uses [DSPy](https://dspy.ai/)'s COPRO instruction optimizer to rewrite the API instruction (`api_prompt`, seeded from the selected production prompt profile) and **keeps the real multi-turn harness as the metric**: COPRO proposes instruction variants, and each is scored by `run_case(...)` against one target model using native tool calls, fixture tool results, final-answer outcome checks, and turn-efficiency scoring. The winner is then optionally cross-evaluated against the model matrix.
+
+`optimize` uses DSPy, whose `dspy.LM` path accepts litellm-style ids such as `openrouter/...`; `eval` uses Pydantic AI provider-prefixed ids such as `openrouter:...`.
 
 ```bash
 uv run --group dev --group evals python -m llm_sandbox_evals optimize \
@@ -65,7 +67,7 @@ It writes `optimized_candidate.json` + `optimized_prompt.md` and prints a baseli
 uv run --group dev --group evals python -m llm_sandbox_evals eval \
   --prompt-profile standard \
   --candidates baseline,optimized:eval_data/runs/<run_id>/optimized_candidate.json \
-  --models openrouter/deepseek/deepseek-v4-flash,stub
+  --models openrouter:deepseek/deepseek-v4-flash,stub
 ```
 
 ## Commands
@@ -83,7 +85,7 @@ python -m llm_sandbox_evals report <run_id> [--runs-dir PATH]
 - `--candidates` accepts `baseline`, `profile:<id>` production profiles, and `optimized:<path>` (a saved `optimized_candidate.json`).
 - `--prompt-profile PROFILE_ID` selects one production base prompt profile for the whole run (default: `standard`); it is not comma-separated and is separate from `--candidates`.
 - `terse` and `minimal` are condensed production profiles for capability-vs-size analysis; compare them with `--candidates baseline,profile:terse,profile:minimal` or select one via `--prompt-profile`.
-- `--reasoning LEVEL` forwards a reasoning effort (e.g. `medium`/`high`, or `none` to disable a reasoning model) to real models via litellm. `optimize` adds `--target-reasoning` and `--proposer-reasoning` to control the target and proposer models independently (e.g. `--target-reasoning none --proposer-reasoning high`).
+- `--reasoning LEVEL` forwards a reasoning effort (e.g. `medium`/`high`, or `none` to disable a reasoning model) to real models via Pydantic AI provider settings (OpenRouter/OpenAI reasoning effort). `optimize` adds `--target-reasoning` and `--proposer-reasoning` to control the target and proposer models independently (e.g. `--target-reasoning none --proposer-reasoning high`).
 - `--model-timeout SECONDS` bounds one model generation before recording `model_error` (default `75`). Slow free models may need a higher value or lower `--concurrency`.
 - `--logfire` enables optional native Pydantic Logfire instrumentation when `LOGFIRE_TOKEN` is available.
 - Defaults: `--models stub`, `--candidates baseline`, `--prompt-profile standard`, all cases.

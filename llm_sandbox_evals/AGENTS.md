@@ -25,7 +25,7 @@ Prioritize improving accomdating reasonable intent over increasing prompting len
 - **Never** pass a live `HomeAssistant` object, live registries, event bus, auth, config, filesystem, network, or OS/process API into the tool runner. The only service seam is `RecordingInvoker` (`tools.py`), which records the `ProposedAction` and returns `None` — it never calls `hass.services.async_call`.
 - Build a **fresh** `HomeSnapshot` per case evaluation; never cache or mutate fixtures.
 - The recorder tools are **emulated** from fixture `recorder()` data, never a live database.
-- Keep eval dependencies **isolated**: `litellm`, `pydantic-evals[logfire]`, `dspy`, and `rich` live only in `[dependency-groups] evals`. Never add them to `[project] dependencies`, `manifest.json`, or any `custom_components/**` import. `custom_components/**` is read-only.
+- Keep eval dependencies **isolated**: `pydantic-ai-slim[...]`, `pydantic-evals[logfire]`, `dspy`, and `rich` live only in `[dependency-groups] evals`. `litellm` remains only as a transitive dep of `dspy`; the eval-matrix adapter never imports it. Never add them to `[project] dependencies`, `manifest.json`, or any `custom_components/**` import. `custom_components/**` is read-only.
 - Keep `scripts/check` (the integration check) untouched; this package has its own `scripts/*-evals`.
 - The DSPy optimizer is dev-only. Keep `dspy` imports inside `optimize_dspy.py` and the lazy CLI optimize handler so eval/report/stub paths import without DSPy.
 - No fallbacks unless explicitly approved.
@@ -39,7 +39,7 @@ Prioritize improving accomdating reasonable intent over increasing prompting len
 - Optimize: `uv run --group dev --group evals python -m llm_sandbox_evals optimize --target-model <real-model>`
 - Report: `uv run --group dev --group evals python -m llm_sandbox_evals report <run_id>`
 
-Note: eval runs need **both** groups (`dev` provides `homeassistant`, `evals` provides `litellm` and `pydantic-evals`). Artifacts go to the gitignored `eval_data/runs/`; each native eval run writes `report.json`. Pass `--logfire` to enable optional Pydantic Logfire export when `LOGFIRE_TOKEN` is available.
+Note: eval runs need **both** groups (`dev` provides `homeassistant`, `evals` provides `pydantic-ai-slim` and `pydantic-evals`). Artifacts go to the gitignored `eval_data/runs/`; each native eval run writes `report.json`. Pass `--logfire` to enable optional Pydantic Logfire export when `LOGFIRE_TOKEN` is available.
 
 ## Architecture And Data Flow
 
@@ -73,7 +73,7 @@ The harness owns the snapshot lifecycle (build once per case evaluation, pass to
 - `cases.py` — loads `data/cases.yaml` with `Dataset.from_file()` and exposes stable `CASES: list[EvalCase]`.
 - `homes/` — frozen fixture modules (`snapshot() -> HomeSnapshot`, `recorder() -> dict`) + `get_home(name)` registry.
 - `prompts.py` — `baseline_candidate()` (from production builders), `load_candidates(ids, prompt_profile_id)`, `render_messages(...)`, `function_schemas(...)`, `tool_specs(...)`. Reuses the selected production prompt profile / `ACTIONS_*_PROMPT` / tool-description builders; derives the request-location section from the frozen snapshot. `terse`/`minimal` are condensed production profiles for size-axis evals.
-- `models.py` — `ModelAdapter` protocol, `StubAdapter` (offline, deterministic multi-turn validator), `LiteLLMAdapter` (any provider, lazy import), `get_adapter(id)`.
+- `models.py` — `ModelAdapter` protocol, `StubAdapter` (offline, deterministic multi-turn validator), `PydanticAIAdapter` (Pydantic AI direct `model_request`, lazy import), `get_adapter(id)`.
 - `tools.py` — `run_tool(tool_call, case, snapshot, prompt_profile, invoker=...) -> ToolOutcome`. Real executor path + fixture-backed recorder emulators matching production response shapes + `RecordingInvoker`; `tool_result_message(...)` serializes bounded tool results for the next model turn.
 - `scoring.py` — `check_case(...)`, `score_case(...)`, `mean_score(...)`. Outcome gates + turn-efficiency scoring.
 - `harness.py` — `run_case(...) -> CaseTrace`; the bounded per-cell task body reused by native experiments and DSPy.
@@ -95,7 +95,7 @@ The harness owns the snapshot lifecycle (build once per case evaluation, pass to
 - **Add a case:** append one native Dataset `Case` to `data/cases.yaml` with `name` matching `inputs.id`; do not hand-parse the file in code. Reference a real fixture `home`; keep `expected` deterministic; set `par_turns` to the expected efficient tool-turn count. Recorder cases may use entity ids or supported selectors such as area/domain/device/floor/label in native tool args. Use `required_tool_names`, `required_tool_sequence`, `recorder_window`, `required_error_keys`, `required_result_paths`, `max_tool_turns`, `max_successful_actions`, and `evidence_*` fields for multi-tool, recovery, and no-retry cases. Do not require final-answer entity mentions for action cases; score actions from recorded side effects and intermediate tool evidence.
 - **Add a fixture:** add `homes/<name>.py` with `snapshot()`/`recorder()` and `NAME`, then register in `homes/__init__.py`. Mirror `home_default.py`'s helpers (effective-area rule, sorted tuple `SnapshotIndexes`, nested `SafeContext`).
 - **Add a candidate:** add a `PromptCandidate` and expose via `prompts.load_candidates`. `baseline` is auto-built; unknown ids currently raise.
-- **Add a model:** no code needed — pass any litellm id to `--models`. To add a non-litellm backend, implement the `ModelAdapter` protocol and branch in `get_adapter`.
+- **Add a model:** no code needed — pass any Pydantic AI provider-prefixed id (`openai:...`, `anthropic:...`, `openrouter:...`) to `--models`. To add another backend, implement the `ModelAdapter` protocol and branch in `get_adapter`.
 
 ## The Stub Adapter
 

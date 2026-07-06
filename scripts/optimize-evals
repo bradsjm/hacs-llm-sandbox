@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Optimize the execute_home_code instruction via DSPy COPRO against a real model.
 # Requires API keys in .env (e.g. OPENROUTER_API_KEY). Costs model calls.
+# Model ids below are litellm-format because DSPy's dspy.LM is litellm-backed;
+# the eval matrix uses Pydantic-AI-format ids (openrouter:...).
 #
 # Override the target model with EVAL_TARGET_MODEL or pass flags directly, e.g.:
 #   scripts/optimize-evals --target-model gpt-4o-mini --breadth 5 --depth 2

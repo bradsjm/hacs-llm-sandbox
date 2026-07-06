@@ -24,7 +24,7 @@ from llm_sandbox_evals.harness import _select_cases
 _STUB_NOTE = (
     '"stub" is a keyless, deterministic pipeline-checker: great for verifying the\n'
     "harness end to end, but low stub scores are expected and are not a quality\n"
-    "signal. Pass real model ids (e.g. gpt-4o-mini) to measure prompt quality."
+    "signal. Pass real model ids (e.g. openai:gpt-4o-mini) to measure prompt quality."
 )
 
 
@@ -63,13 +63,13 @@ def _build_parser() -> argparse.ArgumentParser:
             "  python -m llm_sandbox_evals eval --models stub\n"
             "\n"
             "  # Score real models (keys read from env/.env):\n"
-            "  python -m llm_sandbox_evals eval --models gpt-4o-mini,claude-haiku-4-5,stub\n"
+            "  python -m llm_sandbox_evals eval --models openai:gpt-4o-mini,anthropic:claude-haiku-4-5,stub\n"
             "\n"
             "  # Re-render a saved run's leaderboard (no model calls):\n"
             "  python -m llm_sandbox_evals report 20260630-164326-318981\n"
             "\n"
             "  # Optimize the prompt with DSPy COPRO (costs real model calls):\n"
-            "  python -m llm_sandbox_evals optimize --target-model gpt-4o-mini --breadth 5 --depth 2\n"
+            "  python -m llm_sandbox_evals optimize --target-model openrouter/openai/gpt-4o-mini --breadth 5 --depth 2\n"
             "\n"
             "See `python -m llm_sandbox_evals <command> -h` for command-specific flags."
         ),
@@ -111,9 +111,10 @@ def _add_eval_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPar
         "--models",
         metavar="ID,ID,...",
         help=(
-            "comma-separated model ids to evaluate (default: stub). Any LiteLLM id works "
-            "(e.g. gpt-4o-mini, claude-haiku-4-5, openrouter/...); API keys come from the "
-            "environment. 'stub' is offline and keyless."
+            "comma-separated model ids to evaluate (default: stub). Any Pydantic AI model id works "
+            "(e.g. openai:gpt-4o-mini, anthropic:claude-haiku-4-5, "
+            "openrouter:anthropic/claude-sonnet-4.6); API keys come from the environment. "
+            "'stub' is offline and keyless."
         ),
     )
     eval_parser.add_argument(
@@ -158,9 +159,8 @@ def _add_eval_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPar
     eval_parser.add_argument(
         "--reasoning",
         metavar="LEVEL",
-        help="reasoning effort forwarded to real models via LiteLLM "
-        "(e.g. minimal/low/medium/high, or none to disable a reasoning model). "
-        "Ignored by 'stub'.",
+        help="reasoning effort forwarded to real models via Pydantic AI provider settings "
+        "(OpenRouter/OpenAI reasoning effort; ignored by 'stub' and providers without a reasoning setting).",
     )
     eval_parser.add_argument(
         "--logfire",
@@ -218,12 +218,12 @@ def _add_optimize_parser(subparsers: argparse._SubParsersAction[argparse.Argumen
         "--target-model",
         required=True,
         metavar="ID",
-        help="model id to optimize against (required; must be a real model, not 'stub').",
+        help="model id to optimize against (required; must be a real model, not 'stub'; optimize uses DSPy, which accepts litellm-style ids such as openrouter/...).",
     )
     optimize_parser.add_argument(
         "--proposer-model",
         metavar="ID",
-        help="model id COPRO uses to propose prompt rewrites (default: the target model).",
+        help="model id COPRO uses to propose prompt rewrites (default: the target model; DSPy accepts litellm-style ids such as openrouter/...).",
     )
     optimize_parser.add_argument(
         "--target-reasoning",
@@ -272,7 +272,7 @@ def _add_optimize_parser(subparsers: argparse._SubParsersAction[argparse.Argumen
     optimize_parser.add_argument(
         "--reasoning",
         metavar="LEVEL",
-        help="reasoning effort forwarded to cross-eval harness models.",
+        help="reasoning effort forwarded to cross-eval harness models via Pydantic AI provider settings.",
     )
     optimize_parser.add_argument(
         "--cross-eval-models",

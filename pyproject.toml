@@ -27,7 +27,7 @@ dev = [
   "yamllint>=1.37.1",
 ]
 evals = [
-  "litellm>=1.0",
+  "pydantic-ai-slim[openai,anthropic,openrouter,google]>=2.5.0",
   "pydantic-evals[logfire]>=2.5.0",
   "python-dotenv>=1.0",
   "rich>=13.0",
