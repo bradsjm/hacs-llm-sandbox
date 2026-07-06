@@ -445,7 +445,7 @@ def entity_ids_from_action(action: Mapping[str, object], snapshot: HomeSnapshot)
 
 
 def _entity_ids_from_mapping(data: Mapping[str, object], snapshot: HomeSnapshot) -> list[str]:
-    """Resolve direct entity ids plus simple area/device selectors from an action mapping."""
+    """Resolve direct entity ids plus HA target selectors from an action mapping."""
     entity_ids: list[str] = []
     entity_ids.extend(strings_from_value(data.get("entity_id")))
     entity_ids.extend(strings_from_value(data.get("entity_ids")))
@@ -455,6 +455,14 @@ def _entity_ids_from_mapping(data: Mapping[str, object], snapshot: HomeSnapshot)
 
     for area_id in strings_from_value(data.get("area_id")):
         entity_ids.extend(snapshot.indexes.entity_ids_by_area_id.get(area_id, ()))
+
+    for label_id in [*strings_from_value(data.get("label_id")), *strings_from_value(data.get("label_ids"))]:
+        entity_ids.extend(snapshot.indexes.entity_ids_by_label.get(label_id, ()))
+
+    for floor_id in [*strings_from_value(data.get("floor_id")), *strings_from_value(data.get("floor_ids"))]:
+        # Branch boundary: floor targets resolve through areas; no direct floor-to-entity index exists.
+        for area_id in snapshot.indexes.area_ids_by_floor_id.get(floor_id, ()):
+            entity_ids.extend(snapshot.indexes.entity_ids_by_area_id.get(area_id, ()))
 
     return _dedupe(entity_ids)
 

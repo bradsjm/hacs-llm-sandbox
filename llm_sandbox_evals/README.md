@@ -81,8 +81,9 @@ python -m llm_sandbox_evals report <run_id> [--runs-dir PATH]
 - `optimize` runs DSPy COPRO against one target model and cross-evaluates the winner (see *Optimizing the prompt* above).
 - `report <run_id>` re-renders a saved run's leaderboard from its `run.json`, regenerates `report.html`, and makes no model calls.
 - `--cases` accepts case ids **or** category names (`state_read`, `registry_read`, `recorder_read`, `action_allowed`, `action_blocked`, `complex`).
-- `--candidates` accepts `baseline` and `optimized:<path>` (a saved `optimized_candidate.json`).
+- `--candidates` accepts `baseline`, `profile:<id>` production profiles, and `optimized:<path>` (a saved `optimized_candidate.json`).
 - `--prompt-profile PROFILE_ID` selects one production base prompt profile for the whole run (default: `standard`); it is not comma-separated and is separate from `--candidates`.
+- `terse` and `minimal` are condensed production profiles for capability-vs-size analysis; compare them with `--candidates baseline,profile:terse,profile:minimal` or select one via `--prompt-profile`.
 - `--reasoning LEVEL` forwards a reasoning effort (e.g. `medium`/`high`, or `none` to disable a reasoning model) to real models via litellm. `optimize` adds `--target-reasoning` and `--proposer-reasoning` to control the target and proposer models independently (e.g. `--target-reasoning none --proposer-reasoning high`).
 - `--model-timeout SECONDS` bounds one model generation before recording `model_error` (default `75`). Slow free models may need a higher value or lower `--concurrency`.
 - Defaults: `--models stub`, `--candidates baseline`, `--prompt-profile standard`, all cases.
@@ -138,7 +139,7 @@ Add a module under `homes/` exposing `snapshot() -> HomeSnapshot` and `recorder(
 
 ## Adding prompt candidates
 
-`baseline` (auto-built from production `prompts.py`) and any `optimized:<path>` candidate (a saved `optimized_candidate.json`) are loadable via `--candidates`. `load_candidates` rejects unknown ids. To evaluate a hand-authored alternative prompt, add a `PromptCandidate` and expose it through `prompts.load_candidates`. The `optimize` command emits optimized candidates through this same seam.
+`baseline` (auto-built from production `prompts.py`), `profile:<id>` production profiles such as `profile:terse` and `profile:minimal`, and any `optimized:<path>` candidate (a saved `optimized_candidate.json`) are loadable via `--candidates`. `load_candidates` rejects unknown ids. To evaluate a hand-authored alternative prompt, add a `PromptCandidate` and expose it through `prompts.load_candidates`. The `optimize` command emits optimized candidates through this same seam.
 
 ## Artifacts
 

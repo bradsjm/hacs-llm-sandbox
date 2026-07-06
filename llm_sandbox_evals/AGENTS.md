@@ -70,7 +70,7 @@ The harness owns the snapshot lifecycle (build once per case evaluation, pass to
 - `config.py` — `EvalConfig` + `load_config()` (defaults: `models=["stub"]`, `candidates=["baseline"]`).
 - `cases.py` — `CASES: list[EvalCase]`, the predefined suite (simple -> complex, all categories).
 - `homes/` — frozen fixture modules (`snapshot() -> HomeSnapshot`, `recorder() -> dict`) + `get_home(name)` registry.
-- `prompts.py` — `baseline_candidate()` (from production builders), `load_candidates(ids, prompt_profile_id)`, `render_messages(...)`, `function_schemas(...)`, `tool_specs(...)`. Reuses the selected production prompt profile / `ACTIONS_*_PROMPT` / tool-description builders; derives the request-location section from the frozen snapshot.
+- `prompts.py` — `baseline_candidate()` (from production builders), `load_candidates(ids, prompt_profile_id)`, `render_messages(...)`, `function_schemas(...)`, `tool_specs(...)`. Reuses the selected production prompt profile / `ACTIONS_*_PROMPT` / tool-description builders; derives the request-location section from the frozen snapshot. `terse`/`minimal` are condensed production profiles for size-axis evals.
 - `models.py` — `ModelAdapter` protocol, `StubAdapter` (offline, deterministic multi-turn validator), `LiteLLMAdapter` (any provider, lazy import), `get_adapter(id)`.
 - `tools.py` — `run_tool(tool_call, case, snapshot, prompt_profile, invoker=...) -> ToolOutcome`. Real executor path + fixture-backed recorder emulators matching production response shapes + `RecordingInvoker`; `tool_result_message(...)` serializes bounded tool results for the next model turn.
 - `scoring.py` — `check_case(...)`, `score_case(...)`, `mean_score(...)`. Outcome gates + turn-efficiency scoring.

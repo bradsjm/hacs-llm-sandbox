@@ -17,6 +17,24 @@ def test_load_candidates_accepts_profile_candidate() -> None:
     assert candidates[0].api_prompt
 
 
+@pytest.mark.parametrize("profile_id", ["terse", "minimal"])
+def test_condensed_profiles_load_and_are_smaller_than_standard(profile_id: str) -> None:
+    standard = load_candidates(["profile:standard"], DEFAULT_PROMPT_PROFILE)[0]
+    terse = load_candidates(["profile:terse"], DEFAULT_PROMPT_PROFILE)[0]
+    minimal = load_candidates(["profile:minimal"], DEFAULT_PROMPT_PROFILE)[0]
+    candidate = load_candidates([f"profile:{profile_id}"], DEFAULT_PROMPT_PROFILE)[0]
+
+    standard_api_chars, _standard_authored_chars = candidate_prompt_sizes(standard)
+    terse_api_chars, _terse_authored_chars = candidate_prompt_sizes(terse)
+    minimal_api_chars, _minimal_authored_chars = candidate_prompt_sizes(minimal)
+    candidate_api_chars, _candidate_authored_chars = candidate_prompt_sizes(candidate)
+
+    assert candidate.id == f"profile:{profile_id}"
+    assert candidate.api_prompt
+    assert candidate_api_chars < standard_api_chars
+    assert minimal_api_chars < terse_api_chars < standard_api_chars
+
+
 def test_load_candidates_rejects_unknown_profile() -> None:
     with pytest.raises(ValueError, match="unknown prompt profile"):
         load_candidates(["profile:bogus"], DEFAULT_PROMPT_PROFILE)

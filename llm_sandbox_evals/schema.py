@@ -79,6 +79,7 @@ class EvalCase:
     llm_context: CaseContext
     expected: Expected
     par_turns: int
+    action_domains: frozenset[str] = frozenset()
     max_turns: int | None = None
 
 

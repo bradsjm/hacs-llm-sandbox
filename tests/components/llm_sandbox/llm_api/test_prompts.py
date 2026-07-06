@@ -9,8 +9,8 @@ from custom_components.llm_sandbox.llm_api.prompts import (
 )
 
 
-def test_registry_has_standard_profile_only() -> None:
-    assert [p.id for p in PROFILE_OPTIONS] == [DEFAULT_PROMPT_PROFILE]
+def test_registry_has_expected_profiles() -> None:
+    assert [p.id for p in PROFILE_OPTIONS] == [DEFAULT_PROMPT_PROFILE, "terse", "minimal"]
 
 
 def test_resolve_standard_profile() -> None:

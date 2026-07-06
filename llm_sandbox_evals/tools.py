@@ -3,10 +3,21 @@
 import json
 import math
 from collections.abc import Callable, Mapping
+from datetime import UTC, datetime, timedelta
 from types import ModuleType
 from typing import cast
 
 from custom_components.llm_sandbox.const import (
+    DEFAULT_HISTORY_WINDOW_HOURS,
+    DEFAULT_LOGBOOK_WINDOW_HOURS,
+    DEFAULT_STATISTICS_WINDOW_HOURS,
+    MAX_HISTORY_AGGREGATE_LOOKBACK_HOURS,
+    MAX_HISTORY_ATTRIBUTES,
+    MAX_HISTORY_STATES,
+    MAX_LOGBOOK_ENTRIES,
+    MAX_RECORDER_LOOKBACK_HOURS,
+    MAX_STATISTICS_LOOKBACK_HOURS,
+    MAX_STATISTICS_ROWS,
     TOOL_EXECUTE_HOME_CODE,
     TOOL_GET_HISTORY,
     TOOL_GET_LOGBOOK,
@@ -22,10 +33,25 @@ from custom_components.llm_sandbox.llm_api.tools import (
     recorder_error_envelope,
     resolve_entity_ids,
 )
+from custom_components.llm_sandbox.llm_api.tools._aggregates import (
+    AGGREGATORS,
+    AggregateFilters,
+    AggregateMode,
+    HistoryRow,
+)
+from custom_components.llm_sandbox.llm_api.tools._cursor import (
+    _LOGBOOK_CURSOR_KEY,
+    INVALID_CURSOR,
+    Cursor,
+    decode_cursor,
+    encode_cursor,
+    paginate_stream,
+)
 from custom_components.llm_sandbox.llm_api.tools.recorder import STATISTIC_VALUE_TYPES
 from custom_components.llm_sandbox.runtime import SandboxSettings
 from custom_components.llm_sandbox.snapshot import finalize_snapshot
 from custom_components.llm_sandbox.snapshot.models import HomeSnapshot, SnapshotScope
+from homeassistant.util import dt as dt_util
 
 from llm_sandbox_evals.homes import get_home
 from llm_sandbox_evals.schema import EvalCase, ToolCall, ToolOutcome
@@ -179,7 +205,7 @@ async def _run_execute(
         helper_call_budget=20,
         scope=EVAL_SCOPE,
         actions_enabled=case.actions_enabled,
-        action_domains=frozenset(),
+        action_domains=case.action_domains,
         prompt_profile=prompt_profile,
     )
     runtime = RuntimeContext(
@@ -216,18 +242,74 @@ def _run_history(tool_args: dict[str, object], case: EvalCase, snapshot: HomeSna
     """Return fixture-backed history rows in the production response envelope."""
     try:
         entity_ids = resolve_entity_ids(snapshot, tool_args, "entity_ids")
+        aggregate = cast(AggregateMode | None, tool_args.get("aggregate"))
+        if aggregate is not None:
+            if tool_args.get("attributes") is not None:
+                raise RecoverableToolError(
+                    "invalid_tool_input", {"error": "aggregate cannot be combined with attributes"}
+                )
+            if tool_args.get("cursor") is not None:
+                raise RecoverableToolError("invalid_tool_input", {"error": "aggregate cannot be combined with cursor"})
+            start, end, _cursor = _resolve_eval_window(
+                tool_args,
+                snapshot,
+                default_hours=DEFAULT_HISTORY_WINDOW_HOURS,
+                max_hours=MAX_HISTORY_AGGREGATE_LOOKBACK_HOURS,
+            )
+        else:
+            start, end, cursor = _resolve_eval_window(
+                tool_args,
+                snapshot,
+                default_hours=DEFAULT_HISTORY_WINDOW_HOURS,
+                max_hours=MAX_RECORDER_LOOKBACK_HOURS,
+            )
     except RecoverableToolError as err:
         return _recoverable_recorder_error(TOOL_GET_HISTORY, err, snapshot)
-    start = _optional_string(tool_args.get("start"))
-    end = _optional_string(tool_args.get("end"))
 
     fixture = get_home(case.home)
     history = _recorder_section(fixture, "history")
-    entities = {entity_id: _history_entity_payload(history.get(entity_id, [])) for entity_id in entity_ids}
+    if aggregate is not None:
+        filters = AggregateFilters(
+            from_state=cast(str | None, tool_args.get("from_state")),
+            to_state=cast(str | None, tool_args.get("to_state")),
+        )
+        aggregator = AGGREGATORS[aggregate]
+        summary = {
+            entity_id: aggregator(
+                cast(list[HistoryRow], _windowed_rows(history.get(entity_id, []), start, end, _history_timestamp)),
+                start,
+                end,
+                filters,
+            )
+            for entity_id in entity_ids
+        }
+        result: dict[str, object] = {"window": _window(start, end), "mode": aggregate, "summary": summary}
+        return ToolOutcome(ok=True, tool_name=TOOL_GET_HISTORY, result=result, recorded_actions=(), error=None)
+
+    requested_attributes = _requested_attributes(tool_args.get("attributes"))
+    entities: dict[str, dict[str, object]] = {}
+    next_cutoffs: dict[str, str] = {}
+    for entity_id in entity_ids:
+        rows = _windowed_rows(history.get(entity_id, []), start, end, _history_timestamp)
+        shaped = [_history_row(row, requested_attributes) for row in rows]
+        page, next_cutoff = paginate_stream(
+            shaped,
+            ts_of=lambda item: str(item[0][0]),
+            budget=MAX_HISTORY_STATES,
+            cutoff_iso=cursor.cutoffs.get(entity_id),
+        )
+        entities[entity_id] = _history_entity_payload(page)
+        # State mutation point: carry exhausted streams so follow-up pages do not re-emit them.
+        next_cutoffs[entity_id] = next_cutoff if next_cutoff is not None else ""
+    if next_cutoffs and all(cutoff == "" for cutoff in next_cutoffs.values()):
+        next_cutoffs = {}
+    result = {"window": _window(start, end), "entities": entities}
+    if next_cutoffs:
+        result["next_cursor"] = encode_cursor(Cursor(start=start, end=end, cutoffs=next_cutoffs))
     return ToolOutcome(
         ok=True,
         tool_name=TOOL_GET_HISTORY,
-        result={"window": {"start": start, "end": end}, "entities": entities},
+        result=result,
         recorded_actions=(),
         error=None,
     )
@@ -237,27 +319,59 @@ def _run_statistics(tool_args: dict[str, object], case: EvalCase, snapshot: Home
     """Return fixture-backed statistics rows in the production response envelope."""
     try:
         statistic_ids = resolve_entity_ids(snapshot, tool_args, "statistic_ids")
+        start, end, cursor = _resolve_eval_window(
+            tool_args,
+            snapshot,
+            default_hours=DEFAULT_STATISTICS_WINDOW_HOURS,
+            max_hours=MAX_STATISTICS_LOOKBACK_HOURS,
+        )
+        if tool_args.get("cursor") is not None:
+            if cursor.period not in (None, "5minute", "hour", "day"):
+                raise RecoverableToolError(INVALID_CURSOR, {})
+            period = cursor.period or "hour"
+            requested_types = cursor.statistic_types
+            if requested_types is not None and (
+                not requested_types or set(requested_types) - set(STATISTIC_VALUE_TYPES)
+            ):
+                raise RecoverableToolError(INVALID_CURSOR, {})
+        else:
+            period = str(tool_args.get("period", "hour"))
+            requested_types = tuple(cast(list[str] | None, tool_args.get("types")) or ()) or None
+            cursor = Cursor(start=start, end=end, cutoffs={}, period=period, statistic_types=requested_types)
     except RecoverableToolError as err:
         return _recoverable_recorder_error(TOOL_GET_STATISTICS, err, snapshot)
-    start = _optional_string(tool_args.get("start"))
-    end = _optional_string(tool_args.get("end"))
-    period = str(tool_args.get("period", "hour"))
-    requested_types = tuple(cast(list[str] | None, tool_args.get("types")) or ()) or None
 
     fixture = get_home(case.home)
     statistics = _recorder_section(fixture, "statistics")
-    rows = {
-        statistic_id: _statistics_payload(statistics.get(statistic_id, []), requested_types)
-        for statistic_id in statistic_ids
+    rows: dict[str, dict[str, object]] = {}
+    next_cutoffs: dict[str, str] = {}
+    for statistic_id in statistic_ids:
+        windowed = _windowed_rows(statistics.get(statistic_id, []), start, end, _statistics_timestamp)
+        shaped = [_statistics_row(row, requested_types) for row in windowed]
+        page, next_cutoff = paginate_stream(
+            shaped,
+            ts_of=lambda row: str(row[0]),
+            budget=MAX_STATISTICS_ROWS,
+            cutoff_iso=cursor.cutoffs.get(statistic_id),
+        )
+        rows[statistic_id] = _statistics_payload(page)
+        # State mutation point: mark exhausted statistic streams to avoid duplicate continuation pages.
+        next_cutoffs[statistic_id] = next_cutoff if next_cutoff is not None else ""
+    if next_cutoffs and all(cutoff == "" for cutoff in next_cutoffs.values()):
+        next_cutoffs = {}
+    result: dict[str, object] = {
+        "window": _window(start, end),
+        "period": period,
+        "statistics": rows,
     }
+    if next_cutoffs:
+        result["next_cursor"] = encode_cursor(
+            Cursor(start=start, end=end, cutoffs=next_cutoffs, period=period, statistic_types=requested_types)
+        )
     return ToolOutcome(
         ok=True,
         tool_name=TOOL_GET_STATISTICS,
-        result={
-            "window": {"start": start, "end": end},
-            "period": period,
-            "statistics": rows,
-        },
+        result=result,
         recorded_actions=(),
         error=None,
     )
@@ -267,18 +381,38 @@ def _run_logbook(tool_args: dict[str, object], case: EvalCase, snapshot: HomeSna
     """Return fixture-backed logbook rows in the production response envelope."""
     try:
         entity_ids = resolve_entity_ids(snapshot, tool_args, "entity_ids")
+        start, end, cursor = _resolve_eval_window(
+            tool_args,
+            snapshot,
+            default_hours=DEFAULT_LOGBOOK_WINDOW_HOURS,
+            max_hours=MAX_RECORDER_LOOKBACK_HOURS,
+        )
     except RecoverableToolError as err:
         return _recoverable_recorder_error(TOOL_GET_LOGBOOK, err, snapshot)
-    start = _optional_string(tool_args.get("start"))
-    end = _optional_string(tool_args.get("end"))
 
     fixture = get_home(case.home)
     logbook = _recorder_section(fixture, "logbook")
-    entries = [_logbook_entry(entity_id, row) for entity_id in entity_ids for row in logbook.get(entity_id, [])]
+    entries = sorted(
+        (
+            _logbook_entry(entity_id, row)
+            for entity_id in entity_ids
+            for row in _windowed_rows(logbook.get(entity_id, []), start, end, _logbook_timestamp)
+        ),
+        key=_logbook_entry_timestamp,
+    )
+    page, next_cutoff = paginate_stream(
+        entries,
+        ts_of=_logbook_entry_timestamp,
+        budget=MAX_LOGBOOK_ENTRIES,
+        cutoff_iso=cursor.cutoffs.get(_LOGBOOK_CURSOR_KEY),
+    )
+    result: dict[str, object] = {"window": _window(start, end), "entries": page}
+    if next_cutoff is not None:
+        result["next_cursor"] = encode_cursor(Cursor(start=start, end=end, cutoffs={_LOGBOOK_CURSOR_KEY: next_cutoff}))
     return ToolOutcome(
         ok=True,
         tool_name=TOOL_GET_LOGBOOK,
-        result={"window": {"start": start, "end": end}, "entries": entries},
+        result=result,
         recorded_actions=(),
         error=None,
     )
@@ -290,14 +424,6 @@ def _tool_args(value: object) -> dict[str, object]:
     if not isinstance(value, dict):
         return {}
     return cast(dict[str, object], value)
-
-
-def _optional_string(value: object) -> str | None:
-    """Return an ISO string argument or None for omitted/null windows."""
-    # Branch boundary: recorder windows may be omitted.
-    if value is None:
-        return None
-    return str(value)
 
 
 def _recoverable_recorder_error(tool_name: str, err: RecoverableToolError, snapshot: HomeSnapshot) -> ToolOutcome:
@@ -323,31 +449,128 @@ def _recorder_section(fixture: ModuleType, section: str) -> dict[str, list[dict[
     return cast(dict[str, list[dict[str, object]]], data[section])
 
 
-def _history_entity_payload(rows: list[dict[str, object]]) -> dict[str, object]:
+def _resolve_eval_window(
+    tool_args: Mapping[str, object],
+    snapshot: HomeSnapshot,
+    *,
+    default_hours: int,
+    max_hours: int,
+) -> tuple[datetime, datetime, Cursor]:
+    """Resolve the eval recorder query window using production cursor precedence."""
+    if (cursor_in := tool_args.get("cursor")) is not None:
+        # Branch boundary: cursors carry the original validated window for stable pagination.
+        cursor = decode_cursor(cursor_in)
+        return cursor.start, cursor.end, cursor
+
+    end = (
+        _parse_datetime(tool_args.get("end"))
+        if tool_args.get("end") is not None
+        else _parse_datetime(snapshot.created_at)
+    )
+    if tool_args.get("start") is not None:
+        start = _parse_datetime(tool_args.get("start"))
+    elif tool_args.get("hours") is not None:
+        start = end - timedelta(hours=float(cast(float | int | str, tool_args["hours"])))
+    else:
+        start = end - timedelta(hours=default_hours)
+    if start > end:
+        raise RecoverableToolError("invalid_tool_input", {"error": "start after end"})
+    if end - start > timedelta(hours=max_hours):
+        raise RecoverableToolError("time_window_too_large", {"max_hours": str(max_hours)})
+    return start, end, Cursor(start=start, end=end, cutoffs={})
+
+
+def _parse_datetime(value: object) -> datetime:
+    """Return a UTC-aware datetime or raise the production invalid-input key."""
+    if isinstance(value, datetime):
+        return dt_util.as_utc(value)
+    if isinstance(value, str):
+        parsed = dt_util.parse_datetime(value)
+        if parsed is not None:
+            return dt_util.as_utc(parsed)
+    raise RecoverableToolError("invalid_tool_input", {"error": "expected an ISO datetime"})
+
+
+def _window(start: datetime, end: datetime) -> dict[str, str]:
+    """Build the production recorder window envelope."""
+    return {"start": start.isoformat(), "end": end.isoformat()}
+
+
+def _windowed_rows(
+    rows: list[dict[str, object]],
+    start: datetime,
+    end: datetime,
+    timestamp: Callable[[Mapping[str, object]], datetime],
+) -> list[dict[str, object]]:
+    """Keep fixture rows whose timestamp falls inside the computed inclusive window."""
+    return [row for row in rows if start <= timestamp(row) <= end]
+
+
+def _history_timestamp(row: Mapping[str, object]) -> datetime:
+    """Return the UTC timestamp of a fixture history row."""
+    return _parse_datetime(row.get("last_changed") or row.get("last_updated"))
+
+
+def _statistics_timestamp(row: Mapping[str, object]) -> datetime:
+    """Return the UTC timestamp of a fixture statistics row."""
+    value = row.get("start") or row.get("end") or row.get("last_reset")
+    if isinstance(value, int | float):
+        return datetime.fromtimestamp(value, UTC)
+    return _parse_datetime(value)
+
+
+def _logbook_timestamp(row: Mapping[str, object]) -> datetime:
+    """Return the UTC timestamp of a fixture logbook row."""
+    return _parse_datetime(row.get("when"))
+
+
+def _logbook_entry_timestamp(row: Mapping[str, object]) -> str:
+    """Return one logbook entry's ISO timestamp for cursor pagination."""
+    return str(row["when"])
+
+
+def _requested_attributes(value: object) -> list[str] | None:
+    """Normalize and bound history attribute opt-in names."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return [value][:MAX_HISTORY_ATTRIBUTES]
+    if isinstance(value, list | tuple):
+        return [str(item) for item in value][:MAX_HISTORY_ATTRIBUTES]
+    return [str(value)][:MAX_HISTORY_ATTRIBUTES]
+
+
+def _history_entity_payload(rows: list[tuple[list[object], str | None]]) -> dict[str, object]:
     """Build the de-duplicated production history payload for one entity."""
-    converted = [_history_row(row) for row in rows]
-    entity: dict[str, object] = {"rows": [row for row, _unit in converted]}
-    unit = next((unit for _row, unit in converted if unit), None)
+    entity: dict[str, object] = {"rows": [row for row, _unit in rows]}
+    unit = next((unit for _row, unit in rows if unit), None)
     if unit is not None:
         entity["unit"] = unit
     return entity
 
 
-def _history_row(row: Mapping[str, object]) -> tuple[list[object], str | None]:
-    """Convert a fixture history row to ``([time, state], unit)``."""
+def _history_row(
+    row: Mapping[str, object], requested_attributes: list[str] | None = None
+) -> tuple[list[object], str | None]:
+    """Convert a fixture history row to ``([time, state, attrs?], unit)``."""
     timestamp = row.get("last_changed") or row.get("last_updated")
     attributes = row.get("attributes")
     unit = None
     if isinstance(attributes, Mapping):
         unit = attributes.get("unit_of_measurement") or attributes.get("unit")
-    return [str(timestamp), row.get("state")], str(unit) if unit is not None else None
+    shaped: list[object] = [str(timestamp), row.get("state")]
+    if requested_attributes is not None:
+        present: dict[str, object] = {}
+        if isinstance(attributes, Mapping):
+            present = {name: attributes[name] for name in requested_attributes if name in attributes}
+        shaped.append(present)
+    return shaped, str(unit) if unit is not None else None
 
 
-def _statistics_payload(rows: list[dict[str, object]], requested_types: tuple[str, ...] | None) -> dict[str, object]:
+def _statistics_payload(rows: list[list[object]]) -> dict[str, object]:
     """Build the production statistics payload for one statistic id."""
-    shaped_rows = [_statistics_row(row, requested_types) for row in rows]
-    fields = sorted({key for row in shaped_rows if isinstance(row[1], Mapping) for key in row[1]})
-    return {"rows": shaped_rows, "fields": fields}
+    fields = sorted({str(key) for row in rows if isinstance(row[1], Mapping) for key in row[1]})
+    return {"rows": rows, "fields": fields}
 
 
 def _statistics_row(row: Mapping[str, object], requested_types: tuple[str, ...] | None) -> list[object]:
