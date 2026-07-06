@@ -16,10 +16,12 @@ The `stub` adapter is deterministic and keyless — it validates the full pipeli
 ```
 eval_data/runs/20260630-164326-318981
 
-| Candidate | Mean | MinModel | Turns | Eff | state_read | registry_read | recorder_read | action_allowed | action_blocked | complex |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| baseline | 0.858 | 0.858 | 1.000 | 0.858 | 1.000 | 1.000 | 0.889 | 0.500 | 1.000 | 0.750 |
+| Candidate | Mean | MinModel | Turns | PromptChars | SizeRatio | state_read | registry_read | recorder_read | action_allowed | action_blocked | complex |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| baseline | 0.858 | 0.858 | 1.000 | 11668 | 1.000 | 1.000 | 1.000 | 0.889 | 0.500 | 1.000 | 0.750 |
 ```
+
+Interactive runs also render a Rich live progress table plus colored leaderboard/failure tables on stderr. Every run writes `report.html` next to `leaderboard.md`; open it in a browser for a self-contained demo view with sortable tables, filters, expandable checks, and links to trace JSON files.
 
 ## Running real models
 
@@ -75,9 +77,9 @@ python -m llm_sandbox_evals optimize --target-model ID [--proposer-model ID] [--
 python -m llm_sandbox_evals report <run_id> [--runs-dir PATH]
 ```
 
-- `eval` runs the matrix and writes artifacts under `eval_data/runs/<run_id>/`.
+- `eval` runs the matrix, shows Rich progress on stderr, and writes artifacts under `eval_data/runs/<run_id>/`.
 - `optimize` runs DSPy COPRO against one target model and cross-evaluates the winner (see *Optimizing the prompt* above).
-- `report <run_id>` re-renders a saved run's leaderboard from its `run.json` without re-running.
+- `report <run_id>` re-renders a saved run's leaderboard from its `run.json`, regenerates `report.html`, and makes no model calls.
 - `--cases` accepts case ids **or** category names (`state_read`, `registry_read`, `recorder_read`, `action_allowed`, `action_blocked`, `complex`).
 - `--candidates` accepts `baseline` and `optimized:<path>` (a saved `optimized_candidate.json`).
 - `--prompt-profile PROFILE_ID` selects one production base prompt profile for the whole run (default: `standard`); it is not comma-separated and is separate from `--candidates`.
@@ -144,6 +146,7 @@ Add a module under `homes/` exposing `snapshot() -> HomeSnapshot` and `recorder(
 
 - `run.json` — run metadata and per-(candidate, model) scores (no API keys).
 - `leaderboard.md` — candidate ranking + candidate-by-model matrix.
+- `report.html` — self-contained browser report with sortable summary tables, result filters, expandable checks, and trace links.
 - `results.jsonl` — one line per case/candidate/model with scores and check outcomes.
 - `failures.jsonl` — cases that scored `0.0` or failed a required gate.
 - `traces/<case>.<model>.<candidate>.json` — full messages, raw model output, final answer, turns/par/efficiency, per-turn tool calls/results, recorded actions, and per-check results.

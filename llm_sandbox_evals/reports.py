@@ -1,13 +1,13 @@
 """Artifact writing and leaderboard rendering for eval runs.
 
-The ``report`` CLI command reloads ``run.json`` only. That file stores enough
-metadata plus serialized ``CandidateModelScore`` objects to render the same
-leaderboard without loading full prompts or per-case traces.
+The ``report`` CLI command reloads ``run.json`` for leaderboard data. That file
+stores enough metadata plus serialized ``CandidateModelScore`` objects to render
+the same leaderboard without loading full prompts or per-case traces.
 """
 
 import json
 import re
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from llm_sandbox_evals.schema import CandidateModelScore, CaseTrace, RunResult
@@ -16,6 +16,30 @@ _SAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9_.-]")
 _INTEGRATION_MANIFEST = Path(__file__).resolve().parent.parent / "custom_components" / "llm_sandbox" / "manifest.json"
 # Two candidate means within this epsilon are treated as equal quality and tie-broken by smaller prompt size.
 _SIZE_TIE_EPSILON = 0.005
+
+
+@dataclass(frozen=True, slots=True)
+class CandidateRow:
+    """Display-ready aggregate row for one prompt candidate."""
+
+    candidate_id: str
+    mean: float
+    min_model: float
+    mean_turns: float
+    category_means: dict[str, float]
+    prompt_chars: int
+    api_prompt_chars: int
+    size_ratio: float
+
+
+@dataclass(frozen=True, slots=True)
+class MatrixRow:
+    """Display-ready aggregate row for one candidate/model pair."""
+
+    candidate_id: str
+    model_id: str
+    mean: float
+    mean_turns: float
 
 
 def write_run(result: RunResult, runs_dir: Path) -> Path:
@@ -36,11 +60,14 @@ def write_run(result: RunResult, runs_dir: Path) -> Path:
         # Branch boundary: failures are zero scores or any failed required check.
         if trace.score == 0.0 or any(check.required and not check.passed for check in trace.checks):
             failure_lines.append(result_line)
-        trace_path = traces_dir / _trace_filename(trace)
+        trace_path = traces_dir / trace_filename(trace.case_id, trace.model_id, trace.candidate_id)
         trace_path.write_text(json.dumps(_trace_json(trace), indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
     _write_jsonl(run_dir / "results.jsonl", result_lines)
     _write_jsonl(run_dir / "failures.jsonl", failure_lines)
+    from llm_sandbox_evals.html_report import write_html
+
+    write_html(run_dir)
     return run_dir
 
 
@@ -66,12 +93,95 @@ def render_leaderboard_from_scores(
     model_ids: list[str],
 ) -> str:
     """Render a leaderboard from serialized score summaries in ``run.json``."""
-    categories = _categories(scores)
+    categories = score_categories(scores)
     lines = [f"# Eval leaderboard {run_id}", "", f"Created: {created_at}", f"Cases: {case_count}", ""]
     lines.extend(_candidate_table(scores, candidate_ids, model_ids, categories))
     lines.extend(("", "## Candidate x model means", ""))
     lines.extend(_model_matrix_table(scores, candidate_ids, model_ids))
     return "\n".join(lines) + "\n"
+
+
+def score_categories(scores: list[CandidateModelScore]) -> list[str]:
+    """Return categories present in score summaries, preserving first-seen order."""
+    categories: list[str] = []
+    for score in scores:
+        for category in score.per_category:
+            if category not in categories:
+                categories.append(category)
+    return categories
+
+
+def candidate_rows(
+    scores: list[CandidateModelScore], candidate_ids: list[str], model_ids: list[str]
+) -> list[CandidateRow]:
+    """Return sorted candidate aggregate rows shared by all report renderers."""
+    categories = score_categories(scores)
+    score_map = {(score.candidate_id, score.model_id): score for score in scores}
+    candidate_prompt_chars: dict[str, int] = {}
+    for candidate_id in candidate_ids:
+        candidate_scores = [
+            score_map[(candidate_id, model_id)] for model_id in model_ids if (candidate_id, model_id) in score_map
+        ]
+        candidate_prompt_chars[candidate_id] = candidate_scores[0].prompt_chars if candidate_scores else 0
+
+    baseline_prompt_chars = candidate_prompt_chars.get("baseline", max(candidate_prompt_chars.values(), default=0))
+    if baseline_prompt_chars == 0:
+        baseline_prompt_chars = 1
+
+    rows: list[CandidateRow] = []
+    for candidate_id in candidate_ids:
+        candidate_scores = [
+            score_map[(candidate_id, model_id)] for model_id in model_ids if (candidate_id, model_id) in score_map
+        ]
+        prompt_chars = candidate_prompt_chars[candidate_id]
+        api_prompt_chars = candidate_scores[0].api_prompt_chars if candidate_scores else 0
+        category_means: dict[str, float] = {}
+        for category in categories:
+            category_values = [
+                score.per_category[category] for score in candidate_scores if category in score.per_category
+            ]
+            category_means[category] = _mean(category_values)
+
+        # State mutation point: rows are the shared contract for every display renderer.
+        rows.append(
+            CandidateRow(
+                candidate_id=candidate_id,
+                mean=_mean([case_score for score in candidate_scores for case_score in score.case_scores.values()]),
+                min_model=min((score.mean for score in candidate_scores), default=0.0),
+                mean_turns=_mean([score.mean_turns for score in candidate_scores]),
+                category_means=category_means,
+                prompt_chars=prompt_chars,
+                api_prompt_chars=api_prompt_chars,
+                size_ratio=prompt_chars / baseline_prompt_chars,
+            )
+        )
+
+    rows.sort(
+        key=lambda row: (
+            -round(row.mean / _SIZE_TIE_EPSILON),
+            row.api_prompt_chars,
+            -row.min_model,
+        )
+    )
+    return rows
+
+
+def matrix_rows(scores: list[CandidateModelScore], candidate_ids: list[str], model_ids: list[str]) -> list[MatrixRow]:
+    """Return candidate/model aggregate rows in deterministic matrix order."""
+    score_map = {(score.candidate_id, score.model_id): score for score in scores}
+    rows: list[MatrixRow] = []
+    for candidate_id in candidate_ids:
+        for model_id in model_ids:
+            score = score_map.get((candidate_id, model_id))
+            rows.append(
+                MatrixRow(
+                    candidate_id=candidate_id,
+                    model_id=model_id,
+                    mean=0.0 if score is None else score.mean,
+                    mean_turns=0.0 if score is None else score.mean_turns,
+                )
+            )
+    return rows
 
 
 def load_results(results_jsonl: Path) -> list[dict[str, object]]:
@@ -169,25 +279,15 @@ def _write_jsonl(path: Path, rows: list[dict[str, object]]) -> None:
     path.write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in rows), encoding="utf-8")
 
 
-def _trace_filename(trace: CaseTrace) -> str:
+def trace_filename(case_id: str, model_id: str, candidate_id: str) -> str:
     """Return the filesystem-safe trace filename for one matrix cell."""
-    parts = (_sanitize(trace.case_id), _sanitize(trace.model_id), _sanitize(trace.candidate_id))
+    parts = (_sanitize(case_id), _sanitize(model_id), _sanitize(candidate_id))
     return f"{parts[0]}.{parts[1]}.{parts[2]}.json"
 
 
 def _sanitize(value: str) -> str:
     """Replace unsafe filename characters with underscores."""
     return _SAFE_FILENAME_RE.sub("_", value)
-
-
-def _categories(scores: list[CandidateModelScore]) -> list[str]:
-    """Return categories present in score summaries, preserving first-seen order."""
-    categories: list[str] = []
-    for score in scores:
-        for category in score.per_category:
-            if category not in categories:
-                categories.append(category)
-    return categories
 
 
 def _candidate_table(
@@ -197,78 +297,20 @@ def _candidate_table(
     categories: list[str],
 ) -> list[str]:
     """Render candidate ranking rows."""
-    score_map = {(score.candidate_id, score.model_id): score for score in scores}
-    ranked_rows: list[tuple[str, float, float, float, dict[str, float], int, int, float]] = []
-    candidate_prompt_chars: dict[str, int] = {}
-    for candidate_id in candidate_ids:
-        candidate_scores = [
-            score_map[(candidate_id, model_id)] for model_id in model_ids if (candidate_id, model_id) in score_map
-        ]
-        prompt_chars = candidate_scores[0].prompt_chars if candidate_scores else 0
-        candidate_prompt_chars[candidate_id] = prompt_chars
-
-    baseline_prompt_chars = candidate_prompt_chars.get("baseline", max(candidate_prompt_chars.values(), default=0))
-    if baseline_prompt_chars == 0:
-        baseline_prompt_chars = 1
-
-    for candidate_id in candidate_ids:
-        candidate_scores = [
-            score_map[(candidate_id, model_id)] for model_id in model_ids if (candidate_id, model_id) in score_map
-        ]
-        prompt_chars = candidate_prompt_chars[candidate_id]
-        api_prompt_chars = candidate_scores[0].api_prompt_chars if candidate_scores else 0
-        size_ratio = prompt_chars / baseline_prompt_chars if baseline_prompt_chars else 0.0
-        all_case_scores = [case_score for score in candidate_scores for case_score in score.case_scores.values()]
-        model_means = [score.mean for score in candidate_scores]
-        turns = [score.mean_turns for score in candidate_scores]
-        category_means: dict[str, float] = {}
-        for category in categories:
-            category_values = [
-                score.per_category[category] for score in candidate_scores if category in score.per_category
-            ]
-            category_means[category] = _mean(category_values)
-        ranked_rows.append(
-            (
-                candidate_id,
-                _mean(all_case_scores),
-                min(model_means, default=0.0),
-                _mean(turns),
-                category_means,
-                prompt_chars,
-                api_prompt_chars,
-                size_ratio,
-            )
-        )
-
-    ranked_rows.sort(
-        key=lambda row: (
-            -round(row[1] / _SIZE_TIE_EPSILON),
-            row[6],
-            -row[2],
-        )
-    )
+    rows = candidate_rows(scores, candidate_ids, model_ids)
     header = ["Candidate", "Mean", "MinModel", "Turns", "PromptChars", "SizeRatio", *categories]
     lines = [_markdown_row(header), _markdown_separator(len(header))]
-    for (
-        candidate_id,
-        mean,
-        min_model,
-        mean_turns,
-        category_means,
-        prompt_chars,
-        _api_prompt_chars,
-        size_ratio,
-    ) in ranked_rows:
+    for row in rows:
         lines.append(
             _markdown_row(
                 [
-                    candidate_id,
-                    _format_score(mean),
-                    _format_score(min_model),
-                    _format_score(mean_turns),
-                    str(int(prompt_chars)),
-                    _format_score(size_ratio),
-                    *[_format_score(category_means[cat]) for cat in categories],
+                    row.candidate_id,
+                    _format_score(row.mean),
+                    _format_score(row.min_model),
+                    _format_score(row.mean_turns),
+                    str(int(row.prompt_chars)),
+                    _format_score(row.size_ratio),
+                    *[_format_score(row.category_means[cat]) for cat in categories],
                 ]
             )
         )
@@ -279,22 +321,19 @@ def _model_matrix_table(
     scores: list[CandidateModelScore], candidate_ids: list[str], model_ids: list[str]
 ) -> list[str]:
     """Render per-candidate/per-model mean and turns rows."""
-    score_map = {(score.candidate_id, score.model_id): score for score in scores}
     header = ["Candidate", "Model", "Mean", "Turns"]
     lines = [_markdown_row(header), _markdown_separator(len(header))]
-    for candidate_id in candidate_ids:
-        for model_id in model_ids:
-            score = score_map.get((candidate_id, model_id))
-            lines.append(
-                _markdown_row(
-                    [
-                        candidate_id,
-                        model_id,
-                        _format_score(0.0 if score is None else score.mean),
-                        _format_score(0.0 if score is None else score.mean_turns),
-                    ]
-                )
+    for row in matrix_rows(scores, candidate_ids, model_ids):
+        lines.append(
+            _markdown_row(
+                [
+                    row.candidate_id,
+                    row.model_id,
+                    _format_score(row.mean),
+                    _format_score(row.mean_turns),
+                ]
             )
+        )
     return lines
 
 

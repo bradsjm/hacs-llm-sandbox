@@ -1183,6 +1183,7 @@ evals = [
     { name = "dspy" },
     { name = "litellm" },
     { name = "python-dotenv" },
+    { name = "rich" },
     { name = "tenacity" },
 ]
 
@@ -1211,6 +1212,7 @@ evals = [
     { name = "dspy", specifier = ">=2.6" },
     { name = "litellm", specifier = ">=1.0" },
     { name = "python-dotenv", specifier = ">=1.0" },
+    { name = "rich", specifier = ">=13.0" },
     { name = "tenacity", specifier = ">=8.0" },
 ]
 

@@ -25,7 +25,7 @@ Prioritize improving accomdating reasonable intent over increasing prompting len
 - **Never** pass a live `HomeAssistant` object, live registries, event bus, auth, config, filesystem, network, or OS/process API into the tool runner. The only service seam is `RecordingInvoker` (`tools.py`), which records the `ProposedAction` and returns `None` — it never calls `hass.services.async_call`.
 - Build a **fresh** `HomeSnapshot` per case evaluation; never cache or mutate fixtures.
 - The recorder tools are **emulated** from fixture `recorder()` data, never a live database.
-- Keep eval dependencies **isolated**: `litellm` and `dspy` live only in `[dependency-groups] evals`. Never add them to `[project] dependencies`, `manifest.json`, or any `custom_components/**` import. `custom_components/**` is read-only.
+- Keep eval dependencies **isolated**: `litellm`, `dspy`, and `rich` live only in `[dependency-groups] evals`. Never add them to `[project] dependencies`, `manifest.json`, or any `custom_components/**` import. `custom_components/**` is read-only.
 - Keep `scripts/check` (the integration check) untouched; this package has its own `scripts/*-evals`.
 - The DSPy optimizer is dev-only. Keep `dspy` imports inside `optimize_dspy.py` and the lazy CLI optimize handler so eval/report/stub paths import without DSPy.
 - No fallbacks unless explicitly approved.
@@ -74,8 +74,10 @@ The harness owns the snapshot lifecycle (build once per case evaluation, pass to
 - `models.py` — `ModelAdapter` protocol, `StubAdapter` (offline, deterministic multi-turn validator), `LiteLLMAdapter` (any provider, lazy import), `get_adapter(id)`.
 - `tools.py` — `run_tool(tool_call, case, snapshot, prompt_profile, invoker=...) -> ToolOutcome`. Real executor path + fixture-backed recorder emulators matching production response shapes + `RecordingInvoker`; `tool_result_message(...)` serializes bounded tool results for the next model turn.
 - `scoring.py` — `check_case(...)`, `score_case(...)`, `mean_score(...)`. Outcome gates + turn-efficiency scoring.
-- `harness.py` — `run_case(...) -> CaseTrace`, `run_matrix(config) -> RunResult`; `CaseTrace`, `CandidateModelScore`, `RunResult`.
-- `reports.py` — `write_run(...)`, `render_leaderboard(...)`, `load_run_json(...)` (for `report`).
+- `harness.py` — `run_case(...) -> CaseTrace`, `run_matrix(config) -> RunResult`; `ProgressReporter` keeps terminal UI pluggable while the harness stays rich-free.
+- `reports.py` — `write_run(...)`, `render_leaderboard(...)`, `load_run_json(...)` (for `report`), shared display row aggregation, trace filename helpers.
+- `tui.py` — Rich live progress and saved leaderboard/failure tables for interactive `eval`/`report` runs.
+- `html_report.py` — stdlib-only `report.html` generator from saved run artifacts.
 - `optimize_dspy.py` — DSPy COPRO prompt optimizer that exports optimized `PromptCandidate` artifacts and reuses the real harness metric path.
 - `cli.py` / `__main__.py` — `eval`, `report`, and `optimize` subcommands.
 

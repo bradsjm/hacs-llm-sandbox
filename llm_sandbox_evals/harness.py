@@ -4,6 +4,7 @@ import asyncio
 import json
 import sys
 from datetime import UTC, datetime
+from typing import Protocol
 
 from custom_components.llm_sandbox.const import TOOL_EXECUTE_HOME_CODE
 from custom_components.llm_sandbox.llm_api.prompts import PromptProfile, resolve_profile
@@ -26,10 +27,69 @@ from llm_sandbox_evals.scoring import check_case, mean_score, score_case
 from llm_sandbox_evals.tools import EVAL_SCOPE, RecordingInvoker, apply_scope, run_tool, tool_result_message
 
 
-async def run_matrix(config: EvalConfig) -> RunResult:
+class ProgressReporter(Protocol):
+    """Observer for matrix progress events emitted by the harness."""
+
+    def pair_started(self, *, candidate_id: str, model_id: str, total: int, concurrency: int) -> None:
+        """Report that one candidate/model pair is starting."""
+        ...
+
+    def case_finished(
+        self,
+        *,
+        candidate_id: str,
+        model_id: str,
+        case_id: str,
+        index: int,
+        total: int,
+        score: float,
+        turns: int,
+    ) -> None:
+        """Report that one case has finished."""
+        ...
+
+    def model_error(self, *, candidate_id: str, model_id: str, case_id: str, detail: str) -> None:
+        """Report detailed provider diagnostics for one candidate/model pair."""
+        ...
+
+
+class PlainProgressReporter:
+    """Default progress reporter that preserves the original stderr line format."""
+
+    def pair_started(self, *, candidate_id: str, model_id: str, total: int, concurrency: int) -> None:
+        """Write one candidate/model pair start line."""
+        _progress(f"[{candidate_id}/{model_id}] {total} cases (concurrency={concurrency})")
+
+    def case_finished(
+        self,
+        *,
+        candidate_id: str,
+        model_id: str,
+        case_id: str,
+        index: int,
+        total: int,
+        score: float,
+        turns: int,
+    ) -> None:
+        """Write one case completion line."""
+        del candidate_id, model_id
+        _progress(f"  [{index + 1}/{total}] {case_id} score={score:.2f} turns={turns}")
+
+    def model_error(self, *, candidate_id: str, model_id: str, case_id: str, detail: str) -> None:
+        """Write provider diagnostics once per failing candidate/model pair."""
+        _progress(
+            f"  model error for candidate={candidate_id} model={model_id} case={case_id}; "
+            "skipping remaining cases for this pair"
+        )
+        for line in detail.splitlines():
+            _progress(f"    {line}")
+
+
+async def run_matrix(config: EvalConfig, reporter: ProgressReporter | None = None) -> RunResult:
     """Run the candidate x model x case matrix and return all traces/scores."""
     run_id = datetime.now(UTC).strftime("%Y%m%d-%H%M%S-%f")
     created_at = datetime.now(UTC).isoformat()
+    progress = PlainProgressReporter() if reporter is None else reporter
     profile = resolve_profile(config.prompt_profile)
     candidates = load_candidates(config.candidates, config.prompt_profile)
     selected_cases = _select_cases(config.cases, config.homes)
@@ -39,8 +99,15 @@ async def run_matrix(config: EvalConfig) -> RunResult:
     for candidate in candidates:
         for model_id in model_ids:
             adapter = get_adapter(model_id, config.reasoning_effort, model_timeout=config.model_timeout)
-            _progress(f"[{candidate.id}/{model_id}] {len(selected_cases)} cases (concurrency={config.concurrency})")
-            pair_traces = await _run_cases_for_pair(candidate, model_id, selected_cases, adapter, config, profile)
+            progress.pair_started(
+                candidate_id=candidate.id,
+                model_id=model_id,
+                total=len(selected_cases),
+                concurrency=config.concurrency,
+            )
+            pair_traces = await _run_cases_for_pair(
+                candidate, model_id, selected_cases, adapter, config, profile, progress
+            )
             traces.extend(pair_traces)
 
     return RunResult(
@@ -157,8 +224,10 @@ async def _run_cases_for_pair(
     adapter: ModelAdapter,
     config: EvalConfig,
     prompt_profile: PromptProfile,
+    reporter: ProgressReporter | None = None,
 ) -> list[CaseTrace]:
     """Run all cases for one candidate/model pair with bounded concurrency."""
+    progress = PlainProgressReporter() if reporter is None else reporter
     semaphore = asyncio.Semaphore(max(1, config.concurrency))
     model_error_lock = asyncio.Lock()
     model_error: ModelResponseError | None = None
@@ -187,9 +256,22 @@ async def _run_cases_for_pair(
                     async with model_error_lock:
                         if model_error is None:
                             model_error = err
-                            _log_model_error(candidate, model_id, case, err)
+                            progress.model_error(
+                                candidate_id=candidate.id,
+                                model_id=model_id,
+                                case_id=case.id,
+                                detail=err.detail,
+                            )
                     trace = _error_trace(candidate, model_id, case, "", "model_error", err.detail)
-        _progress(f"  [{index + 1}/{total}] {case.id} score={trace.score:.2f} turns={trace.turns}")
+        progress.case_finished(
+            candidate_id=candidate.id,
+            model_id=model_id,
+            case_id=case.id,
+            index=index,
+            total=total,
+            score=trace.score,
+            turns=trace.turns,
+        )
         return trace
 
     return await asyncio.gather(*[_one(i, case) for i, case in enumerate(selected_cases)])
@@ -199,16 +281,6 @@ def _progress(message: str) -> None:
     """Write a progress line to stderr (ruff T201 forbids the print builtin)."""
     sys.stderr.write(message + "\n")
     sys.stderr.flush()
-
-
-def _log_model_error(candidate: PromptCandidate, model_id: str, case: EvalCase, err: ModelResponseError) -> None:
-    """Write detailed provider diagnostics once per failing candidate/model pair."""
-    _progress(
-        f"  model error for candidate={candidate.id} model={model_id} case={case.id}; "
-        "skipping remaining cases for this pair"
-    )
-    for line in err.detail.splitlines():
-        _progress(f"    {line}")
 
 
 def _error_trace(

@@ -17,7 +17,9 @@ from dotenv import load_dotenv
 
 from llm_sandbox_evals.config import EvalConfig, load_config
 from llm_sandbox_evals.harness import _select_cases, run_matrix
-from llm_sandbox_evals.reports import load_run_json, render_leaderboard_from_scores, write_run
+from llm_sandbox_evals.html_report import write_html
+from llm_sandbox_evals.reports import load_results, load_run_json, render_leaderboard_from_scores, write_run
+from llm_sandbox_evals.tui import LiveReporter, render_failures, render_leaderboard, stderr_console
 
 _STUB_NOTE = (
     '"stub" is a keyless, deterministic pipeline-checker: great for verifying the\n'
@@ -305,9 +307,21 @@ def _run_eval(args: argparse.Namespace) -> int:
     selected_cases = _select_cases(config.cases, config.homes)
     _say(_eval_banner(config, len(selected_cases)))
 
-    result = asyncio.run(run_matrix(config))
+    console = stderr_console()
+    with LiveReporter(console) as reporter:
+        result = asyncio.run(run_matrix(config, reporter=reporter))
     run_dir = write_run(result, config.runs_dir)
     _say(_eval_footer(run_dir))
+    render_leaderboard(
+        console,
+        scores=result.scores,
+        run_id=result.run_id,
+        created_at=result.created_at,
+        case_count=len(result.case_ids),
+        candidate_ids=result.candidate_ids,
+        model_ids=result.model_ids,
+    )
+    render_failures(console, load_results(run_dir / "results.jsonl"))
 
     # stdout stays machine-readable: the run directory then the leaderboard.
     sys.stdout.write(f"{run_dir}\n\n")
@@ -332,6 +346,19 @@ def _run_report(args: argparse.Namespace) -> int:
 
     _say("(llm sandbox evals) re-rendering the leaderboard from saved scores (no model calls).\n")
     loaded_run_id, created_at, case_count, candidate_ids, model_ids, scores = load_run_json(run_json)
+    html_path = write_html(run_json.parent)
+    console = stderr_console()
+    render_leaderboard(
+        console,
+        scores=scores,
+        run_id=loaded_run_id,
+        created_at=created_at,
+        case_count=case_count,
+        candidate_ids=candidate_ids,
+        model_ids=model_ids,
+    )
+    render_failures(console, load_results(run_json.parent / "results.jsonl"))
+    _say(f"HTML report: {html_path}\n")
     sys.stdout.write(
         render_leaderboard_from_scores(
             scores=scores,
@@ -449,6 +476,7 @@ def _eval_footer(run_dir: Path) -> str:
         f"\nWrote artifacts to {run_dir}:\n"
         "  run.json          run metadata + per-(candidate,model) scores (no API keys)\n"
         "  leaderboard.md    the table printed below\n"
+        "  report.html       self-contained browser report for demos\n"
         "  results.jsonl     one row per (case, candidate, model) with per-check outcomes\n"
         "  failures.jsonl    subset scoring 0.0 or failing a required gate\n"
         "  traces/*.json     full prompt, model output, tool result, actions per cell\n\n"
