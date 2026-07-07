@@ -1,5 +1,5 @@
 import pytest
-from llm_sandbox_evals.optimize_dspy import _to_pydantic_ai_model_id
+from llm_sandbox_evals.optimize_helpers import _to_pydantic_ai_model_id
 
 
 @pytest.mark.parametrize(

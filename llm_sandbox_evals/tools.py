@@ -23,12 +23,12 @@ from custom_components.llm_sandbox.const import (
     TOOL_GET_LOGBOOK,
     TOOL_GET_STATISTICS,
 )
+from custom_components.llm_sandbox.llm_api.errors import RecoverableToolError
 from custom_components.llm_sandbox.llm_api.executor import async_execute_home_code
 from custom_components.llm_sandbox.llm_api.executor_support import ExecutionState
 from custom_components.llm_sandbox.llm_api.facade_views import build_llm_context
 from custom_components.llm_sandbox.llm_api.prompts import PromptProfile
 from custom_components.llm_sandbox.llm_api.runtime import RuntimeContext
-from custom_components.llm_sandbox.llm_api.errors import RecoverableToolError
 from custom_components.llm_sandbox.llm_api.tools._analytics import (
     AGGREGATORS,
     AggregateFilters,

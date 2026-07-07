@@ -1,7 +1,7 @@
 import pytest
 from custom_components.llm_sandbox.const import DEFAULT_PROMPT_PROFILE, TOOL_GET_HISTORY
 from custom_components.llm_sandbox.llm_api.tools._analytics import AGGREGATORS
-from llm_sandbox_evals.optimize_dspy import size_penalized_utility
+from llm_sandbox_evals.optimize_helpers import size_penalized_utility
 from llm_sandbox_evals.prompts import baseline_candidate, candidate_prompt_sizes, function_schemas, load_candidates
 from llm_sandbox_evals.schema import PromptCandidate
 
@@ -60,9 +60,7 @@ def test_get_history_function_schema_exposes_aggregate_filters() -> None:
     parameters = history_schema["function"]["parameters"]
     assert parameters["additionalProperties"] is False
     properties = parameters["properties"]
-    assert properties["aggregate"] == {
-        "anyOf": [{"type": "string", "enum": list(AGGREGATORS)}, {"type": "object"}]
-    }
+    assert properties["aggregate"] == {"anyOf": [{"type": "string", "enum": list(AGGREGATORS)}, {"type": "object"}]}
     assert properties["from_state"] == {"type": "string"}
     assert properties["to_state"] == {"type": "string"}
     assert properties["group_by"] == {"type": "array", "items": {"type": "string"}}
