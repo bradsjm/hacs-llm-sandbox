@@ -106,6 +106,12 @@ from custom_components.llm_sandbox.llm_api.datetime_normalization import (
             {DATETIME_IMPORTS_RESOLVED},
             id="module-alias-date-chain-rewritten",
         ),
+        pytest.param(
+            "import datetime as dt\ndef f(dt):\n    return dt.datetime.now()\nresult = f(1)",
+            "import datetime as dt\ndef f(dt):\n    return dt.datetime.now()\nresult = f(1)",
+            set(),
+            id="module-alias-shadowed-by-param-left-alone",
+        ),
     ],
 )
 def test_normalize_datetime_imports(
@@ -117,17 +123,3 @@ def test_normalize_datetime_imports(
 
     assert normalized == expected_code
     assert set(labels) == expected_labels
-
-
-def test_module_alias_shadowed_by_param_not_rewritten() -> None:
-    """A module-import alias shadowed by a local binding is left intact.
-
-    Conservative behavior: rewriting is skipped so user-code semantics are not
-    silently changed; the real import is preserved and Monty surfaces a natural
-    import error if executed.
-    """
-    code = "import datetime as dt\ndef f(dt):\n    return dt.datetime.now()\nresult = f(1)"
-    normalized, labels = normalize_datetime_imports(code)
-    assert labels == []
-    assert "import datetime as dt" in normalized
-    assert "dt.datetime" in normalized

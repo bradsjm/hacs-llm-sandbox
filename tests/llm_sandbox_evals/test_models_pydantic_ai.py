@@ -127,16 +127,28 @@ def test_to_pydantic_ai_messages_replays_native_assistant_response_parts() -> No
     assert translated[1].parts[0].tool_name == "execute_home_code"
 
 
-def test_reasoning_model_settings_dispatches_openrouter() -> None:
-    settings = reasoning_model_settings("openrouter:openai/gpt-4o-mini", "high")
+@pytest.mark.parametrize(
+    ("model_id", "expected"),
+    [
+        pytest.param(
+            "openrouter:openai/gpt-4o-mini",
+            {"openrouter_reasoning": {"effort": "high"}},
+            id="openrouter",
+        ),
+        pytest.param(
+            "openai:gpt-4o-mini",
+            {"openai_reasoning_effort": "high"},
+            id="openai",
+        ),
+    ],
+)
+def test_reasoning_model_settings_dispatches_provider_specific_reasoning(
+    model_id: str,
+    expected: dict[str, object],
+) -> None:
+    settings = reasoning_model_settings(model_id, "high")
 
-    assert settings == {"openrouter_reasoning": {"effort": "high"}}
-
-
-def test_reasoning_model_settings_dispatches_openai() -> None:
-    settings = reasoning_model_settings("openai:gpt-4o-mini", "high")
-
-    assert settings == {"openai_reasoning_effort": "high"}
+    assert settings == expected
 
 
 @pytest.mark.parametrize(

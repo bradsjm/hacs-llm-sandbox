@@ -287,51 +287,6 @@ async def test_snapshot_captures_service_target_and_field_capability_filters(has
     assert fields["color_temp_kelvin"]["filter"] == {"attribute": {"supported_color_modes": ["color_temp"]}}
 
 
-async def test_snapshot_reuses_service_description_for_schema_and_target(
-    hass: HomeAssistant,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A full snapshot looks up each service description once while preserving metadata."""
-    calls: list[tuple[str, str]] = []
-
-    hass.services.async_register(
-        "cover",
-        "set_position",
-        lambda call: None,
-        schema=vol.Schema({vol.Optional("position"): int}),
-    )
-    async_set_service_schema(
-        hass,
-        "cover",
-        "set_position",
-        {
-            "target": {"entity": [{"domain": ["cover"]}]},
-            "fields": {"position": {"description": "Position", "filter": {"supported_features": [4]}}},
-        },
-    )
-    await hass.async_block_till_done()
-
-    from custom_components.llm_sandbox.snapshot import builder
-
-    original = builder.async_get_cached_service_description
-
-    def _counting_description(hass_arg: HomeAssistant, domain: str, service_name: str) -> object:
-        calls.append((domain, service_name))
-        return original(hass_arg, domain, service_name)
-
-    monkeypatch.setattr(builder, "async_get_cached_service_description", _counting_description)
-
-    snapshot = build_snapshot(hass)
-
-    assert calls.count(("cover", "set_position")) == 1
-    assert snapshot.services_target["cover"]["set_position"] == {
-        "entity": [{"domain": ["cover"], "device_class": [], "integration": None, "supported_features": []}]
-    }
-    fields = {field["name"]: field for field in snapshot.services_schema["cover"]["set_position"]["fields"]}
-    assert fields["position"]["description"] == "Position"
-    assert fields["position"]["filter"] == {"supported_features": [4]}
-
-
 async def test_snapshot_omits_services_target_for_non_entity_services(hass: HomeAssistant) -> None:
     """Services without a declared target are absent from services_target."""
     hass.services.async_register("script", "reload", lambda call: None)

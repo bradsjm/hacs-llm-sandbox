@@ -3,6 +3,7 @@
 import pytest
 from custom_components.llm_sandbox.llm_api.await_normalization import (
     AWAITED_ASYNC_CALLS,
+    REWROTE_SYNC_SUBSCRIPT,
     STRIPPED_AWAIT_FROM_SYNC,
     normalize_awaits,
 )
@@ -115,6 +116,24 @@ VIEW_CLASSES = [
             "state = hass.states.get('light.bedroom')\nresult = await hass.services.async_call('light', 'turn_on')",
             {AWAITED_ASYNC_CALLS, STRIPPED_AWAIT_FROM_SYNC},
             id="wrap-and-strip",
+        ),
+        pytest.param(
+            "result = states['light.bedroom']",
+            "result = states.get('light.bedroom')",
+            {REWROTE_SYNC_SUBSCRIPT},
+            id="rewrite-states-subscript",
+        ),
+        pytest.param(
+            "result = await hass.states['light.bedroom']",
+            "result = hass.states.get('light.bedroom')",
+            {REWROTE_SYNC_SUBSCRIPT, STRIPPED_AWAIT_FROM_SYNC},
+            id="rewrite-and-strip-hass-states-subscript",
+        ),
+        pytest.param(
+            "result = len(states)",
+            "result = len(states.async_entity_ids())",
+            {REWROTE_SYNC_SUBSCRIPT},
+            id="rewrite-state-machine-len",
         ),
         pytest.param(
             "result = x.get('foo')",

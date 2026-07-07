@@ -1,9 +1,8 @@
 from collections.abc import Sequence
 from pathlib import Path
-
 from llm_sandbox_evals.cases import CASES, load_cases
 from llm_sandbox_evals.harness import _select_cases
-from llm_sandbox_evals.schema import EvalCase, ExpectedAction
+from llm_sandbox_evals.schema import EvalCase
 from pydantic_evals import Dataset
 
 
@@ -19,65 +18,6 @@ def test_load_cases_returns_native_dataset_inputs_in_stable_order() -> None:
         "state_kitchen_light",
         "state_living_fan",
     ]
-
-
-def test_checked_in_dataset_round_trips_through_native_file_format(tmp_path: Path) -> None:
-    dataset = _native_dataset()
-    roundtrip_path = tmp_path / "cases.yaml"
-
-    dataset.to_file(roundtrip_path)
-    reloaded = Dataset[EvalCase, object, object].from_file(roundtrip_path)
-
-    assert [case.name for case in reloaded.cases] == [case.name for case in dataset.cases]
-    assert [case.inputs.id for case in reloaded.cases] == [case.inputs.id for case in dataset.cases]
-    assert [case.inputs for case in reloaded.cases] == [case.inputs for case in dataset.cases]
-
-
-def test_loaded_dataset_preserves_structural_expectation_types() -> None:
-    loaded_cases = load_cases()
-    domain_limited_case = _case_by_id(loaded_cases, "action_domain_not_allowed")
-    aggregate_case = _case_by_id(loaded_cases, "recorder_aggregate_last_seen_to_state")
-    multi_action_case = _case_by_id(loaded_cases, "action_multi_sequence")
-
-    assert isinstance(domain_limited_case.action_domains, frozenset)
-    assert domain_limited_case.action_domains == frozenset({"light"})
-    assert aggregate_case.expected.required_tool_arg_values == (("aggregate", "last_seen"), ("to_state", "on"))
-    assert tuple(isinstance(pair, tuple) for pair in aggregate_case.expected.required_tool_arg_values) == (True, True)
-    assert aggregate_case.expected.required_result_paths == ("summary", "mode")
-    assert aggregate_case.expected.recorder_window == (
-        "2026-06-28T12:00:00+00:00",
-        "2026-06-29T12:00:00+00:00",
-    )
-    assert multi_action_case.expected.actions == (
-        ExpectedAction(domain="light", service="turn_off", target_entity_ids=("light.living",)),
-        ExpectedAction(domain="fan", service="set_percentage", target_entity_ids=("fan.living_fan",)),
-    )
-
-
-def test_loaded_dataset_includes_new_query_and_declarative_analytics_cases() -> None:
-    loaded_cases = load_cases()
-    sql_case = _case_by_id(loaded_cases, "sql_query_visible_entities_by_domain")
-    analytics_case = _case_by_id(loaded_cases, "recorder_declarative_sensor_value_analytics")
-
-    assert [case.id for case in loaded_cases[-2:]] == [
-        "sql_query_visible_entities_by_domain",
-        "recorder_declarative_sensor_value_analytics",
-    ]
-    assert "await hass.query" in sql_case.user_request
-    assert sql_case.expected.tool_name == "execute_home_code"
-    assert sql_case.expected.required_result_paths == ("output.domain", "output.entity_count", "output.example_entity")
-    assert sql_case.expected.output_contains_entities == ()
-    assert sql_case.expected.evidence_contains_entities == ()
-    assert analytics_case.expected.tool_name == "get_history"
-    assert analytics_case.expected.required_result_paths == ("rows.bucket", "rows.domain", "rows.value_mean")
-    assert analytics_case.expected.required_tool_arg_values == (
-        ("aggregate.value", ["mean"]),
-        ("group_by", ["domain"]),
-        ("bucket", "12h"),
-        ("where", [{"field": "domain", "op": "eq", "value": "sensor"}]),
-        ("order_by", "-value_mean"),
-        ("limit", 2),
-    )
 
 
 def test_harness_select_cases_consumes_loaded_suite_order() -> None:

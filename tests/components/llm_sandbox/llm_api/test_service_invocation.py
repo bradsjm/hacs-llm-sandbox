@@ -16,7 +16,6 @@ from custom_components.llm_sandbox.llm_api.errors import (
 )
 from custom_components.llm_sandbox.llm_api.executor_support import (
     ExecutionState,
-    code_error_payload_for_state,
     helper_error_payload_for_state,
     validation_error,
 )
@@ -167,48 +166,99 @@ async def test_return_response_records_service_response_on_success() -> None:
     ]
 
 
-async def test_only_response_service_without_return_response_runs_with_response_flags() -> None:
-    """ONLY response services are invoked with the response flags accommodated."""
-    service_response = {"required": True}
-    harness = _service_harness(invoker=RecordingInvoker(responses=[service_response]))
+@pytest.mark.parametrize(
+    (
+        "domain",
+        "service",
+        "blocking",
+        "return_response",
+        "service_response",
+        "expected_result",
+        "expected_status",
+        "expected_error_key",
+        "expected_invoker_calls",
+    ),
+    [
+        pytest.param(
+            "test_response",
+            "required",
+            False,
+            False,
+            {"required": True},
+            {"required": True},
+            "ok",
+            None,
+            [
+                {
+                    "domain": "test_response",
+                    "service": "required",
+                    "service_data": None,
+                    "target": None,
+                    "blocking": True,
+                    "return_response": True,
+                }
+            ],
+            id="only-accommodated",
+        ),
+        pytest.param(
+            "test_response",
+            "optional",
+            False,
+            False,
+            {"optional": True},
+            {"optional": True},
+            "ok",
+            None,
+            [
+                {
+                    "domain": "test_response",
+                    "service": "optional",
+                    "service_data": None,
+                    "target": None,
+                    "blocking": True,
+                    "return_response": True,
+                }
+            ],
+            id="optional-accommodated",
+        ),
+        pytest.param(
+            "light",
+            "turn_on",
+            True,
+            True,
+            None,
+            None,
+            "error",
+            "service_response_not_supported",
+            [],
+            id="none-rejected",
+        ),
+    ],
+)
+async def test_response_mode_policy(
+    domain: str,
+    service: str,
+    blocking: bool,
+    return_response: bool,
+    service_response: dict[str, object] | None,
+    expected_result: object,
+    expected_status: str,
+    expected_error_key: str | None,
+    expected_invoker_calls: list[ProposedAction],
+) -> None:
+    """Response-mode policy accommodates ONLY/OPTIONAL and blocks NONE before invocation."""
+    responses = [] if service_response is None else [service_response]
+    harness = _service_harness(invoker=RecordingInvoker(responses=responses))
 
-    result = await _ok_call(harness, "test_response", "required")
+    result = await _ok_call(harness, domain, service, blocking=blocking, return_response=return_response)
 
-    assert result == service_response
-    assert _action_statuses_via_state(harness) == ["ok"]
-    assert harness.runtime.state.actions[0]["response"] == service_response
-    assert harness.invoker.calls == [
-        {
-            "domain": "test_response",
-            "service": "required",
-            "service_data": None,
-            "target": None,
-            "blocking": True,
-            "return_response": True,
-        }
-    ]
-
-
-async def test_optional_response_service_without_return_response_runs_with_response_flags() -> None:
-    """OPTIONAL response services are invoked with the response flags accommodated."""
-    service_response = {"optional": True}
-    harness = _service_harness(invoker=RecordingInvoker(responses=[service_response]))
-
-    result = await _ok_call(harness, "test_response", "optional")
-
-    assert result == service_response
-    assert _action_statuses_via_state(harness) == ["ok"]
-    assert harness.runtime.state.actions[0]["response"] == service_response
-    assert harness.invoker.calls == [
-        {
-            "domain": "test_response",
-            "service": "optional",
-            "service_data": None,
-            "target": None,
-            "blocking": True,
-            "return_response": True,
-        }
-    ]
+    assert result == expected_result
+    assert harness.invoker.calls == expected_invoker_calls
+    assert harness.runtime.state.actions[0]["status"] == expected_status
+    if expected_error_key is None:
+        assert harness.runtime.state.actions[0]["response"] == service_response
+    else:
+        assert cast(dict[str, object], harness.runtime.state.actions[0]["error"])["key"] == expected_error_key
 
 
 async def test_service_not_found_records_blocked_action_and_returns_none() -> None:
@@ -473,45 +523,6 @@ async def test_helper_error_payload_keeps_prior_success_and_failed_action() -> N
     assert _action_keys(payload) == [None, "service_call_failed"]
 
 
-async def test_code_error_payload_keeps_prior_successful_action() -> None:
-    """A later code failure payload still exposes already-executed actions."""
-    harness = _service_harness()
-
-    await harness.services.async_call(
-        "light",
-        "turn_on",
-        target={"entity_id": "light.bedroom"},
-    )
-    payload = code_error_payload_for_state(
-        kind="ZeroDivisionError",
-        message="division by zero",
-        state=harness.runtime.state,
-    )
-
-    assert payload["execution"]["status"] == "code_error"
-    assert _code_action_statuses(payload) == ["ok"]
-    assert _code_action_keys(payload) == [None]
-
-
-async def test_generic_service_exception_is_service_call_failed_helper_error() -> None:
-    """Plain service exceptions are classified as failed service actions."""
-    harness = _service_harness(invoker=RecordingInvoker(errors=[RuntimeError("boom")]))
-
-    payload = await _helper_error_for(
-        harness,
-        "light",
-        "turn_on",
-        target={"entity_id": "light.bedroom"},
-    )
-
-    assert payload["execution"]["status"] == "helper_error"
-    assert isinstance(payload["execution"]["message"], str)
-    assert payload["execution"]["message"]
-    assert payload["execution"]["message"] != "service_call_failed"
-    assert _action_statuses(payload) == ["error"]
-    assert _action_keys(payload) == ["service_call_failed"]
-
-
 async def test_actions_disabled_gate_records_blocked_action_and_returns_none() -> None:
     """A disabled action master switch records an errored action and returns None."""
     harness = _service_harness(actions_enabled=False)
@@ -533,24 +544,6 @@ async def test_action_domain_allowlist_blocks_unlisted_domain() -> None:
     assert result is None
     assert _action_statuses_via_state(harness) == ["error"]
     assert _action_keys_via_state(harness) == ["action_domain_not_allowed"]
-    assert harness.invoker.calls == []
-
-
-async def test_no_response_service_rejects_return_response_and_returns_none() -> None:
-    """NONE response services still reject return_response=True before invocation."""
-    harness = _service_harness()
-
-    result = await _ok_call(
-        harness,
-        "light",
-        "turn_on",
-        blocking=True,
-        return_response=True,
-    )
-
-    assert result is None
-    assert _action_statuses_via_state(harness) == ["error"]
-    assert _action_keys_via_state(harness) == ["service_response_not_supported"]
     assert harness.invoker.calls == []
 
 

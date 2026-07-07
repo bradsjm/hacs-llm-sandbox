@@ -57,11 +57,6 @@ async def test_user_step_shows_form(hass: HomeAssistant) -> None:
 
     assert result["type"] == "form"
     assert result["step_id"] == "user"
-
-
-async def test_user_step_defaults_assistant_to_conversation(hass: HomeAssistant) -> None:
-    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
-
     assert _schema_default(result, CONF_ASSISTANT) == DEFAULT_ASSISTANT
 
 

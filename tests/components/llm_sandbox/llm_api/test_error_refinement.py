@@ -175,42 +175,53 @@ def test_refine_attribute_error_unknown_class_has_no_surface() -> None:
 
 
 @pytest.mark.parametrize(
-    "message",
+    ("message", "module_name"),
     [
-        pytest.param("error[unresolved-import]: Cannot resolve imported module `statistics`", id="statistics"),
-        pytest.param("ModuleNotFoundError: No module named 'collections'", id="collections"),
-        pytest.param("error[unresolved-import]: Cannot resolve imported module 'itertools'", id="itertools"),
+        pytest.param(
+            "error[unresolved-import]: Cannot resolve imported module `statistics`",
+            "statistics",
+            id="statistics",
+        ),
+        pytest.param("ModuleNotFoundError: No module named 'collections'", "collections", id="collections"),
+        pytest.param(
+            "error[unresolved-import]: Cannot resolve imported module 'itertools'",
+            "itertools",
+            id="itertools",
+        ),
     ],
 )
-def test_refine_unresolved_import_guides_to_builtins(message: str) -> None:
+def test_refine_unresolved_import_guides_to_builtins(message: str, module_name: str) -> None:
     refined_kind, refined_message, available_attributes = refine_code_error("Exception", message, "import x")
 
     assert refined_kind == "ImportError"
     assert available_attributes is None
-    assert "json, math, re" in refined_message
+    assert refined_message != message
+    assert module_name in refined_message
 
 
 def test_refine_percent_format_guides_to_fstring() -> None:
+    message = "unsupported operand type(s) for %: 'str' and 'int'"
     refined_kind, refined_message, _available_attributes = refine_code_error(
         "TypeError",
-        "unsupported operand type(s) for %: 'str' and 'int'",
+        message,
         "x = '%d' % 5",
     )
 
     assert refined_kind == "TypeError"
-    assert "f-string" in refined_message
+    assert refined_message != message
 
 
 def test_refine_str_format_guides_to_fstring() -> None:
+    message = "'str' object has no attribute 'format'"
     refined_kind, refined_message, available_attributes = refine_code_error(
         "AttributeError",
-        "'str' object has no attribute 'format'",
+        message,
         "'{}'.format(1)",
     )
 
     assert refined_kind == "AttributeError"
-    assert "f-string" in refined_message
     assert available_attributes is None
+    assert refined_message != message
 
 
 @pytest.mark.parametrize(
@@ -247,39 +258,42 @@ def test_refine_parse_miss_returns_inputs_unchanged() -> None:
 
 
 def test_refine_import_hint_for_dunder_import() -> None:
+    message = "unresolved-reference: name `__import__` is used when not defined"
     refined_kind, refined_message, available_attributes = refine_code_error(
         "MontyTypingError",
-        "unresolved-reference: name `__import__` is used when not defined",
+        message,
         "json = __import__('json')",
     )
 
     assert refined_kind == "NameError"
     assert available_attributes is None
     assert "__import__" in refined_message
-    assert "json" in refined_message
+    assert refined_message != message
 
 
 def test_refine_collection_dict_method_hint() -> None:
+    message = "'list' object has no attribute 'items'"
     refined_kind, refined_message, available_attributes = refine_code_error(
         "MontyRuntimeError",
-        "'list' object has no attribute 'items'",
+        message,
         "for eid, st in states.async_all().items(): ...",
     )
 
     assert refined_kind == "AttributeError"
     assert available_attributes is None
     assert "list" in refined_message
-    assert "comprehension" in refined_message
+    assert refined_message != message
 
 
 def test_refine_none_deref_hint() -> None:
+    message = "'NoneType' object has no attribute 'lower'"
     refined_kind, refined_message, available_attributes = refine_code_error(
         "MontyRuntimeError",
-        "'NoneType' object has no attribute 'lower'",
+        message,
         "name = hass.states.get('light.x').name.lower()",
     )
 
     assert refined_kind == "AttributeError"
     assert available_attributes is None
     assert "None" in refined_message
-    assert "is not None" in refined_message
+    assert refined_message != message

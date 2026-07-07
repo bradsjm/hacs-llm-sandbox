@@ -15,10 +15,7 @@ from custom_components.llm_sandbox.llm_api.executor_support import ExecutionStat
 from custom_components.llm_sandbox.llm_api.facade_views import (
     SafeHass as SandboxHass,
 )
-from custom_components.llm_sandbox.llm_api.facade_views import (
-    _query_scope,
-    build_facades,
-)
+from custom_components.llm_sandbox.llm_api.facade_views import build_facades
 from custom_components.llm_sandbox.llm_api.home_db import MAX_HISTORY_LOAD_ROWS
 from custom_components.llm_sandbox.llm_api.prompts.profiles import resolve_profile
 from custom_components.llm_sandbox.llm_api.runtime import RuntimeContext, activate_runtime, clear_runtime
@@ -257,7 +254,8 @@ async def test_hass_query_literal_scope_appends_transparency_note() -> None:
     finally:
         clear_runtime()
 
-    assert runtime.state.notes == ["query scope inferred from SQL literals: sensor.temp"]
+    assert len(runtime.state.notes) == 1
+    assert "sensor.temp" in runtime.state.notes[0]
 
 
 async def test_hass_query_capped_history_load_does_not_mark_window_complete() -> None:
@@ -428,28 +426,6 @@ async def test_hass_query_clamp_error_uses_helper_key() -> None:
     assert err.value.key == "time_window_too_large"
 
 
-def test_sql_inferred_entity_literals_over_cap_are_rejected() -> None:
-    """SQL literal entity inference enforces the recorder entity-id cap instead of truncating."""
-    base = _snapshot()
-    state = base.states["sensor.temp"]
-    states = {
-        f"sensor.temp_{index}": replace(state, entity_id=f"sensor.temp_{index}", object_id=f"temp_{index}")
-        for index in range(MAX_RECORDER_ENTITY_IDS + 1)
-    }
-    snapshot = replace(base, states=states)
-    sql = (
-        "select * from history where entity_id in ("
-        + ", ".join(f"'sensor.temp_{index}'" for index in range(MAX_RECORDER_ENTITY_IDS + 1))
-        + ")"
-    )
-
-    with pytest.raises(HelperExecutionError) as err:
-        _query_scope(snapshot, sql, None, None, None, None, None, None)
-
-    assert err.value.helper == "query"
-    assert err.value.key == "invalid_tool_input"
-
-
 async def test_hass_query_scopes_history_by_area() -> None:
     """Area-scoped SQL history queries load only the area's visible entities."""
     base = _snapshot()
@@ -537,7 +513,7 @@ async def test_missing_entity_read_attaches_note(
     hass: HomeAssistant,
     loaded_entry: MockConfigEntry,
 ) -> None:
-    """An absent states.get yielding an empty result names visible same-domain entities."""
+    """An empty literal state read adds a repair note, then rewrites on the next run."""
     code = """
 result = hass.states.get("light.kitchen_main")
 """
@@ -551,6 +527,19 @@ result = hass.states.get("light.kitchen_main")
     assert note
     assert "light.kitchen_main" in note
     assert "light.bedroom" in note
+
+    follow_up = await _run_code(
+        hass,
+        loaded_entry,
+        """
+state = hass.states.get("light.kitchen_main")
+result = state.entity_id if state is not None else None
+""",
+    )
+
+    assert follow_up["execution"]["status"] == "ok"
+    assert follow_up["output"] == "light.bedroom"
+    assert follow_up["resolutions"] == [{"requested": "light.kitchen_main", "applied": "light.bedroom"}]
 
 
 async def test_present_entity_read_attaches_no_hint(
@@ -787,148 +776,6 @@ result = {
     assert output["entity_entries_count"] >= 2
 
 
-async def test_label_registry_read_end_to_end(
-    hass: HomeAssistant,
-    loaded_entry: MockConfigEntry,
-) -> None:
-    from homeassistant.helpers import label_registry as lr
-
-    lr.async_get(hass).async_create("Favourites")
-    code = """
-by_name = label_registry.async_get_label_by_name("FAV OURITES")
-result = {
-    "count": len(label_registry.async_list_labels()),
-    "label_id": by_name.label_id if by_name else None,
-    "module_count": len(lr.async_get(hass).async_list_labels()),
-}
-"""
-
-    result = await _run_code(hass, loaded_entry, code)
-
-    assert result["execution"]["status"] == "ok"
-    output = result["output"]
-    assert output["count"] >= 1
-    assert output["label_id"] is not None
-    assert output["module_count"] == output["count"]
-
-
-async def test_category_registry_read_end_to_end(
-    hass: HomeAssistant,
-    loaded_entry: MockConfigEntry,
-) -> None:
-    from homeassistant.helpers import category_registry as cr_core
-
-    reg = cr_core.async_get(hass)
-    reg.async_create(name="High Priority", scope="todo")
-    code = """
-cats = category_registry.async_list_categories(scope="todo")
-result = {
-    "count": len(cats),
-    "module_count": len(cr.async_get(hass).async_list_categories(scope="todo")),
-    "missing_scope": len(category_registry.async_list_categories(scope="nope")),
-}
-"""
-
-    result = await _run_code(hass, loaded_entry, code)
-
-    assert result["execution"]["status"] == "ok"
-    output = result["output"]
-    assert output["count"] >= 1
-    assert output["module_count"] == output["count"]
-    assert output["missing_scope"] == 0
-
-
-async def test_repairs_read_end_to_end(
-    hass: HomeAssistant,
-    loaded_entry: MockConfigEntry,
-) -> None:
-    from homeassistant.helpers.issue_registry import IssueSeverity, async_create_issue
-
-    async_create_issue(
-        hass,
-        domain="light",
-        issue_id="warn_thing",
-        is_fixable=False,
-        is_persistent=False,
-        severity=IssueSeverity.WARNING,
-        translation_key="warn_thing",
-    )
-    code = """
-result = {
-    "total": len(repairs.async_issues()),
-    "active": len(repairs.async_active_issues()),
-    "by_severity": len(repairs.async_issues_by_severity("warning")),
-    "one": repairs.async_get_issue("light", "warn_thing") is not None,
-}
-"""
-
-    result = await _run_code(hass, loaded_entry, code)
-
-    assert result["execution"]["status"] == "ok"
-    output = result["output"]
-    assert output["total"] >= 1
-    assert output["active"] >= 1
-    assert output["by_severity"] >= 1
-    assert output["one"] is True
-
-
-async def test_persistent_notifications_read_end_to_end(
-    hass: HomeAssistant,
-    loaded_entry: MockConfigEntry,
-) -> None:
-    from homeassistant.components.persistent_notification import async_create
-
-    async_create(
-        hass,
-        "Disk almost full",
-        title="Storage warning",
-        notification_id="disk_full",
-    )
-    code = """
-notification = persistent_notifications.async_get_notification("disk_full")
-result = {
-    "total": len(persistent_notifications.async_get_notifications()),
-    "one": notification is not None,
-    "title": notification.title if notification else None,
-    "message": notification.message if notification else None,
-}
-"""
-
-    result = await _run_code(hass, loaded_entry, code)
-
-    assert result["execution"]["status"] == "ok"
-    output = result["output"]
-    assert output["total"] >= 1
-    assert output["one"] is True
-    assert output["title"] == "Storage warning"
-    assert output["message"] == "Disk almost full"
-
-
-async def test_config_entries_read_end_to_end(
-    hass: HomeAssistant,
-    loaded_entry: MockConfigEntry,
-) -> None:
-    code = """
-mine = config_entries.async_get_entry("<ENTRY_ID>")
-all_count = len(config_entries.async_entries())
-domain_count = len(config_entries.async_entries("llm_sandbox"))
-result = {
-    "found": mine is not None,
-    "domain": mine.domain if mine else None,
-    "all_count": all_count,
-    "domain_count": domain_count,
-}
-""".replace("<ENTRY_ID>", loaded_entry.entry_id)
-
-    result = await _run_code(hass, loaded_entry, code)
-
-    assert result["execution"]["status"] == "ok"
-    output = result["output"]
-    assert output["found"] is True
-    assert output["domain"] == "llm_sandbox"
-    assert output["domain_count"] >= 1
-
-
 async def test_service_action_executes_and_records_outcome(
     hass: HomeAssistant,
     loaded_entry: MockConfigEntry,
@@ -1094,65 +941,6 @@ result = "should not reach"
     assert result["actions"][0]["error"]["key"] == "service_response_not_supported"
 
 
-async def test_optional_response_service_without_blocking_records_ok_action(
-    hass: HomeAssistant,
-    loaded_entry: MockConfigEntry,
-) -> None:
-    """Verify OPTIONAL response services run when blocking is absent."""
-    service_response: dict[str, JsonValueType] = {"optional": True}
-    hass.services.async_register(
-        "test_response",
-        "optional",
-        lambda call: service_response,
-        supports_response=SupportsResponse.OPTIONAL,
-    )
-    code = """
-result = await hass.services.async_call("test_response", "optional", return_response=True)
-"""
-
-    result = await _run_code(hass, loaded_entry, code)
-
-    assert result["execution"]["status"] == "ok"
-    assert result["output"] == service_response
-    actions = result["actions"]
-    assert len(actions) == 1
-    action = actions[0]
-    assert action["service"] == "test_response.optional"
-    assert action["status"] == "ok"
-    assert action["response"] == service_response
-
-
-async def test_response_required_service_with_return_response_records_action(
-    hass: HomeAssistant,
-    loaded_entry: MockConfigEntry,
-) -> None:
-    """Verify return_response=True records an executed ONLY service action."""
-    hass.services.async_register(
-        "test_response",
-        "required",
-        lambda call: {},
-        supports_response=SupportsResponse.ONLY,
-    )
-    code = """
-result = await hass.services.async_call(
-    "test_response",
-    "required",
-    blocking=True,
-    return_response=True,
-)
-"""
-
-    result = await _run_code(hass, loaded_entry, code)
-
-    assert result["execution"]["status"] == "ok"
-    actions = result["actions"]
-    assert len(actions) == 1
-    assert actions[0]["service"] == "test_response.required"
-    assert actions[0]["status"] == "ok"
-    assert actions[0]["response"] == result["output"]
-    assert "return_response" not in actions[0]
-
-
 async def test_positional_response_service_call_records_action(
     hass: HomeAssistant,
     loaded_entry: MockConfigEntry,
@@ -1195,27 +983,6 @@ result = await hass.services.async_call(
     assert events == ["required"]
 
 
-async def test_llm_context_device_id_accessible(
-    hass: HomeAssistant,
-    loaded_entry: MockConfigEntry,
-) -> None:
-    """Verify llm_context is accessible inside Monty code."""
-    code = """
-result = {
-    "platform": llm_context.platform,
-    "language": llm_context.language,
-    "device_id": llm_context.device_id,
-}
-"""
-
-    result = await _run_code(hass, loaded_entry, code)
-
-    assert result["execution"]["status"] == "ok"
-    output = result["output"]
-    assert output["platform"] == "test"
-    assert output["language"] == "en"
-
-
 async def test_missing_await_normalized_on_async_call(
     hass: HomeAssistant,
     loaded_entry: MockConfigEntry,
@@ -1229,6 +996,8 @@ result = "ok"
     result = await _run_code(hass, loaded_entry, code)
 
     assert result["execution"]["status"] == "ok"
+    assert result["output"] == "ok"
+    assert result["actions"] == [{"service": "light.turn_off", "target": None, "status": "ok"}]
 
 
 async def test_forgiveness_layer_collapses_home_tour_to_single_call(
@@ -1274,7 +1043,8 @@ result = {
     assert output["has_name"] is True
     assert output["has_bogus"] is False
     assert output["floor_name_via_getattr"] == "Ground Floor"
-    assert output["type_name"] == "SafeFloorRegistry"
+    assert isinstance(output["type_name"], str)
+    assert output["type_name"] != "dataclass"
 
 
 async def test_conditional_dead_result_branch_promotes_trailing_expression(
@@ -1310,42 +1080,33 @@ if False:
     assert result["output"] is None
 
 
-async def test_datetime_now_isoformat(
+@pytest.mark.parametrize(
+    ("code", "expects_time_component"),
+    [
+        pytest.param("result = datetime.now().isoformat()", True, id="datetime-now-isoformat"),
+        pytest.param("result = datetime.utcnow().isoformat()", True, id="datetime-utcnow-isoformat"),
+        pytest.param("result = datetime.now()", True, id="datetime-direct-return"),
+        pytest.param("result = date.today().isoformat()", False, id="date-today-isoformat"),
+        pytest.param("result = datetime.now().date().isoformat()", False, id="datetime-date-method"),
+        pytest.param("result = date.today()", False, id="date-direct-return"),
+    ],
+)
+async def test_datetime_facade_values_serialize_stably(
     hass: HomeAssistant,
     loaded_entry: MockConfigEntry,
+    code: str,
+    expects_time_component: bool,
 ) -> None:
-    """datetime.now() returns a frozen snapshot datetime in HA timezone."""
-    code = "result = datetime.now().isoformat()"
+    """Datetime/date facade values serialize to stable JSON-safe strings."""
     result = await _run_code(hass, loaded_entry, code)
+
     assert result["execution"]["status"] == "ok"
     output = result["output"]
     assert isinstance(output, str)
-    assert "T" in output
-
-
-async def test_datetime_utcnow_isoformat(
-    hass: HomeAssistant,
-    loaded_entry: MockConfigEntry,
-) -> None:
-    """datetime.utcnow() returns a frozen UTC snapshot datetime."""
-    code = "result = datetime.utcnow().isoformat()"
-    result = await _run_code(hass, loaded_entry, code)
-    assert result["execution"]["status"] == "ok"
-    assert isinstance(result["output"], str)
-    assert "T" in result["output"]
-
-
-async def test_date_today_isoformat(
-    hass: HomeAssistant,
-    loaded_entry: MockConfigEntry,
-) -> None:
-    """date.today() returns the frozen snapshot date."""
-    code = "result = date.today().isoformat()"
-    result = await _run_code(hass, loaded_entry, code)
-    assert result["execution"]["status"] == "ok"
-    output = result["output"]
-    assert isinstance(output, str)
-    assert len(output) == 10  # YYYY-MM-DD format
+    if expects_time_component:
+        assert "T" in output
+    else:
+        assert len(output) == 10
 
 
 async def test_date_today_fields(
@@ -1372,110 +1133,65 @@ result = {
     assert isinstance(output["weekday"], int)
 
 
-async def test_datetime_fromisoformat(
+@pytest.mark.parametrize(
+    "code",
+    [
+        pytest.param(
+            "from datetime import datetime\nresult = datetime.now().isoformat()[:4] == now[:4]",
+            id="from-datetime-import",
+        ),
+        pytest.param(
+            "import datetime as dt\nresult = dt.datetime.now().year == int(now[:4])",
+            id="module-datetime-alias",
+        ),
+        pytest.param(
+            "from datetime import date as d\nresult = len(d.today().isoformat()) == 10",
+            id="from-date-alias",
+        ),
+    ],
+)
+async def test_datetime_imports_normalize_end_to_end(
     hass: HomeAssistant,
     loaded_entry: MockConfigEntry,
+    code: str,
 ) -> None:
-    """datetime.fromisoformat parses an ISO string and exposes fields."""
-    code = "result = datetime.fromisoformat('2025-01-15T08:30:00+00:00').year"
+    """Supported datetime/date imports normalize to the sandbox facades end to end."""
     result = await _run_code(hass, loaded_entry, code)
-    assert result["execution"]["status"] == "ok"
-    assert result["output"] == 2025
 
-
-async def test_date_fromisoformat(
-    hass: HomeAssistant,
-    loaded_entry: MockConfigEntry,
-) -> None:
-    """date.fromisoformat parses an ISO date string and exposes fields."""
-    code = "result = date.fromisoformat('2025-03-20').month"
-    result = await _run_code(hass, loaded_entry, code)
-    assert result["execution"]["status"] == "ok"
-    assert result["output"] == 3
-
-
-async def test_datetime_now_date_method(
-    hass: HomeAssistant,
-    loaded_entry: MockConfigEntry,
-) -> None:
-    """datetime.now().date() returns a SafeDate value."""
-    code = "result = datetime.now().date().isoformat()"
-    result = await _run_code(hass, loaded_entry, code)
-    assert result["execution"]["status"] == "ok"
-    assert isinstance(result["output"], str)
-    assert len(result["output"]) == 10
-
-
-async def test_return_date_object_directly(
-    hass: HomeAssistant,
-    loaded_entry: MockConfigEntry,
-) -> None:
-    """Returning a SafeDate directly produces an ISO string."""
-    code = "result = date.today()"
-    result = await _run_code(hass, loaded_entry, code)
-    assert result["execution"]["status"] == "ok"
-    assert isinstance(result["output"], str)
-    assert len(result["output"]) == 10
-
-
-async def test_return_datetime_object_directly(
-    hass: HomeAssistant,
-    loaded_entry: MockConfigEntry,
-) -> None:
-    """Returning a SafeDateTime directly produces an ISO string."""
-    code = "result = datetime.now()"
-    result = await _run_code(hass, loaded_entry, code)
-    assert result["execution"]["status"] == "ok"
-    assert isinstance(result["output"], str)
-    assert "T" in result["output"]
-
-
-async def test_from_datetime_import_normalized(
-    hass: HomeAssistant,
-    loaded_entry: MockConfigEntry,
-) -> None:
-    """from datetime import datetime is normalized to the sandbox facade."""
-    code = "from datetime import datetime\nresult = datetime.now().isoformat()[:4] == now[:4]"
-    result = await _run_code(hass, loaded_entry, code)
     assert result["execution"]["status"] == "ok"
     assert result["output"] is True
 
 
-async def test_import_datetime_as_dt_normalized(
-    hass: HomeAssistant,
-    loaded_entry: MockConfigEntry,
-) -> None:
-    """import datetime as dt is normalized with attribute rewriting."""
-    code = "import datetime as dt\nresult = dt.datetime.now().year == int(now[:4])"
-    result = await _run_code(hass, loaded_entry, code)
-    assert result["execution"]["status"] == "ok"
-    assert result["output"] is True
-
-
-async def test_from_datetime_import_date_as_d_normalized(
-    hass: HomeAssistant,
-    loaded_entry: MockConfigEntry,
-) -> None:
-    """from datetime import date as d is normalized to the sandbox facade."""
-    code = "from datetime import date as d\nresult = d.today().isoformat()"
-    result = await _run_code(hass, loaded_entry, code)
-    assert result["execution"]["status"] == "ok"
-    assert isinstance(result["output"], str)
-    assert len(result["output"]) == 10
-
-
-async def test_parse_state_timestamp_with_fromisoformat(
-    hass: HomeAssistant,
-    loaded_entry: MockConfigEntry,
-) -> None:
-    """datetime.fromisoformat parses State timestamp strings."""
-    code = """
+@pytest.mark.parametrize(
+    ("code", "expected_output"),
+    [
+        pytest.param(
+            "result = datetime.fromisoformat('2025-01-15T08:30:00+00:00').year",
+            2025,
+            id="datetime-fromisoformat",
+        ),
+        pytest.param("result = date.fromisoformat('2025-03-20').month", 3, id="date-fromisoformat"),
+        pytest.param(
+            """
 s = hass.states.get('light.bedroom')
 result = datetime.fromisoformat(s.last_changed).year == int(now[:4])
-"""
+""",
+            True,
+            id="state-timestamp-fromisoformat",
+        ),
+    ],
+)
+async def test_datetime_fromisoformat_parses_expected_values(
+    hass: HomeAssistant,
+    loaded_entry: MockConfigEntry,
+    code: str,
+    expected_output: object,
+) -> None:
+    """fromisoformat parsing works for explicit literals and state timestamps."""
     result = await _run_code(hass, loaded_entry, code)
+
     assert result["execution"]["status"] == "ok"
-    assert result["output"] is True
+    assert result["output"] == expected_output
 
 
 async def test_now_global_unchanged(

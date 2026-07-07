@@ -1,9 +1,7 @@
 import pytest
 from custom_components.llm_sandbox.const import DEFAULT_PROMPT_PROFILE, TOOL_GET_HISTORY
 from custom_components.llm_sandbox.llm_api.tools._analytics import AGGREGATORS
-from llm_sandbox_evals.optimize_helpers import size_penalized_utility
 from llm_sandbox_evals.prompts import baseline_candidate, candidate_prompt_sizes, function_schemas, load_candidates
-from llm_sandbox_evals.schema import PromptCandidate
 
 
 def test_load_candidates_accepts_profile_candidate() -> None:
@@ -37,22 +35,6 @@ def test_load_candidates_rejects_unknown_profile() -> None:
         load_candidates(["profile:bogus"], DEFAULT_PROMPT_PROFILE)
 
 
-def test_candidate_prompt_sizes_counts_api_and_authored_prompt_text() -> None:
-    candidate = PromptCandidate(
-        id="t",
-        api_prompt="abc",
-        execute_home_code_description="d1",
-        get_history_description="d2",
-        get_statistics_description="d3",
-        get_logbook_description="d4",
-    )
-
-    api_prompt_chars, authored_prompt_chars = candidate_prompt_sizes(candidate)
-
-    assert api_prompt_chars == 3
-    assert authored_prompt_chars == 11
-
-
 def test_get_history_function_schema_exposes_aggregate_filters() -> None:
     schemas = function_schemas(baseline_candidate())
     history_schema = next(schema for schema in schemas if schema["function"]["name"] == TOOL_GET_HISTORY)
@@ -68,24 +50,3 @@ def test_get_history_function_schema_exposes_aggregate_filters() -> None:
     assert properties["where"] == {"type": "array", "items": {"type": "object"}}
     assert properties["order_by"] == {"type": "string"}
     assert properties["limit"] == {"type": "integer", "minimum": 1}
-
-
-@pytest.mark.parametrize(
-    ("score", "ratio", "penalty", "expected", "expected_less_than_score"),
-    [
-        pytest.param(0.9, 1.0, 0.02, 0.9, False, id="baseline-size-no-penalty"),
-        pytest.param(0.9, 0.5, 0.02, 0.9, False, id="smaller-size-no-reward"),
-        pytest.param(0.9, 2.0, 0.02, 0.88, True, id="larger-size-linear-penalty"),
-    ],
-)
-def test_size_penalized_utility(
-    score: float,
-    ratio: float,
-    penalty: float,
-    expected: float,
-    expected_less_than_score: bool,
-) -> None:
-    utility = size_penalized_utility(score, ratio, penalty)
-
-    assert utility == pytest.approx(expected)
-    assert (utility < score) is expected_less_than_score

@@ -110,22 +110,3 @@ def test_normalize_builtins_wraps_next(
 
     assert normalized == expected_code
     assert set(labels) == expected_labels
-
-
-@pytest.mark.parametrize(
-    "code",
-    [
-        pytest.param("result = list(map(str, items))", id="map-name"),
-        pytest.param("result = list(map(lambda x: x * 2, items))", id="map-lambda"),
-        pytest.param("result = list(map(f, a, b))", id="map-multi-iterable"),
-        pytest.param("result = list(filter(pred, items))", id="filter-name"),
-        pytest.param("result = list(filter(lambda x: x > 1, items))", id="filter-lambda"),
-        pytest.param("result = list(filter(None, items))", id="filter-none"),
-    ],
-)
-def test_normalize_builtins_leaves_native_map_filter_unchanged(code: str) -> None:
-    """map/filter run natively in Monty, so normalization leaves them untouched."""
-    normalized, labels = normalize_builtins(code)
-
-    assert normalized == code
-    assert labels == []

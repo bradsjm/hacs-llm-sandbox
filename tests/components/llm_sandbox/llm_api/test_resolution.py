@@ -9,6 +9,7 @@ from custom_components.llm_sandbox.llm_api.resolution import (
     rank_candidates_for_service,
     resolve_target_entity,
 )
+from custom_components.llm_sandbox.llm_api.resolution_memory import ResolutionMemory
 from custom_components.llm_sandbox.snapshot.models import (
     HomeSnapshot,
     SafeConfig,
@@ -22,12 +23,13 @@ _TIMESTAMP = 1782691200.0
 
 
 @pytest.mark.parametrize(
-    ("state_specs", "domain", "query", "expected_resolved", "expected_candidates"),
+    ("state_specs", "domain", "query", "memory_pairs", "expected_resolved", "expected_candidates"),
     [
         pytest.param(
             (("climate.upstairs_thermostat", None),),
             "climate",
             "thermostat",
+            (),
             "climate.upstairs_thermostat",
             (),
             id="query-subset-of-object-id",
@@ -36,6 +38,7 @@ _TIMESTAMP = 1782691200.0
             (("climate.upstairs_thermostat", None),),
             "climate",
             "climate.upstairs_thermostat_extra",
+            (),
             "climate.upstairs_thermostat",
             (),
             id="candidate-subset-of-query",
@@ -44,6 +47,7 @@ _TIMESTAMP = 1782691200.0
             (("light.kitchen_ceiling", "Kitchen Ceiling"),),
             "light",
             "kitchen ceiling",
+            (),
             "light.kitchen_ceiling",
             (),
             id="name-based-equal-token-set",
@@ -52,6 +56,7 @@ _TIMESTAMP = 1782691200.0
             (("light.kitchen_sink", "Kitchen Sink"),),
             "light",
             "light.kitchen_ceiling",
+            (),
             None,
             (),
             id="review-block-kitchen-ceiling-vs-sink",
@@ -60,6 +65,7 @@ _TIMESTAMP = 1782691200.0
             (("lock.front_door", "Front Door"),),
             "lock",
             "lock.back_door",
+            (),
             None,
             (),
             id="review-block-back-door-vs-front-door",
@@ -68,6 +74,7 @@ _TIMESTAMP = 1782691200.0
             (("light.kitchen_ceiling", "Kitchen Ceiling"),),
             "light",
             "light.bedroom_ceiling",
+            (),
             None,
             (),
             id="single-shared-token-non-containment",
@@ -76,9 +83,19 @@ _TIMESTAMP = 1782691200.0
             (("light.kitchen", "Kitchen"),),
             "light",
             "!!!",
+            (),
             None,
             (),
             id="empty-query-token-guard",
+        ),
+        pytest.param(
+            (("fan.ceiling", None), ("fan.living_ceiling", "Living Ceiling")),
+            "fan",
+            "ceiling",
+            (("ceiling", "fan.living_ceiling"),),
+            "fan.living_ceiling",
+            (),
+            id="remembered-candidate-breaks-ambiguity",
         ),
     ],
 )
@@ -86,11 +103,16 @@ def test_resolve_target_entity_uses_bidirectional_token_containment(
     state_specs: Sequence[tuple[str, str | None]],
     domain: str,
     query: str,
+    memory_pairs: tuple[tuple[str, str], ...],
     expected_resolved: str | None,
     expected_candidates: tuple[str, ...],
 ) -> None:
     """Resolve only exact ids or unique same-domain bidirectional containment matches."""
-    result = resolve_target_entity(_snapshot(state_specs), query, domain)
+    memory = ResolutionMemory()
+    for requested, resolved in memory_pairs:
+        memory.record(requested, resolved)
+
+    result = resolve_target_entity(_snapshot(state_specs), query, domain, memory=memory or None)
 
     assert result.resolved == expected_resolved
     assert result.is_resolved is (expected_resolved is not None)

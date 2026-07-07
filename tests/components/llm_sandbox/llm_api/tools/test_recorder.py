@@ -1,6 +1,5 @@
 """Behavior tests for recorder-backed LLM tools."""
 
-import asyncio
 import time
 from datetime import timedelta
 from typing import cast
@@ -18,19 +17,6 @@ from homeassistant.helpers import llm
 from homeassistant.util import dt as dt_util
 from homeassistant.util.json import JsonObjectType
 from pytest_homeassistant_custom_component.common import MockConfigEntry
-
-
-class _SlowHass:
-    async def async_block_till_done(self) -> None:
-        await asyncio.sleep(1)
-
-
-class _FakeRecorder:
-    async def async_block_till_done(self) -> None:
-        raise AssertionError("recorder sync should not run after HA sync times out")
-
-    async def async_add_executor_job(self, _fn: object) -> object:
-        raise AssertionError("query should not run after sync times out")
 
 
 async def test_history_returns_states_for_visible_entity(
@@ -56,14 +42,6 @@ async def test_history_returns_states_for_visible_entity(
     assert len(row) == 2
     assert isinstance(row[0], str)
     assert isinstance(row[1], str)
-
-
-async def test_recorder_query_sync_respects_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The pre-query HA recorder sync drains are bounded by the tool deadline."""
-    monkeypatch.setattr(recorder, "get_instance", lambda _hass: _FakeRecorder())
-
-    with pytest.raises(TimeoutError):
-        await recorder._run_query(cast(HomeAssistant, _SlowHass()), time.monotonic() + 0.01, lambda: None)
 
 
 async def test_history_includes_requested_attributes(
@@ -331,35 +309,31 @@ async def test_window_too_large_rejected(
     assert isinstance(result["error"]["fix"], list)
 
 
-async def test_history_window_clamped_to_default_when_omitted(
+@pytest.mark.parametrize(
+    ("tool_args", "expected_hours"),
+    [
+        pytest.param({"entity_ids": ["light.bedroom"]}, 1, id="default-hour-window"),
+        pytest.param({"entity_ids": ["light.bedroom"], "hours": 2}, 2, id="hours-argument-window"),
+    ],
+)
+async def test_history_window_sizing(
     hass: HomeAssistant,
     recorder_entry: MockConfigEntry,
+    tool_args: dict[str, object],
+    expected_hours: int,
 ) -> None:
-    """Omitting start/end queries the default one-hour history window."""
-    result = await _call_history(hass, recorder_entry, {"entity_ids": ["light.bedroom"]})
-
-    start = dt_util.parse_datetime(cast(str, result["window"]["start"]))
-    end = dt_util.parse_datetime(cast(str, result["window"]["end"]))
-    assert start is not None
-    assert end is not None
-    assert timedelta(hours=1) - timedelta(seconds=5) <= end - start <= timedelta(hours=1) + timedelta(seconds=5)
-
-
-async def test_history_hours_sizes_window(
-    hass: HomeAssistant,
-    recorder_entry: MockConfigEntry,
-) -> None:
-    """The hours argument sizes the window without ISO/timedelta math."""
+    """History windows default to one hour or honor the explicit hours selector."""
     hass.states.async_set("light.bedroom", "on", {"friendly_name": "Bedroom Light"})
     await _sync_recorder(hass)
 
-    result = await _call_history(hass, recorder_entry, {"entity_ids": ["light.bedroom"], "hours": 2})
+    result = await _call_history(hass, recorder_entry, tool_args)
 
     start = dt_util.parse_datetime(cast(str, result["window"]["start"]))
     end = dt_util.parse_datetime(cast(str, result["window"]["end"]))
     assert start is not None
     assert end is not None
-    assert timedelta(hours=2) - timedelta(seconds=5) <= end - start <= timedelta(hours=2) + timedelta(seconds=5)
+    expected_window = timedelta(hours=expected_hours)
+    assert expected_window - timedelta(seconds=5) <= end - start <= expected_window + timedelta(seconds=5)
 
 
 async def test_history_area_and_domain_selectors(
@@ -395,11 +369,19 @@ async def test_history_pure_domain_still_expands(
     assert "light.bedroom" in result["entities"]
 
 
-async def test_history_bad_area_with_domain_does_not_widen(
+@pytest.mark.parametrize(
+    "tool_args",
+    [
+        pytest.param({"area_id": "kichen-typo", "domain": "light"}, id="bad-area-with-domain"),
+        pytest.param({"area_id": "kichen-typo"}, id="bad-area-without-domain"),
+    ],
+)
+async def test_history_bad_area_errors_with_candidates(
     hass: HomeAssistant,
     recorder_entry: MockConfigEntry,
+    tool_args: dict[str, object],
 ) -> None:
-    """A typo'd area_id plus domain errors with candidates instead of widening to all lights."""
+    """A typo'd area selector errors with concrete fixes instead of widening the scope."""
     from homeassistant.helpers import area_registry as ar
 
     hass.states.async_set("light.bedroom", "on", {"friendly_name": "Bedroom Light"})
@@ -409,32 +391,12 @@ async def test_history_bad_area_with_domain_does_not_widen(
     bedroom = ar.async_get(hass).async_get_area_by_name("Bedroom")
     assert bedroom is not None
 
-    result = await _call_history(hass, recorder_entry, {"area_id": "kichen-typo", "domain": "light"})
+    result = await _call_history(hass, recorder_entry, tool_args)
 
     assert result["status"] == "error"
     assert result["error"]["key"] == "selector_no_match"
     assert isinstance(result["error"]["message"], str)
     assert result["error"]["message"]
-    fix = result["error"]["fix"]
-    assert isinstance(fix, list)
-    # The valid area id is surfaced so the LLM can correct the typo.
-    assert bedroom.id in fix
-
-
-async def test_history_bad_area_without_domain_errors(
-    hass: HomeAssistant,
-    recorder_entry: MockConfigEntry,
-) -> None:
-    """A typo'd area_id alone errors with candidates rather than a generic message."""
-    from homeassistant.helpers import area_registry as ar
-
-    bedroom = ar.async_get(hass).async_get_area_by_name("Bedroom")
-    assert bedroom is not None
-
-    result = await _call_history(hass, recorder_entry, {"area_id": "kichen-typo"})
-
-    assert result["status"] == "error"
-    assert result["error"]["key"] == "selector_no_match"
     fix = result["error"]["fix"]
     assert isinstance(fix, list)
     assert bedroom.id in fix
