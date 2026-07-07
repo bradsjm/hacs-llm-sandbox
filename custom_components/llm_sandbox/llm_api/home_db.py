@@ -1,7 +1,6 @@
 """Bounded in-memory SQLite database over the frozen home snapshot."""
 
 import json
-import math
 import re
 import sqlite3
 import time
@@ -14,6 +13,7 @@ from homeassistant.util import dt as dt_util
 
 from ..snapshot.models import HomeSnapshot, SafeState
 from .errors import HelperExecutionError
+from .numeric import finite_float
 
 MAX_SQL_RESULT_ROWS = 500
 MAX_HISTORY_LOAD_ROWS = 20_000
@@ -26,26 +26,15 @@ _READ_ONLY_ACTIONS = {
     sqlite3.SQLITE_FUNCTION,
     sqlite3.SQLITE_PRAGMA,
 }
-_ALLOWED_FUNCTIONS = frozenset(
-    {
-        "abs",
-        "avg",
-        "coalesce",
-        "count",
-        "date",
-        "datetime",
-        "ifnull",
-        "json_extract",
-        "length",
-        "lower",
-        "max",
-        "min",
-        "round",
-        "strftime",
-        "sum",
-        "time",
-        "upper",
-    }
+_SCHEMA_TABLE_NAMES: tuple[str, ...] = (
+    "states",
+    "history",
+    "statistics",
+    "states_meta",
+    "statistics_meta",
+    "statistics_short_term",
+    "state_history",
+    "long_term_statistics",
 )
 _SQL_IDENTIFIER = r'(?:"[^"]+"|`[^`]+`|\[[^\]]+\]|[A-Za-z_][A-Za-z0-9_]*)'
 _TABLE_PATTERN = re.compile(
@@ -58,6 +47,11 @@ _FROM_CLAUSE_PATTERN = re.compile(
 )
 _LEADING_TABLE_PATTERN = re.compile(
     rf"^\s*(?P<table>{_SQL_IDENTIFIER}(?:\s*\.\s*{_SQL_IDENTIFIER})?)",
+    re.IGNORECASE,
+)
+_LEADING_SQL_COMMENT = re.compile(r"^\s*(?:--[^\n]*\n|/\*.*?\*/)", re.DOTALL)
+_SQL_COLUMN_QUALIFIER = re.compile(
+    rf"no such column:\s+(?:(?P<table>{_SQL_IDENTIFIER})\s*\.)?{_SQL_IDENTIFIER}",
     re.IGNORECASE,
 )
 
@@ -76,13 +70,26 @@ class HomeDatabase:
     def __init__(self, snapshot: HomeSnapshot) -> None:
         """Create an empty per-run in-memory database for one snapshot."""
         self.snapshot = snapshot
-        self._conn = sqlite3.connect(":memory:", check_same_thread=False)
-        self._conn.row_factory = sqlite3.Row
+        self._conn: sqlite3.Connection | None = None
         self._history_windows: dict[str, tuple[datetime, datetime]] = {}
         self._statistics_windows: dict[str, tuple[datetime, datetime]] = {}
+
+    def initialize(self) -> None:
+        """Connect, create schema, and load snapshot states for this per-run database."""
+        if self._conn is not None:
+            return
+        self._conn = sqlite3.connect(":memory:", check_same_thread=False)
+        self._conn.row_factory = sqlite3.Row
         self._conn.enable_load_extension(False)
         self._conn.setlimit(sqlite3.SQLITE_LIMIT_SQL_LENGTH, MAX_SQL_LENGTH)
         self._create_schema()
+        self.load_states()
+
+    @property
+    def conn(self) -> sqlite3.Connection:
+        """Return the initialized SQLite connection."""
+        assert self._conn is not None
+        return self._conn
 
     @property
     def loaded_history(self) -> bool:
@@ -107,8 +114,11 @@ class HomeDatabase:
 
     def load_states(self) -> None:
         """Load visible snapshot states into SQLite before read-only guard activation."""
+        if self._conn is None:
+            self.initialize()
+            return
         rows = [self._state_row(state) for state in self.snapshot.states.values()]
-        self._conn.executemany(
+        self.conn.executemany(
             """
             insert into states(entity_id, domain, object_id, name, state, value, attributes,
                                area_id, floor_id, device_id, platform, unique_id,
@@ -119,29 +129,29 @@ class HomeDatabase:
             """,
             rows,
         )
-        self._conn.commit()
+        self.conn.commit()
 
     def load_history(self, rows: Sequence[Mapping[str, object]]) -> None:
         """Load flat recorder history rows into SQLite before executing user SQL."""
-        self._conn.executemany(
+        self.conn.executemany(
             """
             insert or ignore into history(entity_id, domain, area_id, floor_id, device_id, when_iso, when_ts, state, value)
             values(:entity_id, :domain, :area_id, :floor_id, :device_id, :when_iso, :when_ts, :state, :value)
             """,
             [self._history_row(row) for row in rows[:MAX_HISTORY_LOAD_ROWS]],
         )
-        self._conn.commit()
+        self.conn.commit()
 
     def load_statistics(self, rows: Sequence[Mapping[str, object]]) -> None:
         """Load flat recorder statistics rows into SQLite before executing user SQL."""
-        self._conn.executemany(
+        self.conn.executemany(
             """
             insert or ignore into statistics(statistic_id, entity_id, when_iso, when_ts, mean, min, max, state, sum)
             values(:statistic_id, :entity_id, :when_iso, :when_ts, :mean, :min, :max, :state, :sum)
             """,
             [self._statistic_row(row) for row in rows[:MAX_HISTORY_LOAD_ROWS]],
         )
-        self._conn.commit()
+        self.conn.commit()
 
     def record_history_loaded(self, entity_ids: Sequence[str], start: datetime, end: datetime) -> None:
         """Record the trusted recorder history scope now available in the DB."""
@@ -159,10 +169,10 @@ class HomeDatabase:
         """Execute one bounded read-only SQL statement."""
         self._arm_user_sql_guard(deadline)
         try:
-            cursor = self._conn.execute(sql)
+            cursor = self.conn.execute(sql)
             fetched = cursor.fetchmany(MAX_SQL_RESULT_ROWS + 1)
         except sqlite3.OperationalError as err:
-            raise _sql_helper_error(str(err)) from err
+            raise self._refine_sql_error(str(err)) from err
         except sqlite3.DatabaseError as err:
             raise HelperExecutionError("query", "sql_read_only", {"reason": str(err)}) from err
         finally:
@@ -174,10 +184,13 @@ class HomeDatabase:
 
     def close(self) -> None:
         """Close the per-run in-memory database."""
+        if self._conn is None:
+            return
         self._conn.close()
+        self._conn = None
 
     def _create_schema(self) -> None:
-        self._conn.executescript(
+        self.conn.executescript(
             """
             create table states(
                 entity_id text primary key, domain text, object_id text, name text, state text, value real,
@@ -188,7 +201,14 @@ class HomeDatabase:
                 entity_id text, domain text, area_id text, floor_id text, device_id text,
                 when_iso text, when_ts real, state text, value real
             );
-            create unique index history_row_unique on history(entity_id, when_iso, state);
+            -- Dedup on every loaded column so only byte-identical rows collapse on a
+            -- re-load; COALESCE normalizes NULLs (SQLite treats NULLs as distinct in
+            -- unique indexes) so two identical rows with nullable fields still dedup.
+            create unique index history_row_unique on history(
+                entity_id, when_iso, state,
+                coalesce(when_ts, -1), coalesce(value, -1e308),
+                coalesce(area_id, ''), coalesce(floor_id, ''), coalesce(device_id, ''), coalesce(domain, '')
+            );
             create table statistics(
                 statistic_id text, entity_id text, when_iso text, when_ts real,
                 mean real, min real, max real, state real, sum real
@@ -196,20 +216,24 @@ class HomeDatabase:
             create unique index statistics_row_unique on statistics(statistic_id, when_iso);
             create view state_history as select * from history;
             create view long_term_statistics as select * from statistics;
+            -- Name-only aliases for recorder-schema reflexes.
+            create view states_meta as select entity_id, state, attributes, last_updated_ts, last_changed_ts from states;
+            create view statistics_meta as select distinct statistic_id, entity_id from statistics;
+            create view statistics_short_term as select * from statistics;
             """
         )
 
     def _arm_user_sql_guard(self, deadline: float) -> None:
         """Temporarily guard one user SQL statement while trusted loads remain possible later."""
-        self._conn.execute("pragma query_only=ON")
-        self._conn.set_authorizer(_authorize)
-        self._conn.set_progress_handler(lambda: 1 if time.monotonic() > deadline else 0, SQL_PROGRESS_OPCODES)
+        self.conn.execute("pragma query_only=ON")
+        self.conn.set_authorizer(_authorize)
+        self.conn.set_progress_handler(lambda: 1 if time.monotonic() > deadline else 0, SQL_PROGRESS_OPCODES)
 
     def _disarm_user_sql_guard(self) -> None:
         """Restore trusted host write access for lazy internal table loading."""
-        self._conn.set_progress_handler(None, 0)
-        self._conn.set_authorizer(None)
-        self._conn.execute("pragma query_only=OFF")
+        self.conn.set_progress_handler(None, 0)
+        self.conn.set_authorizer(None)
+        self.conn.execute("pragma query_only=OFF")
 
     def _state_row(self, state: SafeState) -> dict[str, object]:
         return {
@@ -218,7 +242,7 @@ class HomeDatabase:
             "object_id": state.object_id,
             "name": state.name,
             "state": state.state,
-            "value": _finite_float(state.state),
+            "value": finite_float(state.state),
             "attributes": json.dumps(state.attributes, default=str, sort_keys=True),
             "area_id": state.area_id,
             "floor_id": state.floor_id,
@@ -233,6 +257,7 @@ class HomeDatabase:
 
     def _history_row(self, row: Mapping[str, object]) -> dict[str, object]:
         when = str(row.get("when"))
+        when_ts = row.get("when_ts")
         return {
             "entity_id": row.get("entity_id"),
             "domain": row.get("domain"),
@@ -240,9 +265,9 @@ class HomeDatabase:
             "floor_id": row.get("floor_id"),
             "device_id": row.get("device_id"),
             "when_iso": when,
-            "when_ts": _timestamp(when),
+            "when_ts": when_ts if isinstance(when_ts, float | int) else _timestamp(when),
             "state": row.get("state"),
-            "value": _finite_float(row.get("value")),
+            "value": finite_float(row.get("value")),
         }
 
     def _statistic_row(self, row: Mapping[str, object]) -> dict[str, object]:
@@ -253,12 +278,42 @@ class HomeDatabase:
             "entity_id": statistic_id,
             "when_iso": when,
             "when_ts": _timestamp(when),
-            "mean": _finite_float(row.get("mean")),
-            "min": _finite_float(row.get("min")),
-            "max": _finite_float(row.get("max")),
-            "state": _finite_float(row.get("state")),
-            "sum": _finite_float(row.get("sum")),
+            "mean": finite_float(row.get("mean")),
+            "min": finite_float(row.get("min")),
+            "max": finite_float(row.get("max")),
+            "state": finite_float(row.get("state")),
+            "sum": finite_float(row.get("sum")),
         }
+
+    def _refine_sql_error(self, message: str) -> HelperExecutionError:
+        """Return a structured SQL helper error with targeted fix candidates."""
+        lowered = message.lower()
+        if "no such table" in lowered:
+            return HelperExecutionError(
+                "query",
+                "sql_unknown_table",
+                {"reason": message},
+                fix=_bounded_list(_SCHEMA_TABLE_NAMES),
+            )
+        if "no such column" in lowered:
+            table = None
+            if match := _SQL_COLUMN_QUALIFIER.search(message):
+                table_ref = match.group("table")
+                table = _table_name(table_ref) if table_ref else None
+            if table not in _SCHEMA_TABLE_NAMES:
+                table = "states"
+            columns = tuple(str(row["name"]) for row in self.conn.execute(f"pragma table_info({table})"))
+            return HelperExecutionError(
+                "query",
+                "sql_unknown_column",
+                {"reason": message},
+                fix=_bounded_list(columns),
+            )
+        if "not authorized" in lowered or "readonly" in lowered or "only select" in lowered:
+            return HelperExecutionError("query", "sql_read_only", {"reason": message})
+        if "interrupted" in lowered:
+            return HelperExecutionError("query", "sql_timeout", {})
+        return HelperExecutionError("query", "sql_syntax_error", {"reason": message})
 
 
 def referenced_tables(sql: str) -> set[str]:
@@ -301,42 +356,31 @@ def ensure_sql_allowed(sql: str) -> None:
         raise HelperExecutionError("query", "invalid_tool_input", {"reason": "SQL is required"})
     if len(sql) > MAX_SQL_LENGTH:
         raise HelperExecutionError("query", "sql_too_long", {"max_length": str(MAX_SQL_LENGTH)})
-    first = sql.lstrip().split(None, 1)[0].lower() if sql.strip() else ""
+    sql_without_comments = sql
+    while match := _LEADING_SQL_COMMENT.match(sql_without_comments):
+        sql_without_comments = sql_without_comments[match.end() :]
+    first = sql_without_comments.lstrip().split(None, 1)[0].lower() if sql_without_comments.strip() else ""
     if first not in {"select", "with", "pragma"}:
         raise HelperExecutionError(
             "query", "sql_read_only", {"reason": "only SELECT/WITH/approved PRAGMA reads are allowed"}
         )
 
 
-def _authorize(action: int, arg1: str | None, arg2: str | None, _db: str | None, _source: str | None) -> int:
+def _authorize(action: int, arg1: str | None, _arg2: str | None, _db: str | None, _source: str | None) -> int:
+    # Read-only category denial is the safety boundary with disabled extensions and query_only.
     if action not in _READ_ONLY_ACTIONS:
-        return sqlite3.SQLITE_DENY
-    if action == sqlite3.SQLITE_FUNCTION and (arg2 or arg1 or "").lower() not in _ALLOWED_FUNCTIONS:
         return sqlite3.SQLITE_DENY
     if action == sqlite3.SQLITE_PRAGMA and (arg1 or "").lower() not in {"table_info", "table_list"}:
         return sqlite3.SQLITE_DENY
     return sqlite3.SQLITE_OK
 
 
-def _sql_helper_error(message: str) -> HelperExecutionError:
-    lowered = message.lower()
-    if "no such table" in lowered:
-        return HelperExecutionError("query", "sql_unknown_table", {"reason": message})
-    if "no such column" in lowered:
-        return HelperExecutionError("query", "sql_unknown_column", {"reason": message})
-    if "not authorized" in lowered or "readonly" in lowered or "only select" in lowered:
-        return HelperExecutionError("query", "sql_read_only", {"reason": message})
-    if "interrupted" in lowered:
-        return HelperExecutionError("query", "sql_timeout", {})
-    return HelperExecutionError("query", "sql_syntax_error", {"reason": message})
-
-
-def _finite_float(value: object) -> float | None:
-    try:
-        number = float(cast(str | int | float, value))
-    except TypeError, ValueError:
-        return None
-    return number if math.isfinite(number) else None
+def _bounded_list(names: tuple[str, ...], limit: int = 8) -> list[str]:
+    """Return a deterministic bounded candidate list."""
+    bounded = sorted(names)[:limit]
+    if len(names) > limit:
+        bounded.append("...")
+    return bounded
 
 
 def _timestamp(value: str) -> float | None:

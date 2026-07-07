@@ -133,4 +133,4 @@ disable_error_code = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["tests"]
+testpaths = ["tests/components/llm_sandbox", "tests/llm_sandbox_evals"]

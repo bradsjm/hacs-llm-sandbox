@@ -46,7 +46,7 @@ from ..snapshot.models import (
     SnapshotIndexes,
 )
 from ..types import ActionRecord, ProposedAction, TranslationPlaceholders
-from .errors import HelperExecutionError
+from .errors import HelperExecutionError, RecoverableToolError
 from .executor_support import helper_response, json_safe
 from .home_db import MAX_HISTORY_LOAD_ROWS, HomeDatabase, QueryResult, ensure_sql_allowed, referenced_tables
 from .resolution import (
@@ -68,6 +68,7 @@ from .tools.recorder import (
     MAX_RECORDER_ENTITY_IDS,
     MAX_RECORDER_LOOKBACK_HOURS,
     _clamp_window,
+    resolve_entity_ids,
 )
 
 _TARGET_SELECTOR_KEYS = frozenset(("entity_id", "device_id", "area_id", "label_id", "label", "floor_id"))
@@ -969,18 +970,50 @@ def _history_entity_ids(snapshot: HomeSnapshot, entity_ids: str | list[str] | No
     return ids
 
 
-def _query_entity_ids(snapshot: HomeSnapshot, sql: str, entity_ids: str | list[str] | None) -> list[str]:
-    """Resolve query recorder scope without widening past the visible snapshot."""
-    if entity_ids is not None:
+def _coerce_id_list(value: str | list[str] | None) -> list[str] | None:
+    """Normalize optional query entity ids into recorder resolver input."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return [value]
+    return [str(item) for item in value]
+
+
+def _query_scope(
+    snapshot: HomeSnapshot,
+    sql: str,
+    entity_ids: str | list[str] | None,
+    area_id: str | None,
+    floor_id: str | None,
+    device_id: str | None,
+    label_id: str | None,
+    domain: str | None,
+) -> list[str]:
+    """Resolve query recorder scope from explicit ids, HA-native selectors, or SQL literals.
+
+    Explicit entity ids and any selector (area/floor/device/label/domain) route through
+    the recorder resolver so scope is bounded without an all-visible fallback. With none
+    given, fall back to entity-id string literals quoted in the SQL, accepting only ids
+    that actually exist in the snapshot (so unrelated quoted strings do not widen scope).
+    """
+    data: dict[str, object] = {
+        "entity_ids": _coerce_id_list(entity_ids),
+        "area_id": area_id,
+        "floor_id": floor_id,
+        "device_id": device_id,
+        "label_id": label_id,
+        "domain": domain,
+    }
+    # Branch boundary: an explicit id or selector routes through the recorder resolver,
+    # which validates visibility, expands selectors, and caps at MAX_RECORDER_ENTITY_IDS.
+    if any(data[key] for key in ("entity_ids", "area_id", "floor_id", "device_id", "label_id", "domain")):
         try:
-            return _history_entity_ids(snapshot, entity_ids)
-        except HelperExecutionError as err:
+            return resolve_entity_ids(snapshot, data, "entity_ids")
+        except RecoverableToolError as err:
             raise HelperExecutionError("query", err.key, err.placeholders) from err
-    literal_ids = sorted(set(re.findall(r"['\"]([a-zA-Z0-9_]+\.[a-zA-Z0-9_]+)['\"]", sql)))
+    # Advisory literal scan: only accept tokens that are real visible entity ids.
+    literal_ids = sorted(set(re.findall(r"['\"]([a-zA-Z0-9_]+\.[a-zA-Z0-9_]+)['\"]", sql)) & set(snapshot.states))
     if literal_ids:
-        missing = [entity_id for entity_id in literal_ids if entity_id not in snapshot.states]
-        if missing:
-            raise HelperExecutionError("query", "entity_not_visible", {"entity_id": missing[0]})
         if len(literal_ids) > MAX_RECORDER_ENTITY_IDS:
             raise HelperExecutionError(
                 "query",
@@ -990,14 +1023,13 @@ def _query_entity_ids(snapshot: HomeSnapshot, sql: str, entity_ids: str | list[s
                 },
             )
         return literal_ids
-    ids = sorted(snapshot.states)
-    if len(ids) > MAX_RECORDER_ENTITY_IDS:
-        raise HelperExecutionError(
-            "query",
-            "invalid_tool_input",
-            {"reason": f"query recorder scope resolves to {len(ids)} entities; pass entity_ids to narrow it"},
-        )
-    return ids
+    raise HelperExecutionError(
+        "query",
+        "invalid_tool_input",
+        {
+            "reason": "narrow the query with entity_ids/area_id/floor_id/device_id/label_id/domain, or quote entity ids in SQL"
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1069,6 +1101,11 @@ class SafeHass:
         sql: str,
         hours: float | None = None,
         entity_ids: str | list[str] | None = None,
+        area_id: str | None = None,
+        floor_id: str | None = None,
+        device_id: str | None = None,
+        label_id: str | None = None,
+        domain: str | None = None,
     ) -> JsonValueType:
         """Run bounded read-only SQLite over states plus optional recorder rows."""
 
@@ -1079,37 +1116,40 @@ class SafeHass:
             if runtime.state.home_db is None:
                 # Lazy per-run DB creation stores only frozen snapshot records;
                 # lifecycle cleanup in executor closes it before context reset.
-                runtime.state.home_db = HomeDatabase(snapshot)
-                await runtime.run_blocking(runtime.state.home_db.load_states)
+                db = HomeDatabase(snapshot)
+                await runtime.run_blocking(db.initialize)
+                runtime.state.home_db = db
             db = runtime.state.home_db
             tables = referenced_tables(sql)
-            if tables & {"history", "state_history"}:
+            needs_history = bool(tables & {"history", "state_history"})
+            needs_statistics = bool(
+                tables & {"statistics", "long_term_statistics", "statistics_short_term", "statistics_meta"}
+            )
+            if needs_history or needs_statistics:
+                # Branch boundary: when history is referenced it forces the 24h recorder cap;
+                # statistics-only may use the longer analytics lookback. One window, one scope.
+                max_hours = MAX_RECORDER_LOOKBACK_HOURS if needs_history else MAX_HISTORY_AGGREGATE_LOOKBACK_HOURS
                 start, end = _clamp_window(
                     None,
                     None,
                     hours=hours,
                     default_hours=DEFAULT_HISTORY_WINDOW_HOURS,
-                    max_hours=MAX_RECORDER_LOOKBACK_HOURS,
+                    max_hours=max_hours,
                 )
-                ids = _query_entity_ids(snapshot, sql, entity_ids)
-                if db.history_needs_load(ids, start, end):
+                ids = _query_scope(snapshot, sql, entity_ids, area_id, floor_id, device_id, label_id, domain)
+                if needs_history and db.history_needs_load(ids, start, end):
                     rows = await runtime.fetch_history(ids, start, end)
                     capped = len(rows) >= MAX_HISTORY_LOAD_ROWS
                     if capped:
                         runtime.state.notes.append(f"history load capped at {MAX_HISTORY_LOAD_ROWS} rows")
                     await runtime.run_blocking(lambda: db.load_history(rows))
+                    # A capped load is intentionally NOT marked complete: the cap keeps
+                    # only the newest rows for the fetched scope, so a later narrower query
+                    # for an entity whose rows fell outside the cap must still be allowed to
+                    # re-fetch. Re-inserts stay cheap via the full-row history dedup index.
                     if not capped:
                         db.record_history_loaded(ids, start, end)
-            if tables & {"statistics", "long_term_statistics"}:
-                start, end = _clamp_window(
-                    None,
-                    None,
-                    hours=hours,
-                    default_hours=DEFAULT_HISTORY_WINDOW_HOURS,
-                    max_hours=MAX_HISTORY_AGGREGATE_LOOKBACK_HOURS,
-                )
-                ids = _query_entity_ids(snapshot, sql, entity_ids)
-                if db.statistics_needs_load(ids, start, end):
+                if needs_statistics and db.statistics_needs_load(ids, start, end):
                     rows = await runtime.fetch_statistics(ids, start, end)
                     capped = len(rows) >= MAX_HISTORY_LOAD_ROWS
                     if capped:

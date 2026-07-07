@@ -2,6 +2,7 @@
 
 from dataclasses import replace
 from datetime import UTC, datetime
+from typing import cast
 
 import pytest
 from custom_components.llm_sandbox.llm_api.errors import RecoverableToolError
@@ -354,6 +355,32 @@ def test_grouped_first_seen_uses_timestamp_order_across_entities() -> None:
     )
 
     assert result == [{"domain": "sensor", "first_seen": {"state": "target", "at": "2026-01-01T00:05:00+00:00"}}]
+
+
+def test_bucketed_time_in_state_attributes_seconds_once_per_bucket() -> None:
+    """Bucketed time-in-state assigns only the overlapping seconds to each bucket."""
+    snapshot = _snapshot()
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    rows: list[dict[str, object]] = [
+        {"entity_id": "sensor.temp", "when": "2026-01-01T00:30:00+00:00", "state": "on"},
+        {"entity_id": "sensor.temp", "when": "2026-01-01T01:15:00+00:00", "state": "off"},
+    ]
+
+    result = run_analytics(
+        rows,
+        analytics_spec_from_data({"aggregate": {"mode": "time_in_state"}, "bucket": "1h"}),
+        (start, datetime(2026, 1, 1, 2, tzinfo=UTC)),
+        snapshot,
+    )
+
+    first_bucket_states = cast(dict[str, float], result[0]["time_in_state"])
+    second_bucket_states = cast(dict[str, float], result[1]["time_in_state"])
+    assert len(result) == 2
+    assert result[0]["bucket"] == "2026-01-01T00:00:00+00:00"
+    assert first_bucket_states["on"] == pytest.approx(1800.0)
+    assert result[1]["bucket"] == "2026-01-01T01:00:00+00:00"
+    assert second_bucket_states["on"] == pytest.approx(900.0)
+    assert second_bucket_states["off"] == pytest.approx(2700.0)
 
 
 def _snapshot() -> HomeSnapshot:

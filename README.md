@@ -102,6 +102,10 @@ The safety model rests on two ideas: a **frozen snapshot** and an **isolated san
 
 4. **A forgiveness layer fixes common mistakes.** The assistant's code passes through a normalization step that silently repairs harmless variations — a missing `await`, an imported `datetime`, a forgotten `result =` — so the assistant succeeds on the first try instead of burning retries (and tokens) on trivial errors. When the tool has already offered or applied an entity-id fix in the same conversation, it can also prefer that still-visible entity in later resolution and transparently report remembered literal rewrites in `resolutions`.
 
+### Read-only SQL queries
+
+`execute_home_code` can call `await hass.query(sql, hours=N)` to run read-only SQLite over visible `states` plus bounded recorder `history` and `statistics`. History and statistics rows load only when referenced, and their scope can be narrowed with `entity_ids` or HA-native selectors (`area_id`, `floor_id`, `device_id`, `label_id`, `domain`). For discoverability, the in-memory database also exposes recorder-compatible views: `states_meta`, `statistics_meta`, `statistics_short_term`, `state_history`, and `long_term_statistics`.
+
 ## Things to know before you install
 
 - **You need a capable model.** This integration lives or dies by model quality. A weak model will write broken code, pick the wrong tool, or misread results. Budget for a strong cloud model, or run a strong local model.

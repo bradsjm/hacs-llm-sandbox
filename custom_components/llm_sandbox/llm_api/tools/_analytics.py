@@ -6,7 +6,6 @@ from collections import Counter
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from functools import cmp_to_key
 from itertools import pairwise
 from typing import Literal, cast
 
@@ -15,6 +14,7 @@ from homeassistant.util import dt as dt_util
 
 from ...snapshot.models import HomeSnapshot
 from ..errors import RecoverableToolError
+from ..numeric import finite_float
 
 type AggregateMode = Literal[
     "count_transitions",
@@ -30,6 +30,8 @@ type NumericOp = Literal["count", "min", "max", "mean", "median", "sum", "stdev"
 
 NUMERIC_OPS: frozenset[str] = frozenset({"count", "min", "max", "mean", "median", "sum", "stdev"})
 GROUP_KEYS: frozenset[str] = frozenset({"entity_id", "domain", "area_id", "floor_id", "device_id"})
+# Aggregate-map keys that select mode or filters, never numeric field->op entries.
+_AGGREGATE_RESERVED_KEYS: frozenset[str] = frozenset({"mode", "from_state", "to_state"})
 DEFAULT_ANALYTICS_LIMIT = 500
 _SEQUENCE_DEPENDENT_MODES = frozenset({"count_transitions", "time_in_state", "on_duration"})
 _TIMESTAMP_ORDERED_MODES = frozenset({"first_seen", "last_seen"})
@@ -181,6 +183,21 @@ def analytics_spec_from_data(data: Mapping[str, object]) -> AnalyticsSpec:
             "analytics_unknown_group_key",
             {"group_key": unknown_groups[0], "valid": ", ".join(sorted(GROUP_KEYS))},
         )
+    if aggregate_map is not None and (mode := aggregate_map.get("mode")) is not None:
+        if mode not in AGGREGATORS:
+            raise RecoverableToolError(
+                "analytics_unknown_op", {"op": str(mode), "valid": ", ".join(sorted(AGGREGATORS))}
+            )
+    elif aggregate_map is not None:
+        for field, ops in aggregate_map.items():
+            if field in _AGGREGATE_RESERVED_KEYS:
+                continue
+            op_names = [str(item) for item in _ensure_list(ops)]
+            unknown = sorted(set(op_names) - NUMERIC_OPS)
+            if unknown:
+                raise RecoverableToolError(
+                    "analytics_unknown_op", {"op": unknown[0], "valid": ", ".join(sorted(NUMERIC_OPS))}
+                )
     where = tuple(_condition(item) for item in _ensure_list(data.get("where")))
     limit = cast(str | int | float | None, data.get("limit"))
     return AnalyticsSpec(
@@ -203,47 +220,28 @@ def run_analytics(
     start, end = window
     bucket_seconds = _bucket_seconds(spec.bucket) if spec.bucket is not None else None
     filtered = [row for row in rows if all(_matches(row, condition, snapshot) for condition in spec.where)]
-    buckets: dict[tuple[object, ...], list[HistoryRow]] = {}
-    for row in filtered:
-        key: list[object] = []
-        if bucket_seconds is not None:
-            key.append(_bucket_start(_row_time(row), start, bucket_seconds).isoformat())
-        for group_key in spec.group_by:
-            key.append(_group_value(row, group_key, snapshot))
-        buckets.setdefault(tuple(key), []).append(row)
 
-    if bucket_seconds is not None and _carries_transition_across_buckets(spec):
+    # Bucketed state-carry modes attribute state intervals directly to overlapping buckets.
+    if bucket_seconds is not None and _carries_state_across_buckets(spec):
+        results = _duration_bucket_results(filtered, spec, start, end, bucket_seconds, snapshot)
+    # Bucketed transition mode keeps the prior row at each bucket boundary.
+    elif bucket_seconds is not None and _carries_transition_across_buckets(spec):
         buckets = _transition_buckets(filtered, spec, start, end, bucket_seconds, snapshot)
-    elif bucket_seconds is not None and _carries_state_across_buckets(spec):
-        buckets = _duration_buckets(filtered, spec, start, end, bucket_seconds, snapshot)
+        if not buckets and (spec.bucket is not None or spec.group_by):
+            return []
+        if not buckets:
+            buckets[()] = filtered
+        results = _format_buckets(buckets, spec, start, end, bucket_seconds)
+    # Row-assigned buckets handle unbucketed and non-carry aggregate modes.
+    else:
+        buckets = _row_buckets(filtered, spec, start, bucket_seconds, snapshot)
+        if not buckets and (spec.bucket is not None or spec.group_by):
+            return []
+        if not buckets:
+            buckets[()] = filtered
+        results = _format_buckets(buckets, spec, start, end, bucket_seconds)
 
-    if not buckets and (spec.bucket is not None or spec.group_by):
-        return []
-    if not buckets:
-        buckets[()] = filtered
-
-    results: list[dict[str, object]] = []
-    for bucket_key, group_rows in sorted(buckets.items(), key=lambda item: _bucket_sort_key(item[0])):
-        offset = 0
-        output: dict[str, object] = {}
-        group_start = start
-        group_end = end
-        if bucket_seconds is not None:
-            output["bucket"] = bucket_key[0]
-            group_start = datetime.fromisoformat(str(bucket_key[0]))
-            group_end = min(group_start + timedelta(seconds=bucket_seconds), end)
-            offset = 1
-        for index, group_key in enumerate(spec.group_by):
-            output[group_key] = bucket_key[offset + index]
-        output.update(_aggregate_group(group_rows, spec, group_start, group_end))
-        results.append(output)
-
-    if spec.order_by is not None:
-        reverse = spec.order_by.startswith("-")
-        field = spec.order_by[1:] if reverse else spec.order_by
-        results.sort(
-            key=cmp_to_key(lambda left, right: _compare_order_values(left.get(field), right.get(field), reverse))
-        )
+    _apply_order(results, spec.order_by)
     return results[: _bounded_limit(spec.limit)]
 
 
@@ -261,6 +259,7 @@ def flat_history_rows(raw: Mapping[str, Iterable[HistoryRow]], snapshot: HomeSna
                     "floor_id": state.floor_id if state is not None else None,
                     "device_id": state.device_id if state is not None else None,
                     "when": _row_time(row).isoformat(),
+                    "when_ts": _row_time(row).timestamp(),
                     "state": _row_state(row),
                     "value": _row_value(row),
                 }
@@ -277,6 +276,8 @@ def _aggregate_group(rows: list[HistoryRow], spec: AnalyticsSpec, start: datetim
             raise RecoverableToolError(
                 "analytics_unknown_op", {"op": str(mode), "valid": ", ".join(sorted(AGGREGATORS))}
             )
+        # Eager validation in analytics_spec_from_data guarantees mode is a known key;
+        # the guard above preserves type narrowing for the dispatch below.
         if mode in _SEQUENCE_DEPENDENT_MODES:
             return _aggregate_entity_streams(rows, mode, start, end, _aggregate_filters(aggregate))
         if mode in _TIMESTAMP_ORDERED_MODES:
@@ -285,17 +286,14 @@ def _aggregate_group(rows: list[HistoryRow], spec: AnalyticsSpec, start: datetim
 
     output: dict[str, object] = {}
     for field, ops in aggregate.items():
+        if field in _AGGREGATE_RESERVED_KEYS:
+            continue
         op_names = [str(item) for item in _ensure_list(ops)]
-        unknown = sorted(set(op_names) - NUMERIC_OPS)
-        if unknown:
-            raise RecoverableToolError(
-                "analytics_unknown_op", {"op": unknown[0], "valid": ", ".join(sorted(NUMERIC_OPS))}
-            )
         values: list[float] = []
         skipped = 0
         for row in rows:
             value = _field_value(row, str(field), None)
-            number = _number(value)
+            number = finite_float(value)
             if number is None:
                 skipped += 1
                 continue
@@ -350,7 +348,7 @@ def _combine_sequence_summaries(mode: AggregateMode, summaries: list[AggregateSu
             "on_duration": math.fsum(cast(float, summary["on_duration"]) for summary in summaries),
             "unit": "seconds",
         }
-    raise RecoverableToolError("analytics_unknown_op", {"op": mode, "valid": ", ".join(sorted(AGGREGATORS))})
+    return {}
 
 
 def _carries_state_across_buckets(spec: AnalyticsSpec) -> bool:
@@ -398,32 +396,100 @@ def _transition_buckets(
     return buckets
 
 
-def _duration_buckets(
+def _duration_bucket_results(
     rows: list[HistoryRow],
     spec: AnalyticsSpec,
     start: datetime,
     end: datetime,
     bucket_seconds: int,
     snapshot: HomeSnapshot,
-) -> dict[tuple[object, ...], list[HistoryRow]]:
-    """Build every duration bucket, carrying each group's prior state rows forward."""
-    grouped: dict[tuple[object, ...], list[HistoryRow]] = {}
+) -> list[dict[str, object]]:
+    """Attribute state durations to bucket overlaps in one pass per entity stream."""
+    grouped: dict[tuple[object, ...], dict[str, list[HistoryRow]]] = {}
     for row in rows:
         group_key = tuple(_group_value(row, key, snapshot) for key in spec.group_by)
-        grouped.setdefault(group_key, []).append(row)
+        entity_id = str(_field_value(row, "entity_id", None))
+        grouped.setdefault(group_key, {}).setdefault(entity_id, []).append(row)
     if not grouped and spec.group_by:
-        return {}
+        return []
     if not grouped:
-        grouped[()] = []
+        grouped[()] = {}
 
+    bucket_state: dict[tuple[object, ...], dict[str, float]] = {}
+    for group_key, entity_rows in grouped.items():
+        # Initialize each requested group bucket so empty duration buckets remain visible.
+        bucket_cursor = start
+        while bucket_cursor < end:
+            bucket_state.setdefault((bucket_cursor.isoformat(), *group_key), {})
+            bucket_cursor += timedelta(seconds=bucket_seconds)
+        for stream_rows in entity_rows.values():
+            for state, period_start, period_end in _state_intervals(stream_rows, start, end):
+                cursor = _bucket_start(period_start, start, bucket_seconds)
+                while cursor < end and cursor < period_end:
+                    bucket_end = min(cursor + timedelta(seconds=bucket_seconds), end)
+                    if period_start < bucket_end and period_end > cursor:
+                        seconds = (min(period_end, bucket_end) - max(period_start, cursor)).total_seconds()
+                        totals = bucket_state.setdefault((cursor.isoformat(), *group_key), {})
+                        totals[state] = totals.get(state, 0.0) + seconds
+                    cursor += timedelta(seconds=bucket_seconds)
+
+    mode = spec.aggregate.get("mode") if isinstance(spec.aggregate, Mapping) else None
+    results: list[dict[str, object]] = []
+    for bucket_key, state_totals in sorted(bucket_state.items(), key=lambda item: _bucket_sort_key(item[0])):
+        output: dict[str, object] = {"bucket": bucket_key[0]}
+        for index, group_field in enumerate(spec.group_by):
+            output[group_field] = bucket_key[index + 1]
+        if mode == "on_duration":
+            output.update({"on_duration": state_totals.get("on", 0.0), "unit": "seconds"})
+        else:
+            output.update({"time_in_state": state_totals, "unit": "seconds"})
+        results.append(output)
+    return results
+
+
+def _row_buckets(
+    rows: list[HistoryRow],
+    spec: AnalyticsSpec,
+    start: datetime,
+    bucket_seconds: int | None,
+    snapshot: HomeSnapshot,
+) -> dict[tuple[object, ...], list[HistoryRow]]:
+    """Build buckets by assigning each row to its own time/group key."""
     buckets: dict[tuple[object, ...], list[HistoryRow]] = {}
-    bucket_start = start
-    while bucket_start < end:
-        bucket_key = bucket_start.isoformat()
-        for group_key, group_rows in grouped.items():
-            buckets[(bucket_key, *group_key)] = group_rows
-        bucket_start += timedelta(seconds=bucket_seconds)
+    for row in rows:
+        key: list[object] = []
+        if bucket_seconds is not None:
+            key.append(_bucket_start(_row_time(row), start, bucket_seconds).isoformat())
+        for group_key in spec.group_by:
+            key.append(_group_value(row, group_key, snapshot))
+        buckets.setdefault(tuple(key), []).append(row)
     return buckets
+
+
+def _format_buckets(
+    buckets: dict[tuple[object, ...], list[HistoryRow]],
+    spec: AnalyticsSpec,
+    start: datetime,
+    end: datetime,
+    bucket_seconds: int | None,
+) -> list[dict[str, object]]:
+    """Format row buckets into aggregate result dictionaries."""
+    results: list[dict[str, object]] = []
+    for bucket_key, group_rows in sorted(buckets.items(), key=lambda item: _bucket_sort_key(item[0])):
+        offset = 0
+        output: dict[str, object] = {}
+        group_start = start
+        group_end = end
+        if bucket_seconds is not None:
+            output["bucket"] = bucket_key[0]
+            group_start = datetime.fromisoformat(str(bucket_key[0]))
+            group_end = min(group_start + timedelta(seconds=bucket_seconds), end)
+            offset = 1
+        for index, group_key in enumerate(spec.group_by):
+            output[group_key] = bucket_key[offset + index]
+        output.update(_aggregate_group(group_rows, spec, group_start, group_end))
+        results.append(output)
+    return results
 
 
 def _numeric_result(values: list[float], op: str) -> int | float | None:
@@ -443,31 +509,25 @@ def _numeric_result(values: list[float], op: str) -> int | float | None:
         return math.fsum(values)
     if op == "stdev":
         return statistics.stdev(values) if len(values) > 1 else 0.0
-    raise RecoverableToolError("analytics_unknown_op", {"op": op, "valid": ", ".join(sorted(NUMERIC_OPS))})
+    return None
 
 
-def _compare_order_values(left: object, right: object, reverse: bool) -> int:
-    left_rank, left_value = _order_value(left)
-    right_rank, right_value = _order_value(right)
-    if left_rank != right_rank:
-        return -1 if left_rank < right_rank else 1
-    if left_value == right_value:
-        return 0
-    if left_rank == 0:
-        result = -1 if cast(float, left_value) < cast(float, right_value) else 1
-    else:
-        result = -1 if cast(str, left_value) < cast(str, right_value) else 1
-    return -result if reverse and left_rank < 2 else result
-
-
-def _order_value(value: object) -> tuple[int, float | str]:
-    """Return a stable order key preserving numeric aggregate ordering."""
-    number = _number(value)
+def _order_rank(value: object) -> tuple[int, float | str]:
+    number = finite_float(value)
     if number is not None:
         return (0, number)
-    if value is None:
-        return (2, "")
     return (1, str(value))
+
+
+def _apply_order(results: list[dict[str, object]], order_by: str | None) -> None:
+    if order_by is None:
+        return
+    reverse = order_by.startswith("-")
+    field = order_by[1:] if reverse else order_by
+    non_null = [row for row in results if row.get(field) is not None]
+    nulls = [row for row in results if row.get(field) is None]
+    non_null.sort(key=lambda row: _order_rank(row.get(field)), reverse=reverse)
+    results[:] = non_null + nulls
 
 
 def _condition(value: object) -> Condition:
@@ -488,8 +548,8 @@ def _matches(row: HistoryRow, condition: Condition, snapshot: HomeSnapshot) -> b
         return left != right
     if condition.op == "in":
         return isinstance(right, Sequence) and not isinstance(right, str) and left in right
-    left_number = _number(left)
-    right_number = _number(right)
+    left_number = finite_float(left)
+    right_number = finite_float(right)
     if left_number is None or right_number is None:
         return False
     if condition.op == "gt":
@@ -528,14 +588,6 @@ def _group_value(row: HistoryRow, group_key: str, snapshot: HomeSnapshot) -> obj
     return _field_value(row, group_key, snapshot)
 
 
-def _number(value: object) -> float | None:
-    try:
-        number = float(cast(str | int | float, value))
-    except TypeError, ValueError:
-        return None
-    return number if math.isfinite(number) else None
-
-
 def _bucket_seconds(value: str) -> int:
     unit = value[-1:]
     amount = value[:-1]
@@ -552,8 +604,8 @@ def _bucket_start(value: datetime, start: datetime, seconds: int) -> datetime:
     return start + timedelta(seconds=(elapsed // seconds) * seconds)
 
 
-def _state_periods(rows: list[HistoryRow], start: datetime, end: datetime) -> list[tuple[str, float]]:
-    periods: list[tuple[str, float]] = []
+def _state_intervals(rows: list[HistoryRow], start: datetime, end: datetime) -> list[tuple[str, datetime, datetime]]:
+    intervals: list[tuple[str, datetime, datetime]] = []
     active_state: str | None = None
     active_at = start
     for row in sorted(rows, key=_row_time):
@@ -565,15 +617,22 @@ def _state_periods(rows: list[HistoryRow], start: datetime, end: datetime) -> li
             continue
         if row_at >= end:
             if active_state is not None and active_at < end:
-                periods.append((active_state, (end - active_at).total_seconds()))
-            return periods
+                intervals.append((active_state, active_at, end))
+            return intervals
         if active_state is not None:
-            periods.append((active_state, (row_at - active_at).total_seconds()))
+            intervals.append((active_state, active_at, row_at))
         active_state = state
         active_at = row_at
     if active_state is not None and active_at < end:
-        periods.append((active_state, (end - active_at).total_seconds()))
-    return periods
+        intervals.append((active_state, active_at, end))
+    return intervals
+
+
+def _state_periods(rows: list[HistoryRow], start: datetime, end: datetime) -> list[tuple[str, float]]:
+    return [
+        (state, (period_end - period_start).total_seconds())
+        for state, period_start, period_end in _state_intervals(rows, start, end)
+    ]
 
 
 def _seen(row: HistoryRow) -> dict[str, str]:
@@ -593,7 +652,7 @@ def _row_state(row: HistoryRow) -> str:
 
 
 def _row_value(row: HistoryRow) -> float | None:
-    return _number(_row_state(row))
+    return finite_float(_row_state(row))
 
 
 def _row_time(row: HistoryRow) -> datetime:

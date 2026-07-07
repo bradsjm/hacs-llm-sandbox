@@ -16,7 +16,7 @@ from custom_components.llm_sandbox.llm_api.facade_views import (
     SafeHass as SandboxHass,
 )
 from custom_components.llm_sandbox.llm_api.facade_views import (
-    _query_entity_ids,
+    _query_scope,
     build_facades,
 )
 from custom_components.llm_sandbox.llm_api.home_db import MAX_HISTORY_LOAD_ROWS
@@ -25,7 +25,7 @@ from custom_components.llm_sandbox.llm_api.runtime import RuntimeContext, activa
 from custom_components.llm_sandbox.llm_api.tools.code import _execute
 from custom_components.llm_sandbox.llm_api.tools.recorder import MAX_HISTORY_STATES, MAX_RECORDER_ENTITY_IDS
 from custom_components.llm_sandbox.runtime import SandboxSettings
-from custom_components.llm_sandbox.snapshot.models import DEFAULT_SCOPE, HomeSnapshot
+from custom_components.llm_sandbox.snapshot.models import DEFAULT_SCOPE, HomeSnapshot, SafeAreaEntry, SnapshotIndexes
 from custom_components.llm_sandbox.types import ProposedAction
 from homeassistant.core import Context, HomeAssistant, SupportsResponse
 from homeassistant.helpers import area_registry as ar
@@ -275,7 +275,7 @@ async def test_hass_query_capped_history_load_does_not_mark_window_complete() ->
 
     hass_facade, runtime = _history_facade(snapshot, _fetch_history)
     try:
-        await hass_facade.query("select count(*) as count from history")
+        await hass_facade.query("select count(*) as count from history", entity_ids=["sensor.other", "sensor.temp"])
         second = await hass_facade.query("select count(*) as count from history where entity_id = 'sensor.other'")
     finally:
         clear_runtime()
@@ -324,7 +324,7 @@ async def test_hass_query_capped_statistics_load_does_not_mark_window_complete()
 
     hass_facade, runtime = _history_facade(snapshot, _fetch_history, _fetch_statistics)
     try:
-        await hass_facade.query("select count(*) as count from statistics")
+        await hass_facade.query("select count(*) as count from statistics", entity_ids=["sensor.other", "sensor.temp"])
         second = await hass_facade.query("select count(*) as count from statistics where entity_id = 'sensor.other'")
     finally:
         clear_runtime()
@@ -411,10 +411,93 @@ def test_sql_inferred_entity_literals_over_cap_are_rejected() -> None:
     )
 
     with pytest.raises(HelperExecutionError) as err:
-        _query_entity_ids(snapshot, sql, None)
+        _query_scope(snapshot, sql, None, None, None, None, None, None)
 
     assert err.value.helper == "query"
     assert err.value.key == "invalid_tool_input"
+
+
+async def test_hass_query_scopes_history_by_area() -> None:
+    """Area-scoped SQL history queries load only the area's visible entities."""
+    base = _snapshot()
+    state = base.states["sensor.temp"]
+    area_id = "area-main"
+    area_entity_ids = ("sensor.area_0", "sensor.area_1")
+    states = {
+        f"sensor.area_{index}": replace(
+            state,
+            entity_id=f"sensor.area_{index}",
+            object_id=f"area_{index}",
+            area_id=area_id,
+        )
+        for index in range(2)
+    } | {
+        f"sensor.other_{index}": replace(
+            state,
+            entity_id=f"sensor.other_{index}",
+            object_id=f"other_{index}",
+            area_id="area-other",
+        )
+        for index in range(MAX_RECORDER_ENTITY_IDS)
+    }
+    snapshot = replace(
+        base,
+        states=states,
+        areas={
+            area_id: SafeAreaEntry(
+                id=area_id,
+                area_id=area_id,
+                name="Main Area",
+                aliases=(),
+                floor_id=None,
+                labels=(),
+                icon=None,
+                picture=None,
+                humidity_entity_id=None,
+                temperature_entity_id=None,
+                created_at=None,
+                modified_at=None,
+            )
+        },
+        indexes=SnapshotIndexes(
+            {},
+            {
+                area_id: area_entity_ids,
+                "area-other": tuple(f"sensor.other_{index}" for index in range(MAX_RECORDER_ENTITY_IDS)),
+            },
+            {},
+            {},
+            {},
+            {},
+            {},
+        ),
+    )
+    fetch_calls: list[tuple[str, ...]] = []
+
+    async def _fetch_history(entity_ids: Sequence[str], _start: datetime, _end: datetime) -> list[dict[str, object]]:
+        fetch_calls.append(tuple(entity_ids))
+        return [
+            {
+                "entity_id": entity_id,
+                "domain": "sensor",
+                "area_id": area_id,
+                "floor_id": None,
+                "device_id": None,
+                "when": "2026-01-01T00:00:00+00:00",
+                "state": "20",
+                "value": 20.0,
+            }
+            for entity_id in entity_ids
+        ]
+
+    hass_facade, _runtime = _history_facade(snapshot, _fetch_history)
+    try:
+        result = await hass_facade.query("select count(*) as c from history", area_id=area_id)
+    finally:
+        clear_runtime()
+
+    assert result == [{"c": 2}]
+    assert fetch_calls == [area_entity_ids]
 
 
 async def test_missing_entity_read_attaches_note(

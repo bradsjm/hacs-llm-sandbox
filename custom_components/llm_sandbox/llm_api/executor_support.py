@@ -155,6 +155,7 @@ def helper_error_payload_for_state(
         err,
         message=_helper_error_message(err, state),
         kind=err.key,
+        fix=err.fix,
         adjustments=list(state.adjustments),
         printed=list(state.printed),
         actions=cast(list[ActionRecord], json_safe(state.actions)),

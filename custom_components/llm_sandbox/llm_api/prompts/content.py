@@ -167,7 +167,9 @@ def build_execute_home_code_description() -> str:
     return (
         "Execute bounded Python/Monty code against a frozen, read-only Home Assistant view. "
         "Read states and registries using the native Home Assistant patterns documented in the API prompt. "
-        "await hass.query(sql, hours=N) runs read-only SQLite over states, history, and statistics. "
+        "await hass.query(sql, hours=N) runs read-only SQLite over states, history, and statistics; "
+        "history and statistics load on demand and can be narrowed with entity_ids or "
+        "area_id/floor_id/device_id/label_id/domain. "
         "Service-call availability follows the API prompt. "
         "Success returns {execution:{status:'ok'}, output:<data>} with printed only when print() emitted lines "
         "and resolutions only when a remembered missing literal was rewritten to a visible entity id. "

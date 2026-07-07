@@ -5,5 +5,4 @@ uv run pytest \
   --timeout=10 \
   -n "${PYTEST_WORKERS:-auto}" \
   --dist=loadfile \
-  tests/components/llm_sandbox \
   "$@"
