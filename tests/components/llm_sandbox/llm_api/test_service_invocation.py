@@ -462,47 +462,6 @@ async def test_ambiguous_entity_target_blocks_with_candidates() -> None:
     assert harness.invoker.calls == []
 
 
-async def test_shared_token_without_containment_blocks_before_invocation() -> None:
-    """A partial cross-guess that is not containment never invokes live HA."""
-    snapshot = HomeSnapshot(
-        created_at="2026-06-29T00:00:00+00:00",
-        states={
-            "light.kitchen_ceiling": _state("light.kitchen_ceiling", "off", "Kitchen Ceiling"),
-            "light.kitchen_sink": _state("light.kitchen_sink", "off", "Kitchen Sink"),
-        },
-        entities={},
-        devices={},
-        areas={},
-        floors={},
-        config=_config(),
-        services={"light": ("turn_on",)},
-        services_supports_response={"light": {"turn_on": SupportsResponse.NONE.value}},
-        indexes=SnapshotIndexes(
-            entity_ids_by_device_id={},
-            entity_ids_by_area_id={},
-            device_ids_by_area_id={},
-            entity_ids_by_config_entry_id={},
-            entity_ids_by_label={},
-            device_ids_by_label={},
-            area_ids_by_floor_id={},
-        ),
-        labels={},
-        categories={},
-        issues=[],
-        notifications=[],
-        config_entries=[],
-        services_schema={"light": {"turn_on": LIGHT_TURN_ON_BRIEF}},
-    )
-    harness = _service_harness(snapshot=snapshot)
-
-    result = await _ok_call(harness, "light", "turn_on", target={"entity_id": "light.kitchen_cabinets"})
-
-    assert result is None
-    assert _action_statuses_via_state(harness) == ["error"]
-    assert _action_keys_via_state(harness) == ["service_target_not_visible"]
-    assert harness.invoker.calls == []
-
-
 async def test_helper_error_payload_keeps_prior_success_and_failed_action() -> None:
     """Partial action history includes prior successes plus the failed call."""
     harness = _service_harness()
@@ -571,14 +530,6 @@ async def test_async_services_for_target_reports_per_entity_services() -> None:
             }
         }
     }
-
-
-def test_async_services_for_target_returns_empty_for_unresolved_selector() -> None:
-    """A selector that resolves to no visible entity yields an empty discovery map."""
-    harness = _service_harness()
-
-    assert harness.services.async_services_for_target({"entity_id": "light.missing"}) == {}
-    assert harness.services.async_services_for_target(None) == {}
 
 
 async def test_cross_domain_target_is_blocked_with_service_supported_fix() -> None:

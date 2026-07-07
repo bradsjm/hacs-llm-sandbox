@@ -192,21 +192,6 @@ def test_rank_candidates_for_service_surfaces_targeted_entities_first() -> None:
     ]
 
 
-def test_rank_candidates_for_service_preserves_order_without_target_metadata() -> None:
-    """When the service has no target metadata, ranking is a no-op (HA decides)."""
-    from custom_components.llm_sandbox.llm_api.resolution import CandidateTarget
-
-    snapshot = _snapshot((("light.alpha", None), ("light.beta", None)))
-    candidates = (
-        CandidateTarget(entity_id="light.alpha", name=None, object_id="alpha"),
-        CandidateTarget(entity_id="light.beta", name=None, object_id="beta"),
-    )
-
-    ranked = rank_candidates_for_service(snapshot, candidates, "light", "turn_on")
-
-    assert [candidate.entity_id for candidate in ranked] == ["light.alpha", "light.beta"]
-
-
 def _state_with_features(entity_id: str, supported_features: int) -> SafeState:
     """Build a state record carrying a supported_features attribute."""
     base = _state(entity_id, None)

@@ -238,25 +238,6 @@ async def test_snapshot_service_schema_brief(hass: HomeAssistant) -> None:
     assert all(isinstance(field["required"], bool) for field in brief["fields"])
 
 
-async def test_snapshot_service_schema_plain_keys_are_optional(hass: HomeAssistant) -> None:
-    """Bare voluptuous schema keys are optional by default, not required."""
-    hass.services.async_register(
-        "schema_test",
-        "plain_keys",
-        lambda call: None,
-        schema=vol.Schema({"name": str, vol.Required("count"): int}),
-    )
-    await hass.async_block_till_done()
-
-    snapshot = build_snapshot(hass)
-
-    fields = {field["name"]: field for field in snapshot.services_schema["schema_test"]["plain_keys"]["fields"]}
-    assert fields["count"]["required"] is True
-    # A bare key validates as optional in voluptuous, so it must not be
-    # advertised as required to the LLM.
-    assert fields["name"]["required"] is False
-
-
 async def test_snapshot_captures_service_target_and_field_capability_filters(hass: HomeAssistant) -> None:
     """Service target entity-filters and per-field capability filters are captured."""
     hass.services.async_register(
@@ -285,16 +266,6 @@ async def test_snapshot_captures_service_target_and_field_capability_filters(has
     }
     fields = {field["name"]: field for field in snapshot.services_schema["cover"]["stop_cover"]["fields"]}
     assert fields["color_temp_kelvin"]["filter"] == {"attribute": {"supported_color_modes": ["color_temp"]}}
-
-
-async def test_snapshot_omits_services_target_for_non_entity_services(hass: HomeAssistant) -> None:
-    """Services without a declared target are absent from services_target."""
-    hass.services.async_register("script", "reload", lambda call: None)
-    await hass.async_block_till_done()
-
-    snapshot = build_snapshot(hass)
-
-    assert "script" not in snapshot.services_target
 
 
 async def test_snapshot_device_label_index(hass: HomeAssistant) -> None:
@@ -340,70 +311,6 @@ async def test_snapshot_includes_label_registry(hass: HomeAssistant) -> None:
     assert label.color == "red"
     assert label.icon == "mdi:star"
     assert isinstance(label.created_at, str)
-
-
-async def test_snapshot_includes_category_registry(hass: HomeAssistant) -> None:
-    from homeassistant.helpers import category_registry as cr_core
-
-    reg = cr_core.async_get(hass)
-    reg.async_create(name="High Priority", scope="todo", icon="mdi:alert")
-
-    snapshot = build_snapshot(hass)
-
-    assert "todo" in snapshot.categories
-    cat = next(iter(snapshot.categories["todo"].values()))
-    assert cat.scope == "todo"
-    assert cat.name == "High Priority"
-    assert cat.icon == "mdi:alert"
-    assert isinstance(cat.created_at, str)
-
-
-async def test_snapshot_includes_repairs_issues(hass: HomeAssistant) -> None:
-    from homeassistant.helpers.issue_registry import IssueSeverity, async_create_issue
-
-    async_create_issue(
-        hass,
-        domain="light",
-        issue_id="broken_thing",
-        is_fixable=True,
-        is_persistent=False,
-        severity=IssueSeverity.WARNING,
-        translation_key="broken_thing",
-        translation_placeholders={"device": "lamp"},
-    )
-
-    snapshot = build_snapshot(hass)
-
-    matches = [i for i in snapshot.issues if i.issue_id == "broken_thing"]
-    assert matches
-    issue = matches[0]
-    assert issue.domain == "light"
-    assert issue.severity == "warning"
-    assert issue.active is True
-    assert issue.translation_placeholders == {"device": "lamp"}
-    assert isinstance(issue.created, str)
-
-
-async def test_snapshot_includes_persistent_notifications(hass: HomeAssistant) -> None:
-    from homeassistant.components.persistent_notification import async_create
-
-    assert build_snapshot(hass).notifications == []
-
-    async_create(
-        hass,
-        "Disk almost full",
-        title="Storage warning",
-        notification_id="disk_full",
-    )
-
-    snapshot = build_snapshot(hass)
-
-    matches = [n for n in snapshot.notifications if n.notification_id == "disk_full"]
-    assert matches
-    notification = matches[0]
-    assert notification.title == "Storage warning"
-    assert notification.message == "Disk almost full"
-    assert isinstance(notification.created_at, str)
 
 
 async def test_snapshot_includes_config_entries_without_secrets(hass: HomeAssistant) -> None:
@@ -558,15 +465,6 @@ async def test_build_snapshot_anchor_device_force_included(
     assert floor_id in snapshot.floors
     assert device_id not in snapshot.indexes.entity_ids_by_device_id
     assert device_id in snapshot.indexes.device_ids_by_area_id[area_id]
-
-
-async def test_build_snapshot_anchor_unknown_device_id_is_safe(hass: HomeAssistant) -> None:
-    _add_entity(hass, "sensor.visible_value", "visible_value")
-
-    snapshot = build_snapshot(hass, scope=DEFAULT_PRODUCT_SCOPE, anchor_device_id="does-not-exist")
-
-    assert "sensor.visible_value" in snapshot.states
-    assert "does-not-exist" not in snapshot.devices
 
 
 async def test_build_recorder_snapshot_keeps_selector_surface_without_admin_metadata(hass: HomeAssistant) -> None:

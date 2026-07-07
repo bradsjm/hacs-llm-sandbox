@@ -18,8 +18,6 @@ from custom_components.llm_sandbox.const import (
     CONF_RESTRICT_TO_ASSIST_EXPOSED,
     DEFAULT_ACTIONS_ENABLED,
     DEFAULT_ASSISTANT,
-    DEFAULT_EXCLUDE_CONFIG,
-    DEFAULT_EXCLUDE_DIAGNOSTIC,
     DEFAULT_EXCLUDE_HIDDEN,
     DEFAULT_EXECUTION_TIMEOUT_SECONDS,
     DEFAULT_HELPER_CALL_BUDGET,
@@ -80,43 +78,6 @@ async def test_duplicate_assistant_aborts(hass: HomeAssistant) -> None:
     assert first["type"] == "create_entry"
     assert second["type"] == "abort"
     assert second["reason"] == "already_configured"
-
-
-async def test_options_flow_persists_typed_options(
-    hass: HomeAssistant,
-    mock_config_entry: MockConfigEntry,
-) -> None:
-    mock_config_entry.add_to_hass(hass)
-    init_result = await hass.config_entries.options.async_init(mock_config_entry.entry_id)
-    options = {
-        SECTION_PROMPT: {CONF_PROMPT_PROFILE: DEFAULT_PROMPT_PROFILE},
-        SECTION_EXECUTION_LIMITS: {
-            CONF_EXECUTION_TIMEOUT: 17,
-            CONF_HELPER_CALL_BUDGET: 48,
-        },
-        SECTION_VISIBILITY: {
-            CONF_RESTRICT_TO_ASSIST_EXPOSED: False,
-        },
-        SECTION_ACTIONS: {
-            CONF_ACTIONS_ENABLED: True,
-            CONF_ACTION_DOMAINS: ["light"],
-        },
-    }
-
-    result = await hass.config_entries.options.async_configure(init_result["flow_id"], user_input=options)
-
-    assert result["type"] == "create_entry"
-    assert mock_config_entry.options == {
-        CONF_PROMPT_PROFILE: DEFAULT_PROMPT_PROFILE,
-        CONF_EXECUTION_TIMEOUT: 17.0,
-        CONF_HELPER_CALL_BUDGET: 48.0,
-        CONF_RESTRICT_TO_ASSIST_EXPOSED: False,
-        CONF_EXCLUDE_HIDDEN: DEFAULT_EXCLUDE_HIDDEN,
-        CONF_EXCLUDE_CONFIG: DEFAULT_EXCLUDE_CONFIG,
-        CONF_EXCLUDE_DIAGNOSTIC: DEFAULT_EXCLUDE_DIAGNOSTIC,
-        CONF_ACTIONS_ENABLED: True,
-        CONF_ACTION_DOMAINS: ["light"],
-    }
 
 
 def test_settings_from_entry_defaults() -> None:

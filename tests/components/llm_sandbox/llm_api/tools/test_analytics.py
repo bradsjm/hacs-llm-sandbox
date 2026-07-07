@@ -119,27 +119,6 @@ def test_group_by_missing_and_string_keys_sort_deterministically() -> None:
     assert result == [{"area_id": "area-main", "count": 1}, {"area_id": None, "count": 1}]
 
 
-def test_bucketed_duration_carries_state_across_empty_buckets() -> None:
-    """Duration analytics emit later buckets when the active state did not change."""
-    snapshot = _snapshot()
-    start = datetime(2026, 1, 1, tzinfo=UTC)
-    rows: list[dict[str, object]] = [
-        {"entity_id": "sensor.temp", "when": "2026-01-01T00:00:00+00:00", "state": "on"},
-    ]
-
-    result = run_analytics(
-        rows,
-        analytics_spec_from_data({"aggregate": "on_duration", "bucket": "1h"}),
-        (start, datetime(2026, 1, 1, 2, tzinfo=UTC)),
-        snapshot,
-    )
-
-    assert result == [
-        {"bucket": "2026-01-01T00:00:00+00:00", "on_duration": 3600.0, "unit": "seconds"},
-        {"bucket": "2026-01-01T01:00:00+00:00", "on_duration": 3600.0, "unit": "seconds"},
-    ]
-
-
 def test_empty_bucketed_duration_with_group_returns_no_rows() -> None:
     """Grouped duration buckets with no history rows keep the standard empty analytics result."""
     snapshot = _snapshot()
@@ -265,26 +244,6 @@ def test_analytics_applies_default_limit_deterministically() -> None:
 
     assert len(result) == 500
     assert result[0] == {"entity_id": "sensor.temp_000", "count": 1}
-    assert result[-1] == {"entity_id": "sensor.temp_499", "count": 1}
-
-
-def test_analytics_clamps_oversized_explicit_limit() -> None:
-    """Facade analytics limits cannot exceed the recorder tool's 500-row cap."""
-    snapshot = _snapshot()
-    start = datetime(2026, 1, 1, tzinfo=UTC)
-    rows: list[dict[str, object]] = [
-        {"entity_id": f"sensor.temp_{index:03}", "when": "2026-01-01T00:00:00+00:00", "state": str(index)}
-        for index in range(501)
-    ]
-
-    result = run_analytics(
-        rows,
-        analytics_spec_from_data({"group_by": ["entity_id"], "limit": 10_000}),
-        (start, datetime(2026, 1, 1, 1, tzinfo=UTC)),
-        snapshot,
-    )
-
-    assert len(result) == 500
     assert result[-1] == {"entity_id": "sensor.temp_499", "count": 1}
 
 

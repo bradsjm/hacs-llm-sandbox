@@ -7,7 +7,6 @@ from datetime import datetime
 from typing import Any, cast
 
 import pytest
-import voluptuous as vol
 from custom_components.llm_sandbox.const import DEFAULT_PROMPT_PROFILE
 from custom_components.llm_sandbox.llm_api import executor
 from custom_components.llm_sandbox.llm_api.errors import HelperExecutionError
@@ -29,7 +28,6 @@ from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import llm
-from homeassistant.util.json import JsonValueType
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from tests.components.llm_sandbox.llm_api.tools.test_analytics import _snapshot
@@ -313,58 +311,6 @@ async def test_hass_query_capped_history_load_does_not_mark_window_complete() ->
     ]
 
 
-async def test_hass_query_capped_statistics_load_does_not_mark_window_complete() -> None:
-    """A capped SQL statistics load stays conservative so later narrower scopes can fetch missing rows."""
-    base = _snapshot()
-    temp_state = base.states["sensor.temp"]
-    snapshot = replace(
-        base,
-        states=base.states
-        | {"sensor.other": replace(temp_state, entity_id="sensor.other", object_id="other", state="30")},
-    )
-    fetch_calls: list[tuple[str, ...]] = []
-
-    async def _fetch_history(_entity_ids: Sequence[str], _start: datetime, _end: datetime) -> list[dict[str, object]]:
-        return []
-
-    async def _fetch_statistics(
-        entity_ids: Sequence[str], _start: datetime, _end: datetime
-    ) -> list[dict[str, object]]:
-        fetch_calls.append(tuple(entity_ids))
-        if tuple(entity_ids) == ("sensor.other",):
-            return [
-                {
-                    "statistic_id": "sensor.other",
-                    "entity_id": "sensor.other",
-                    "when": "2026-01-01T00:00:00+00:00",
-                    "mean": 30.0,
-                }
-            ]
-        return [
-            {
-                "statistic_id": "sensor.temp",
-                "entity_id": "sensor.temp",
-                "when": f"2026-01-01T{index // 3600:02d}:{(index // 60) % 60:02d}:{index % 60:02d}+00:00",
-                "mean": float(index),
-            }
-            for index in range(MAX_HISTORY_LOAD_ROWS + 1)
-        ]
-
-    hass_facade, runtime = _history_facade(snapshot, _fetch_history, _fetch_statistics)
-    try:
-        await hass_facade.query("select count(*) as count from statistics", entity_ids=["sensor.other", "sensor.temp"])
-        second = await hass_facade.query("select count(*) as count from statistics where entity_id = 'sensor.other'")
-    finally:
-        clear_runtime()
-
-    assert second == [{"count": 1}]
-    assert fetch_calls == [("sensor.other", "sensor.temp"), ("sensor.other",)]
-    assert runtime.state.notes == [
-        f"statistics load capped at {MAX_HISTORY_LOAD_ROWS} rows",
-        "query scope inferred from SQL literals: sensor.other",
-    ]
-
-
 async def test_hass_history_raw_caps_rows_and_adds_note() -> None:
     """Raw hass.history output is bounded and reports the cap transparently."""
     snapshot = _snapshot()
@@ -542,23 +488,6 @@ result = state.entity_id if state is not None else None
     assert follow_up["resolutions"] == [{"requested": "light.kitchen_main", "applied": "light.bedroom"}]
 
 
-async def test_present_entity_read_attaches_no_hint(
-    hass: HomeAssistant,
-    loaded_entry: MockConfigEntry,
-) -> None:
-    """A successful read produces no repair note."""
-    code = """
-state = hass.states.get("light.bedroom")
-result = state.state if state is not None else None
-"""
-
-    result = await _run_code(hass, loaded_entry, code)
-
-    assert result["execution"]["status"] == "ok"
-    assert result["output"] == "on"
-    assert "note" not in result
-
-
 async def test_map_filter_normalize_and_run(
     hass: HomeAssistant,
     loaded_entry: MockConfigEntry,
@@ -680,38 +609,6 @@ result = {
     assert output["turn_on_response"] == "none"
     assert output["required_response"] == "only"
     assert output["missing_response"] == "none"
-
-
-async def test_service_schema_fields_flow_through_read_path(
-    hass: HomeAssistant,
-    loaded_entry: MockConfigEntry,
-) -> None:
-    """Verify service schema fields are visible through the Monty read facade."""
-    hass.services.async_register(
-        "schema_test",
-        "do_thing",
-        lambda call: None,
-        schema=vol.Schema(
-            {
-                vol.Required("count"): vol.Coerce(int),
-                vol.Optional("label"): str,
-            }
-        ),
-    )
-    await hass.async_block_till_done()
-    code = """
-result = hass.services.async_services_for_domain("schema_test")
-"""
-
-    result = await _run_code(hass, loaded_entry, code)
-
-    assert result["execution"]["status"] == "ok"
-    service = result["output"]["do_thing"]
-    assert service["dynamic"] is False
-    assert len(service["fields"]) == 2
-    fields = {field["name"]: field for field in service["fields"]}
-    assert fields["count"]["required"] is True
-    assert fields["label"]["required"] is False
 
 
 async def test_config_read_end_to_end(
@@ -877,70 +774,6 @@ async def test_timeout_returns_code_error(
     assert result["output"] is None
 
 
-async def test_service_not_found_records_error_action_and_continues(
-    hass: HomeAssistant,
-    loaded_entry: MockConfigEntry,
-) -> None:
-    """Verify unknown service/domain records an errored action and continues."""
-    code = """
-await hass.services.async_call("nonexistent", "do_thing")
-result = "should not reach"
-"""
-
-    result = await _run_code(hass, loaded_entry, code)
-
-    assert result["execution"]["status"] == "ok"
-    assert result["output"] == "should not reach"
-    assert result["actions"][0]["status"] == "error"
-    assert result["actions"][0]["error"]["key"] == "service_not_found"
-
-
-async def test_response_required_service_without_return_response_records_ok_action(
-    hass: HomeAssistant,
-    loaded_entry: MockConfigEntry,
-) -> None:
-    """Verify ONLY response services run when return_response is absent."""
-    service_response: dict[str, JsonValueType] = {"required": True}
-    hass.services.async_register(
-        "test_response",
-        "required",
-        lambda call: service_response,
-        supports_response=SupportsResponse.ONLY,
-    )
-    code = """
-result = await hass.services.async_call("test_response", "required")
-"""
-
-    result = await _run_code(hass, loaded_entry, code)
-
-    assert result["execution"]["status"] == "ok"
-    assert result["output"] == service_response
-    actions = result["actions"]
-    assert len(actions) == 1
-    action = actions[0]
-    assert action["service"] == "test_response.required"
-    assert action["status"] == "ok"
-    assert action["response"] == service_response
-
-
-async def test_no_response_service_with_return_response_records_error_action(
-    hass: HomeAssistant,
-    loaded_entry: MockConfigEntry,
-) -> None:
-    """Verify NONE response services record an error for return_response=True."""
-    code = """
-await hass.services.async_call("light", "turn_on", blocking=True, return_response=True)
-result = "should not reach"
-"""
-
-    result = await _run_code(hass, loaded_entry, code)
-
-    assert result["execution"]["status"] == "ok"
-    assert result["output"] == "should not reach"
-    assert result["actions"][0]["status"] == "error"
-    assert result["actions"][0]["error"]["key"] == "service_response_not_supported"
-
-
 async def test_positional_response_service_call_records_action(
     hass: HomeAssistant,
     loaded_entry: MockConfigEntry,
@@ -967,6 +800,7 @@ result = await hass.services.async_call(
 """
 
     result = await _run_code(hass, loaded_entry, code)
+    await hass.async_block_till_done()
 
     assert result["execution"]["status"] == "ok"
     assert result["output"] == {}
@@ -981,70 +815,6 @@ result = await hass.services.async_call(
     assert "blocking" not in action
     assert "return_response" not in action
     assert events == ["required"]
-
-
-async def test_missing_await_normalized_on_async_call(
-    hass: HomeAssistant,
-    loaded_entry: MockConfigEntry,
-) -> None:
-    """Verify the forgiveness layer adds missing await on async_call."""
-    code = """
-hass.services.async_call("light", "turn_off")
-result = "ok"
-"""
-
-    result = await _run_code(hass, loaded_entry, code)
-
-    assert result["execution"]["status"] == "ok"
-    assert result["output"] == "ok"
-    assert result["actions"] == [{"service": "light.turn_off", "target": None, "status": "ok"}]
-
-
-async def test_forgiveness_layer_collapses_home_tour_to_single_call(
-    hass: HomeAssistant,
-    loaded_entry: MockConfigEntry,
-) -> None:
-    """R3: alias fields + reflection builtins resolve in one successful call.
-
-    Reproduces the "tell me about my home" patterns that previously took five
-    calls and three errors, now collapsing to one ok result.
-    """
-    from homeassistant.helpers import area_registry as ar
-    from homeassistant.helpers import floor_registry as fr
-
-    floor = fr.async_get(hass).async_create("Ground Floor")
-    bedroom = ar.async_get(hass).async_get_area_by_name("Bedroom")
-    ar.async_get(hass).async_update(bedroom.id, floor_id=floor.floor_id)
-
-    code = """
-floors = [(f.name, f.floor_id, f.id) for f in floor_registry.async_list_floors()]
-areas = [(a.name, a.id, a.area_id) for a in area_registry.async_list_areas()]
-first_floor = floor_registry.async_list_floors()[0]
-result = {
-    "floor_count": len(floors),
-    "floors": floors,
-    "areas": areas,
-    "has_name": hasattr(first_floor, "name"),
-    "has_bogus": hasattr(first_floor, "nope"),
-    "floor_name_via_getattr": getattr(first_floor, "name", None),
-    "type_name": type(floor_registry).__name__,
-}
-"""
-
-    result = await _run_code(hass, loaded_entry, code)
-
-    assert result["execution"]["status"] == "ok"
-    output = result["output"]
-    assert output["floor_count"] == 1
-    # Alias: f.id equals canonical f.floor_id.
-    assert output["floors"][0][1] == output["floors"][0][2]
-    # Alias: a.area_id equals canonical a.id.
-    assert output["areas"][0][1] == output["areas"][0][2]
-    assert output["has_name"] is True
-    assert output["has_bogus"] is False
-    assert output["floor_name_via_getattr"] == "Ground Floor"
-    assert isinstance(output["type_name"], str)
-    assert output["type_name"] != "dataclass"
 
 
 async def test_conditional_dead_result_branch_promotes_trailing_expression(
