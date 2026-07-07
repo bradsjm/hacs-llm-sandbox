@@ -54,6 +54,32 @@ def test_loaded_dataset_preserves_structural_expectation_types() -> None:
     )
 
 
+def test_loaded_dataset_includes_new_query_and_declarative_analytics_cases() -> None:
+    loaded_cases = load_cases()
+    sql_case = _case_by_id(loaded_cases, "sql_query_visible_entities_by_domain")
+    analytics_case = _case_by_id(loaded_cases, "recorder_declarative_sensor_value_analytics")
+
+    assert [case.id for case in loaded_cases[-2:]] == [
+        "sql_query_visible_entities_by_domain",
+        "recorder_declarative_sensor_value_analytics",
+    ]
+    assert "await hass.query" in sql_case.user_request
+    assert sql_case.expected.tool_name == "execute_home_code"
+    assert sql_case.expected.required_result_paths == ("output.domain", "output.entity_count", "output.example_entity")
+    assert sql_case.expected.output_contains_entities == ()
+    assert sql_case.expected.evidence_contains_entities == ()
+    assert analytics_case.expected.tool_name == "get_history"
+    assert analytics_case.expected.required_result_paths == ("rows.bucket", "rows.domain", "rows.value_mean")
+    assert analytics_case.expected.required_tool_arg_values == (
+        ("aggregate.value", ["mean"]),
+        ("group_by", ["domain"]),
+        ("bucket", "12h"),
+        ("where", [{"field": "domain", "op": "eq", "value": "sensor"}]),
+        ("order_by", "-value_mean"),
+        ("limit", 2),
+    )
+
+
 def test_harness_select_cases_consumes_loaded_suite_order() -> None:
     selected_cases = _select_cases(None, None)
 

@@ -3384,5 +3384,102 @@ cases:
   metadata: null
   expected_output: null
   evaluators: []
+- name: sql_query_visible_entities_by_domain
+  inputs:
+    id: sql_query_visible_entities_by_domain
+    category: complex
+    home: home_default
+    user_request: Use execute_home_code with await hass.query(...) to return SQL
+      rows for the light and sensor domains with columns domain, entity_count,
+      and example_entity.
+    actions_enabled: false
+    llm_context:
+      platform: test
+      device_id: null
+      language: en
+    expected:
+      tool_name: execute_home_code
+      required_tool_names: []
+      required_tool_sequence: []
+      execution_status: ok
+      output_contains_entities: []
+      output_excludes_entities: []
+      evidence_contains_entities: []
+      evidence_excludes_entities: []
+      required_error_keys: []
+      required_result_paths:
+      - output.domain
+      - output.entity_count
+      - output.example_entity
+      required_tool_arg_values: []
+      actions: []
+      recorder_window: null
+      max_tool_turns: null
+      max_successful_actions: null
+      max_tool_calls: 1
+    par_turns: 1
+    action_domains: []
+    max_turns: null
+  metadata: null
+  expected_output: null
+  evaluators: []
+- name: recorder_declarative_sensor_value_analytics
+  inputs:
+    id: recorder_declarative_sensor_value_analytics
+    category: recorder_read
+    home: home_default
+    user_request: For sensor.living_temp and sensor.bedroom_humidity over the last
+      24 hours, use get_history declarative analytics with an aggregate object to
+      rank sensor-domain 12-hour buckets by mean numeric value, returning the top
+      two buckets.
+    actions_enabled: false
+    llm_context:
+      platform: test
+      device_id: null
+      language: en
+    expected:
+      tool_name: get_history
+      required_tool_names: []
+      required_tool_sequence: []
+      execution_status: na
+      output_contains_entities: []
+      output_excludes_entities: []
+      evidence_contains_entities:
+      - sensor.living_temp
+      - sensor.bedroom_humidity
+      evidence_excludes_entities: []
+      required_error_keys: []
+      required_result_paths:
+      - rows.bucket
+      - rows.domain
+      - rows.value_mean
+      required_tool_arg_values:
+      - - aggregate.value
+        - - mean
+      - - group_by
+        - - domain
+      - - bucket
+        - 12h
+      - - where
+        - - field: domain
+            op: eq
+            value: sensor
+      - - order_by
+        - -value_mean
+      - - limit
+        - 2
+      actions: []
+      recorder_window:
+      - '2026-06-28T12:00:00+00:00'
+      - '2026-06-29T12:00:00+00:00'
+      max_tool_turns: null
+      max_successful_actions: null
+      max_tool_calls: 1
+    par_turns: 1
+    action_domains: []
+    max_turns: null
+  metadata: null
+  expected_output: null
+  evaluators: []
 evaluators: []
 report_evaluators: []
