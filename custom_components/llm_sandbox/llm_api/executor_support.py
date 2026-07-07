@@ -84,6 +84,9 @@ class ExecutionState:
     # by hass.query() and closed by executor cleanup before runtime context reset.
     home_db: HomeDatabase | None = None
     notes: list[str] = field(default_factory=list)
+    # Set when this run dispatched at least one live service call, so later
+    # recorder-backed reads synchronize before reading (read-after-write).
+    live_write_dispatched: bool = False
 
 
 async def helper_response(

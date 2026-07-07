@@ -19,6 +19,11 @@ MAX_SQL_RESULT_ROWS = 500
 MAX_HISTORY_LOAD_ROWS = 20_000
 SQL_PROGRESS_OPCODES = 50_000
 MAX_SQL_LENGTH = 4_000
+# Bounds the size of a single SQLite value (string/blob) so LLM-generated
+# queries that synthesize large blobs (zeroblob/randomblob) hit this limit
+# instead of allocating unbounded host memory before the progress handler
+# can interrupt.
+MAX_SQL_VALUE_LENGTH = 1_000_000
 
 _READ_ONLY_ACTIONS = {
     sqlite3.SQLITE_SELECT,
@@ -36,22 +41,11 @@ _SCHEMA_TABLE_NAMES: tuple[str, ...] = (
     "state_history",
     "long_term_statistics",
 )
-_SQL_IDENTIFIER = r'(?:"[^"]+"|`[^`]+`|\[[^\]]+\]|[A-Za-z_][A-Za-z0-9_]*)'
-_TABLE_PATTERN = re.compile(
-    rf"\b(?:from|join)\s+(?P<table>{_SQL_IDENTIFIER}(?:\s*\.\s*{_SQL_IDENTIFIER})?)",
-    re.IGNORECASE,
-)
-_FROM_CLAUSE_PATTERN = re.compile(
-    r"\bfrom\s+(?P<body>.*?)(?=\bwhere\b|\bgroup\s+by\b|\border\s+by\b|\bhaving\b|\blimit\b|\boffset\b|\bunion\b|\bexcept\b|\bintersect\b|$)",
-    re.IGNORECASE | re.DOTALL,
-)
-_LEADING_TABLE_PATTERN = re.compile(
-    rf"^\s*(?P<table>{_SQL_IDENTIFIER}(?:\s*\.\s*{_SQL_IDENTIFIER})?)",
-    re.IGNORECASE,
-)
 _LEADING_SQL_COMMENT = re.compile(r"^\s*(?:--[^\n]*\n|/\*.*?\*/)", re.DOTALL)
 _SQL_COLUMN_QUALIFIER = re.compile(
-    rf"no such column:\s+(?:(?P<table>{_SQL_IDENTIFIER})\s*\.)?{_SQL_IDENTIFIER}",
+    r"no such column:\s+"
+    r"(?:(?P<table>\"[^\"]+\"|`[^`]+`|\[[^\]]+\]|[A-Za-z_][A-Za-z0-9_]*)\s*\.)?"
+    r"(\"[^\"]+\"|`[^`]+`|\[[^\]]+\]|[A-Za-z_][A-Za-z0-9_]*)",
     re.IGNORECASE,
 )
 
@@ -78,12 +72,16 @@ class HomeDatabase:
         """Connect, create schema, and load snapshot states for this per-run database."""
         if self._conn is not None:
             return
+        # check_same_thread=False is safe only because every access to this
+        # connection is serialized through sequential run_blocking awaits within
+        # a single execute_home_code run; there is no concurrent access.
         self._conn = sqlite3.connect(":memory:", check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.enable_load_extension(False)
         self._conn.setlimit(sqlite3.SQLITE_LIMIT_SQL_LENGTH, MAX_SQL_LENGTH)
+        self._conn.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, MAX_SQL_VALUE_LENGTH)
         self._create_schema()
-        self.load_states()
+        self._load_states()
 
     @property
     def conn(self) -> sqlite3.Connection:
@@ -112,46 +110,37 @@ class HomeDatabase:
             for statistic_id in statistic_ids
         )
 
-    def load_states(self) -> None:
-        """Load visible snapshot states into SQLite before read-only guard activation."""
-        if self._conn is None:
-            self.initialize()
-            return
-        rows = [self._state_row(state) for state in self.snapshot.states.values()]
-        self.conn.executemany(
-            """
-            insert into states(entity_id, domain, object_id, name, state, value, attributes,
-                               area_id, floor_id, device_id, platform, unique_id,
-                               last_changed, last_changed_ts, last_updated, last_updated_ts)
-            values(:entity_id, :domain, :object_id, :name, :state, :value, :attributes,
-                   :area_id, :floor_id, :device_id, :platform, :unique_id,
-                   :last_changed, :last_changed_ts, :last_updated, :last_updated_ts)
-            """,
-            rows,
-        )
-        self.conn.commit()
+    def load_history(self, rows: Sequence[Mapping[str, object]]) -> bool:
+        """Load flat recorder history rows, keeping the newest rows when capped.
 
-    def load_history(self, rows: Sequence[Mapping[str, object]]) -> None:
-        """Load flat recorder history rows into SQLite before executing user SQL."""
+        Returns True when the row set exceeded the load cap and was truncated.
+        """
+        kept, truncated = _cap_newest_first([self._history_row(row) for row in rows])
         self.conn.executemany(
             """
             insert or ignore into history(entity_id, domain, area_id, floor_id, device_id, when_iso, when_ts, state, value)
             values(:entity_id, :domain, :area_id, :floor_id, :device_id, :when_iso, :when_ts, :state, :value)
             """,
-            [self._history_row(row) for row in rows[:MAX_HISTORY_LOAD_ROWS]],
+            kept,
         )
         self.conn.commit()
+        return truncated
 
-    def load_statistics(self, rows: Sequence[Mapping[str, object]]) -> None:
-        """Load flat recorder statistics rows into SQLite before executing user SQL."""
+    def load_statistics(self, rows: Sequence[Mapping[str, object]]) -> bool:
+        """Load flat recorder statistics rows, keeping the newest rows when capped.
+
+        Returns True when the row set exceeded the load cap and was truncated.
+        """
+        kept, truncated = _cap_newest_first([self._statistic_row(row) for row in rows])
         self.conn.executemany(
             """
             insert or ignore into statistics(statistic_id, entity_id, when_iso, when_ts, mean, min, max, state, sum)
             values(:statistic_id, :entity_id, :when_iso, :when_ts, :mean, :min, :max, :state, :sum)
             """,
-            [self._statistic_row(row) for row in rows[:MAX_HISTORY_LOAD_ROWS]],
+            kept,
         )
         self.conn.commit()
+        return truncated
 
     def record_history_loaded(self, entity_ids: Sequence[str], start: datetime, end: datetime) -> None:
         """Record the trusted recorder history scope now available in the DB."""
@@ -165,20 +154,48 @@ class HomeDatabase:
                 self._statistics_windows.get(statistic_id), start, end
             )
 
+    def referenced_base_tables(self, sql: str) -> set[str]:
+        """Return the base tables (history/statistics) the statement reads.
+
+        Uses a recording authorizer over ``EXPLAIN QUERY PLAN`` so the answer
+        comes from SQLite's own preparation: view aliases resolve to their base
+        tables, and a CTE named ``history`` shadows the base table (no read
+        reported). Fails open: any error returns an empty set so ``execute``
+        surfaces the real SQL error for the LLM.
+        """
+        seen: set[str] = set()
+
+        def _record(action: int, arg1: str | None, _arg2: str | None, _db: str | None, _source: str | None) -> int:
+            if action == sqlite3.SQLITE_READ and arg1 in {"history", "statistics"}:
+                seen.add(str(arg1))
+            return sqlite3.SQLITE_OK
+
+        try:
+            self.conn.set_authorizer(_record)
+            self.conn.execute(f"explain query plan {sql}")
+        except Exception:  # noqa: BLE001 - fail open so execute() surfaces the real SQL error
+            # A malformed statement surfaces its real error from execute().
+            return set()
+        finally:
+            self.conn.set_authorizer(None)
+        return seen
+
     def execute(self, sql: str, deadline: float) -> QueryResult:
         """Execute one bounded read-only SQL statement."""
         self._arm_user_sql_guard(deadline)
         try:
             cursor = self.conn.execute(sql)
             fetched = cursor.fetchmany(MAX_SQL_RESULT_ROWS + 1)
+        except sqlite3.ProgrammingError as err:
+            message = str(err)
+            reason = "submit exactly one SQL statement" if "one statement at a time" in message.lower() else message
+            raise HelperExecutionError("query", "sql_syntax_error", {"reason": reason}) from err
         except sqlite3.OperationalError as err:
             raise self._refine_sql_error(str(err)) from err
         except sqlite3.DatabaseError as err:
             raise HelperExecutionError("query", "sql_read_only", {"reason": str(err)}) from err
         finally:
             self._disarm_user_sql_guard()
-        if time.monotonic() > deadline:
-            raise HelperExecutionError("query", "sql_timeout", {})
         rows = [dict(row) for row in fetched[:MAX_SQL_RESULT_ROWS]]
         return QueryResult(rows=cast(list[dict[str, object]], rows), truncated=len(fetched) > MAX_SQL_RESULT_ROWS)
 
@@ -234,6 +251,22 @@ class HomeDatabase:
         self.conn.set_progress_handler(None, 0)
         self.conn.set_authorizer(None)
         self.conn.execute("pragma query_only=OFF")
+
+    def _load_states(self) -> None:
+        """Load visible snapshot states into SQLite before read-only guard activation."""
+        rows = [self._state_row(state) for state in self.snapshot.states.values()]
+        self.conn.executemany(
+            """
+            insert into states(entity_id, domain, object_id, name, state, value, attributes,
+                               area_id, floor_id, device_id, platform, unique_id,
+                               last_changed, last_changed_ts, last_updated, last_updated_ts)
+            values(:entity_id, :domain, :object_id, :name, :state, :value, :attributes,
+                   :area_id, :floor_id, :device_id, :platform, :unique_id,
+                   :last_changed, :last_changed_ts, :last_updated, :last_updated_ts)
+            """,
+            rows,
+        )
+        self.conn.commit()
 
     def _state_row(self, state: SafeState) -> dict[str, object]:
         return {
@@ -299,7 +332,7 @@ class HomeDatabase:
             table = None
             if match := _SQL_COLUMN_QUALIFIER.search(message):
                 table_ref = match.group("table")
-                table = _table_name(table_ref) if table_ref else None
+                table = _unquote_identifier(table_ref) if table_ref else None
             if table not in _SCHEMA_TABLE_NAMES:
                 table = "states"
             columns = tuple(str(row["name"]) for row in self.conn.execute(f"pragma table_info({table})"))
@@ -316,19 +349,24 @@ class HomeDatabase:
         return HelperExecutionError("query", "sql_syntax_error", {"reason": message})
 
 
-def referenced_tables(sql: str) -> set[str]:
-    """Return user-referenced table names from simple SELECT/JOIN clauses."""
-    tables: set[str] = set()
-    for match in _TABLE_PATTERN.finditer(sql):
-        tables.add(_table_name(match.group("table")))
-    for match in _FROM_CLAUSE_PATTERN.finditer(sql):
-        for segment in match.group("body").split(","):
-            if segment_match := _LEADING_TABLE_PATTERN.match(segment):
-                tables.add(_table_name(segment_match.group("table")))
-    return tables
+def _cap_newest_first(shaped: list[dict[str, object]]) -> tuple[list[dict[str, object]], bool]:
+    """Return up to MAX_HISTORY_LOAD_ROWS newest rows, plus a truncation flag.
+
+    Newest first by when_ts; NULL timestamps (parse failures) are treated as
+    oldest so they are the first to drop when the cap applies. The ISO string
+    is a deterministic tiebreaker.
+    """
+    if len(shaped) <= MAX_HISTORY_LOAD_ROWS:
+        return shaped, False
+    kept = sorted(
+        shaped,
+        key=lambda item: (item.get("when_ts") or 0.0, str(item.get("when_iso") or "")),
+        reverse=True,
+    )[:MAX_HISTORY_LOAD_ROWS]
+    return kept, True
 
 
-def _table_name(table_ref: str) -> str:
+def _unquote_identifier(table_ref: str) -> str:
     """Return the unqualified, unquoted SQLite table identifier."""
     # The table identifier is the final identifier; any earlier identifier is a
     # schema/catalog qualifier such as ``main``.

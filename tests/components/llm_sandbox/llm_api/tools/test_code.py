@@ -233,6 +233,33 @@ async def test_hass_query_loads_additional_history_scope_in_same_run() -> None:
     assert fetch_calls == [("sensor.temp",), ("sensor.other",)]
 
 
+async def test_hass_query_literal_scope_appends_transparency_note() -> None:
+    """Literal-inferred query scope is surfaced so partial-scope results are not silent."""
+    snapshot = _snapshot()
+
+    async def _fetch_history(_entity_ids: Sequence[str], _start: datetime, _end: datetime) -> list[dict[str, object]]:
+        return [
+            {
+                "entity_id": "sensor.temp",
+                "domain": "sensor",
+                "area_id": None,
+                "floor_id": None,
+                "device_id": None,
+                "when": "2026-01-01T00:00:00+00:00",
+                "state": "20",
+                "value": 20.0,
+            }
+        ]
+
+    hass_facade, runtime = _history_facade(snapshot, _fetch_history)
+    try:
+        await hass_facade.query("select count(*) as c from history where entity_id = 'sensor.temp'")
+    finally:
+        clear_runtime()
+
+    assert runtime.state.notes == ["query scope inferred from SQL literals: sensor.temp"]
+
+
 async def test_hass_query_capped_history_load_does_not_mark_window_complete() -> None:
     """A capped SQL history load stays conservative so later narrower scopes can fetch missing rows."""
     base = _snapshot()
@@ -270,7 +297,7 @@ async def test_hass_query_capped_history_load_does_not_mark_window_complete() ->
                 "state": str(index),
                 "value": float(index),
             }
-            for index in range(MAX_HISTORY_LOAD_ROWS)
+            for index in range(MAX_HISTORY_LOAD_ROWS + 1)
         ]
 
     hass_facade, runtime = _history_facade(snapshot, _fetch_history)
@@ -282,7 +309,10 @@ async def test_hass_query_capped_history_load_does_not_mark_window_complete() ->
 
     assert second == [{"count": 1}]
     assert fetch_calls == [("sensor.other", "sensor.temp"), ("sensor.other",)]
-    assert runtime.state.notes == [f"history load capped at {MAX_HISTORY_LOAD_ROWS} rows"]
+    assert runtime.state.notes == [
+        f"history load capped at {MAX_HISTORY_LOAD_ROWS} rows",
+        "query scope inferred from SQL literals: sensor.other",
+    ]
 
 
 async def test_hass_query_capped_statistics_load_does_not_mark_window_complete() -> None:
@@ -319,7 +349,7 @@ async def test_hass_query_capped_statistics_load_does_not_mark_window_complete()
                 "when": f"2026-01-01T{index // 3600:02d}:{(index // 60) % 60:02d}:{index % 60:02d}+00:00",
                 "mean": float(index),
             }
-            for index in range(MAX_HISTORY_LOAD_ROWS)
+            for index in range(MAX_HISTORY_LOAD_ROWS + 1)
         ]
 
     hass_facade, runtime = _history_facade(snapshot, _fetch_history, _fetch_statistics)
@@ -331,7 +361,10 @@ async def test_hass_query_capped_statistics_load_does_not_mark_window_complete()
 
     assert second == [{"count": 1}]
     assert fetch_calls == [("sensor.other", "sensor.temp"), ("sensor.other",)]
-    assert runtime.state.notes == [f"statistics load capped at {MAX_HISTORY_LOAD_ROWS} rows"]
+    assert runtime.state.notes == [
+        f"statistics load capped at {MAX_HISTORY_LOAD_ROWS} rows",
+        "query scope inferred from SQL literals: sensor.other",
+    ]
 
 
 async def test_hass_history_raw_caps_rows_and_adds_note() -> None:

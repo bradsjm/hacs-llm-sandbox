@@ -205,6 +205,24 @@ def test_declarative_count_transitions_uses_from_to_filters() -> None:
     assert result == [{"domain": "sensor", "transitions": 2}]
 
 
+@pytest.mark.parametrize(
+    "mode",
+    [
+        pytest.param("first_seen", id="first-seen"),
+        pytest.param("last_seen", id="last-seen"),
+        pytest.param("time_in_state", id="time-in-state"),
+        pytest.param("state_counts", id="state-counts"),
+        pytest.param("on_duration", id="on-duration"),
+    ],
+)
+def test_from_state_rejected_outside_count_transitions(mode: str) -> None:
+    """from_state has no prior-state semantics outside count_transitions."""
+    with pytest.raises(RecoverableToolError) as err:
+        analytics_spec_from_data({"aggregate": mode, "from_state": "off"})
+
+    assert err.value.key == "invalid_tool_input"
+
+
 def test_bucketed_count_transitions_carries_previous_state() -> None:
     """Transition buckets include the previous row needed for boundary transitions."""
     snapshot = _snapshot()

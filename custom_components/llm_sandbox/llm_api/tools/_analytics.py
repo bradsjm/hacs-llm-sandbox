@@ -57,9 +57,15 @@ class Condition:
 
 @dataclass(frozen=True, slots=True)
 class AnalyticsSpec:
-    """Declarative analytics request over flat history rows."""
+    """Declarative analytics request over flat history rows.
 
-    aggregate: Mapping[str, object] | None = None
+    Validation lives entirely in ``analytics_spec_from_data``; runtime
+    aggregation reads these typed fields directly without re-checking.
+    """
+
+    mode: AggregateMode | None = None
+    filters: AggregateFilters = AggregateFilters()
+    numeric: tuple[tuple[str, tuple[NumericOp, ...]], ...] = ()
     group_by: tuple[str, ...] = ()
     bucket: str | None = None
     where: tuple[Condition, ...] = ()
@@ -165,17 +171,60 @@ AGGREGATORS: dict[AggregateMode, AggregateFn] = {
 
 
 def analytics_spec_from_data(data: Mapping[str, object]) -> AnalyticsSpec:
-    """Build an analytics spec from validated tool/facade arguments."""
+    """Build a validated analytics spec from tool/facade arguments.
+
+    All mode/op/group validation happens here once; ``run_analytics`` and its
+    helpers read the typed spec fields directly without re-checking.
+    """
     aggregate = data.get("aggregate")
-    if aggregate is None:
-        aggregate_map: Mapping[str, object] | None = None
-    elif isinstance(aggregate, Mapping):
-        aggregate_map = dict(aggregate)
-        aggregate_map.update(
-            {key: data[key] for key in ("from_state", "to_state") if key in data and key not in aggregate}
-        )
-    else:
-        aggregate_map = {"mode": aggregate} | {key: data[key] for key in ("from_state", "to_state") if key in data}
+    data_from_state = cast(str | None, data.get("from_state"))
+    data_to_state = cast(str | None, data.get("to_state"))
+    mode: AggregateMode | None = None
+    numeric: tuple[tuple[str, tuple[NumericOp, ...]], ...] = ()
+    effective_from_state = data_from_state
+    effective_to_state = data_to_state
+
+    if aggregate is not None:
+        if isinstance(aggregate, Mapping):
+            aggregate_map = dict(aggregate)
+            # from_state/to_state may live at the data top level or inside the mapping;
+            # the mapping wins, the top-level values fill the gaps.
+            if data_from_state is not None and "from_state" not in aggregate_map:
+                aggregate_map["from_state"] = data_from_state
+            if data_to_state is not None and "to_state" not in aggregate_map:
+                aggregate_map["to_state"] = data_to_state
+        else:
+            # Shorthand: ``aggregate: "count_transitions"`` is sugar for a mode-only map.
+            aggregate_map = {"mode": aggregate, "from_state": data_from_state, "to_state": data_to_state}
+        effective_from_state = cast(str | None, aggregate_map.get("from_state"))
+        effective_to_state = cast(str | None, aggregate_map.get("to_state"))
+
+        if (raw_mode := aggregate_map.get("mode")) is not None:
+            if raw_mode not in AGGREGATORS:
+                raise RecoverableToolError(
+                    "analytics_unknown_op", {"op": str(raw_mode), "valid": ", ".join(sorted(AGGREGATORS))}
+                )
+            mode = cast(AggregateMode, raw_mode)
+            # from_state has prior-state semantics only for count_transitions.
+            if effective_from_state is not None and mode != "count_transitions":
+                raise RecoverableToolError(
+                    "invalid_tool_input", {"error": "from_state is only valid with count_transitions"}
+                )
+        else:
+            fields: list[tuple[str, tuple[NumericOp, ...]]] = []
+            for field, ops in aggregate_map.items():
+                if field in _AGGREGATE_RESERVED_KEYS:
+                    continue
+                op_names = tuple(str(item) for item in _ensure_list(ops))
+                unknown = sorted(set(op_names) - NUMERIC_OPS)
+                if unknown:
+                    raise RecoverableToolError(
+                        "analytics_unknown_op", {"op": unknown[0], "valid": ", ".join(sorted(NUMERIC_OPS))}
+                    )
+                fields.append((str(field), cast(tuple[NumericOp, ...], op_names)))
+            numeric = tuple(fields)
+
+    filters = AggregateFilters(from_state=effective_from_state, to_state=effective_to_state)
     group_by = tuple(str(item) for item in _ensure_list(data.get("group_by")))
     unknown_groups = sorted(set(group_by) - GROUP_KEYS)
     if unknown_groups:
@@ -183,25 +232,12 @@ def analytics_spec_from_data(data: Mapping[str, object]) -> AnalyticsSpec:
             "analytics_unknown_group_key",
             {"group_key": unknown_groups[0], "valid": ", ".join(sorted(GROUP_KEYS))},
         )
-    if aggregate_map is not None and (mode := aggregate_map.get("mode")) is not None:
-        if mode not in AGGREGATORS:
-            raise RecoverableToolError(
-                "analytics_unknown_op", {"op": str(mode), "valid": ", ".join(sorted(AGGREGATORS))}
-            )
-    elif aggregate_map is not None:
-        for field, ops in aggregate_map.items():
-            if field in _AGGREGATE_RESERVED_KEYS:
-                continue
-            op_names = [str(item) for item in _ensure_list(ops)]
-            unknown = sorted(set(op_names) - NUMERIC_OPS)
-            if unknown:
-                raise RecoverableToolError(
-                    "analytics_unknown_op", {"op": unknown[0], "valid": ", ".join(sorted(NUMERIC_OPS))}
-                )
     where = tuple(_condition(item) for item in _ensure_list(data.get("where")))
     limit = cast(str | int | float | None, data.get("limit"))
     return AnalyticsSpec(
-        aggregate=aggregate_map,
+        mode=mode,
+        filters=filters,
+        numeric=numeric,
         group_by=group_by,
         bucket=cast(str | None, data.get("bucket")),
         where=where,
@@ -227,22 +263,38 @@ def run_analytics(
     # Bucketed transition mode keeps the prior row at each bucket boundary.
     elif bucket_seconds is not None and _carries_transition_across_buckets(spec):
         buckets = _transition_buckets(filtered, spec, start, end, bucket_seconds, snapshot)
-        if not buckets and (spec.bucket is not None or spec.group_by):
+        if not _seed_empty_group(buckets, spec, filtered):
             return []
-        if not buckets:
-            buckets[()] = filtered
         results = _format_buckets(buckets, spec, start, end, bucket_seconds)
     # Row-assigned buckets handle unbucketed and non-carry aggregate modes.
     else:
         buckets = _row_buckets(filtered, spec, start, bucket_seconds, snapshot)
-        if not buckets and (spec.bucket is not None or spec.group_by):
+        if not _seed_empty_group(buckets, spec, filtered):
             return []
-        if not buckets:
-            buckets[()] = filtered
         results = _format_buckets(buckets, spec, start, end, bucket_seconds)
 
     _apply_order(results, spec.order_by)
     return results[: _bounded_limit(spec.limit)]
+
+
+def _seed_empty_group[T](
+    grouped: dict[tuple[object, ...], T],
+    spec: AnalyticsSpec,
+    empty: T,
+) -> bool:
+    """Apply the shared empty-dimension policy in place; return True to proceed.
+
+    When a dimension (bucket or group_by) was requested but produced no groups,
+    returns False so the caller returns an empty list. Otherwise, when there are
+    no groups at all, seeds a single unkeyed group holding ``empty`` so
+    unbucketed/un grouped analytics still run over (possibly empty) filtered rows.
+    """
+    if grouped:
+        return True
+    if spec.bucket is not None or spec.group_by:
+        return False
+    grouped[()] = empty
+    return True
 
 
 def flat_history_rows(raw: Mapping[str, Iterable[HistoryRow]], snapshot: HomeSnapshot) -> list[dict[str, object]]:
@@ -268,37 +320,28 @@ def flat_history_rows(raw: Mapping[str, Iterable[HistoryRow]], snapshot: HomeSna
 
 
 def _aggregate_group(rows: list[HistoryRow], spec: AnalyticsSpec, start: datetime, end: datetime) -> dict[str, object]:
-    if spec.aggregate is None:
+    # No mode and no numeric field-ops: a plain count over the group.
+    if spec.mode is None and not spec.numeric:
         return {"count": len(rows)}
-    aggregate = spec.aggregate
-    if (mode := aggregate.get("mode")) is not None:
-        if mode not in AGGREGATORS:
-            raise RecoverableToolError(
-                "analytics_unknown_op", {"op": str(mode), "valid": ", ".join(sorted(AGGREGATORS))}
-            )
-        # Eager validation in analytics_spec_from_data guarantees mode is a known key;
-        # the guard above preserves type narrowing for the dispatch below.
+    if spec.mode is not None:
+        mode = spec.mode
         if mode in _SEQUENCE_DEPENDENT_MODES:
-            return _aggregate_entity_streams(rows, mode, start, end, _aggregate_filters(aggregate))
+            return _aggregate_entity_streams(rows, mode, start, end, spec.filters)
         if mode in _TIMESTAMP_ORDERED_MODES:
             rows = sorted(rows, key=_row_time)
-        return AGGREGATORS[mode](rows, start, end, _aggregate_filters(aggregate))
+        return AGGREGATORS[mode](rows, start, end, spec.filters)
 
     output: dict[str, object] = {}
-    for field, ops in aggregate.items():
-        if field in _AGGREGATE_RESERVED_KEYS:
-            continue
-        op_names = [str(item) for item in _ensure_list(ops)]
+    for field, ops in spec.numeric:
         values: list[float] = []
         skipped = 0
         for row in rows:
-            value = _field_value(row, str(field), None)
-            number = finite_float(value)
+            number = finite_float(_field_value(row, field, None))
             if number is None:
                 skipped += 1
                 continue
             values.append(number)
-        for op in op_names:
+        for op in ops:
             output[f"{field}_{op}"] = _numeric_result(values, op)
         if skipped:
             output[f"{field}_skipped_non_numeric"] = skipped
@@ -309,13 +352,6 @@ def _bounded_limit(limit: int | None) -> int:
     if limit is None:
         return DEFAULT_ANALYTICS_LIMIT
     return max(1, min(limit, DEFAULT_ANALYTICS_LIMIT))
-
-
-def _aggregate_filters(aggregate: Mapping[str, object]) -> AggregateFilters:
-    return AggregateFilters(
-        from_state=cast(str | None, aggregate.get("from_state")),
-        to_state=cast(str | None, aggregate.get("to_state")),
-    )
 
 
 def _bucket_sort_key(bucket_key: tuple[object, ...]) -> tuple[tuple[int, str], ...]:
@@ -352,13 +388,13 @@ def _combine_sequence_summaries(mode: AggregateMode, summaries: list[AggregateSu
 
 
 def _carries_state_across_buckets(spec: AnalyticsSpec) -> bool:
-    """Return whether the legacy aggregate needs pre-bucket state history."""
-    return isinstance(spec.aggregate, Mapping) and spec.aggregate.get("mode") in _BUCKETED_CARRY_FORWARD_MODES
+    """Return whether the aggregate needs pre-bucket state history."""
+    return spec.mode in _BUCKETED_CARRY_FORWARD_MODES
 
 
 def _carries_transition_across_buckets(spec: AnalyticsSpec) -> bool:
     """Return whether transition buckets need the prior state row."""
-    return isinstance(spec.aggregate, Mapping) and spec.aggregate.get("mode") == "count_transitions"
+    return spec.mode == "count_transitions"
 
 
 def _transition_buckets(
@@ -410,10 +446,8 @@ def _duration_bucket_results(
         group_key = tuple(_group_value(row, key, snapshot) for key in spec.group_by)
         entity_id = str(_field_value(row, "entity_id", None))
         grouped.setdefault(group_key, {}).setdefault(entity_id, []).append(row)
-    if not grouped and spec.group_by:
+    if not _seed_empty_group(grouped, spec, {}):
         return []
-    if not grouped:
-        grouped[()] = {}
 
     bucket_state: dict[tuple[object, ...], dict[str, float]] = {}
     for group_key, entity_rows in grouped.items():
@@ -433,7 +467,7 @@ def _duration_bucket_results(
                         totals[state] = totals.get(state, 0.0) + seconds
                     cursor += timedelta(seconds=bucket_seconds)
 
-    mode = spec.aggregate.get("mode") if isinstance(spec.aggregate, Mapping) else None
+    mode = spec.mode
     results: list[dict[str, object]] = []
     for bucket_key, state_totals in sorted(bucket_state.items(), key=lambda item: _bucket_sort_key(item[0])):
         output: dict[str, object] = {"bucket": bucket_key[0]}

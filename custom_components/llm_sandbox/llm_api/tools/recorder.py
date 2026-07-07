@@ -435,8 +435,16 @@ async def fetch_visible_history_rows(
     entity_ids: list[str],
     start: datetime,
     end: datetime,
+    *,
+    sync: bool = True,
 ) -> dict[str, list[HistoryRow]]:
-    """Fetch significant recorder history for visible snapshot entity ids."""
+    """Fetch significant recorder history for visible snapshot entity ids.
+
+    ``sync`` controls the read-after-write recorder synchronization barrier;
+    standalone tools keep the default (True), facade fetches pass the run's
+    ``live_write_dispatched`` flag so only runs that dispatched live writes pay
+    the global loop-drain cost.
+    """
     _validate_visibility(snapshot, entity_ids)
     return cast(
         dict[str, list[HistoryRow]],
@@ -456,6 +464,7 @@ async def fetch_visible_history_rows(
                 no_attributes=False,
                 compressed_state_format=False,
             ),
+            sync=sync,
         ),
     )
 
@@ -467,6 +476,8 @@ async def fetch_flat_history_rows(
     entity_ids: list[str],
     start: datetime,
     end: datetime,
+    *,
+    sync: bool = True,
 ) -> list[dict[str, object]]:
     """Fetch JSON-compatible flat history rows for facade helpers and SQL."""
     result = await fetch_visible_history_rows(
@@ -476,6 +487,7 @@ async def fetch_flat_history_rows(
         entity_ids,
         start,
         end,
+        sync=sync,
     )
     return flat_history_rows(result, snapshot)
 
@@ -487,6 +499,8 @@ async def fetch_flat_statistics_rows(
     statistic_ids: list[str],
     start: datetime,
     end: datetime,
+    *,
+    sync: bool = True,
 ) -> list[dict[str, object]]:
     """Fetch JSON-compatible long-term statistics rows for facade SQL."""
     _validate_visibility(snapshot, statistic_ids)
@@ -503,6 +517,7 @@ async def fetch_flat_statistics_rows(
             units=None,
             types=set(_ALL_STAT_QUERY_TYPES),
         ),
+        sync=sync,
     )
     rows: list[dict[str, object]] = []
     for statistic_id, values in cast(Mapping[str, list[dict[str, object]]], result).items():
@@ -577,10 +592,20 @@ async def _run_query[T](
     hass: HomeAssistant,
     deadline: float,
     fn: Callable[[], T],
+    *,
+    sync: bool = True,
 ) -> T:
-    """Run a blocking recorder query on the recorder executor with the tool deadline."""
+    """Run a blocking recorder query on the recorder executor with the tool deadline.
+
+    ``sync`` runs the read-after-write barrier (commit pending recorder writes
+    before the read). Standalone recorder tools keep the default True so they
+    always observe prior writes; facade fetches pass the run's
+    ``live_write_dispatched`` flag so only runs that dispatched live writes pay
+    the global loop-drain cost of the barrier.
+    """
     recorder_instance = get_instance(hass)
-    await _sync_recorder_for_query(hass, recorder_instance, deadline)
+    if sync:
+        await _sync_recorder_for_query(hass, recorder_instance, deadline)
     return await _await_deadline(recorder_instance.async_add_executor_job(fn), deadline)
 
 

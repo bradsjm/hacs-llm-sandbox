@@ -48,7 +48,7 @@ from ..snapshot.models import (
 from ..types import ActionRecord, ProposedAction, TranslationPlaceholders
 from .errors import HelperExecutionError, RecoverableToolError
 from .executor_support import helper_response, json_safe
-from .home_db import MAX_HISTORY_LOAD_ROWS, HomeDatabase, QueryResult, ensure_sql_allowed, referenced_tables
+from .home_db import MAX_HISTORY_LOAD_ROWS, HomeDatabase, QueryResult, ensure_sql_allowed
 from .resolution import (
     _DISCOVERY_LIMIT,
     CandidateTarget,
@@ -804,6 +804,10 @@ class SafeServiceRegistry:
                     {"domain": domain, "service": service},
                 )
             try:
+                # Mark that this run dispatched a live write so later recorder-backed
+                # reads know to synchronize before reading (read-after-write). Set
+                # before invoking so a partial write (or a failure) still counts.
+                runtime.state.live_write_dispatched = True
                 result = await asyncio.wait_for(runtime.invoke(action), timeout=remaining)
             except TimeoutError as err:
                 error = _action_error(
@@ -988,13 +992,16 @@ def _query_scope(
     device_id: str | None,
     label_id: str | None,
     domain: str | None,
-) -> list[str]:
+) -> tuple[list[str], bool]:
     """Resolve query recorder scope from explicit ids, HA-native selectors, or SQL literals.
 
     Explicit entity ids and any selector (area/floor/device/label/domain) route through
     the recorder resolver so scope is bounded without an all-visible fallback. With none
     given, fall back to entity-id string literals quoted in the SQL, accepting only ids
     that actually exist in the snapshot (so unrelated quoted strings do not widen scope).
+
+    Returns the resolved ids and a flag that is True when scope was inferred from SQL
+    literals (the fallback path), so the caller can surface that to the LLM.
     """
     data: dict[str, object] = {
         "entity_ids": _coerce_id_list(entity_ids),
@@ -1008,7 +1015,7 @@ def _query_scope(
     # which validates visibility, expands selectors, and caps at MAX_RECORDER_ENTITY_IDS.
     if any(data[key] for key in ("entity_ids", "area_id", "floor_id", "device_id", "label_id", "domain")):
         try:
-            return resolve_entity_ids(snapshot, data, "entity_ids")
+            return resolve_entity_ids(snapshot, data, "entity_ids"), False
         except RecoverableToolError as err:
             raise HelperExecutionError("query", err.key, err.placeholders) from err
     # Advisory literal scan: only accept tokens that are real visible entity ids.
@@ -1022,7 +1029,7 @@ def _query_scope(
                     "reason": f"query SQL references {len(literal_ids)} entities; narrow it to at most {MAX_RECORDER_ENTITY_IDS}"
                 },
             )
-        return literal_ids
+        return literal_ids, True
     raise HelperExecutionError(
         "query",
         "invalid_tool_input",
@@ -1120,11 +1127,11 @@ class SafeHass:
                 await runtime.run_blocking(db.initialize)
                 runtime.state.home_db = db
             db = runtime.state.home_db
-            tables = referenced_tables(sql)
-            needs_history = bool(tables & {"history", "state_history"})
-            needs_statistics = bool(
-                tables & {"statistics", "long_term_statistics", "statistics_short_term", "statistics_meta"}
-            )
+            # Exact table detection via SQLite's own preparation: view aliases
+            # resolve to base tables, and a CTE named ``history`` shadows it.
+            tables = cast(set[str], await runtime.run_blocking(lambda: db.referenced_base_tables(sql)))
+            needs_history = "history" in tables
+            needs_statistics = "statistics" in tables
             if needs_history or needs_statistics:
                 # Branch boundary: when history is referenced it forces the 24h recorder cap;
                 # statistics-only may use the longer analytics lookback. One window, one scope.
@@ -1136,27 +1143,36 @@ class SafeHass:
                     default_hours=DEFAULT_HISTORY_WINDOW_HOURS,
                     max_hours=max_hours,
                 )
-                ids = _query_scope(snapshot, sql, entity_ids, area_id, floor_id, device_id, label_id, domain)
-                if needs_history and db.history_needs_load(ids, start, end):
+                ids, inferred = _query_scope(snapshot, sql, entity_ids, area_id, floor_id, device_id, label_id, domain)
+                if inferred:
+                    runtime.state.notes.append(f"query scope inferred from SQL literals: {', '.join(ids)}")
+
+                async def _load_history() -> None:
+                    if not needs_history or not db.history_needs_load(ids, start, end):
+                        return
                     rows = await runtime.fetch_history(ids, start, end)
-                    capped = len(rows) >= MAX_HISTORY_LOAD_ROWS
-                    if capped:
+                    truncated = cast(bool, await runtime.run_blocking(lambda: db.load_history(rows)))
+                    if truncated:
                         runtime.state.notes.append(f"history load capped at {MAX_HISTORY_LOAD_ROWS} rows")
-                    await runtime.run_blocking(lambda: db.load_history(rows))
-                    # A capped load is intentionally NOT marked complete: the cap keeps
-                    # only the newest rows for the fetched scope, so a later narrower query
-                    # for an entity whose rows fell outside the cap must still be allowed to
-                    # re-fetch. Re-inserts stay cheap via the full-row history dedup index.
-                    if not capped:
-                        db.record_history_loaded(ids, start, end)
-                if needs_statistics and db.statistics_needs_load(ids, start, end):
+                        # A capped load is intentionally NOT marked complete: the cap keeps
+                        # only the newest rows for the fetched scope, so a later narrower
+                        # query for an entity whose rows fell outside the cap must still be
+                        # allowed to re-fetch. Re-inserts stay cheap via the full-row dedup index.
+                        return
+                    db.record_history_loaded(ids, start, end)
+
+                async def _load_statistics() -> None:
+                    if not needs_statistics or not db.statistics_needs_load(ids, start, end):
+                        return
                     rows = await runtime.fetch_statistics(ids, start, end)
-                    capped = len(rows) >= MAX_HISTORY_LOAD_ROWS
-                    if capped:
+                    truncated = cast(bool, await runtime.run_blocking(lambda: db.load_statistics(rows)))
+                    if truncated:
                         runtime.state.notes.append(f"statistics load capped at {MAX_HISTORY_LOAD_ROWS} rows")
-                    await runtime.run_blocking(lambda: db.load_statistics(rows))
-                    if not capped:
-                        db.record_statistics_loaded(ids, start, end)
+                        return
+                    db.record_statistics_loaded(ids, start, end)
+
+                await _load_history()
+                await _load_statistics()
             result = cast(QueryResult, await runtime.run_blocking(lambda: db.execute(sql, runtime.deadline)))
             if result.truncated:
                 runtime.state.notes.append("query result truncated")

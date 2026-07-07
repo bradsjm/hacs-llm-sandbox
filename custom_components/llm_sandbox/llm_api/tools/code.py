@@ -125,22 +125,30 @@ async def _execute(
     async def _fetch_history(entity_ids: Sequence[str], start: datetime, end: datetime) -> list[dict[str, object]]:
         # Private host-side recorder seam: validates against the fresh snapshot
         # and never passes live hass/recorder objects into Monty-visible inputs.
+        # Sync only when this run dispatched a live write (read-after-write);
+        # standalone tools keep the unconditional default sync=True.
         if not recorder_available(hass):
             raise RecoverableToolError(RECORDER_UNAVAILABLE, {})
-        return await fetch_flat_history_rows(hass, snapshot, deadline, list(entity_ids), start, end)
+        return await fetch_flat_history_rows(
+            hass, snapshot, deadline, list(entity_ids), start, end, sync=state.live_write_dispatched
+        )
 
     async def _fetch_statistics(entity_ids: Sequence[str], start: datetime, end: datetime) -> list[dict[str, object]]:
         # Private host-side statistics seam; statistics are recorder-derived live
         # reads but cross into Monty only as JSON-safe rows.
         if not recorder_available(hass):
             raise RecoverableToolError(RECORDER_UNAVAILABLE, {})
-        return await fetch_flat_statistics_rows(hass, snapshot, deadline, list(entity_ids), start, end)
+        return await fetch_flat_statistics_rows(
+            hass, snapshot, deadline, list(entity_ids), start, end, sync=state.live_write_dispatched
+        )
 
     async def _run_blocking(fn: Callable[[], object]) -> object:
         return await hass.async_add_executor_job(fn)
 
+    # Hoist state so the fetcher closures can read the live-write flag.
+    state = ExecutionState(helper_call_limit=settings.helper_call_budget)
     runtime = RuntimeContext(
-        state=ExecutionState(helper_call_limit=settings.helper_call_budget),
+        state=state,
         settings=settings,
         invoke=_invoke,
         fetch_history=_fetch_history,

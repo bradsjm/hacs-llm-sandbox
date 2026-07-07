@@ -2,7 +2,7 @@
 
 import pytest
 from custom_components.llm_sandbox.llm_api.errors import HelperExecutionError
-from custom_components.llm_sandbox.llm_api.home_db import HomeDatabase, referenced_tables
+from custom_components.llm_sandbox.llm_api.home_db import MAX_HISTORY_LOAD_ROWS, HomeDatabase
 
 from tests.components.llm_sandbox.llm_api.tools.test_analytics import _snapshot
 
@@ -104,17 +104,89 @@ def test_home_db_allows_table_list_pragma() -> None:
     assert any(row["name"] == "states" for row in result.rows)
 
 
-def test_referenced_tables_detects_quoted_and_schema_qualified_names() -> None:
-    """Lazy-loading table detection handles valid SQLite quoted and qualified references."""
-    assert referenced_tables('select * from "history"') == {"history"}
-    assert referenced_tables("select * from main.history join `statistics` on 1 = 1") == {
-        "history",
-        "statistics",
-    }
-    assert referenced_tables("select * from states s, history h where s.entity_id = h.entity_id") == {
-        "states",
-        "history",
-    }
+def test_referenced_base_tables_detects_exact_reads() -> None:
+    """Table detection comes from SQLite preparation: views resolve, CTEs shadow."""
+    db = HomeDatabase(_snapshot())
+    try:
+        db.initialize()
+        assert db.referenced_base_tables("select * from states") == set()
+        assert db.referenced_base_tables("select * from history") == {"history"}
+        assert db.referenced_base_tables("select * from state_history") == {"history"}
+        assert db.referenced_base_tables("select * from long_term_statistics") == {"statistics"}
+        assert db.referenced_base_tables("select * from statistics_meta") == {"statistics"}
+        # A CTE named ``history`` shadows the base table: no base-table read reported.
+        assert db.referenced_base_tables("with history as (select 1 as x) select * from history") == set()
+        # Invalid SQL fails open to an empty set so execute() surfaces the real error.
+        assert db.referenced_base_tables("select bogus from nowhere") == set()
+    finally:
+        db.close()
+
+
+def test_load_history_caps_newest_first_and_reports_truncation() -> None:
+    """A capped history load keeps the newest rows and returns the truncation flag."""
+    db = HomeDatabase(_snapshot())
+    try:
+        db.initialize()
+        total = MAX_HISTORY_LOAD_ROWS + 5
+        rows = [
+            {
+                "entity_id": "sensor.temp",
+                "domain": "sensor",
+                "when_ts": float(index),
+                "when": "2026-01-01T00:00:00+00:00",
+                "state": str(index),
+                "value": float(index),
+            }
+            for index in range(total)
+        ]
+        truncated = db.load_history(rows)
+        result = db.execute("select max(value) as max_v, min(value) as min_v, count(*) as c from history", 9999999999)
+    finally:
+        db.close()
+
+    assert truncated is True
+    assert result.rows[0]["c"] == MAX_HISTORY_LOAD_ROWS
+    # Newest-first: the oldest rows (lowest value/ts) are the ones dropped.
+    assert result.rows[0]["min_v"] == 5.0
+    assert result.rows[0]["max_v"] == float(total - 1)
+
+
+def test_load_history_at_cap_keeps_all_rows() -> None:
+    """A history load at exactly the cap is not truncated and keeps every row."""
+    db = HomeDatabase(_snapshot())
+    try:
+        db.initialize()
+        rows = [
+            {
+                "entity_id": "sensor.temp",
+                "domain": "sensor",
+                "when_ts": float(index),
+                "when": "2026-01-01T00:00:00+00:00",
+                "state": str(index),
+                "value": float(index),
+            }
+            for index in range(MAX_HISTORY_LOAD_ROWS)
+        ]
+        truncated = db.load_history(rows)
+        result = db.execute("select count(*) as c from history", 9999999999)
+    finally:
+        db.close()
+
+    assert truncated is False
+    assert result.rows[0]["c"] == MAX_HISTORY_LOAD_ROWS
+
+
+def test_home_db_multi_statement_maps_to_syntax_error() -> None:
+    """Multi-statement SQL surfaces as a syntax error, not a read-only error."""
+    db = HomeDatabase(_snapshot())
+    try:
+        db.initialize()
+        with pytest.raises(HelperExecutionError) as err:
+            db.execute("select 1; select 2", 9999999999)
+    finally:
+        db.close()
+
+    assert err.value.key == "sql_syntax_error"
 
 
 @pytest.mark.parametrize(
