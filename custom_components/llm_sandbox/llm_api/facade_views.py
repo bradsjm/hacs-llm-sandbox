@@ -15,6 +15,7 @@ bus, the config, or auth into the Monty sandbox.
 # ruff: noqa: D105, ANN401
 
 import asyncio
+import re
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -47,6 +48,7 @@ from ..snapshot.models import (
 from ..types import ActionRecord, ProposedAction, TranslationPlaceholders
 from .errors import HelperExecutionError
 from .executor_support import helper_response, json_safe
+from .home_db import MAX_HISTORY_LOAD_ROWS, HomeDatabase, QueryResult, ensure_sql_allowed, referenced_tables
 from .resolution import (
     _DISCOVERY_LIMIT,
     CandidateTarget,
@@ -58,6 +60,15 @@ from .resolution import (
 from .runtime import require_runtime, require_snapshot
 from .selector_expansion import AGGREGATE_SELECTOR_KEYS, expand_aggregate_selectors
 from .target_matching import entities_for_service, raw_service_field_names, service_accepts_domain, services_for_entity
+from .tools._analytics import HistoryRow, analytics_spec_from_data, run_analytics
+from .tools.recorder import (
+    DEFAULT_HISTORY_WINDOW_HOURS,
+    MAX_HISTORY_AGGREGATE_LOOKBACK_HOURS,
+    MAX_HISTORY_STATES,
+    MAX_RECORDER_ENTITY_IDS,
+    MAX_RECORDER_LOOKBACK_HOURS,
+    _clamp_window,
+)
 
 _TARGET_SELECTOR_KEYS = frozenset(("entity_id", "device_id", "area_id", "label_id", "label", "floor_id"))
 
@@ -938,6 +949,57 @@ class SafeServiceRegistry:
         )
 
 
+def _history_entity_ids(snapshot: HomeSnapshot, entity_ids: str | list[str] | None) -> list[str]:
+    """Resolve explicit facade history ids or default to all visible states."""
+    if entity_ids is None:
+        ids = sorted(snapshot.states)
+    elif isinstance(entity_ids, str):
+        ids = [entity_ids]
+    else:
+        ids = [str(entity_id) for entity_id in entity_ids]
+    missing = [entity_id for entity_id in ids if entity_id not in snapshot.states]
+    if missing:
+        raise HelperExecutionError("history", "entity_not_visible", {"entity_id": missing[0]})
+    if not ids or len(ids) > MAX_RECORDER_ENTITY_IDS:
+        raise HelperExecutionError(
+            "history",
+            "invalid_tool_input",
+            {"reason": f"scope must resolve to 1..{MAX_RECORDER_ENTITY_IDS} visible entities"},
+        )
+    return ids
+
+
+def _query_entity_ids(snapshot: HomeSnapshot, sql: str, entity_ids: str | list[str] | None) -> list[str]:
+    """Resolve query recorder scope without widening past the visible snapshot."""
+    if entity_ids is not None:
+        try:
+            return _history_entity_ids(snapshot, entity_ids)
+        except HelperExecutionError as err:
+            raise HelperExecutionError("query", err.key, err.placeholders) from err
+    literal_ids = sorted(set(re.findall(r"['\"]([a-zA-Z0-9_]+\.[a-zA-Z0-9_]+)['\"]", sql)))
+    if literal_ids:
+        missing = [entity_id for entity_id in literal_ids if entity_id not in snapshot.states]
+        if missing:
+            raise HelperExecutionError("query", "entity_not_visible", {"entity_id": missing[0]})
+        if len(literal_ids) > MAX_RECORDER_ENTITY_IDS:
+            raise HelperExecutionError(
+                "query",
+                "invalid_tool_input",
+                {
+                    "reason": f"query SQL references {len(literal_ids)} entities; narrow it to at most {MAX_RECORDER_ENTITY_IDS}"
+                },
+            )
+        return literal_ids
+    ids = sorted(snapshot.states)
+    if len(ids) > MAX_RECORDER_ENTITY_IDS:
+        raise HelperExecutionError(
+            "query",
+            "invalid_tool_input",
+            {"reason": f"query recorder scope resolves to {len(ids)} entities; pass entity_ids to narrow it"},
+        )
+    return ids
+
+
 # ---------------------------------------------------------------------------
 # Hass root facade
 # ---------------------------------------------------------------------------
@@ -957,6 +1019,110 @@ class SafeHass:
     services: SafeServiceRegistry
     config: SafeConfig
     type: str = "hass"
+
+    async def history(
+        self,
+        entity_ids: str | list[str] | None = None,
+        hours: float | None = None,
+        aggregate: Mapping[str, object] | str | None = None,
+        group_by: str | list[str] | None = None,
+        bucket: str | None = None,
+        limit: int | None = None,
+    ) -> JsonValueType:
+        """Return raw or aggregated recorder history for visible snapshot entities."""
+
+        async def _call() -> object:
+            runtime = require_runtime(None)
+            snapshot = require_snapshot()
+            analytics = aggregate is not None or group_by is not None or bucket is not None or limit is not None
+            start, end = _clamp_window(
+                None,
+                None,
+                hours=hours,
+                default_hours=DEFAULT_HISTORY_WINDOW_HOURS,
+                max_hours=MAX_HISTORY_AGGREGATE_LOOKBACK_HOURS if analytics else MAX_RECORDER_LOOKBACK_HOURS,
+            )
+            ids = _history_entity_ids(snapshot, entity_ids)
+            rows = await runtime.fetch_history(ids, start, end)
+            if not analytics:
+                if len(rows) > MAX_HISTORY_STATES:
+                    runtime.state.notes.append(f"history result capped at {MAX_HISTORY_STATES} rows")
+                    rows = rows[:MAX_HISTORY_STATES]
+                return [
+                    {"entity_id": row["entity_id"], "when": row["when"], "state": row["state"], "value": row["value"]}
+                    for row in rows
+                ]
+            spec = analytics_spec_from_data(
+                {
+                    "aggregate": aggregate,
+                    "group_by": group_by,
+                    "bucket": bucket,
+                    "limit": limit,
+                }
+            )
+            return run_analytics(cast(list[HistoryRow], rows), spec, (start, end), snapshot)
+
+        return await helper_response(require_runtime(None).state, "history", _call)
+
+    async def query(
+        self,
+        sql: str,
+        hours: float | None = None,
+        entity_ids: str | list[str] | None = None,
+    ) -> JsonValueType:
+        """Run bounded read-only SQLite over states plus optional recorder rows."""
+
+        async def _call() -> object:
+            runtime = require_runtime(None)
+            snapshot = require_snapshot()
+            ensure_sql_allowed(sql)
+            if runtime.state.home_db is None:
+                # Lazy per-run DB creation stores only frozen snapshot records;
+                # lifecycle cleanup in executor closes it before context reset.
+                runtime.state.home_db = HomeDatabase(snapshot)
+                await runtime.run_blocking(runtime.state.home_db.load_states)
+            db = runtime.state.home_db
+            tables = referenced_tables(sql)
+            if tables & {"history", "state_history"}:
+                start, end = _clamp_window(
+                    None,
+                    None,
+                    hours=hours,
+                    default_hours=DEFAULT_HISTORY_WINDOW_HOURS,
+                    max_hours=MAX_RECORDER_LOOKBACK_HOURS,
+                )
+                ids = _query_entity_ids(snapshot, sql, entity_ids)
+                if db.history_needs_load(ids, start, end):
+                    rows = await runtime.fetch_history(ids, start, end)
+                    capped = len(rows) >= MAX_HISTORY_LOAD_ROWS
+                    if capped:
+                        runtime.state.notes.append(f"history load capped at {MAX_HISTORY_LOAD_ROWS} rows")
+                    await runtime.run_blocking(lambda: db.load_history(rows))
+                    if not capped:
+                        db.record_history_loaded(ids, start, end)
+            if tables & {"statistics", "long_term_statistics"}:
+                start, end = _clamp_window(
+                    None,
+                    None,
+                    hours=hours,
+                    default_hours=DEFAULT_HISTORY_WINDOW_HOURS,
+                    max_hours=MAX_HISTORY_AGGREGATE_LOOKBACK_HOURS,
+                )
+                ids = _query_entity_ids(snapshot, sql, entity_ids)
+                if db.statistics_needs_load(ids, start, end):
+                    rows = await runtime.fetch_statistics(ids, start, end)
+                    capped = len(rows) >= MAX_HISTORY_LOAD_ROWS
+                    if capped:
+                        runtime.state.notes.append(f"statistics load capped at {MAX_HISTORY_LOAD_ROWS} rows")
+                    await runtime.run_blocking(lambda: db.load_statistics(rows))
+                    if not capped:
+                        db.record_statistics_loaded(ids, start, end)
+            result = cast(QueryResult, await runtime.run_blocking(lambda: db.execute(sql, runtime.deadline)))
+            if result.truncated:
+                runtime.state.notes.append("query result truncated")
+            return result.rows
+
+        return await helper_response(require_runtime(None).state, "query", _call)
 
     def __llm_sandbox_json__(self) -> JsonValueType:
         return cast(

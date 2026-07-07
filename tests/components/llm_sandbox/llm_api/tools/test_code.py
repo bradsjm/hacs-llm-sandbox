@@ -1,13 +1,32 @@
 """End-to-end tests for the Monty executor with HA-native facades."""
 
 import json
-from collections.abc import Awaitable
-from typing import Any
+from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import replace
+from datetime import datetime
+from typing import Any, cast
 
 import pytest
 import voluptuous as vol
+from custom_components.llm_sandbox.const import DEFAULT_PROMPT_PROFILE
 from custom_components.llm_sandbox.llm_api import executor
+from custom_components.llm_sandbox.llm_api.errors import HelperExecutionError
+from custom_components.llm_sandbox.llm_api.executor_support import ExecutionState
+from custom_components.llm_sandbox.llm_api.facade_views import (
+    SafeHass as SandboxHass,
+)
+from custom_components.llm_sandbox.llm_api.facade_views import (
+    _query_entity_ids,
+    build_facades,
+)
+from custom_components.llm_sandbox.llm_api.home_db import MAX_HISTORY_LOAD_ROWS
+from custom_components.llm_sandbox.llm_api.prompts.profiles import resolve_profile
+from custom_components.llm_sandbox.llm_api.runtime import RuntimeContext, activate_runtime, clear_runtime
 from custom_components.llm_sandbox.llm_api.tools.code import _execute
+from custom_components.llm_sandbox.llm_api.tools.recorder import MAX_HISTORY_STATES, MAX_RECORDER_ENTITY_IDS
+from custom_components.llm_sandbox.runtime import SandboxSettings
+from custom_components.llm_sandbox.snapshot.models import DEFAULT_SCOPE, HomeSnapshot
+from custom_components.llm_sandbox.types import ProposedAction
 from homeassistant.core import Context, HomeAssistant, SupportsResponse
 from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import device_registry as dr
@@ -15,6 +34,8 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import llm
 from homeassistant.util.json import JsonValueType
 from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+from tests.components.llm_sandbox.llm_api.tools.test_analytics import _snapshot
 
 
 async def _run_code(
@@ -31,6 +52,44 @@ async def _run_code(
         device_id=None,
     )
     return await _execute(hass, entry.entry_id, {"code": code}, llm_context)  # type: ignore[return-value]
+
+
+def _history_facade(
+    snapshot: HomeSnapshot,
+    fetch_history: Callable[[Sequence[str], datetime, datetime], Awaitable[list[dict[str, object]]]],
+    fetch_statistics: Callable[[Sequence[str], datetime, datetime], Awaitable[list[dict[str, object]]]] | None = None,
+) -> tuple[SandboxHass, RuntimeContext]:
+    """Activate a SafeHass facade with test runtime seams."""
+
+    async def _invoke(_action: ProposedAction) -> object:
+        return None
+
+    async def _fetch_statistics(
+        _entity_ids: Sequence[str], _start: datetime, _end: datetime
+    ) -> list[dict[str, object]]:
+        return []
+
+    async def _run_blocking(fn: Callable[[], object]) -> object:
+        return fn()
+
+    runtime = RuntimeContext(
+        state=ExecutionState(),
+        settings=SandboxSettings(
+            execution_timeout_seconds=10,
+            helper_call_budget=20,
+            scope=DEFAULT_SCOPE,
+            actions_enabled=False,
+            action_domains=frozenset(),
+            prompt_profile=resolve_profile(DEFAULT_PROMPT_PROFILE),
+        ),
+        invoke=_invoke,
+        fetch_history=fetch_history,
+        fetch_statistics=fetch_statistics or _fetch_statistics,
+        run_blocking=_run_blocking,
+    )
+    clear_runtime()
+    activate_runtime(runtime, snapshot)
+    return cast(SandboxHass, build_facades(snapshot)["hass"]), runtime
 
 
 async def test_read_state_and_registry_end_to_end(
@@ -91,6 +150,271 @@ result = {
     assert output["subscript"] == "on"
     assert output["contains"] is True
     assert output["len"] >= 2
+
+
+async def test_hass_query_reads_visible_states(
+    hass: HomeAssistant,
+    loaded_entry: MockConfigEntry,
+) -> None:
+    """hass.query exposes bounded read-only SQL over the visible snapshot states table."""
+    result = await _run_code(
+        hass,
+        loaded_entry,
+        """
+result = await hass.query("select entity_id, state from states where entity_id = 'light.bedroom'")
+""",
+    )
+
+    assert result["execution"]["status"] == "ok"
+    assert result["output"] == [{"entity_id": "light.bedroom", "state": "on"}]
+
+
+async def test_hass_query_rejects_writes(
+    hass: HomeAssistant,
+    loaded_entry: MockConfigEntry,
+) -> None:
+    """hass.query reports a helper error for non-read SQL."""
+    result = await _run_code(hass, loaded_entry, "result = await hass.query('delete from states')")
+
+    assert result["execution"]["status"] == "helper_error"
+    assert result["execution"]["kind"] == "sql_read_only"
+
+
+async def test_hass_history_recorder_unavailable_is_helper_error(
+    hass: HomeAssistant,
+    loaded_entry: MockConfigEntry,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Recorder-backed facade helpers map unavailable recorder to a stable helper key."""
+    monkeypatch.setattr("custom_components.llm_sandbox.llm_api.tools.code.recorder_available", lambda _hass: False)
+
+    result = await _run_code(hass, loaded_entry, "result = await hass.history(entity_ids='light.bedroom')")
+
+    assert result["execution"]["status"] == "helper_error"
+    assert result["execution"]["kind"] == "recorder_unavailable"
+
+
+async def test_hass_query_loads_additional_history_scope_in_same_run() -> None:
+    """A second SQL history query with a different visible scope loads additional rows."""
+    base = _snapshot()
+    temp_state = base.states["sensor.temp"]
+    snapshot = replace(
+        base,
+        states=base.states
+        | {"sensor.other": replace(temp_state, entity_id="sensor.other", object_id="other", state="30")},
+    )
+    fetch_calls: list[tuple[str, ...]] = []
+
+    async def _fetch_history(entity_ids: Sequence[str], _start: datetime, _end: datetime) -> list[dict[str, object]]:
+        fetch_calls.append(tuple(entity_ids))
+        return [
+            {
+                "entity_id": entity_id,
+                "domain": "sensor",
+                "area_id": None,
+                "floor_id": None,
+                "device_id": None,
+                "when": "2026-01-01T00:00:00+00:00",
+                "state": "20" if entity_id == "sensor.temp" else "30",
+                "value": 20.0 if entity_id == "sensor.temp" else 30.0,
+            }
+            for entity_id in entity_ids
+        ]
+
+    hass_facade, _runtime = _history_facade(snapshot, _fetch_history)
+    try:
+        first = await hass_facade.query("select count(*) as count from \"history\" where entity_id = 'sensor.temp'")
+        second = await hass_facade.query("select count(*) as count from main.history where entity_id = 'sensor.other'")
+    finally:
+        clear_runtime()
+
+    assert first == [{"count": 1}]
+    assert second == [{"count": 1}]
+    assert fetch_calls == [("sensor.temp",), ("sensor.other",)]
+
+
+async def test_hass_query_capped_history_load_does_not_mark_window_complete() -> None:
+    """A capped SQL history load stays conservative so later narrower scopes can fetch missing rows."""
+    base = _snapshot()
+    temp_state = base.states["sensor.temp"]
+    snapshot = replace(
+        base,
+        states=base.states
+        | {"sensor.other": replace(temp_state, entity_id="sensor.other", object_id="other", state="30")},
+    )
+    fetch_calls: list[tuple[str, ...]] = []
+
+    async def _fetch_history(entity_ids: Sequence[str], _start: datetime, _end: datetime) -> list[dict[str, object]]:
+        fetch_calls.append(tuple(entity_ids))
+        if tuple(entity_ids) == ("sensor.other",):
+            return [
+                {
+                    "entity_id": "sensor.other",
+                    "domain": "sensor",
+                    "area_id": None,
+                    "floor_id": None,
+                    "device_id": None,
+                    "when": "2026-01-01T00:00:00+00:00",
+                    "state": "30",
+                    "value": 30.0,
+                }
+            ]
+        return [
+            {
+                "entity_id": "sensor.temp",
+                "domain": "sensor",
+                "area_id": None,
+                "floor_id": None,
+                "device_id": None,
+                "when": f"2026-01-01T{index // 3600:02d}:{(index // 60) % 60:02d}:{index % 60:02d}+00:00",
+                "state": str(index),
+                "value": float(index),
+            }
+            for index in range(MAX_HISTORY_LOAD_ROWS)
+        ]
+
+    hass_facade, runtime = _history_facade(snapshot, _fetch_history)
+    try:
+        await hass_facade.query("select count(*) as count from history")
+        second = await hass_facade.query("select count(*) as count from history where entity_id = 'sensor.other'")
+    finally:
+        clear_runtime()
+
+    assert second == [{"count": 1}]
+    assert fetch_calls == [("sensor.other", "sensor.temp"), ("sensor.other",)]
+    assert runtime.state.notes == [f"history load capped at {MAX_HISTORY_LOAD_ROWS} rows"]
+
+
+async def test_hass_query_capped_statistics_load_does_not_mark_window_complete() -> None:
+    """A capped SQL statistics load stays conservative so later narrower scopes can fetch missing rows."""
+    base = _snapshot()
+    temp_state = base.states["sensor.temp"]
+    snapshot = replace(
+        base,
+        states=base.states
+        | {"sensor.other": replace(temp_state, entity_id="sensor.other", object_id="other", state="30")},
+    )
+    fetch_calls: list[tuple[str, ...]] = []
+
+    async def _fetch_history(_entity_ids: Sequence[str], _start: datetime, _end: datetime) -> list[dict[str, object]]:
+        return []
+
+    async def _fetch_statistics(
+        entity_ids: Sequence[str], _start: datetime, _end: datetime
+    ) -> list[dict[str, object]]:
+        fetch_calls.append(tuple(entity_ids))
+        if tuple(entity_ids) == ("sensor.other",):
+            return [
+                {
+                    "statistic_id": "sensor.other",
+                    "entity_id": "sensor.other",
+                    "when": "2026-01-01T00:00:00+00:00",
+                    "mean": 30.0,
+                }
+            ]
+        return [
+            {
+                "statistic_id": "sensor.temp",
+                "entity_id": "sensor.temp",
+                "when": f"2026-01-01T{index // 3600:02d}:{(index // 60) % 60:02d}:{index % 60:02d}+00:00",
+                "mean": float(index),
+            }
+            for index in range(MAX_HISTORY_LOAD_ROWS)
+        ]
+
+    hass_facade, runtime = _history_facade(snapshot, _fetch_history, _fetch_statistics)
+    try:
+        await hass_facade.query("select count(*) as count from statistics")
+        second = await hass_facade.query("select count(*) as count from statistics where entity_id = 'sensor.other'")
+    finally:
+        clear_runtime()
+
+    assert second == [{"count": 1}]
+    assert fetch_calls == [("sensor.other", "sensor.temp"), ("sensor.other",)]
+    assert runtime.state.notes == [f"statistics load capped at {MAX_HISTORY_LOAD_ROWS} rows"]
+
+
+async def test_hass_history_raw_caps_rows_and_adds_note() -> None:
+    """Raw hass.history output is bounded and reports the cap transparently."""
+    snapshot = _snapshot()
+    rows = [
+        {
+            "entity_id": "sensor.temp",
+            "when": f"2026-01-01T00:{index % 60:02d}:00+00:00",
+            "state": str(index),
+            "value": float(index),
+        }
+        for index in range(MAX_HISTORY_STATES + 1)
+    ]
+
+    async def _fetch_history(_entity_ids: Sequence[str], _start: datetime, _end: datetime) -> list[dict[str, object]]:
+        return rows
+
+    hass_facade, runtime = _history_facade(snapshot, _fetch_history)
+    try:
+        result = await hass_facade.history(entity_ids="sensor.temp")
+    finally:
+        clear_runtime()
+
+    assert isinstance(result, list)
+    assert len(result) == MAX_HISTORY_STATES
+    assert runtime.state.notes == [f"history result capped at {MAX_HISTORY_STATES} rows"]
+
+
+async def test_hass_history_analytics_error_uses_helper_key() -> None:
+    """Analytics validation errors inside hass.history surface as helper errors."""
+
+    async def _fetch_history(_entity_ids: Sequence[str], _start: datetime, _end: datetime) -> list[dict[str, object]]:
+        return []
+
+    hass_facade, _runtime = _history_facade(_snapshot(), _fetch_history)
+    try:
+        with pytest.raises(HelperExecutionError) as err:
+            await hass_facade.history(entity_ids="sensor.temp", aggregate="on_duration", bucket="bad")
+    finally:
+        clear_runtime()
+
+    assert err.value.helper == "history"
+    assert err.value.key == "analytics_bad_bucket"
+
+
+async def test_hass_query_clamp_error_uses_helper_key() -> None:
+    """Recorder window clamp errors inside hass.query surface as helper errors."""
+
+    async def _fetch_history(_entity_ids: Sequence[str], _start: datetime, _end: datetime) -> list[dict[str, object]]:
+        return []
+
+    hass_facade, _runtime = _history_facade(_snapshot(), _fetch_history)
+    try:
+        with pytest.raises(HelperExecutionError) as err:
+            await hass_facade.query("select * from history", hours=10_000)
+    finally:
+        clear_runtime()
+
+    assert err.value.helper == "query"
+    assert err.value.key == "time_window_too_large"
+
+
+def test_sql_inferred_entity_literals_over_cap_are_rejected() -> None:
+    """SQL literal entity inference enforces the recorder entity-id cap instead of truncating."""
+    base = _snapshot()
+    state = base.states["sensor.temp"]
+    states = {
+        f"sensor.temp_{index}": replace(state, entity_id=f"sensor.temp_{index}", object_id=f"temp_{index}")
+        for index in range(MAX_RECORDER_ENTITY_IDS + 1)
+    }
+    snapshot = replace(base, states=states)
+    sql = (
+        "select * from history where entity_id in ("
+        + ", ".join(f"'sensor.temp_{index}'" for index in range(MAX_RECORDER_ENTITY_IDS + 1))
+        + ")"
+    )
+
+    with pytest.raises(HelperExecutionError) as err:
+        _query_entity_ids(snapshot, sql, None)
+
+    assert err.value.helper == "query"
+    assert err.value.key == "invalid_tool_input"
 
 
 async def test_missing_entity_read_attaches_note(

@@ -3,7 +3,7 @@
 import asyncio
 import functools
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Literal, cast, final, override
 
@@ -45,7 +45,15 @@ from ..executor_support import json_safe
 from ..prompts import build_get_history_description, build_get_logbook_description, build_get_statistics_description
 from ..resolution import _DISCOVERY_LIMIT, bounded_strings, candidates_for_domain, resolve_target_entity
 from ..selector_expansion import expand_aggregate_selectors
-from ._aggregates import AGGREGATORS, AggregateFilters, AggregateMode, HistoryRow
+from ._analytics import (
+    AGGREGATORS,
+    AggregateFilters,
+    AggregateMode,
+    HistoryRow,
+    analytics_spec_from_data,
+    flat_history_rows,
+    run_analytics,
+)
 from ._cursor import _LOGBOOK_CURSOR_KEY, INVALID_CURSOR, Cursor, decode_cursor, encode_cursor, paginate_stream
 from ._support import _require_loaded_entry_error, _require_sandbox_runtime
 
@@ -93,6 +101,18 @@ _RECORDER_GUIDANCE: dict[str, tuple[str, list[str]]] = {
     "invalid_tool_input": (
         "Invalid tool input.",
         ["Check argument names and types; the validation error was: {error}."],
+    ),
+    "analytics_unknown_op": (
+        "The requested analytics operation is not supported.",
+        ["Use one of: {valid}."],
+    ),
+    "analytics_unknown_group_key": (
+        "The requested analytics group key is not supported.",
+        ["Use one of: {valid}."],
+    ),
+    "analytics_bad_bucket": (
+        "The requested analytics bucket is invalid.",
+        ["Use bucket examples like {examples}."],
     ),
 }
 
@@ -199,7 +219,7 @@ class _RecorderTool(llm.Tool):
         llm_context: llm.LLMContext,
     ) -> JsonObjectType:
         try:
-            data = cast(dict[str, object], self.parameters(tool_input.tool_args))
+            data = cast(dict[str, object], self.parameters(self._normalize_args(tool_input.tool_args)))
         except Exception as err:
             mapped = tool_error_from_exception(err)
             if mapped is None:
@@ -231,6 +251,10 @@ class _RecorderTool(llm.Tool):
             if mapped is None:
                 return recorder_error_envelope(QUERY_FAILED, {"error": type(err).__name__})
             return recorder_error_envelope(*mapped)
+
+    def _normalize_args(self, args: Mapping[str, object]) -> dict[str, object]:
+        """Normalize tool-specific input aliases before voluptuous validation."""
+        return dict(args)
 
     async def _query(
         self,
@@ -402,6 +426,102 @@ def _resolve_window(
     return start, end, Cursor(start=start, end=end, cutoffs={})
 
 
+async def fetch_visible_history_rows(
+    hass: HomeAssistant,
+    snapshot: HomeSnapshot,
+    deadline: float,
+    entity_ids: list[str],
+    start: datetime,
+    end: datetime,
+) -> dict[str, list[HistoryRow]]:
+    """Fetch significant recorder history for visible snapshot entity ids."""
+    _validate_visibility(snapshot, entity_ids)
+    return cast(
+        dict[str, list[HistoryRow]],
+        await _run_query(
+            hass,
+            deadline,
+            functools.partial(
+                history.get_significant_states,
+                hass=hass,
+                start_time=start,
+                end_time=end,
+                entity_ids=entity_ids,
+                filters=None,
+                include_start_time_state=True,
+                significant_changes_only=True,
+                minimal_response=False,
+                no_attributes=False,
+                compressed_state_format=False,
+            ),
+        ),
+    )
+
+
+async def fetch_flat_history_rows(
+    hass: HomeAssistant,
+    snapshot: HomeSnapshot,
+    deadline: float,
+    entity_ids: list[str],
+    start: datetime,
+    end: datetime,
+) -> list[dict[str, object]]:
+    """Fetch JSON-compatible flat history rows for facade helpers and SQL."""
+    result = await fetch_visible_history_rows(
+        hass,
+        snapshot,
+        deadline,
+        entity_ids,
+        start,
+        end,
+    )
+    return flat_history_rows(result, snapshot)
+
+
+async def fetch_flat_statistics_rows(
+    hass: HomeAssistant,
+    snapshot: HomeSnapshot,
+    deadline: float,
+    statistic_ids: list[str],
+    start: datetime,
+    end: datetime,
+) -> list[dict[str, object]]:
+    """Fetch JSON-compatible long-term statistics rows for facade SQL."""
+    _validate_visibility(snapshot, statistic_ids)
+    result = await _run_query(
+        hass,
+        deadline,
+        functools.partial(
+            statistics.statistics_during_period,
+            hass=hass,
+            start_time=start,
+            end_time=end,
+            statistic_ids=set(statistic_ids),
+            period="hour",
+            units=None,
+            types=set(_ALL_STAT_QUERY_TYPES),
+        ),
+    )
+    rows: list[dict[str, object]] = []
+    for statistic_id, values in cast(Mapping[str, list[dict[str, object]]], result).items():
+        for row in values:
+            timestamp = row.get("start") or row.get("end") or row.get("last_reset")
+            if isinstance(timestamp, datetime):
+                timestamp = dt_util.as_utc(timestamp).isoformat()
+            rows.append(
+                {
+                    "statistic_id": statistic_id,
+                    "when": str(timestamp),
+                    "mean": row.get("mean"),
+                    "min": row.get("min"),
+                    "max": row.get("max"),
+                    "state": row.get("state"),
+                    "sum": row.get("sum"),
+                }
+            )
+    return rows
+
+
 def _paginate_streams(
     streams: Mapping[str, list[list[object]]],
     *,
@@ -457,8 +577,29 @@ async def _run_query[T](
     fn: Callable[[], T],
 ) -> T:
     """Run a blocking recorder query on the recorder executor with the tool deadline."""
-    remaining = max(0.1, deadline - time.monotonic())
-    return await asyncio.wait_for(get_instance(hass).async_add_executor_job(fn), timeout=remaining)
+    recorder_instance = get_instance(hass)
+    # Drain the HA event loop first so state-change events are dispatched to the
+    # recorder listener and queued; otherwise the recorder sync below could see an
+    # empty queue, early-return, and skip the commit that makes writes visible.
+    await _await_deadline(hass.async_block_till_done(), deadline)
+    # async_block_till_done queues a SynchronizeTask (commit_before=True), forcing a
+    # session.commit() and resolving only after the recorder thread has run it, so the
+    # fresh read session sees all writes. The sync block_till_done must NOT be used
+    # here: it queues WaitTask (commit_before=False) and drains without committing.
+    await _await_deadline(recorder_instance.async_block_till_done(), deadline)
+    # Drain once more in case the commit resolution scheduled further loop work.
+    await _await_deadline(hass.async_block_till_done(), deadline)
+    # A final public recorder sync catches state-change events that were queued
+    # by the post-commit loop drain above, preserving read-after-write visibility
+    # without private recorder APIs or sync block_till_done.
+    await _await_deadline(recorder_instance.async_block_till_done(), deadline)
+    await _await_deadline(hass.async_block_till_done(), deadline)
+    return await _await_deadline(recorder_instance.async_add_executor_job(fn), deadline)
+
+
+async def _await_deadline[T](awaitable: Awaitable[T], deadline: float) -> T:
+    """Await one recorder sync/query step within the remaining tool deadline."""
+    return await asyncio.wait_for(awaitable, timeout=max(0, deadline - time.monotonic()))
 
 
 def _state_row_to_dict(
@@ -566,7 +707,16 @@ class GetHistoryTool(_RecorderTool):
             vol.Optional(
                 "aggregate",
                 description="Optional server-side summary mode instead of raw rows.",
-            ): vol.In(tuple(AGGREGATORS)),
+            ): vol.Any(vol.In(tuple(AGGREGATORS)), dict),
+            vol.Optional("group_by", description="Optional analytics group key(s)."): vol.All(
+                cv.ensure_list, [str], vol.Length(min=1, max=4)
+            ),
+            vol.Optional("bucket", description="Optional analytics bucket, e.g. 15m, 1h, 1d."): str,
+            vol.Optional("where", description="Optional analytics row filters."): vol.All(cv.ensure_list, [dict]),
+            vol.Optional("order_by", description="Optional analytics result sort field; prefix '-' for desc."): str,
+            vol.Optional("limit", description="Maximum analytics result rows."): vol.All(
+                vol.Coerce(int), vol.Range(min=1)
+            ),
             vol.Optional(
                 "from_state",
                 description="Optional count_transitions filter for the previous state.",
@@ -585,6 +735,19 @@ class GetHistoryTool(_RecorderTool):
         }
     )
 
+    def _normalize_args(self, args: Mapping[str, object]) -> dict[str, object]:
+        """Accept the requested history analytics input-key synonyms."""
+        data = dict(args)
+        if "agg" in data and "aggregate" not in data:
+            data["aggregate"] = data.pop("agg")
+        if "groupby" in data and "group_by" not in data:
+            data["group_by"] = data.pop("groupby")
+        if "resample" in data and "bucket" not in data:
+            data["bucket"] = data.pop("resample")
+        if "interval" in data and "bucket" not in data:
+            data["bucket"] = data.pop("interval")
+        return data
+
     @override
     async def _query(
         self,
@@ -597,30 +760,28 @@ class GetHistoryTool(_RecorderTool):
         entity_ids = resolve_entity_ids(snapshot, data, "entity_ids")
         requested_attributes = cast(list[str] | None, data.get("attributes"))
         aggregate = cast(AggregateMode | None, data.get("aggregate"))
-        if aggregate is not None:
+        analytics_requested = any(
+            key in data for key in ("aggregate", "group_by", "bucket", "where", "order_by", "limit")
+        )
+        if isinstance(aggregate, str) and not any(
+            key in data for key in ("group_by", "bucket", "where", "order_by", "limit")
+        ):
             return await _aggregate_history(hass, deadline, entity_ids, data, aggregate)
+        if analytics_requested:
+            return await _declarative_history(hass, snapshot, deadline, entity_ids, data)
 
         start, end, cursor = _resolve_window(
             data,
             default_hours=DEFAULT_HISTORY_WINDOW_HOURS,
             max_hours=MAX_RECORDER_LOOKBACK_HOURS,
         )
-        result = await _run_query(
+        result = await fetch_visible_history_rows(
             hass,
+            snapshot,
             deadline,
-            functools.partial(
-                history.get_significant_states,
-                hass=hass,
-                start_time=start,
-                end_time=end,
-                entity_ids=entity_ids,
-                filters=None,
-                include_start_time_state=True,
-                significant_changes_only=True,
-                minimal_response=False,
-                no_attributes=False,
-                compressed_state_format=False,
-            ),
+            entity_ids,
+            start,
+            end,
         )
         budget = max(1, MAX_HISTORY_STATES // len(entity_ids))
         stream_rows: dict[str, list[list[object]]] = {}
@@ -700,6 +861,35 @@ async def _aggregate_history(
     return cast(
         JsonObjectType,
         json_safe(payload),
+    )
+
+
+async def _declarative_history(
+    hass: HomeAssistant,
+    snapshot: HomeSnapshot,
+    deadline: float,
+    entity_ids: list[str],
+    data: dict[str, object],
+) -> JsonObjectType:
+    """Return flat declarative analytics results for get_history."""
+    if data.get("attributes") is not None:
+        raise RecoverableToolError("invalid_tool_input", {"error": "analytics cannot be combined with attributes"})
+    if data.get("cursor") is not None:
+        raise RecoverableToolError("invalid_tool_input", {"error": "analytics cannot be combined with cursor"})
+    start, end = _clamp_window(
+        cast(datetime | None, data.get("start")),
+        cast(datetime | None, data.get("end")),
+        hours=cast(float | None, data.get("hours")),
+        default_hours=DEFAULT_HISTORY_WINDOW_HOURS,
+        max_hours=MAX_HISTORY_AGGREGATE_LOOKBACK_HOURS,
+    )
+    raw = await fetch_visible_history_rows(hass, snapshot, deadline, entity_ids, start, end)
+    flat = flat_history_rows(raw, snapshot)
+    spec = analytics_spec_from_data(data)
+    rows = run_analytics(cast(list[HistoryRow], flat), spec, (start, end), snapshot)
+    return cast(
+        JsonObjectType,
+        json_safe({"window": {"start": start.isoformat(), "end": end.isoformat()}, "rows": rows}),
     )
 
 

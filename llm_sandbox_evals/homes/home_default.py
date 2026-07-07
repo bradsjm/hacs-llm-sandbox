@@ -247,11 +247,11 @@ def snapshot() -> HomeSnapshot:
         for entity_id, unique_id, device_id, area_id, labels, hidden_by, category, device_class, original_device_class in _ENTITIES
     }
     devices = {device_id: _device(device_id, name, area_id, labels) for device_id, name, area_id, labels in _DEVICES}
-    states = enrich_states(states, entities, devices)
     areas = {
         area_id: _area(area_id, name, floor_id, labels, temperature_entity_id, humidity_entity_id)
         for area_id, name, floor_id, labels, temperature_entity_id, humidity_entity_id in _AREAS
     }
+    states = enrich_states(states, entities, devices, areas)
     floors = {floor_id: _floor(floor_id, name, level) for floor_id, name, level in _FLOORS}
     labels = {
         label_id: _label(label_id, name, normalized_name, description)

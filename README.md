@@ -22,8 +22,8 @@ Once enabled, the assistant gains five tools it can call during a conversation:
 
 | Tool | What it's for |
 | --- | --- |
-| **`execute_home_code`** | The assistant writes and runs a short Python snippet to read and reason over your home — current states, the entity/device/area/floor/label registries, repairs, persistent notifications, and (secret-stripped) config entries. |
-| **`get_history`** | Recorded **state history** — raw changes up to 24 hours, or server-side summaries such as transitions and time-in-state up to 30 days. |
+| **`execute_home_code`** | The assistant writes and runs a short Python snippet to read and reason over your home — current states, the entity/device/area/floor/label registries, repairs, persistent notifications, secret-stripped config entries, and read-only SQL via `await hass.query(...)` over visible snapshot states plus bounded recorder history/statistics. |
+| **`get_history`** | Recorded **state history** — raw changes up to 24 hours, legacy summaries such as transitions and time-in-state, or declarative analytics (`aggregate`, `group_by`, `bucket`, `where`, `order_by`, `limit`) up to 30 days. |
 | **`get_statistics`** | Pre-aggregated **long-term statistics** (mean / min / max) over a period. Up to 30 days. |
 | **`get_logbook`** | The **activity timeline** — what happened and why (e.g. "did the front door open after midnight?"). Up to 24 hours. |
 | **`get_camera_image`** | Captures a **live frame** from a camera or image entity so a multimodal model can look at it ("what's on the front porch right now?"). |
@@ -96,7 +96,7 @@ The safety model rests on two ideas: a **frozen snapshot** and an **isolated san
 
 1. **Every request builds a fresh snapshot.** When the assistant calls a tool, the integration takes a point-in-time copy of your home's current states, all registries (entities, devices, areas, floors, labels), the service catalog, repairs, persistent notifications, and config entries. That snapshot is then narrowed by your visibility settings so only what you've allowed is included.
 
-2. **Code runs inside Monty, an isolated Python sandbox.** The assistant's snippet never touches the *live* Home Assistant object. It only receives safe, frozen copies built from the snapshot. The sandbox has **no access** to your filesystem, the network, the event bus, authentication, your configuration files, or any OS/process APIs. Imports are limited to `json`, `math`, and `re`.
+2. **Code runs inside Monty, an isolated Python sandbox.** The assistant's snippet never touches the *live* Home Assistant object. It only receives safe, frozen copies built from the snapshot. Read-only SQL is executed against a per-run in-memory SQLite database populated from that snapshot and bounded recorder rows. The sandbox has **no access** to your filesystem, the network, the event bus, authentication, your configuration files, or any OS/process APIs. Imports are limited to `json`, `math`, and `re`.
 
 3. **Reads are always allowed; control is gated.** Reading state and history works out of the box. Calling services (turning things on/off) is **off by default**. When you enable it, every single call is re-checked against that request's snapshot: the domain must be allowed, the target must be visible, and it must fit within the call budget. Calls run through a private path that never hands the live Home Assistant object to the sandbox.
 

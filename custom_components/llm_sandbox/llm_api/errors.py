@@ -48,6 +48,7 @@ class HelperErrorPayload(TypedDict):
     output: None
     printed: NotRequired[list[str]]
     actions: NotRequired[list[ActionRecord]]
+    notes: NotRequired[list[str]]
 
 
 class CodeErrorPayload(TypedDict):
@@ -57,6 +58,7 @@ class CodeErrorPayload(TypedDict):
     output: None
     printed: NotRequired[list[str]]
     actions: NotRequired[list[ActionRecord]]
+    notes: NotRequired[list[str]]
 
 
 class SetupErrorPayload(TypedDict):

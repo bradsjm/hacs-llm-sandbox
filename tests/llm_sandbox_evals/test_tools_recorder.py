@@ -4,13 +4,16 @@ from typing import cast
 
 import pytest
 from custom_components.llm_sandbox.const import (
+    DEFAULT_PROMPT_PROFILE,
     MAX_HISTORY_STATES,
     MAX_LOGBOOK_ENTRIES,
     MAX_STATISTICS_ROWS,
+    TOOL_EXECUTE_HOME_CODE,
     TOOL_GET_HISTORY,
     TOOL_GET_LOGBOOK,
     TOOL_GET_STATISTICS,
 )
+from custom_components.llm_sandbox.llm_api.prompts.profiles import resolve_profile
 from custom_components.llm_sandbox.snapshot.models import HomeSnapshot
 from llm_sandbox_evals.homes import get_home
 from llm_sandbox_evals.schema import CaseContext, EvalCase, Expected, ToolOutcome
@@ -103,6 +106,52 @@ def test_history_seen_aggregates_filter_to_state(
     )
 
     assert result["summary"] == {_LIVING_LIGHT: expected_summary}
+
+
+def test_history_declarative_analytics_reuses_production_shape() -> None:
+    result = _result(
+        eval_tools._run_history(
+            {"entity_ids": [_LIVING_TEMP], "hours": 24, "aggregate": "state_counts", "group_by": ["domain"]},
+            _case(TOOL_GET_HISTORY),
+            _snapshot(),
+        )
+    )
+
+    assert result == {
+        "window": {
+            "start": "2026-06-28T12:00:00+00:00",
+            "end": "2026-06-29T12:00:00+00:00",
+        },
+        "rows": [{"domain": "sensor", "state_counts": {"24.4": 1, "24.9": 1, "25.2": 1}}],
+    }
+
+
+def test_history_declarative_analytics_errors_return_envelope() -> None:
+    result = _result(
+        eval_tools._run_history(
+            {"entity_ids": [_LIVING_TEMP], "hours": 24, "group_by": ["not_a_group"]},
+            _case(TOOL_GET_HISTORY),
+            _snapshot(),
+        )
+    )
+
+    assert result["status"] == "error"
+    error = cast(dict[str, object], result["error"])
+    assert error["key"] == "analytics_unknown_group_key"
+
+
+async def test_execute_eval_states_only_hass_query_works() -> None:
+    outcome = await eval_tools._run_execute(
+        "result = await hass.query(\"select entity_id, state from states where entity_id = 'light.living'\")",
+        _case(TOOL_EXECUTE_HOME_CODE),
+        _snapshot(),
+        resolve_profile(DEFAULT_PROMPT_PROFILE),
+        eval_tools.RecordingInvoker(),
+    )
+
+    result = _result(outcome)
+    assert result["execution"] == {"status": "ok"}
+    assert result["output"] == [{"entity_id": "light.living", "state": "on"}]
 
 
 def test_history_raw_cursor_round_trip_returns_next_older_rows(monkeypatch: pytest.MonkeyPatch) -> None:

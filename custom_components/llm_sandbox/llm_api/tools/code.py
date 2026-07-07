@@ -7,6 +7,8 @@ view. The tool wires the schema and dispatch; the actual Monty run lives in
 
 import logging
 import time
+from collections.abc import Callable, Sequence
+from datetime import datetime
 from typing import Any, cast, final, override
 
 import voluptuous as vol
@@ -18,13 +20,14 @@ from ...const import TOOL_EXECUTE_HOME_CODE
 from ...snapshot import build_snapshot
 from ...snapshot.models import HomeSnapshot
 from ...types import ProposedAction
-from ..errors import setup_error_payload, tool_error_from_exception
+from ..errors import RecoverableToolError, setup_error_payload, tool_error_from_exception
 from ..executor import MAX_MONTY_CODE_CHARS, async_execute_home_code
 from ..executor_support import ExecutionState
 from ..facade_views import build_llm_context
 from ..prompts import build_execute_home_code_description
 from ..runtime import RuntimeContext
 from ._support import _require_loaded_entry_error, _require_sandbox_runtime
+from .recorder import RECORDER_UNAVAILABLE, fetch_flat_history_rows, fetch_flat_statistics_rows, recorder_available
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -119,10 +122,30 @@ async def _execute(
             context=real_context,
         )
 
+    async def _fetch_history(entity_ids: Sequence[str], start: datetime, end: datetime) -> list[dict[str, object]]:
+        # Private host-side recorder seam: validates against the fresh snapshot
+        # and never passes live hass/recorder objects into Monty-visible inputs.
+        if not recorder_available(hass):
+            raise RecoverableToolError(RECORDER_UNAVAILABLE, {})
+        return await fetch_flat_history_rows(hass, snapshot, deadline, list(entity_ids), start, end)
+
+    async def _fetch_statistics(entity_ids: Sequence[str], start: datetime, end: datetime) -> list[dict[str, object]]:
+        # Private host-side statistics seam; statistics are recorder-derived live
+        # reads but cross into Monty only as JSON-safe rows.
+        if not recorder_available(hass):
+            raise RecoverableToolError(RECORDER_UNAVAILABLE, {})
+        return await fetch_flat_statistics_rows(hass, snapshot, deadline, list(entity_ids), start, end)
+
+    async def _run_blocking(fn: Callable[[], object]) -> object:
+        return await hass.async_add_executor_job(fn)
+
     runtime = RuntimeContext(
         state=ExecutionState(helper_call_limit=settings.helper_call_budget),
         settings=settings,
         invoke=_invoke,
+        fetch_history=_fetch_history,
+        fetch_statistics=_fetch_statistics,
+        run_blocking=_run_blocking,
         deadline=deadline,
         memory=sandbox_runtime.memory_store.for_context(llm_context),
     )

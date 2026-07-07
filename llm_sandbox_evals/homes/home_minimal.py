@@ -61,11 +61,11 @@ def snapshot() -> HomeSnapshot:
         for entity_id, unique_id, device_id, area_id, hidden_by, device_class in _ENTITIES
     }
     devices = {device_id: _device(device_id, name, area_id) for device_id, name, area_id in _DEVICES}
-    states = enrich_states(states, entities, devices)
     areas = {
         area_id: _area(area_id, name, floor_id, temperature_entity_id, humidity_entity_id)
         for area_id, name, floor_id, temperature_entity_id, humidity_entity_id in _AREAS
     }
+    states = enrich_states(states, entities, devices, areas)
     return HomeSnapshot(
         created_at=CREATED_AT,
         states=states,

@@ -1,5 +1,7 @@
 """Behavior tests for recorder-backed LLM tools."""
 
+import asyncio
+import time
 from datetime import timedelta
 from typing import cast
 
@@ -18,17 +20,31 @@ from homeassistant.util.json import JsonObjectType
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 
+class _SlowHass:
+    async def async_block_till_done(self) -> None:
+        await asyncio.sleep(1)
+
+
+class _FakeRecorder:
+    async def async_block_till_done(self) -> None:
+        raise AssertionError("recorder sync should not run after HA sync times out")
+
+    async def async_add_executor_job(self, _fn: object) -> object:
+        raise AssertionError("query should not run after sync times out")
+
+
 async def test_history_returns_states_for_visible_entity(
     hass: HomeAssistant,
     recorder_entry: MockConfigEntry,
 ) -> None:
     """History returns recorded state rows for a visible entity."""
+    start = dt_util.utcnow().isoformat()
     hass.states.async_set("light.bedroom", "on", {"friendly_name": "Bedroom Light"})
     hass.states.async_set("light.bedroom", "off", {"friendly_name": "Bedroom Light"})
     await hass.async_block_till_done()
     await get_instance(hass).async_block_till_done()
 
-    result = await _call_history(hass, recorder_entry, {"entity_ids": ["light.bedroom"]})
+    result = await _call_history(hass, recorder_entry, {"entity_ids": ["light.bedroom"], "start": start})
 
     assert "light.bedroom" in result["entities"]
     assert isinstance(result["window"]["start"], str)
@@ -41,6 +57,14 @@ async def test_history_returns_states_for_visible_entity(
     assert len(row) == 2
     assert isinstance(row[0], str)
     assert isinstance(row[1], str)
+
+
+async def test_recorder_query_sync_respects_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The pre-query HA recorder sync drains are bounded by the tool deadline."""
+    monkeypatch.setattr(recorder, "get_instance", lambda _hass: _FakeRecorder())
+
+    with pytest.raises(TimeoutError):
+        await recorder._run_query(cast(HomeAssistant, _SlowHass()), time.monotonic() + 0.01, lambda: None)
 
 
 async def test_history_includes_requested_attributes(
@@ -438,6 +462,7 @@ async def test_history_paginates_large_result(
         hass.states.async_set("light.bedroom", str(index), {"friendly_name": "Bedroom Light"})
         await hass.async_block_till_done()
         await get_instance(hass).async_block_till_done()
+    await _sync_recorder(hass)
 
     result = await _call_history(hass, recorder_entry, {"entity_ids": ["light.bedroom"], "start": start})
 
@@ -458,6 +483,7 @@ async def test_history_pagination_walk_returns_older_page(
         hass.states.async_set("light.bedroom", str(index), {"friendly_name": "Bedroom Light"})
         await hass.async_block_till_done()
         await get_instance(hass).async_block_till_done()
+    await _sync_recorder(hass)
 
     first = await _call_history(hass, recorder_entry, {"entity_ids": ["light.bedroom"], "start": start})
     cursor = cast(str, first["next_cursor"])
@@ -481,6 +507,7 @@ async def test_history_multi_entity_paginates_independently(
         hass.states.async_set("light.living_room", str(index), {"friendly_name": "Living Room Light"})
         await hass.async_block_till_done()
         await get_instance(hass).async_block_till_done()
+    await _sync_recorder(hass)
 
     first = await _call_history(
         hass,
@@ -517,6 +544,7 @@ async def test_history_multi_entity_asymmetric_exhaustion_no_duplicates(
     hass.states.async_set("light.living_room", "only", {"friendly_name": "Living Room Light"})
     await hass.async_block_till_done()
     await get_instance(hass).async_block_till_done()
+    await _sync_recorder(hass)
 
     entity_ids = ["light.bedroom", "light.living_room"]
     first = await _call_history(hass, recorder_entry, {"entity_ids": entity_ids, "start": start})
@@ -530,6 +558,29 @@ async def test_history_multi_entity_asymmetric_exhaustion_no_duplicates(
     assert second["entities"]["light.living_room"]["rows"] == []
     # The non-exhausted stream still advances.
     assert second["entities"]["light.bedroom"]["rows"]
+
+
+async def test_history_declarative_limit_above_cap_clamps(
+    hass: HomeAssistant,
+    recorder_entry: MockConfigEntry,
+) -> None:
+    """Declarative analytics accepts oversized positive limits and clamps internally."""
+    hass.states.async_set("light.bedroom", "on")
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    result = await _call_history(
+        hass,
+        recorder_entry,
+        {"entity_ids": ["light.bedroom"], "aggregate": "state_counts", "group_by": ["domain"], "limit": 10_000},
+    )
+
+    assert "status" not in result
+    rows = result["rows"]
+    assert isinstance(rows, list)
+    assert len(rows) <= 500
+    assert rows[0]["domain"] == "light"
+    assert "state_counts" in rows[0]
 
 
 @pytest.mark.parametrize(
@@ -606,6 +657,16 @@ async def _call_history(
 ) -> JsonObjectType:
     """Call GetHistoryTool with a standard test LLM context."""
     return await _call_tool(GetHistoryTool(entry.entry_id), TOOL_GET_HISTORY, hass, tool_args)
+
+
+async def _sync_recorder(hass: HomeAssistant) -> None:
+    """Public recorder barrier for tests that create rapid state bursts."""
+    recorder_instance = get_instance(hass)
+    await hass.async_block_till_done()
+    await recorder_instance.async_block_till_done()
+    await hass.async_block_till_done()
+    await recorder_instance.async_block_till_done()
+    await hass.async_block_till_done()
 
 
 def _row_states(rows: list[list[object]]) -> list[str]:

@@ -119,7 +119,7 @@ def snapshot() -> HomeSnapshot:
     devices = {device["id"]: _device(device) for device in _DATA["devices"]}
     entities = {entity["entity_id"]: _entity(entity, devices, areas) for entity in _DATA["entities"]}
     states = {entity["entity_id"]: _state(entity) for entity in _DATA["entities"]}
-    states = enrich_states(states, entities, devices)
+    states = enrich_states(states, entities, devices, areas)
     services = {domain: tuple(services) for domain, services in _DATA["services"].items()}
     return HomeSnapshot(
         created_at=CREATED_AT,

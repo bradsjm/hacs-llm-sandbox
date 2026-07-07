@@ -240,6 +240,11 @@ async def async_execute_home_code(
         # Capture print output even on success; CollectString.output is a
         # concatenation, so we strip the trailing newline of each print() call.
         _capture_printed()
+        if runtime.state.home_db is not None:
+            # Close per-run SQLite state before clearing contextvars so no
+            # snapshot-derived database survives past this execute_home_code call.
+            runtime.state.home_db.close()
+            runtime.state.home_db = None
         clear_runtime()
 
     result = json_safe(output)
@@ -257,4 +262,6 @@ async def async_execute_home_code(
         payload["printed"] = list(runtime.state.printed)
     if runtime.state.actions:
         payload["actions"] = json_safe(runtime.state.actions)
+    if runtime.state.notes:
+        payload["notes"] = list(runtime.state.notes)
     return payload

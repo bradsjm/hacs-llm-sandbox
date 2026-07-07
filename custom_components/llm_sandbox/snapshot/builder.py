@@ -108,6 +108,7 @@ def _build_snapshot(
     indexes = _empty_indexes()
     live_visible_entities: dict[str, er.RegistryEntry] = {}
     live_selected_devices: dict[str, dr.DeviceEntry] = {}
+    live_selected_areas: dict[str, ar.AreaEntry] = {}
 
     if flavor != "vision":
         device_registry = dr.async_get(hass)
@@ -163,7 +164,7 @@ def _build_snapshot(
         live_device = None
         if live_entry is not None and live_entry.device_id is not None:
             live_device = live_selected_devices.get(live_entry.device_id)
-        states[state.entity_id] = _safe_state(state, live_entry, live_device)
+        states[state.entity_id] = _safe_state(state, live_entry, live_device, live_selected_areas)
 
     if flavor == "full":
         category_registry = cr_core.async_get(hass)
@@ -271,9 +272,9 @@ def _finalize_snapshot_collections(
         visible,
         anchor_device_id,
     )
-    # Fill registry-derived join keys (effective area, device, platform, unique_id)
+    # Fill registry-derived join keys (effective area/floor, device, platform, unique_id)
     # now that the filtered entity/device collections exist, mirroring the index rule.
-    states = enrich_states(states, entities, devices)
+    states = enrich_states(states, entities, devices, areas)
     return states, entities, devices, areas, floors, _build_indexes(entities, devices, areas)
 
 
@@ -386,6 +387,7 @@ def enrich_states(
     states: dict[str, SafeState],
     entities: dict[str, SafeRegistryEntry],
     devices: dict[str, SafeDeviceEntry],
+    areas: dict[str, SafeAreaEntry],
 ) -> dict[str, SafeState]:
     """Fill registry-derived join keys on each ``SafeState``.
 
@@ -402,9 +404,11 @@ def enrich_states(
         if entry is None:
             continue
         area_id = _effective_area_id(entry, devices.get(entry.device_id) if entry.device_id is not None else None)
+        area = areas.get(area_id) if area_id is not None else None
         enriched[entity_id] = replace(
             safe_state,
             area_id=area_id,
+            floor_id=area.floor_id if area is not None else None,
             device_id=entry.device_id,
             platform=entry.platform,
             unique_id=entry.unique_id,
@@ -422,6 +426,7 @@ def _safe_state(
     state: State,
     entry: er.RegistryEntry | None = None,
     device: dr.DeviceEntry | None = None,
+    areas: Mapping[str, ar.AreaEntry] | None = None,
 ) -> SafeState:
     """Convert a live HA state into a frozen safe state record."""
     context = state.context
@@ -431,6 +436,7 @@ def _safe_state(
         user_id=context.user_id if context else None,
     )
     area_id = entry.area_id or (device.area_id if device is not None else None) if entry is not None else None
+    area = areas.get(area_id) if areas is not None and area_id is not None else None
     return SafeState(
         entity_id=state.entity_id,
         domain=state.domain,
@@ -446,6 +452,7 @@ def _safe_state(
         last_updated_timestamp=state.last_updated.timestamp(),
         context=safe_context,
         area_id=area_id,
+        floor_id=area.floor_id if area is not None else None,
         device_id=entry.device_id if entry is not None else None,
         platform=entry.platform if entry is not None else None,
         unique_id=entry.unique_id if entry is not None else None,

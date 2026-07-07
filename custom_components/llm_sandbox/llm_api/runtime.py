@@ -1,8 +1,10 @@
 """Runtime context helpers for LLM Sandbox facade methods."""
 
 import math
+from collections.abc import Awaitable, Callable, Sequence
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Protocol
 
 from ..runtime import SandboxSettings
@@ -20,6 +22,30 @@ class ServiceInvoker(Protocol):
         ...
 
 
+type HistoryFetcher = Callable[[Sequence[str], datetime, datetime], Awaitable[list[dict[str, object]]]]
+type StatisticsFetcher = Callable[[Sequence[str], datetime, datetime], Awaitable[list[dict[str, object]]]]
+type BlockingRunner = Callable[[Callable[[], object]], Awaitable[object]]
+
+
+async def _unavailable_history_fetcher(
+    _entity_ids: Sequence[str], _start: datetime, _end: datetime
+) -> list[dict[str, object]]:
+    """Raise when recorder helpers are used without execute_home_code wiring."""
+    raise RuntimeError("LLM Sandbox history fetcher is unavailable outside execute_home_code")
+
+
+async def _unavailable_statistics_fetcher(
+    _statistic_ids: Sequence[str], _start: datetime, _end: datetime
+) -> list[dict[str, object]]:
+    """Raise when statistics helpers are used without execute_home_code wiring."""
+    raise RuntimeError("LLM Sandbox statistics fetcher is unavailable outside execute_home_code")
+
+
+async def _unavailable_blocking_runner[T](_fn: Callable[[], T]) -> T:
+    """Raise when blocking execution is used without execute_home_code wiring."""
+    raise RuntimeError("LLM Sandbox blocking runner is unavailable outside execute_home_code")
+
+
 @dataclass(frozen=True, slots=True)
 class RuntimeContext:
     """Private runtime dependencies for facade methods.
@@ -33,6 +59,9 @@ class RuntimeContext:
     state: ExecutionState
     settings: SandboxSettings
     invoke: ServiceInvoker
+    fetch_history: HistoryFetcher = _unavailable_history_fetcher
+    fetch_statistics: StatisticsFetcher = _unavailable_statistics_fetcher
+    run_blocking: BlockingRunner = _unavailable_blocking_runner
     deadline: float = math.inf
     memory: ResolutionMemory | None = None
 

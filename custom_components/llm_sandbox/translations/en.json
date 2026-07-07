@@ -152,6 +152,33 @@
     },
     "invalid_cursor": {
       "message": "The pagination cursor is invalid or expired."
+    },
+    "analytics_unknown_op": {
+      "message": "Unsupported analytics operation {op}."
+    },
+    "analytics_unknown_group_key": {
+      "message": "Unsupported analytics group key {group_key}."
+    },
+    "analytics_bad_bucket": {
+      "message": "Invalid analytics bucket {bucket}."
+    },
+    "sql_too_long": {
+      "message": "SQL must not exceed {max_length} characters."
+    },
+    "sql_unknown_table": {
+      "message": "Unknown SQL table: {reason}."
+    },
+    "sql_unknown_column": {
+      "message": "Unknown SQL column: {reason}."
+    },
+    "sql_read_only": {
+      "message": "Only read-only SQL is allowed: {reason}."
+    },
+    "sql_syntax_error": {
+      "message": "SQL syntax error: {reason}."
+    },
+    "sql_timeout": {
+      "message": "SQL query timed out."
     }
   }
 }

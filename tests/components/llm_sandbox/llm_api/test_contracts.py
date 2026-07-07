@@ -1,6 +1,26 @@
 """Tests for Monty-facing runtime contract generation."""
 
+import subprocess
+import sys
+
 from custom_components.llm_sandbox.llm_api.contracts import MONTY_TYPE_STUBS
+
+
+def test_facade_views_and_executor_import_in_fresh_process() -> None:
+    """Direct imports do not depend on package-level tool import order."""
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import custom_components.llm_sandbox.llm_api.facade_views; "
+            "import custom_components.llm_sandbox.llm_api.executor",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_monty_type_stubs_exclude_private_methods() -> None:
@@ -25,6 +45,8 @@ def test_monty_type_stubs_exclude_private_methods() -> None:
     assert "def async_get" in MONTY_TYPE_STUBS
     assert "def async_entries_for_label" in MONTY_TYPE_STUBS
     assert "def __getitem__" in MONTY_TYPE_STUBS
+    assert "async def history" in MONTY_TYPE_STUBS
+    assert "async def query" in MONTY_TYPE_STUBS
 
 
 def test_monty_type_stubs_include_safe_config_surface() -> None:

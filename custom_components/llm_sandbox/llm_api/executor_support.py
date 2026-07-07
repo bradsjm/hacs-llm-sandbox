@@ -18,9 +18,11 @@ from .errors import (
     CodeErrorPayload,
     HelperErrorPayload,
     HelperExecutionError,
+    RecoverableToolError,
     code_error_payload,
     helper_error_payload,
 )
+from .home_db import HomeDatabase
 
 
 class MontyRunner(Protocol):
@@ -78,6 +80,10 @@ class ExecutionState:
     # the start of each helper call so a user try/except that swallows a
     # helper error cannot shadow a later helper-path failure.
     last_helper_error: HelperExecutionError | None = None
+    # Per-run SQL database and transparency notes. The database is created lazily
+    # by hass.query() and closed by executor cleanup before runtime context reset.
+    home_db: HomeDatabase | None = None
+    notes: list[str] = field(default_factory=list)
 
 
 async def helper_response(
@@ -104,6 +110,10 @@ async def helper_response(
     except HelperExecutionError as err:
         state.last_helper_error = err
         raise
+    except RecoverableToolError as err:
+        helper_err = HelperExecutionError(helper, err.key, err.placeholders)
+        state.last_helper_error = helper_err
+        raise helper_err from err
     except ServiceValidationError as err:
         helper_err = HelperExecutionError(
             helper,
@@ -141,13 +151,17 @@ def helper_error_payload_for_state(
     state: ExecutionState,
 ) -> HelperErrorPayload:
     """Build a helper-error response using current execution state."""
-    return helper_error_payload(
+    payload = helper_error_payload(
         err,
         message=_helper_error_message(err, state),
+        kind=err.key,
         adjustments=list(state.adjustments),
         printed=list(state.printed),
         actions=cast(list[ActionRecord], json_safe(state.actions)),
     )
+    if state.notes:
+        payload["notes"] = list(state.notes)
+    return payload
 
 
 def code_error_payload_for_state(
@@ -163,7 +177,7 @@ def code_error_payload_for_state(
         from .contracts import AVAILABLE_GLOBALS
 
         fix = list(AVAILABLE_GLOBALS)
-    return code_error_payload(
+    payload = code_error_payload(
         kind=kind,
         message=message,
         adjustments=list(state.adjustments),
@@ -171,6 +185,9 @@ def code_error_payload_for_state(
         actions=cast(list[ActionRecord], json_safe(state.actions)),
         fix=fix,
     )
+    if state.notes:
+        payload["notes"] = list(state.notes)
+    return payload
 
 
 def _helper_error_message(err: HelperExecutionError, state: ExecutionState) -> str:

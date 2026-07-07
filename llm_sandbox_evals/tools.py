@@ -2,7 +2,7 @@
 
 import json
 import math
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from types import ModuleType
 from typing import cast
@@ -28,16 +28,15 @@ from custom_components.llm_sandbox.llm_api.executor_support import ExecutionStat
 from custom_components.llm_sandbox.llm_api.facade_views import build_llm_context
 from custom_components.llm_sandbox.llm_api.prompts import PromptProfile
 from custom_components.llm_sandbox.llm_api.runtime import RuntimeContext
-from custom_components.llm_sandbox.llm_api.tools import (
-    RecoverableToolError,
-    recorder_error_envelope,
-    resolve_entity_ids,
-)
-from custom_components.llm_sandbox.llm_api.tools._aggregates import (
+from custom_components.llm_sandbox.llm_api.errors import RecoverableToolError
+from custom_components.llm_sandbox.llm_api.tools._analytics import (
     AGGREGATORS,
     AggregateFilters,
     AggregateMode,
     HistoryRow,
+    analytics_spec_from_data,
+    flat_history_rows,
+    run_analytics,
 )
 from custom_components.llm_sandbox.llm_api.tools._cursor import (
     _LOGBOOK_CURSOR_KEY,
@@ -47,7 +46,11 @@ from custom_components.llm_sandbox.llm_api.tools._cursor import (
     encode_cursor,
     paginate_stream,
 )
-from custom_components.llm_sandbox.llm_api.tools.recorder import STATISTIC_VALUE_TYPES
+from custom_components.llm_sandbox.llm_api.tools.recorder import (
+    STATISTIC_VALUE_TYPES,
+    recorder_error_envelope,
+    resolve_entity_ids,
+)
 from custom_components.llm_sandbox.runtime import SandboxSettings
 from custom_components.llm_sandbox.snapshot import finalize_snapshot
 from custom_components.llm_sandbox.snapshot.models import HomeSnapshot, SnapshotScope
@@ -212,6 +215,11 @@ async def _run_execute(
         state=ExecutionState(helper_call_limit=20),
         settings=settings,
         invoke=invoker,
+        fetch_history=lambda entity_ids, start, end: _eval_fetch_history(case, snapshot, entity_ids, start, end),
+        fetch_statistics=lambda statistic_ids, start, end: _eval_fetch_statistics(
+            case, statistic_ids, start, end
+        ),
+        run_blocking=_eval_run_blocking,
         deadline=math.inf,
     )
 
@@ -238,18 +246,71 @@ async def _run_execute(
     )
 
 
+async def _eval_run_blocking(fn: Callable[[], object]) -> object:
+    """Run eval-only blocking seams synchronously without live Home Assistant."""
+    return fn()
+
+
+async def _eval_fetch_history(
+    case: EvalCase,
+    snapshot: HomeSnapshot,
+    entity_ids: Sequence[str],
+    start: datetime,
+    end: datetime,
+) -> list[dict[str, object]]:
+    """Return fixture history as production flat rows for hass.history/query in evals."""
+    history = _recorder_section(get_home(case.home), "history")
+    scoped = {
+        entity_id: _windowed_rows(history.get(entity_id, []), start, end, _history_timestamp)
+        for entity_id in entity_ids
+    }
+    return flat_history_rows(scoped, snapshot)
+
+
+async def _eval_fetch_statistics(
+    case: EvalCase,
+    statistic_ids: Sequence[str],
+    start: datetime,
+    end: datetime,
+) -> list[dict[str, object]]:
+    """Return fixture statistics as flat rows for read-only eval SQL."""
+    statistics = _recorder_section(get_home(case.home), "statistics")
+    rows: list[dict[str, object]] = []
+    for statistic_id in statistic_ids:
+        for row in _windowed_rows(statistics.get(statistic_id, []), start, end, _statistics_timestamp):
+            rows.append(
+                {
+                    "statistic_id": statistic_id,
+                    "entity_id": statistic_id,
+                    "when": _statistics_timestamp(row).isoformat(),
+                    "mean": row.get("mean"),
+                    "min": row.get("min"),
+                    "max": row.get("max"),
+                    "state": row.get("state"),
+                    "sum": row.get("sum"),
+                }
+            )
+    return rows
+
+
 def _run_history(tool_args: dict[str, object], case: EvalCase, snapshot: HomeSnapshot) -> ToolOutcome:
     """Return fixture-backed history rows in the production response envelope."""
     try:
         entity_ids = resolve_entity_ids(snapshot, tool_args, "entity_ids")
         aggregate = cast(AggregateMode | None, tool_args.get("aggregate"))
-        if aggregate is not None:
+        analytics_requested = any(
+            key in tool_args for key in ("aggregate", "group_by", "bucket", "where", "order_by", "limit")
+        )
+        legacy_aggregate = isinstance(aggregate, str) and not any(
+            key in tool_args for key in ("group_by", "bucket", "where", "order_by", "limit")
+        )
+        if analytics_requested:
             if tool_args.get("attributes") is not None:
                 raise RecoverableToolError(
-                    "invalid_tool_input", {"error": "aggregate cannot be combined with attributes"}
+                    "invalid_tool_input", {"error": "analytics cannot be combined with attributes"}
                 )
             if tool_args.get("cursor") is not None:
-                raise RecoverableToolError("invalid_tool_input", {"error": "aggregate cannot be combined with cursor"})
+                raise RecoverableToolError("invalid_tool_input", {"error": "analytics cannot be combined with cursor"})
             start, end, _cursor = _resolve_eval_window(
                 tool_args,
                 snapshot,
@@ -268,12 +329,30 @@ def _run_history(tool_args: dict[str, object], case: EvalCase, snapshot: HomeSna
 
     fixture = get_home(case.home)
     history = _recorder_section(fixture, "history")
-    if aggregate is not None:
+    if analytics_requested and not legacy_aggregate:
+        scoped = {
+            entity_id: _windowed_rows(history.get(entity_id, []), start, end, _history_timestamp)
+            for entity_id in entity_ids
+        }
+        try:
+            spec = analytics_spec_from_data(tool_args)
+            rows = run_analytics(cast(list[HistoryRow], flat_history_rows(scoped, snapshot)), spec, (start, end), snapshot)
+        except RecoverableToolError as err:
+            return _recoverable_recorder_error(TOOL_GET_HISTORY, err, snapshot)
+        return ToolOutcome(
+            ok=True,
+            tool_name=TOOL_GET_HISTORY,
+            result={"window": _window(start, end), "rows": rows},
+            recorded_actions=(),
+            error=None,
+        )
+    if legacy_aggregate:
+        aggregate_mode = cast(AggregateMode, aggregate)
         filters = AggregateFilters(
             from_state=cast(str | None, tool_args.get("from_state")),
             to_state=cast(str | None, tool_args.get("to_state")),
         )
-        aggregator = AGGREGATORS[aggregate]
+        aggregator = AGGREGATORS[aggregate_mode]
         summary = {
             entity_id: aggregator(
                 cast(list[HistoryRow], _windowed_rows(history.get(entity_id, []), start, end, _history_timestamp)),
@@ -283,7 +362,7 @@ def _run_history(tool_args: dict[str, object], case: EvalCase, snapshot: HomeSna
             )
             for entity_id in entity_ids
         }
-        result: dict[str, object] = {"window": _window(start, end), "mode": aggregate, "summary": summary}
+        result: dict[str, object] = {"window": _window(start, end), "mode": aggregate_mode, "summary": summary}
         return ToolOutcome(ok=True, tool_name=TOOL_GET_HISTORY, result=result, recorded_actions=(), error=None)
 
     requested_attributes = _requested_attributes(tool_args.get("attributes"))

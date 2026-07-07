@@ -112,3 +112,4 @@ async def _setup_recorder(hass: HomeAssistant) -> None:
     await async_setup_component(hass, "recorder", {"recorder": {}})
     await hass.async_block_till_done()
     await get_instance(hass).async_block_till_done()
+    await hass.async_block_till_done()

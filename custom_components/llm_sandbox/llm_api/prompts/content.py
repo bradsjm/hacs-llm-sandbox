@@ -167,6 +167,7 @@ def build_execute_home_code_description() -> str:
     return (
         "Execute bounded Python/Monty code against a frozen, read-only Home Assistant view. "
         "Read states and registries using the native Home Assistant patterns documented in the API prompt. "
+        "await hass.query(sql, hours=N) runs read-only SQLite over states, history, and statistics. "
         "Service-call availability follows the API prompt. "
         "Success returns {execution:{status:'ok'}, output:<data>} with printed only when print() emitted lines "
         "and resolutions only when a remembered missing literal was rewritten to a visible entity id. "
@@ -194,6 +195,8 @@ def build_get_history_description() -> str:
         "to return {window, mode, summary} with no rows, cursor, or attributes; aggregate windows may be "
         "larger than raw history. count_transitions may include from_state/to_state filters; "
         "first_seen/last_seen may include to_state to find when a specific state first or last appeared. "
+        "For declarative analytics, pass aggregate={field:[ops]}, group_by=[...], bucket='1h', where=[...], "
+        "order_by, or limit to return {window, rows} as list[dict] with no cursor. "
         "Errors return {status:'error', error:{key, message, fix?}}; entity_not_visible fix names "
         "concrete visible entity candidates."
     )

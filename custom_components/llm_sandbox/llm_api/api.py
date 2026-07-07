@@ -13,8 +13,9 @@ from ..const import DEFAULT_PROMPT_PROFILE, DOMAIN
 from ..runtime import SandboxConfigEntry
 from ..snapshot import build_snapshot
 from .prompts import compose_system_prompt, render_home_inventory, render_request_location, resolve_profile
-from .tools import ExecuteHomeCodeTool, GetCameraImageTool, GetHistoryTool, GetLogbookTool, GetStatisticsTool
-from .tools.recorder import logbook_available, recorder_available
+from .tools.code import ExecuteHomeCodeTool
+from .tools.recorder import GetHistoryTool, GetLogbookTool, GetStatisticsTool, logbook_available, recorder_available
+from .tools.vision import GetCameraImageTool
 
 
 def async_register_llm_api(hass: HomeAssistant, entry: SandboxConfigEntry) -> None:

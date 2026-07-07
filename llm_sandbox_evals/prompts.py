@@ -21,9 +21,8 @@ from custom_components.llm_sandbox.llm_api.prompts import (
     render_request_location,
     resolve_profile,
 )
-from custom_components.llm_sandbox.llm_api.tools import RECORDER_SELECTOR_FIELD_NAMES
-from custom_components.llm_sandbox.llm_api.tools._aggregates import AGGREGATORS
-from custom_components.llm_sandbox.llm_api.tools.recorder import STATISTIC_VALUE_TYPES
+from custom_components.llm_sandbox.llm_api.tools._analytics import AGGREGATORS
+from custom_components.llm_sandbox.llm_api.tools.recorder import RECORDER_SELECTOR_FIELD_NAMES, STATISTIC_VALUE_TYPES
 from custom_components.llm_sandbox.snapshot.models import HomeSnapshot
 
 from llm_sandbox_evals.schema import EvalCase, PromptCandidate, ToolSpec
@@ -167,9 +166,19 @@ def _recorder_parameters(
         properties["attributes"] = {"type": "array", "items": {"type": "string"}}
     # Branch boundary: history can request server-side state aggregates and filters.
     if include_history_aggregates:
-        properties["aggregate"] = {"type": "string", "enum": list(AGGREGATORS)}
+        properties["aggregate"] = {
+            "anyOf": [
+                {"type": "string", "enum": list(AGGREGATORS)},
+                {"type": "object"},
+            ]
+        }
         properties["from_state"] = {"type": "string"}
         properties["to_state"] = {"type": "string"}
+        properties["group_by"] = {"type": "array", "items": {"type": "string"}}
+        properties["bucket"] = {"type": "string"}
+        properties["where"] = {"type": "array", "items": {"type": "object"}}
+        properties["order_by"] = {"type": "string"}
+        properties["limit"] = {"type": "integer", "minimum": 1}
     # Branch boundary: statistics adds one aggregation-period enum.
     if include_period:
         properties["period"] = {"type": "string", "enum": ["5minute", "hour", "day"]}
