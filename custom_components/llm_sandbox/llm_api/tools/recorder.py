@@ -12,6 +12,8 @@ from homeassistant.components.logbook import DOMAIN as LOGBOOK_DOMAIN
 from homeassistant.components.logbook.helpers import async_determine_event_types
 from homeassistant.components.logbook.processor import EventProcessor
 from homeassistant.components.recorder import get_instance, history, statistics
+from homeassistant.components.recorder.core import Recorder
+from homeassistant.components.recorder.tasks import SynchronizeTask
 from homeassistant.core import HomeAssistant, State
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import llm
@@ -578,23 +580,30 @@ async def _run_query[T](
 ) -> T:
     """Run a blocking recorder query on the recorder executor with the tool deadline."""
     recorder_instance = get_instance(hass)
-    # Drain the HA event loop first so state-change events are dispatched to the
-    # recorder listener and queued; otherwise the recorder sync below could see an
-    # empty queue, early-return, and skip the commit that makes writes visible.
-    await _await_deadline(hass.async_block_till_done(), deadline)
-    # async_block_till_done queues a SynchronizeTask (commit_before=True), forcing a
-    # session.commit() and resolving only after the recorder thread has run it, so the
-    # fresh read session sees all writes. The sync block_till_done must NOT be used
-    # here: it queues WaitTask (commit_before=False) and drains without committing.
-    await _await_deadline(recorder_instance.async_block_till_done(), deadline)
-    # Drain once more in case the commit resolution scheduled further loop work.
-    await _await_deadline(hass.async_block_till_done(), deadline)
-    # A final public recorder sync catches state-change events that were queued
-    # by the post-commit loop drain above, preserving read-after-write visibility
-    # without private recorder APIs or sync block_till_done.
-    await _await_deadline(recorder_instance.async_block_till_done(), deadline)
-    await _await_deadline(hass.async_block_till_done(), deadline)
+    await _sync_recorder_for_query(hass, recorder_instance, deadline)
     return await _await_deadline(recorder_instance.async_add_executor_job(fn), deadline)
+
+
+async def _sync_recorder_for_query(
+    hass: HomeAssistant,
+    recorder_instance: Recorder,
+    deadline: float,
+) -> None:
+    """Commit recorder writes that were dispatched before a recorder-backed query."""
+    # Drain the HA event loop first so state-change events are dispatched to the
+    # recorder listener and queued before the commit-before barrier is enqueued.
+    await _await_deadline(hass.async_block_till_done(), deadline)
+    future: asyncio.Future[None] = hass.loop.create_future()
+    # The public recorder async_block_till_done() only queues this SynchronizeTask
+    # when it observes backlog or pending writes. A recorder thread can pop a
+    # state_changed task before marking pending writes, letting the public helper
+    # return without forcing the commit needed for immediate history/logbook reads.
+    # Queue the commit-before task unconditionally behind already-dispatched work.
+    recorder_instance.queue_task(SynchronizeTask(future))
+    await _await_deadline(future, deadline)
+    # The SynchronizeTask resolves its Future back on the HA loop; drain once so
+    # callback-side loop work settles before the query enters the recorder executor.
+    await _await_deadline(hass.async_block_till_done(), deadline)
 
 
 async def _await_deadline[T](awaitable: Awaitable[T], deadline: float) -> T:

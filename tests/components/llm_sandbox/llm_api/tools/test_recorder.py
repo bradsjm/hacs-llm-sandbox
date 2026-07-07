@@ -41,8 +41,7 @@ async def test_history_returns_states_for_visible_entity(
     start = dt_util.utcnow().isoformat()
     hass.states.async_set("light.bedroom", "on", {"friendly_name": "Bedroom Light"})
     hass.states.async_set("light.bedroom", "off", {"friendly_name": "Bedroom Light"})
-    await hass.async_block_till_done()
-    await get_instance(hass).async_block_till_done()
+    await _sync_recorder(hass)
 
     result = await _call_history(hass, recorder_entry, {"entity_ids": ["light.bedroom"], "start": start})
 
@@ -72,22 +71,19 @@ async def test_history_includes_requested_attributes(
     recorder_entry: MockConfigEntry,
 ) -> None:
     """Requested attributes append a per-row dict; absent and unrequested names are omitted."""
-    start = dt_util.utcnow().isoformat()
+    start = (dt_util.utcnow() - timedelta(seconds=1)).isoformat()
     hass.states.async_set(
         "light.bedroom",
         "off",
         {"friendly_name": "Bedroom Light", "brightness": 64, "color_mode": "rgb"},
     )
-    await hass.async_block_till_done()
-    await get_instance(hass).async_block_till_done()
+    await _sync_recorder(hass)
     hass.states.async_set(
         "light.bedroom",
         "on",
         {"friendly_name": "Bedroom Light", "brightness": 128, "color_mode": "rgb"},
     )
-    await hass.async_block_till_done()
-    await get_instance(hass).async_block_till_done()
-    await get_instance(hass).async_block_till_done()
+    await _sync_recorder(hass)
 
     result = await _call_history(
         hass,
@@ -130,7 +126,7 @@ async def test_statistics_returns_rows_for_visible_statistic(
         suggested_object_id="energy",
     )
     hass.states.async_set("sensor.energy", "12", {"friendly_name": "Energy", "state_class": "total"})
-    await hass.async_block_till_done()
+    await _sync_recorder(hass)
     start = dt_util.utcnow().replace(minute=0, second=0, microsecond=0) - timedelta(hours=5)
     get_instance(hass).async_import_statistics(
         StatisticMetaData(
@@ -155,7 +151,7 @@ async def test_statistics_returns_rows_for_visible_statistic(
         ],
         Statistics,
     )
-    await get_instance(hass).async_block_till_done()
+    await _sync_recorder(hass)
 
     result = await _call_statistics(hass, recorder_entry, {"statistic_ids": ["sensor.energy"], "period": "hour"})
 
@@ -200,8 +196,7 @@ async def test_logbook_returns_entries_for_visible_entity(
     """Logbook returns real recorder-backed entries for a visible entity."""
     hass.states.async_set("light.bedroom", "off", {"friendly_name": "Bedroom Light"})
     hass.states.async_set("light.bedroom", "on", {"friendly_name": "Bedroom Light"})
-    await hass.async_block_till_done()
-    await get_instance(hass).async_block_till_done()
+    await _sync_recorder(hass)
 
     result = await _call_logbook(hass, recorder_entry, {"entity_ids": ["light.bedroom"]})
 
@@ -288,8 +283,7 @@ async def test_recorder_snapshot_visibility_is_fresh_per_call(
     registry = er.async_get(hass)
     registry.async_get_or_create("light", "test", "fresh_visibility", suggested_object_id="fresh_visibility")
     hass.states.async_set("light.fresh_visibility", "on", {"friendly_name": "Fresh Visibility"})
-    await hass.async_block_till_done()
-    await get_instance(hass).async_block_till_done()
+    await _sync_recorder(hass)
 
     first = await _call_history(hass, recorder_entry, {"entity_ids": ["light.fresh_visibility"]})
     registry.async_update_entity("light.fresh_visibility", hidden_by=er.RegistryEntryHider.USER)
@@ -357,8 +351,7 @@ async def test_history_hours_sizes_window(
 ) -> None:
     """The hours argument sizes the window without ISO/timedelta math."""
     hass.states.async_set("light.bedroom", "on", {"friendly_name": "Bedroom Light"})
-    await hass.async_block_till_done()
-    await get_instance(hass).async_block_till_done()
+    await _sync_recorder(hass)
 
     result = await _call_history(hass, recorder_entry, {"entity_ids": ["light.bedroom"], "hours": 2})
 
@@ -377,8 +370,7 @@ async def test_history_area_and_domain_selectors(
     from homeassistant.helpers import area_registry as ar
 
     hass.states.async_set("light.bedroom", "on", {"friendly_name": "Bedroom Light"})
-    await hass.async_block_till_done()
-    await get_instance(hass).async_block_till_done()
+    await _sync_recorder(hass)
 
     bedroom = ar.async_get(hass).async_get_area_by_name("Bedroom")
     assert bedroom is not None
@@ -396,8 +388,7 @@ async def test_history_pure_domain_still_expands(
 ) -> None:
     """A bare domain with no IDs and no location selectors still widens to all matches."""
     hass.states.async_set("light.bedroom", "on", {"friendly_name": "Bedroom Light"})
-    await hass.async_block_till_done()
-    await get_instance(hass).async_block_till_done()
+    await _sync_recorder(hass)
 
     result = await _call_history(hass, recorder_entry, {"domain": "light"})
 
@@ -413,8 +404,7 @@ async def test_history_bad_area_with_domain_does_not_widen(
 
     hass.states.async_set("light.bedroom", "on", {"friendly_name": "Bedroom Light"})
     hass.states.async_set("light.living_room", "on", {"friendly_name": "Living Room Light"})
-    await hass.async_block_till_done()
-    await get_instance(hass).async_block_till_done()
+    await _sync_recorder(hass)
 
     bedroom = ar.async_get(hass).async_get_area_by_name("Bedroom")
     assert bedroom is not None
@@ -460,8 +450,6 @@ async def test_history_paginates_large_result(
     start = dt_util.utcnow().isoformat()
     for index in range(6):
         hass.states.async_set("light.bedroom", str(index), {"friendly_name": "Bedroom Light"})
-        await hass.async_block_till_done()
-        await get_instance(hass).async_block_till_done()
     await _sync_recorder(hass)
 
     result = await _call_history(hass, recorder_entry, {"entity_ids": ["light.bedroom"], "start": start})
@@ -481,8 +469,6 @@ async def test_history_pagination_walk_returns_older_page(
     start = dt_util.utcnow().isoformat()
     for index in range(6):
         hass.states.async_set("light.bedroom", str(index), {"friendly_name": "Bedroom Light"})
-        await hass.async_block_till_done()
-        await get_instance(hass).async_block_till_done()
     await _sync_recorder(hass)
 
     first = await _call_history(hass, recorder_entry, {"entity_ids": ["light.bedroom"], "start": start})
@@ -505,8 +491,6 @@ async def test_history_multi_entity_paginates_independently(
     for index in range(6):
         hass.states.async_set("light.bedroom", str(index), {"friendly_name": "Bedroom Light"})
         hass.states.async_set("light.living_room", str(index), {"friendly_name": "Living Room Light"})
-        await hass.async_block_till_done()
-        await get_instance(hass).async_block_till_done()
     await _sync_recorder(hass)
 
     first = await _call_history(
@@ -539,11 +523,7 @@ async def test_history_multi_entity_asymmetric_exhaustion_no_duplicates(
     # light.bedroom has many rows (spans pages); light.living_room has one (exhausts page 1).
     for index in range(6):
         hass.states.async_set("light.bedroom", str(index), {"friendly_name": "Bedroom Light"})
-        await hass.async_block_till_done()
-        await get_instance(hass).async_block_till_done()
     hass.states.async_set("light.living_room", "only", {"friendly_name": "Living Room Light"})
-    await hass.async_block_till_done()
-    await get_instance(hass).async_block_till_done()
     await _sync_recorder(hass)
 
     entity_ids = ["light.bedroom", "light.living_room"]
@@ -566,8 +546,7 @@ async def test_history_declarative_limit_above_cap_clamps(
 ) -> None:
     """Declarative analytics accepts oversized positive limits and clamps internally."""
     hass.states.async_set("light.bedroom", "on")
-    await hass.async_block_till_done()
-    await get_instance(hass).async_block_till_done()
+    await _sync_recorder(hass)
 
     result = await _call_history(
         hass,
@@ -660,13 +639,10 @@ async def _call_history(
 
 
 async def _sync_recorder(hass: HomeAssistant) -> None:
-    """Public recorder barrier for tests that create rapid state bursts."""
-    recorder_instance = get_instance(hass)
-    await hass.async_block_till_done()
-    await recorder_instance.async_block_till_done()
-    await hass.async_block_till_done()
-    await recorder_instance.async_block_till_done()
-    await hass.async_block_till_done()
+    """Deterministically commit recorder writes before direct history assertions."""
+    # Test state writes are followed by immediate recorder-backed reads; use the
+    # same unconditional commit-before barrier as production to avoid TOCTOU gaps.
+    await recorder._sync_recorder_for_query(hass, get_instance(hass), time.monotonic() + 10)
 
 
 def _row_states(rows: list[list[object]]) -> list[str]:
