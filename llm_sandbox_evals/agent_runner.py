@@ -404,23 +404,46 @@ def _build_stub_tool_args(tool_name: str, user_request: str) -> dict[str, object
     return args
 
 
-def reasoning_model_settings(model_id: str, reasoning_effort: str | None) -> ModelSettings | None:
-    """Return provider-specific reasoning settings for Pydantic AI model ids."""
-    # Branch boundary: no reasoning requested preserves the old deterministic eval default.
-    if reasoning_effort is None:
-        return ModelSettings(temperature=0.0)
-    # Branch boundary: explicit no-reasoning keeps deterministic decoding for compatible providers.
-    if reasoning_effort == "none":
-        return ModelSettings(temperature=0.0)
-    effort = cast(_ReasoningEffort, reasoning_effort)
-    # Branch boundary: OpenRouter exposes an effort-shaped reasoning setting.
-    if model_id.startswith("openrouter:"):
-        from pydantic_ai.models.openrouter import OpenRouterModelSettings
+def build_model_settings(
+    model_id: str,
+    *,
+    temperature: float | None,
+    reasoning_effort: str | None,
+) -> ModelSettings | None:
+    """Return provider model settings containing only values explicitly provided.
 
-        return OpenRouterModelSettings(openrouter_reasoning={"effort": effort})
-    # Branch boundary: OpenAI Responses exposes a native reasoning effort setting.
-    if model_id.startswith(("openai:", "openai-chat:")):
-        from pydantic_ai.models.openai import OpenAIResponsesModelSettings
+    Never defaults sampling parameters (e.g. ``temperature=0.0``). Reasoning-capable
+    OpenAI/OpenRouter models that cannot disable reasoning warn and drop sampling
+    params whenever one is present, so a default temperature surfaced that warning on
+    every run; only forward what the caller asked for and leave the rest to the provider.
+    """
+    reasoning_value = _resolve_reasoning_value(reasoning_effort)
+    # Branch boundary: an explicit reasoning effort selects the provider's reasoning setting.
+    if reasoning_value is not None:
+        # Branch boundary: OpenRouter exposes an effort-shaped reasoning setting.
+        if model_id.startswith("openrouter:"):
+            from pydantic_ai.models.openrouter import OpenRouterModelSettings
 
-        return OpenAIResponsesModelSettings(openai_reasoning_effort=effort)
+            return OpenRouterModelSettings(
+                openrouter_reasoning={"effort": reasoning_value},
+                **({"temperature": temperature} if temperature is not None else {}),
+            )
+        # Branch boundary: OpenAI Responses exposes a native reasoning effort setting.
+        if model_id.startswith(("openai:", "openai-chat:")):
+            from pydantic_ai.models.openai import OpenAIResponsesModelSettings
+
+            return OpenAIResponsesModelSettings(
+                openai_reasoning_effort=reasoning_value,
+                **({"temperature": temperature} if temperature is not None else {}),
+            )
+    # Branch boundary: no active reasoning — forward temperature only when explicitly provided.
+    if temperature is not None:
+        return ModelSettings(temperature=temperature)
     return None
+
+
+def _resolve_reasoning_value(reasoning_effort: str | None) -> _ReasoningEffort | None:
+    """Map a CLI reasoning effort to a provider value, treating 'none' as not requested."""
+    if reasoning_effort is None or reasoning_effort == "none":
+        return None
+    return cast(_ReasoningEffort, reasoning_effort)

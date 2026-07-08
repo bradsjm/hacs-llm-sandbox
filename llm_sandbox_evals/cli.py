@@ -20,6 +20,7 @@ from rich.console import Console
 from llm_sandbox_evals import experiment, reports
 from llm_sandbox_evals.config import EvalConfig, load_config
 from llm_sandbox_evals.harness import _select_cases
+from llm_sandbox_evals.schema import CaseTrace
 
 _STUB_NOTE = (
     '"stub" is a keyless, deterministic pipeline-checker: great for verifying the\n'
@@ -161,6 +162,14 @@ def _add_eval_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPar
         metavar="LEVEL",
         help="reasoning effort forwarded to real models via Pydantic AI provider settings "
         "(OpenRouter/OpenAI reasoning effort; ignored by 'stub' and providers without a reasoning setting).",
+    )
+    eval_parser.add_argument(
+        "--temperature",
+        type=float,
+        metavar="FLOAT",
+        help="sampling temperature forwarded to real models via Pydantic AI provider settings "
+        "(default: unset; left to the provider so reasoning-capable models do not warn about "
+        "unsupported sampling parameters). Ignored by 'stub'.",
     )
     eval_parser.add_argument(
         "--logfire",
@@ -306,11 +315,14 @@ def _run_eval(args: argparse.Namespace) -> int:
         max_tool_calls=args.max_tool_calls if args.max_tool_calls else base_config.max_tool_calls,
         model_timeout=args.model_timeout if args.model_timeout else base_config.model_timeout,
         reasoning_effort=args.reasoning,
+        temperature=args.temperature,
     )
     selected_cases = _select_cases(config.cases, config.homes)
     _say(_eval_banner(config, len(selected_cases)))
 
-    report = asyncio.run(experiment.run_matrix(config, logfire_enabled=args.logfire))
+    report = asyncio.run(
+        experiment.run_matrix(config, logfire_enabled=args.logfire, on_complete=_progress_reporter)
+    )
     run_id = _derive_run_id()
     created_at = datetime.now(UTC).isoformat()
     run_dir = reports.write_report_json(report, config, run_id=run_id, created_at=created_at)
@@ -425,6 +437,7 @@ def _eval_banner(config: EvalConfig, case_count: int) -> str:
     """Build the pre-run orientation banner for `eval`."""
     cases_field = f"all ({case_count})" if config.cases is None else f"{', '.join(config.cases)} ({case_count})"
     reasoning = config.reasoning_effort or "(none)"
+    temperature = f"{config.temperature:g}" if config.temperature is not None else "(unset)"
     return (
         "llm_sandbox evals - running the eval matrix\n\n"
         "For every (prompt candidate x language model x test case), this harness:\n"
@@ -442,6 +455,7 @@ def _eval_banner(config: EvalConfig, case_count: int) -> str:
         f"  concurrency : {config.concurrency}\n"
         f"  max tool calls: {config.max_tool_calls}\n"
         f"  model timeout: {config.model_timeout:g}s\n"
+        f"  temperature : {temperature}\n"
         f"  reasoning   : {reasoning}\n\n"
         f"{_STUB_NOTE}\n"
     )
@@ -533,6 +547,14 @@ def _say(text: str) -> None:
     """Write an explanatory block to stderr, keeping stdout machine-readable."""
     if text:
         sys.stderr.write(text if text.endswith("\n") else text + "\n")
+    sys.stderr.flush()
+
+
+def _progress_reporter(index: int, total: int, name: str, trace: CaseTrace, elapsed: float) -> None:
+    """Write one per-cell completion line to stderr; keep stdout machine-readable."""
+    # Branch boundary: error traces carry "check_name: feedback"; surface the stable reason key.
+    result = f"error ({trace.error.split(':', 1)[0]})" if trace.error is not None else f"{trace.score:.3f}"
+    sys.stderr.write(f"({index}/{total}) {name}, result: {result}, time: {elapsed:.1f}s\n")
     sys.stderr.flush()
 
 

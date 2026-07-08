@@ -10,7 +10,7 @@ from pydantic_ai.messages import ModelRequest, ModelResponse, ToolCallPart, Tool
 from pydantic_ai.usage import UsageLimits
 
 from llm_sandbox_evals import cases
-from llm_sandbox_evals.agent_runner import build_agent, reasoning_model_settings
+from llm_sandbox_evals.agent_runner import build_agent, build_model_settings
 from llm_sandbox_evals.config import EvalConfig
 from llm_sandbox_evals.homes import get_home
 from llm_sandbox_evals.runtime import build_eval_runtime
@@ -38,7 +38,11 @@ async def run_case(
             agent.run(
                 case.user_request,
                 deps=runtime,
-                model_settings=reasoning_model_settings(model_id, config.reasoning_effort),
+                model_settings=build_model_settings(
+                    model_id,
+                    temperature=config.temperature,
+                    reasoning_effort=config.reasoning_effort,
+                ),
                 usage_limits=UsageLimits(tool_calls_limit=tool_calls_limit),
             ),
             timeout=config.model_timeout,

@@ -20,6 +20,7 @@ class EvalConfig:
     max_tool_calls: int = 8
     model_timeout: float = 75.0
     reasoning_effort: str | None = None
+    temperature: float | None = None
     target_model: str | None = None
     proposer_model: str | None = None
     target_reasoning_effort: str | None = None

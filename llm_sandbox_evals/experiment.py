@@ -2,6 +2,7 @@
 
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
+from time import perf_counter
 
 from custom_components.llm_sandbox.llm_api.prompts import PromptProfile, resolve_profile
 from pydantic_evals import Case, Dataset
@@ -22,6 +23,11 @@ from llm_sandbox_evals.schema import CaseTrace, CheckResult, EvalCase, PromptCan
 from llm_sandbox_evals.scoring import is_incomplete, mean_score
 
 type MatrixCellMeta = dict[str, str | int]
+type ProgressCallback = Callable[[int, int, str, CaseTrace, float], None]
+"""Per-cell progress reporter: ``(index, total, cell_name, trace, elapsed_seconds)``.
+
+``index`` is the 1-based completion order (unique per cell) and ``elapsed_seconds``
+covers the single ``run_case`` call. Invoked synchronously from the event loop."""
 
 _SIZE_TIE_EPSILON = 0.005
 
@@ -154,19 +160,36 @@ def make_matrix_task(
     profile: PromptProfile,
     candidate_by_id: dict[str, PromptCandidate],
     case_by_id: dict[str, EvalCase],
+    *,
+    total: int,
+    on_complete: ProgressCallback | None = None,
 ) -> Callable[[MatrixCellRef], Awaitable[CaseTrace]]:
     """Build the pydantic-evals task that preserves run_case snapshot/tool semantics."""
+    completed = 0
 
     async def task(cell: MatrixCellRef) -> CaseTrace:
+        nonlocal completed
         candidate = candidate_by_id[cell.candidate_id]
         case = case_by_id[cell.case_id]
-        return await run_case(candidate, cell.model_id, case, config, profile=profile)
+        name = f"{candidate.id}/{cell.model_id}/{case.id}"
+        start = perf_counter()
+        trace = await run_case(candidate, cell.model_id, case, config, profile=profile)
+        elapsed = perf_counter() - start
+        # Branch boundary: increment is synchronous (no await) so each cell gets a
+        # unique completion index despite concurrent matrix evaluation.
+        completed += 1
+        if on_complete is not None:
+            on_complete(completed, total, name, trace, elapsed)
+        return trace
 
     return task
 
 
 async def run_matrix(
-    config: EvalConfig, *, logfire_enabled: bool = False
+    config: EvalConfig,
+    *,
+    logfire_enabled: bool = False,
+    on_complete: ProgressCallback | None = None,
 ) -> EvaluationReport[MatrixCellRef, CaseTrace, MatrixCellMeta]:
     """Run the full matrix through one native pydantic-evals experiment."""
     if logfire_enabled:
@@ -182,6 +205,8 @@ async def run_matrix(
         profile,
         {candidate.id: candidate for candidate in candidates},
         {case.id: case for case in selected_cases},
+        total=len(dataset.cases),
+        on_complete=on_complete,
     )
     return await dataset.evaluate(
         task,
