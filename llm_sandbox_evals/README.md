@@ -34,7 +34,7 @@ EOF
 uv run --group dev --group evals python -m llm_sandbox_evals eval --models openai:gpt-4o-mini,anthropic:claude-haiku-4-5,stub
 ```
 
-Every candidate is evaluated against every model. The native `Candidate x model means` analysis shows the matrix; the native `Candidate ranking` analysis ranks candidates by mean score with a small prompt-size tie-break. A model call that fails (bad key, bad model id, network, or per-generation timeout) is captured as a `model_error` trace and scores `0.0`; the provider exception type/message, timeout details, and cause chain are included in the trace.
+Every candidate is evaluated against every model. The native `Candidate x model means` analysis shows the matrix; the native `Candidate ranking` analysis ranks candidates by mean score with a small prompt-size tie-break. A model call that fails (bad key, bad model id, network, or per-generation timeout) is captured as a `model_error` trace, scores `0.0`, and is excluded from candidate/model mean-score denominators (it is reported separately as an `Incomplete cells` count) so a provider outage does not read as a candidate-quality failure. The provider exception type/message, timeout details, and cause chain are included in the trace.
 
 ## Optimizing the prompt (DSPy COPRO)
 
@@ -129,15 +129,15 @@ cases:
       device_id: null
       language: en
     expected:
-      answer_facts:
-      - sensor.living_temp
+      expected_values:
+      - '25.2'
       answer_excludes: []
       actions: []
       max_tool_calls: 3
       reference_tool_calls: 1
 ```
 
-Categories: `state_read`, `registry_read`, `recorder_read`, `action_allowed`, `action_blocked`, `complex`, `recovery`. Expectations are outcome-only: `answer_facts`, `answer_excludes`, `actions`, `max_tool_calls`, and `reference_tool_calls`. Recorder cases can be solved with explicit ids or supported selectors (`entity_ids`/`statistic_ids`, `area_id`, `device_id`, `floor_id`, `label_id`, `domain`, bounded time window args) through native function calling.
+Categories: `state_read`, `registry_read`, `recorder_read`, `action_allowed`, `action_blocked`, `complex`, `recovery`. Expectations are outcome-evidence: `expected_values`, `answer_excludes`, `actions`, `max_tool_calls`, and `reference_tool_calls`. `expected_values` are distinctive tokens (e.g. the observed state value `25.2`, or an entity id for registry cases) audited whole-word and case-insensitively across the final answer **and** every tool return payload — never against tool-call arguments. Scoring also requires `execution_ok` (the last tool event must not be an error envelope) and `actions_match` (bidirectional side-effect match); provider/infra `model_error` cells are excluded from means and counted as incomplete. Recorder cases can be solved with explicit ids or supported selectors (`entity_ids`/`statistic_ids`, `area_id`, `device_id`, `floor_id`, `label_id`, `domain`, bounded time window args) through native function calling.
 
 Recorder eval execution calls the production `GetHistoryTool` / `GetStatisticsTool` / `GetLogbookTool.run_query(...)` cores with a fixture-backed `RecorderSource`; result envelopes are the production envelopes, including cursor and recoverable-error shapes.
 

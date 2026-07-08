@@ -39,13 +39,19 @@ async def test_run_matrix_stub_slice_writes_reloadable_report_json(tmp_path: Pat
     assert payload.candidate_ids == ["baseline"]
     assert payload.model_ids == ["stub"]
     assert payload.case_count == 1
+    assert payload.incomplete_count == 0
     assert [(cell["candidate_id"], cell["model_id"], cell["case_id"]) for cell in payload.cells] == [
         ("baseline", "stub", "state_living_temperature")
     ]
     assert cast(float, payload.cells[0]["score"]) == pytest.approx(1.0)
+    # The stub read the temperature entity, so one tool event with its return is persisted.
+    tool_events = cast(list[dict[str, object]], payload.cells[0]["trace"]["tool_events"])
+    assert len(tool_events) == 1
+    assert tool_events[0]["tool_name"] == "execute_home_code"
     rendered = reports.render_report_summary(payload)
     assert "stub-slice" in rendered
     assert "baseline/stub/state_living_temperature" in rendered
+    assert "Incomplete:" in rendered
 
 
 async def test_sandbox_outcome_reports_score_required_gate_and_model_error_label(tmp_path: Path) -> None:

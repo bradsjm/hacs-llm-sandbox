@@ -268,6 +268,12 @@ def _stub_initial_calls(user_request: str) -> tuple[tuple[str, dict[str, object]
         return ((TOOL_EXECUTE_HOME_CODE, {"code": "result = states.entity_ids()"}),)
     if "outside temperature stayed below 80" in lowered:
         return ((TOOL_GET_HISTORY, {"entity_ids": ["sensor.tempest_temperature"], **_last_day_window()}),)
+    # Branch boundary: state-read of the living room temperature reads the entity so
+    # the observed value surfaces in the tool return + final answer. Exclude history
+    # and threshold phrasings, which are handled by their own routes or the recorder
+    # fallback below.
+    if "temperature" in lowered and "living room" in lowered and "history" not in lowered and "above" not in lowered:
+        return ((TOOL_EXECUTE_HOME_CODE, {"code": 'result = states.get("sensor.living_temp")'}),)
 
     tool_name = _select_stub_tool(user_request)
     return ((tool_name, _build_stub_tool_args(tool_name, user_request)),)

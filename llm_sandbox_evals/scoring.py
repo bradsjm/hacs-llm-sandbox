@@ -1,8 +1,10 @@
-"""Outcome-only scoring for eval case results."""
+"""Outcome-evidence scoring for eval case results."""
 
+import json
+import re
 from collections.abc import Iterable, Mapping
 
-from llm_sandbox_evals.schema import CheckResult, EvalCase, ExpectedAction
+from llm_sandbox_evals.schema import CheckResult, EvalCase, ExpectedAction, ToolEvent
 
 
 def check_case(
@@ -10,17 +12,24 @@ def check_case(
     output: str,
     recorded_actions: tuple[dict[str, object], ...],
     tool_call_count: int,
+    tool_events: tuple[ToolEvent, ...],
 ) -> list[CheckResult]:
-    """Build deterministic outcome checks for one case."""
+    """Build deterministic outcome-evidence checks for one case."""
     checks: list[CheckResult] = []
     output_lower = output.lower()
-    missing_facts = [fact for fact in case.expected.answer_facts if fact.lower() not in output_lower]
+
+    # Any-source evidence audit: a value passes when it appears anywhere in the
+    # final answer OR in a tool return payload. Tool-call arguments are NOT
+    # evidence. Order/tool-agnostic by construction. Word-boundary matching keeps
+    # short tokens like "off" from matching noise such as "office".
+    evidence_lower = _evidence_blob(output, tool_events)
+    missing_values = [value for value in case.expected.expected_values if not _token_present(value, evidence_lower)]
     checks.append(
         CheckResult(
-            name="answer_facts_present",
-            passed=not missing_facts,
+            name="evidence_present",
+            passed=not missing_values,
             required=True,
-            feedback=f"missing={','.join(missing_facts)}",
+            feedback=f"missing={','.join(missing_values)}",
         )
     )
 
@@ -35,6 +44,7 @@ def check_case(
             )
         )
 
+    checks.append(_execution_ok_check(tool_events))
     checks.append(_actions_check(case.expected.actions, recorded_actions))
     checks.append(
         CheckResult(
@@ -56,6 +66,114 @@ def check_case(
             )
         )
     return checks
+
+
+def score_case(checks: list[CheckResult]) -> float:
+    """Score a case from required gates and the tool-call efficiency component."""
+    if any(check.required and not check.passed for check in checks):
+        return 0.0
+    components: list[float] = [1.0 for check in checks if check.required and check.passed]
+    for check in checks:
+        if check.name != "tool_call_efficiency":
+            continue
+        components.append(_efficiency_feedback_value(check.feedback))
+    return mean_score(components) if components else 1.0
+
+
+def mean_score(case_scores: list[float]) -> float:
+    """Return the arithmetic mean for case scores."""
+    if not case_scores:
+        return 0.0
+    return sum(case_scores) / len(case_scores)
+
+
+def is_incomplete(checks: Iterable[CheckResult]) -> bool:
+    """Return whether a trace failed due to provider/infra error, not candidate behavior.
+
+    Incomplete cells (``model_error`` from timeouts or provider failures) are
+    excluded from candidate/model mean-score denominators. ``tool_calls_exceeded``
+    is a genuine model limit hit and is NOT incomplete.
+    """
+    return any(check.name == "model_error" for check in checks)
+
+
+def _evidence_blob(output: str, tool_events: tuple[ToolEvent, ...]) -> str:
+    """Return the lowercased any-source evidence string for value presence checks."""
+    parts = [output]
+    for event in tool_events:
+        parts.append(json.dumps(event.output, sort_keys=True, default=str))
+    return "\n".join(parts).lower()
+
+
+def _token_present(token: str, evidence_lower: str) -> bool:
+    """Return whether ``token`` appears as a whole word in the lowercased evidence.
+
+    Word boundaries prevent short tokens like ``off`` from matching noise such as
+    ``office`` while still matching a quoted state value like ``"off"``.
+    """
+    return re.search(r"\b" + re.escape(token.lower()) + r"\b", evidence_lower) is not None
+
+
+def _execution_ok_check(tool_events: tuple[ToolEvent, ...]) -> CheckResult:
+    """Return the required gate asserting the final tool event was not an error envelope."""
+    # Branch boundary: no tool events means the model answered without invoking a
+    # tool. execution_ok passes vacuously; the evidence gate is responsible for
+    # catching a non-accomplished task in that case.
+    if not tool_events:
+        return CheckResult(
+            name="execution_ok",
+            passed=True,
+            required=True,
+            feedback="no_tool_events",
+        )
+    last = tool_events[-1]
+    error = _envelope_error_kind(last.output)
+    return CheckResult(
+        name="execution_ok",
+        passed=error is None,
+        required=True,
+        feedback="ok" if error is None else f"error={last.tool_name}:{error}",
+    )
+
+
+def _envelope_error_kind(content: object) -> str | None:
+    """Return the error kind embedded in a tool return envelope, else None.
+
+    Execute payloads carry ``execution.status`` (``ok`` on success); recorder
+    payloads carry a top-level ``status == "error"``. Any other shape is treated
+    as a non-error (success envelopes omit ``status``).
+    """
+    if not isinstance(content, Mapping):
+        return None
+    execution = content.get("execution")
+    if isinstance(execution, Mapping):
+        # Branch boundary: an execute envelope must end on status "ok".
+        status = execution.get("status")
+        if status != "ok":
+            return str(status) if status is not None else "unknown"
+        return None
+    if content.get("status") == "error":
+        error = content.get("error")
+        if isinstance(error, Mapping):
+            kind = error.get("key")
+            return str(kind) if kind is not None else "error"
+        return "error"
+    return None
+
+
+def _efficiency_value(reference: int, actual: int) -> float:
+    """Return the reference/actual efficiency score, clamped to 1."""
+    if actual <= 0:
+        return 1.0
+    return min(1.0, reference / actual)
+
+
+def _efficiency_feedback_value(feedback: str) -> float:
+    """Read the stable numeric value embedded in the efficiency feedback."""
+    marker = " value="
+    if marker not in feedback:
+        return 1.0
+    return float(feedback.rsplit(marker, 1)[1])
 
 
 def _actions_check(
@@ -100,40 +218,6 @@ def _actions_check(
         required=True,
         feedback=";".join(feedback_parts),
     )
-
-
-def score_case(checks: list[CheckResult]) -> float:
-    """Score a case from required gates and the tool-call efficiency component."""
-    if any(check.required and not check.passed for check in checks):
-        return 0.0
-    components: list[float] = [1.0 for check in checks if check.required and check.passed]
-    for check in checks:
-        if check.name != "tool_call_efficiency":
-            continue
-        components.append(_efficiency_feedback_value(check.feedback))
-    return mean_score(components) if components else 1.0
-
-
-def mean_score(case_scores: list[float]) -> float:
-    """Return the arithmetic mean for case scores."""
-    if not case_scores:
-        return 0.0
-    return sum(case_scores) / len(case_scores)
-
-
-def _efficiency_value(reference: int, actual: int) -> float:
-    """Return the reference/actual efficiency score, clamped to 1."""
-    if actual <= 0:
-        return 1.0
-    return min(1.0, reference / actual)
-
-
-def _efficiency_feedback_value(feedback: str) -> float:
-    """Read the stable numeric value embedded in the efficiency feedback."""
-    marker = " value="
-    if marker not in feedback:
-        return 1.0
-    return float(feedback.rsplit(marker, 1)[1])
 
 
 def _has_matching_action(expected_action: ExpectedAction, recorded_actions: tuple[dict[str, object], ...]) -> bool:

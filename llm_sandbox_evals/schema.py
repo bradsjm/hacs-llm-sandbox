@@ -45,9 +45,16 @@ class ExpectedAction:
 
 @dataclass(frozen=True, slots=True)
 class Expected:
-    """Outcome-only expectations: what the final answer + actions must look like."""
+    """Outcome-evidence expectations: salient facts, exclusions, and side effects.
 
-    answer_facts: tuple[str, ...] = ()
+    ``expected_values`` are the tokens that prove the task was accomplished. They
+    are audited case-insensitively as substrings across an any-source evidence
+    blob (final answer + every tool return payload), not against any single tool
+    call, tool order, or tool argument. Keep each token distinctive so it cannot
+    accidentally match noise (e.g. prefer ``23.4`` over ``1``).
+    """
+
+    expected_values: tuple[str, ...] = ()
     answer_excludes: tuple[str, ...] = ()
     actions: tuple[ExpectedAction, ...] = ()
     max_tool_calls: int = 8
@@ -79,6 +86,20 @@ class CheckResult:
 
 
 @dataclass(frozen=True, slots=True)
+class ToolEvent:
+    """One paired tool call/return captured for an eval cell trace.
+
+    ``output`` is the production tool return payload verbatim (a dict envelope
+    such as the ``execute_home_code`` result or a recorder result), used by the
+    any-source evidence audit and the ``execution_ok`` gate.
+    """
+
+    tool_name: str
+    args: dict[str, object]
+    output: dict[str, object]
+
+
+@dataclass(frozen=True, slots=True)
 class CaseTrace:
     """Outcome-only trace for one candidate/model/case execution."""
 
@@ -92,3 +113,6 @@ class CaseTrace:
     recorded_actions: tuple[dict[str, object], ...]
     checks: tuple[CheckResult, ...]
     error: str | None
+    # Trailing field with default so existing constructors stay valid when they
+    # omit tool events (e.g. synthetic traces in tests / error traces).
+    tool_events: tuple[ToolEvent, ...] = ()

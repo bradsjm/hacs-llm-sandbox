@@ -9,6 +9,7 @@ from pydantic_evals.reporting import EvaluationReport, ReportCase
 from llm_sandbox_evals.config import EvalConfig
 from llm_sandbox_evals.experiment import MatrixCellMeta, MatrixCellRef
 from llm_sandbox_evals.schema import CaseTrace
+from llm_sandbox_evals.scoring import is_incomplete
 
 _INTEGRATION_MANIFEST = Path(__file__).resolve().parent.parent / "custom_components" / "llm_sandbox" / "manifest.json"
 
@@ -23,6 +24,7 @@ class ReportPayload:
     candidate_ids: list[str]
     model_ids: list[str]
     case_count: int
+    incomplete_count: int
     analyses: list[dict[str, object]]
     cells: list[dict[str, object]]
 
@@ -38,6 +40,10 @@ def write_report_json(
     run_dir = config.runs_dir / run_id
     run_dir.mkdir(parents=True, exist_ok=False)
     cells = [_cell_json(case) for case in report.cases]
+    # Branch boundary: a cell is incomplete when it failed on a model_error gate
+    # (provider outage / timeout). Such cells are excluded from mean scores but
+    # kept visible in the trace for auditing.
+    incomplete_count = sum(1 for case in report.cases if is_incomplete(case.output.checks))
     payload = ReportPayload(
         run_id=run_id,
         created_at=created_at,
@@ -45,6 +51,7 @@ def write_report_json(
         candidate_ids=_ordered_values(cells, "candidate_id"),
         model_ids=_ordered_values(cells, "model_id"),
         case_count=len(_ordered_values(cells, "case_id")),
+        incomplete_count=incomplete_count,
         analyses=[analysis.model_dump(mode="json") for analysis in report.analyses],
         cells=cells,
     )
@@ -66,6 +73,7 @@ def load_report_payload(run_dir: Path) -> ReportPayload:
         candidate_ids=_string_list(decoded.get("candidate_ids")),
         model_ids=_string_list(decoded.get("model_ids")),
         case_count=_int_field(decoded, "case_count"),
+        incomplete_count=_int_field(decoded, "incomplete_count"),
         analyses=_dict_list(decoded.get("analyses")),
         cells=_dict_list(decoded.get("cells")),
     )
@@ -77,6 +85,7 @@ def render_report_summary(payload: ReportPayload) -> str:
         f"Eval report {payload.run_id}",
         f"Created: {payload.created_at}",
         f"Cases: {payload.case_count}",
+        f"Incomplete: {payload.incomplete_count}",
         "",
     ]
     for analysis in payload.analyses:
@@ -145,6 +154,9 @@ def _trace_json(trace: CaseTrace) -> dict[str, object]:
         "output": trace.output,
         "tool_call_count": trace.tool_call_count,
         "recorded_actions": list(trace.recorded_actions),
+        "tool_events": [
+            {"tool_name": event.tool_name, "args": event.args, "output": event.output} for event in trace.tool_events
+        ],
         "checks": [asdict(check) for check in trace.checks],
         "error": trace.error,
     }

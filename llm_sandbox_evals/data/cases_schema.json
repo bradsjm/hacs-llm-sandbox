@@ -212,14 +212,14 @@
       "type": "object"
     },
     "Expected": {
-      "description": "Outcome-only expectations: what the final answer + actions must look like.",
+      "description": "Outcome-evidence expectations: salient facts, exclusions, and side effects.",
       "properties": {
-        "answer_facts": {
+        "expected_values": {
           "default": [],
           "items": {
             "type": "string"
           },
-          "title": "Answer Facts",
+          "title": "Expected Values",
           "type": "array"
         },
         "answer_excludes": {

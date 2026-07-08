@@ -1,11 +1,12 @@
 """Eval task body backed by a real Pydantic AI Agent."""
 
 import asyncio
+import json
 from collections.abc import Sequence
 
 from custom_components.llm_sandbox.llm_api.prompts import PromptProfile
 from pydantic_ai.exceptions import UnexpectedModelBehavior, UsageLimitExceeded
-from pydantic_ai.messages import ModelResponse, ToolCallPart
+from pydantic_ai.messages import ModelRequest, ModelResponse, ToolCallPart, ToolReturnPart
 from pydantic_ai.usage import UsageLimits
 
 from llm_sandbox_evals import cases
@@ -13,7 +14,7 @@ from llm_sandbox_evals.agent_runner import build_agent, reasoning_model_settings
 from llm_sandbox_evals.config import EvalConfig
 from llm_sandbox_evals.homes import get_home
 from llm_sandbox_evals.runtime import build_eval_runtime
-from llm_sandbox_evals.schema import CaseTrace, CheckResult, EvalCase, PromptCandidate
+from llm_sandbox_evals.schema import CaseTrace, CheckResult, EvalCase, PromptCandidate, ToolEvent
 from llm_sandbox_evals.scoring import check_case, score_case
 from llm_sandbox_evals.tools import EVAL_SCOPE, _for_scoring, apply_scope
 
@@ -43,9 +44,11 @@ async def run_case(
             timeout=config.model_timeout,
         )
         output = result.output
-        tool_call_count = _tool_call_count(result.all_messages())
+        messages = result.all_messages()
+        tool_call_count = _tool_call_count(messages)
+        tool_events = _tool_events(messages)
         recorded_actions = tuple(_for_scoring(action) for action in runtime.invoker.calls)
-        checks = check_case(case, output, recorded_actions, tool_call_count)
+        checks = check_case(case, output, recorded_actions, tool_call_count, tool_events)
         return CaseTrace(
             case_id=case.id,
             category=case.category,
@@ -57,6 +60,7 @@ async def run_case(
             recorded_actions=recorded_actions,
             checks=tuple(checks),
             error=None,
+            tool_events=tool_events,
         )
     except UsageLimitExceeded as err:
         return _error_trace(candidate, model_id, case, "tool_calls_exceeded", f"{type(err).__name__}: {err}")
@@ -92,6 +96,7 @@ def _error_trace(
             ),
         ),
         error=f"{check_name}: {feedback}",
+        tool_events=(),
     )
 
 
@@ -119,3 +124,63 @@ def _tool_call_count(messages: Sequence[object]) -> int:
         for part in message.parts
         if isinstance(part, ToolCallPart)
     )
+
+
+def _tool_events(messages: Sequence[object]) -> tuple[ToolEvent, ...]:
+    """Pair each tool call with its return payload, preserving call order.
+
+    Tool-call arguments are captured for traceability but are NOT used as
+    evidence by scoring. Tool returns (``ToolReturnPart.content``) are the
+    production result envelopes and feed the any-source evidence audit and the
+    ``execution_ok`` gate.
+    """
+    returns_by_id: dict[str, object] = {}
+    calls: list[ToolCallPart] = []
+    for message in messages:
+        # Returns arrive in ModelRequest parts (tool-result messages).
+        if isinstance(message, ModelRequest):
+            for part in message.parts:
+                if isinstance(part, ToolReturnPart):
+                    returns_by_id[part.tool_call_id] = part.content
+        elif isinstance(message, ModelResponse):
+            calls.extend(part for part in message.parts if isinstance(part, ToolCallPart))
+
+    events: list[ToolEvent] = []
+    for call in calls:
+        output = returns_by_id.get(call.tool_call_id)
+        events.append(
+            ToolEvent(
+                tool_name=call.tool_name,
+                args=_coerce_args(call.args),
+                output=_coerce_return(output),
+            )
+        )
+    return tuple(events)
+
+
+def _coerce_args(args: object) -> dict[str, object]:
+    """Normalize a ToolCallPart args value into a dict."""
+    if isinstance(args, dict):
+        return args
+    if isinstance(args, str):
+        try:
+            decoded = json.loads(args)
+        except json.JSONDecodeError:
+            return {"_raw": args}
+        return decoded if isinstance(decoded, dict) else {"_raw": decoded}
+    return {}
+
+
+def _coerce_return(content: object) -> dict[str, object]:
+    """Normalize a ToolReturnPart content value into a dict envelope."""
+    if isinstance(content, dict):
+        return content
+    if isinstance(content, str):
+        try:
+            decoded = json.loads(content)
+        except json.JSONDecodeError:
+            return {"_raw": content}
+        return decoded if isinstance(decoded, dict) else {"_raw": decoded}
+    # Branch boundary: production tools always return dict envelopes, but guard
+    # any non-dict scalar so the trace stays JSON-serializable.
+    return {} if content is None else {"_raw": content}

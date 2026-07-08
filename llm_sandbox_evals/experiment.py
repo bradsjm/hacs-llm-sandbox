@@ -19,7 +19,7 @@ from llm_sandbox_evals import prompts
 from llm_sandbox_evals.config import EvalConfig
 from llm_sandbox_evals.harness import _select_cases, run_case
 from llm_sandbox_evals.schema import CaseTrace, CheckResult, EvalCase, PromptCandidate
-from llm_sandbox_evals.scoring import mean_score
+from llm_sandbox_evals.scoring import is_incomplete, mean_score
 
 type MatrixCellMeta = dict[str, str | int]
 
@@ -67,10 +67,12 @@ class CandidateMatrixReport(ReportEvaluator[MatrixCellRef, CaseTrace, MatrixCell
 
     def evaluate(self, ctx: ReportEvaluatorContext[MatrixCellRef, CaseTrace, MatrixCellMeta]) -> list[ReportAnalysis]:
         """Return native analysis tables for the full experiment report."""
+        complete_cases = _complete_cases(ctx.report.cases)
         categories = _categories(ctx.report.cases)
-        pair_rows = _pair_rows(ctx.report.cases, self.candidate_ids, self.model_ids, categories, self.prompt_sizes)
+        pair_rows = _pair_rows(complete_cases, self.candidate_ids, self.model_ids, categories, self.prompt_sizes)
         ranking_rows = _ranking_rows(pair_rows, self.candidate_ids, self.model_ids, categories)
-        overall = mean_score([_case_score(case) for case in ctx.report.cases])
+        overall = mean_score([_case_score(case) for case in complete_cases])
+        incomplete_count = sum(1 for case in ctx.report.cases if is_incomplete(case.output.checks))
         return [
             TableResult(
                 title="Candidate ranking",
@@ -86,6 +88,7 @@ class CandidateMatrixReport(ReportEvaluator[MatrixCellRef, CaseTrace, MatrixCell
                 ],
             ),
             ScalarResult(title="Overall mean score", value=_round(overall)),
+            ScalarResult(title="Incomplete cells", value=incomplete_count),
         ]
 
 
@@ -190,11 +193,15 @@ async def run_matrix(
 
 
 def overall_mean(report: EvaluationReport[MatrixCellRef, CaseTrace, MatrixCellMeta]) -> float:
-    """Read the native scalar analysis, computing from cases only if the analysis is absent."""
+    """Read the native scalar analysis, computing from complete cases only if absent.
+
+    Provider/infra failures (``model_error``) are excluded so an outage does not
+    read as a candidate scoring near zero.
+    """
     for analysis in report.analyses:
         if isinstance(analysis, ScalarResult) and analysis.title == "Overall mean score":
             return float(analysis.value)
-    return mean_score([_case_score(case) for case in report.cases])
+    return mean_score([_case_score(case) for case in _complete_cases(report.cases)])
 
 
 def matrix_summary_lines(report: EvaluationReport[MatrixCellRef, CaseTrace, MatrixCellMeta]) -> list[str]:
@@ -273,6 +280,17 @@ def _ranking_rows(
         rows.append((mean, api_prompt_chars, min_model, rendered))
     rows.sort(key=lambda row: (-round(row[0] / _SIZE_TIE_EPSILON), row[1], -row[2]))
     return [row[3] for row in rows]
+
+
+def _complete_cases(
+    report_cases: Sequence[ReportCase[MatrixCellRef, CaseTrace, MatrixCellMeta]],
+) -> list[ReportCase[MatrixCellRef, CaseTrace, MatrixCellMeta]]:
+    """Return report cases that are not provider/infra failures.
+
+    Incomplete cells (``model_error``) are excluded from candidate/model mean
+    denominators so an outage does not distort quality scores.
+    """
+    return [case for case in report_cases if not is_incomplete(case.output.checks)]
 
 
 def _categories(report_cases: Sequence[ReportCase[MatrixCellRef, CaseTrace, MatrixCellMeta]]) -> list[str]:
