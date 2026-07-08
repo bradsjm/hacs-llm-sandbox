@@ -571,7 +571,7 @@ def _score_signal_cases() -> dict[str, ScoreSignalCase]:
             {"kind": "entity", "id": "fan.living_fan", "name": "Living Room Fan", "domain": "fan"},
             fan_selector,
             fallback_snapshot,
-            lambda match: match.service_support > 0,
+            lambda match: match.service_support == 0,
         ),
     }
 

@@ -52,7 +52,7 @@ def _forecast_attribute_checker(ctx: LegacyNoteContext) -> str | None:
 def _missing_state_checker(ctx: LegacyNoteContext) -> str | None:
     """Preserve the existing empty-result note for literal missing state ids."""
     referenced_missing = _referenced_missing(ctx.code, ctx.snapshot)
-    if not referenced_missing or not _is_empty_output(ctx.result):
+    if not referenced_missing or not _is_absence_output(ctx.result):
         return None
 
     requested = referenced_missing[0]
@@ -124,6 +124,23 @@ def _is_empty_output(result: object) -> bool:
         return True
     if isinstance(result, list | dict | tuple | str | set):
         return len(result) == 0
+    return False
+
+
+def _is_absence_output(result: object) -> bool:
+    """True when the result is empty or a JSON-like diagnostic made only of absence values."""
+    if _is_empty_output(result):
+        return True
+    if isinstance(result, bool):
+        return not result
+    if isinstance(result, int | float):
+        return False
+    if isinstance(result, str):
+        return result == "None"
+    if isinstance(result, list | tuple | set):
+        return all(_is_absence_output(item) for item in result)
+    if isinstance(result, dict):
+        return all(_is_absence_output(value) for value in result.values())
     return False
 
 

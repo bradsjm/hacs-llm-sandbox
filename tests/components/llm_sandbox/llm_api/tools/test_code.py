@@ -490,6 +490,44 @@ result = state.entity_id if state is not None else None
     assert "resolutions" not in follow_up
 
 
+async def test_missing_entity_diagnostic_output_attaches_note(
+    hass: HomeAssistant,
+    loaded_entry: MockConfigEntry,
+) -> None:
+    """A missing literal state read that returns an absence diagnostic still gets a repair note."""
+    code = """
+s = hass.states.get("light.kitchen_main")
+result = {"found": s is not None, "state": str(s)}
+"""
+
+    result = await _run_code(hass, loaded_entry, code)
+
+    assert result["execution"]["status"] == "ok"
+    assert result["output"] == {"found": False, "state": "None"}
+    note = result["note"]
+    assert isinstance(note, str)
+    assert "light.kitchen_main" in note
+    assert "light.bedroom" in note
+
+
+async def test_missing_entity_note_suppressed_for_mixed_visible_data(
+    hass: HomeAssistant,
+    loaded_entry: MockConfigEntry,
+) -> None:
+    """A mixed missing+visible literal read that returns real data does not get a missing-only note."""
+    code = """
+missing = hass.states.get("light.kitchen_main")
+visible = hass.states.get("light.bedroom")
+result = {"missing": missing is not None, "visible": visible.state if visible is not None else None}
+"""
+
+    result = await _run_code(hass, loaded_entry, code)
+
+    assert result["execution"]["status"] == "ok"
+    assert result["output"] == {"missing": False, "visible": "on"}
+    assert "note" not in result
+
+
 async def test_map_filter_normalize_and_run(
     hass: HomeAssistant,
     loaded_entry: MockConfigEntry,

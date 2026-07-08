@@ -11,14 +11,18 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from ...snapshot.models import HomeSnapshot
+from ..data.selectors import expand_aggregate_selector
 from ..resolution import bounded_strings
 from ..target_matching import service_accepts_domain
 from .context import FailureContext, Intent
 from .sources import CandidateDict, entity_candidates, service_candidates
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
+_SELECTOR_PREFIX_TOKENS = frozenset({"area", "device", "floor", "label"})
 # Minimum shared prefix length for abbreviation-style token matching (temp/temperature).
 _PREFIX_MIN = 3
+# Minimum token length for one-edit typo matching (temperture/temperature).
+_TYPO_MIN = 5
 # Overlap fraction at which a textual match counts as a strong semantic signal.
 _MIN_STRONG_OVERLAP = 0.5
 # Capability weights: device_class is a stronger disambiguator than a unit hint.
@@ -86,13 +90,17 @@ def score(
         label = "id" if requested_normalized == candidate_id.lower() else "name"
 
     requested_tokens = _tokens(requested)
+    if _is_selector_kind_context(ctx):
+        requested_tokens = requested_tokens - _SELECTOR_PREFIX_TOKENS
     # Entity ids include a domain prefix; the prefix alone must not create a fuzzy match.
     if candidate.get("kind") == "entity" and ctx.domain:
         requested_tokens = frozenset(token for token in requested_tokens if token != ctx.domain)
     candidate_tokens = _candidate_tokens(candidate)
-    # Shared-prefix matching catches object_id/name/alias near misses (temp/temperature)
-    # without a hand-maintained abbreviation table.
-    matched = _matched_tokens(requested_tokens, candidate_tokens)
+    if _is_selector_kind_context(ctx):
+        candidate_tokens = candidate_tokens - _SELECTOR_PREFIX_TOKENS
+    # Shared-prefix matching catches abbreviations (temp/temperature), and the
+    # one-edit check catches literal typos without a hand-maintained table.
+    matched = _matched_tokens(requested_tokens, candidate_tokens, allow_typos=_allows_token_typos(ctx))
     overlap = (len(matched) / len(requested_tokens)) if requested_tokens else 0.0
     if exact == 0 and overlap > 0.0:
         label = "name"
@@ -168,6 +176,14 @@ def enumerate_for_context(snapshot: HomeSnapshot, ctx: FailureContext) -> tuple[
     if ctx.intent == Intent.CALL_SERVICE:
         return service_candidates(snapshot, ctx.domain)
     if ctx.intent == Intent.RESOLVE_SELECTOR:
+        if ctx.selector == "area_id":
+            return _domain_resolving_selector_candidates(snapshot, ctx, area_candidates(snapshot), "area_id")
+        if ctx.selector == "floor_id":
+            return _domain_resolving_selector_candidates(snapshot, ctx, floor_candidates(snapshot), "floor_id")
+        if ctx.selector == "device_id":
+            return _domain_resolving_selector_candidates(snapshot, ctx, device_candidates(snapshot), "device_id")
+        if ctx.selector in {"label_id", "label"}:
+            return _domain_resolving_selector_candidates(snapshot, ctx, label_candidates(snapshot), ctx.selector)
         return entity_candidates(snapshot, ctx.domain)
     if ctx.intent == Intent.SQL_TABLE:
         return sql_table_candidates()
@@ -190,7 +206,29 @@ def _tokens(text: str) -> frozenset[str]:
     return frozenset(_TOKEN_RE.findall(text.lower()))
 
 
-def _matched_tokens(requested: frozenset[str], pool: frozenset[str]) -> frozenset[str]:
+def _domain_resolving_selector_candidates(
+    snapshot: HomeSnapshot,
+    ctx: FailureContext,
+    candidates: tuple[CandidateDict, ...],
+    selector: str,
+) -> tuple[CandidateDict, ...]:
+    """Return selector candidates that expand to visible entities in the requested domain."""
+    return tuple(
+        candidate
+        for candidate in candidates
+        if _selector_resolves_to_domain(snapshot, selector, str(candidate.get("id", "")), ctx.domain)
+    )
+
+
+def _selector_resolves_to_domain(snapshot: HomeSnapshot, selector: str, candidate_id: str, domain: str) -> bool:
+    """Return whether one selector candidate expands to at least one domain-scoped entity."""
+    entity_ids = expand_aggregate_selector(snapshot, selector, candidate_id)
+    if not domain:
+        return bool(entity_ids)
+    return any(snapshot.states[entity_id].domain == domain for entity_id in entity_ids)
+
+
+def _matched_tokens(requested: frozenset[str], pool: frozenset[str], *, allow_typos: bool = True) -> frozenset[str]:
     """Return requested tokens that match a pool token by equality or abbreviation.
 
     A token matches when it equals a pool token or one is a prefix of the other
@@ -204,7 +242,7 @@ def _matched_tokens(requested: frozenset[str], pool: frozenset[str]) -> frozense
     matched: set[str] = set()
     for req in requested:
         for cand in pool:
-            if req == cand or _is_abbreviation(req, cand):
+            if req == cand or _is_abbreviation(req, cand) or (allow_typos and _is_typo(req, cand)):
                 matched.add(req)
                 break
     return frozenset(matched)
@@ -214,6 +252,54 @@ def _is_abbreviation(a: str, b: str) -> bool:
     """Return whether one token is a prefix of the other (a true abbreviation)."""
     shorter = _PREFIX_MIN
     return len(a) >= shorter and len(b) >= shorter and (a.startswith(b) or b.startswith(a))
+
+
+def _is_typo(a: str, b: str) -> bool:
+    """Return whether two substantive tokens differ by one edit."""
+    return len(a) >= _TYPO_MIN and len(b) >= _TYPO_MIN and _edit_distance_at_most_one(a, b)
+
+
+def _allows_token_typos(ctx: FailureContext) -> bool:
+    """Return whether one-edit typo matching is appropriate for this HA target context."""
+    return ctx.intent in {
+        Intent.READ_STATE,
+        Intent.RESOLVE_SELECTOR,
+        Intent.QUERY_HISTORY,
+        Intent.CAPTURE_IMAGE,
+        Intent.CALL_SERVICE,
+    }
+
+
+def _is_selector_kind_context(ctx: FailureContext) -> bool:
+    """Return whether scoring compares aggregate selector records instead of entities."""
+    return ctx.intent == Intent.RESOLVE_SELECTOR and ctx.selector in {
+        "area_id",
+        "device_id",
+        "floor_id",
+        "label_id",
+        "label",
+    }
+
+
+def _edit_distance_at_most_one(a: str, b: str) -> bool:
+    """Return True when ``a`` can become ``b`` with one insert/delete/substitute."""
+    if a == b:
+        return True
+    if abs(len(a) - len(b)) > 1:
+        return False
+    if len(a) == len(b):
+        return sum(left != right for left, right in zip(a, b, strict=True)) == 1
+    shorter, longer = (a, b) if len(a) < len(b) else (b, a)
+    skipped = False
+    short_index = 0
+    for long_char in longer:
+        if short_index < len(shorter) and shorter[short_index] == long_char:
+            short_index += 1
+            continue
+        if skipped:
+            return False
+        skipped = True
+    return True
 
 
 def _candidate_tokens(candidate: Mapping[str, object]) -> frozenset[str]:
@@ -265,8 +351,7 @@ def _service_support_signal(
     if brief is not None:
         accepts = service_accepts_domain(brief, candidate_domain)
         return int(accepts is True)
-    # Without metadata, fall back to Home Assistant's domain.service convention.
-    return int(bool(candidate_domain and candidate_domain == ctx.domain))
+    return 0
 
 
 def _field_overlap_signal(candidate: Mapping[str, object], ctx: FailureContext) -> int:

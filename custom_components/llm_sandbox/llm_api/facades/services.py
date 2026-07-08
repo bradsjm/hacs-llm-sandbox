@@ -281,7 +281,12 @@ class SafeServiceRegistry:
                 _block(
                     "service_target_not_visible",
                     cast(TranslationPlaceholders, {"entity_id": target_outcome.requested}),
-                    message=_target_not_found_message(target_outcome.requested, domain, target_outcome.guidance),
+                    message=_target_not_found_message(
+                        target_outcome.requested,
+                        target_outcome.selector,
+                        target_outcome.scope_domain,
+                        target_outcome.guidance,
+                    ),
                     guidance=target_outcome.guidance,
                 )
                 return None
@@ -401,18 +406,27 @@ class SafeServiceRegistry:
                             requested=entity_id,
                             domain=resolve_domain,
                             service=service or "",
+                            selector="entity_id",
                         ),
                     ).to_payload()
                     return _UnresolvedTarget(
                         requested=entity_id,
+                        selector="entity_id",
+                        scope_domain=resolve_domain,
                         guidance=guidance,
                     )
+        first_supported: tuple[str, str] | None = None
+        first_existing_selector: tuple[str, str] | None = None
         for selector in AGGREGATE_SELECTOR_KEYS:
             if selector not in target:
                 continue
             supported_keys.append(selector)
             for requested in _target_values(target[selector]):
                 supported_values.append(requested)
+                if first_supported is None:
+                    first_supported = (selector, requested)
+                if first_existing_selector is None and _selector_exists(snapshot, selector, requested):
+                    first_existing_selector = (selector, requested)
         for selector, requested_expansions in expand_aggregate_selectors(snapshot, target).items():
             for requested, resolved in requested_expansions:
                 domain_resolved = _domain_filtered_entity_ids(snapshot, resolved, domain)
@@ -421,23 +435,47 @@ class SafeServiceRegistry:
 
         if entity_ids:
             return _ResolvedTarget({"entity_id": sorted(entity_ids)}, tuple(adjustments))
-        if supported_values:
+        if first_existing_selector is not None:
+            selector, requested = first_existing_selector
             guidance = advise(
                 snapshot,
                 FailureContext(
                     intent=Intent.RESOLVE_SELECTOR,
-                    requested=supported_values[0],
+                    requested=requested,
                     domain=domain,
                     service=service or "",
+                    selector=selector,
                 ),
             ).to_payload()
             return _UnresolvedTarget(
-                requested=supported_values[0],
+                requested=requested,
+                selector=selector,
+                scope_domain=domain,
+                guidance=guidance,
+            )
+        if supported_values:
+            selector, requested = first_supported or (supported_keys[0], supported_values[0])
+            guidance = advise(
+                snapshot,
+                FailureContext(
+                    intent=Intent.RESOLVE_SELECTOR,
+                    requested=requested,
+                    domain=domain,
+                    service=service or "",
+                    selector=selector,
+                ),
+            ).to_payload()
+            return _UnresolvedTarget(
+                requested=requested,
+                selector=selector,
+                scope_domain=domain,
                 guidance=guidance,
             )
         if supported_keys:
             return _UnresolvedTarget(
                 requested=supported_keys[0],
+                selector=supported_keys[0],
+                scope_domain=domain,
                 guidance=None,
             )
         return _ResolvedTarget(cast(dict[str, object], json_safe(target)))
@@ -505,6 +543,19 @@ def _expand_target_entities(snapshot: HomeSnapshot, target: Mapping[str, object]
         for _requested, resolved in requested_expansions:
             entity_ids.update(resolved)
     return entity_ids
+
+
+def _selector_exists(snapshot: HomeSnapshot, selector: str, requested: str) -> bool:
+    """Return whether an aggregate selector value exists in the frozen snapshot."""
+    if selector == "area_id":
+        return requested in snapshot.areas
+    if selector == "device_id":
+        return requested in snapshot.devices
+    if selector == "floor_id":
+        return requested in snapshot.floors
+    if selector in {"label_id", "label"}:
+        return requested in snapshot.labels
+    return False
 
 
 def _domain_filtered_entity_ids(snapshot: HomeSnapshot, entity_ids: tuple[str, ...], domain: str) -> tuple[str, ...]:
@@ -592,12 +643,34 @@ def _valid_services_message(domain: str, service: str, valid_services: list[str]
     return f"No service '{service}' on '{domain}'."
 
 
-def _target_not_found_message(requested: str, domain: str, guidance: Mapping[str, object] | None) -> str:
+def _target_not_found_message(
+    requested: str,
+    selector: str,
+    scope_domain: str,
+    guidance: Mapping[str, object] | None,
+) -> str:
     """Return the compact target-layer repair message."""
     candidate_ids = _guidance_candidate_ids(guidance)
+    subject = _selector_subject(selector)
     if candidate_ids:
-        return f"Target '{requested}' not found in '{domain}'. Did you mean: {', '.join(candidate_ids)}."
-    return f"Target '{requested}' not found in '{domain}'."
+        if selector == "entity_id":
+            return f"Entity target '{requested}' not found among visible {scope_domain} entities. Did you mean: {', '.join(candidate_ids)}."
+        return f"{subject} target '{requested}' did not resolve to visible {scope_domain} entities. Did you mean: {', '.join(candidate_ids)}."
+    if selector == "entity_id":
+        return f"Entity target '{requested}' not found among visible {scope_domain} entities."
+    return f"{subject} target '{requested}' did not resolve to visible {scope_domain} entities."
+
+
+def _selector_subject(selector: str) -> str:
+    """Return the target-selector noun used in compact repair messages."""
+    return {
+        "area_id": "Area",
+        "device_id": "Device",
+        "floor_id": "Floor",
+        "label_id": "Label",
+        "label": "Label",
+        "entity_id": "Entity",
+    }.get(selector, "Selector")
 
 
 def _service_target_not_supported_message(
@@ -679,6 +752,8 @@ class _UnresolvedTarget:
     """A target that could not resolve to visible entities; carries structured guidance."""
 
     requested: str
+    selector: str
+    scope_domain: str
     guidance: Mapping[str, object] | None = None
 
 

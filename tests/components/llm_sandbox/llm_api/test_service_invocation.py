@@ -34,6 +34,7 @@ from custom_components.llm_sandbox.runtime import SandboxSettings
 from custom_components.llm_sandbox.snapshot.models import (
     DEFAULT_SCOPE,
     HomeSnapshot,
+    SafeAreaEntry,
     SafeConfig,
     SafeContext,
     SafeState,
@@ -576,6 +577,170 @@ async def test_unresolved_target_fix_list_ranks_service_supported_entities_first
     assert {"cover.blind_supported", "cover.blind_plain"} <= _guidance_candidate_ids(error["guidance"])
 
 
+async def test_update_entity_typo_guidance_ranks_temperature_without_service_domain_scope() -> None:
+    """A mistyped entity target gets entity-scoped guidance, not homeassistant-domain wording."""
+    snapshot = replace(
+        _snapshot(),
+        states={
+            "sensor.living_temperature": _state(
+                "sensor.living_temperature",
+                "21",
+                "Living Temperature",
+                attributes={"device_class": "temperature", "unit_of_measurement": "°C"},
+            ),
+            "sensor.unrelated": _state("sensor.unrelated", "ok", "Unrelated Sensor"),
+        },
+        services={"homeassistant": ("update_entity",)},
+        services_supports_response={"homeassistant": {"update_entity": SupportsResponse.NONE.value}},
+        services_target={"homeassistant": {"update_entity": {"entity": [{}]}}},
+        services_schema={"homeassistant": {"update_entity": SWITCH_TURN_ON_BRIEF}},
+    )
+    harness = _service_harness(snapshot=snapshot)
+
+    result = await _ok_call(harness, "homeassistant", "update_entity", target={"entity_id": "sensor.temperture"})
+
+    assert result is None
+    assert _action_keys_via_state(harness) == ["service_target_not_visible"]
+    error = cast(dict[str, object], harness.runtime.state.actions[0]["error"])
+    guidance = cast(Mapping[str, object], error["guidance"])
+    assert guidance["confidence"] == "high"
+    candidates = cast(list[Mapping[str, object]], guidance["candidates"])
+    assert candidates[0]["id"] == "sensor.living_temperature"
+    assert candidates[0]["match"] == "device_class: temperature"
+    assert candidates[1]["id"] == "sensor.unrelated"
+    message = str(error["message"])
+    assert "sensor.temperture" in message
+    assert "sensor" in message
+    assert "homeassistant" not in message
+
+
+async def test_area_selector_typo_guidance_uses_area_context() -> None:
+    """Aggregate selector typo guidance suggests areas that resolve to service-domain entities."""
+    snapshot = replace(
+        _snapshot(),
+        areas={"area-bedroom": _area("area-bedroom", "Bedroom", "floor-main")},
+    )
+    harness = _service_harness(snapshot=snapshot)
+
+    result = await _ok_call(harness, "light", "turn_on", target={"area_id": "area-bedrom"})
+
+    assert result is None
+    assert _action_keys_via_state(harness) == ["service_target_not_visible"]
+    error = cast(dict[str, object], harness.runtime.state.actions[0]["error"])
+    guidance = cast(Mapping[str, object], error["guidance"])
+    candidates = cast(list[Mapping[str, object]], guidance["candidates"])
+    assert candidates[0]["id"] == "area-bedroom"
+    assert candidates[0]["id"] not in snapshot.states
+    message = str(error["message"])
+    assert "Area" in message
+    assert "area-bedrom" in message
+    assert "'light'" not in message
+
+
+async def test_existing_area_with_no_light_entities_does_not_suggest_same_area() -> None:
+    """An existing selector that resolves outside the service domain is not suggested as a fix."""
+    snapshot = replace(
+        _snapshot(),
+        states={"switch.outlet": _state("switch.outlet", "off", "Outlet")},
+        areas={"area-bedroom": _area("area-bedroom", "Bedroom", "floor-main")},
+        indexes=SnapshotIndexes(
+            entity_ids_by_device_id={},
+            entity_ids_by_area_id={"area-bedroom": ("switch.outlet",)},
+            device_ids_by_area_id={},
+            entity_ids_by_config_entry_id={},
+            entity_ids_by_label={},
+            device_ids_by_label={},
+            area_ids_by_floor_id={"floor-main": ("area-bedroom",)},
+        ),
+    )
+    harness = _service_harness(snapshot=snapshot)
+
+    result = await _ok_call(harness, "light", "turn_on", target={"area_id": "area-bedroom"})
+
+    assert result is None
+    assert _action_keys_via_state(harness) == ["service_target_not_visible"]
+    error = cast(dict[str, object], harness.runtime.state.actions[0]["error"])
+    guidance = cast(Mapping[str, object], error["guidance"])
+    assert guidance["confidence"] == "none"
+    assert guidance["candidates"] == []
+    message = str(error["message"])
+    assert "Area" in message
+    assert "area-bedroom" in message
+    assert "light" in message
+    assert "Did you mean" not in message
+
+
+async def test_existing_area_without_lights_keeps_floor_recovery_guidance() -> None:
+    """An existing area with no lights can still recover to same-floor light entities."""
+    snapshot = replace(
+        _snapshot(),
+        states={
+            "switch.outlet": _state("switch.outlet", "off", "Outlet"),
+            "light.office": _state("light.office", "on", "Office Light"),
+        },
+        areas={
+            "area-bedroom": _area("area-bedroom", "Bedroom", "floor-main"),
+            "area-office": _area("area-office", "Office", "floor-main"),
+        },
+        indexes=SnapshotIndexes(
+            entity_ids_by_device_id={},
+            entity_ids_by_area_id={"area-bedroom": ("switch.outlet",), "area-office": ("light.office",)},
+            device_ids_by_area_id={},
+            entity_ids_by_config_entry_id={},
+            entity_ids_by_label={},
+            device_ids_by_label={},
+            area_ids_by_floor_id={"floor-main": ("area-bedroom", "area-office")},
+        ),
+    )
+    harness = _service_harness(snapshot=snapshot)
+
+    result = await _ok_call(harness, "light", "turn_on", target={"area_id": "area-bedroom"})
+
+    assert result is None
+    assert _action_keys_via_state(harness) == ["service_target_not_visible"]
+    error = cast(dict[str, object], harness.runtime.state.actions[0]["error"])
+    guidance = cast(Mapping[str, object], error["guidance"])
+    assert guidance["cross_kind"] == "floor-main"
+    candidates = cast(list[Mapping[str, object]], guidance["candidates"])
+    assert candidates[0]["id"] == "light.office"
+    assert "area-bedroom" not in {candidate["id"] for candidate in candidates}
+    message = str(error["message"])
+    assert "light.office" in message
+    assert "area-bedroom" in message
+
+
+async def test_area_selector_generic_prefix_does_not_create_high_confidence() -> None:
+    """A close area that resolves only outside the service domain is not suggested."""
+    snapshot = replace(
+        _snapshot(),
+        states={"switch.outlet": _state("switch.outlet", "off", "Outlet")},
+        areas={"area-bedroom": _area("area-bedroom", "Bedroom", "floor-main")},
+        indexes=SnapshotIndexes(
+            entity_ids_by_device_id={},
+            entity_ids_by_area_id={"area-bedroom": ("switch.outlet",)},
+            device_ids_by_area_id={},
+            entity_ids_by_config_entry_id={},
+            entity_ids_by_label={},
+            device_ids_by_label={},
+            area_ids_by_floor_id={"floor-main": ("area-bedroom",)},
+        ),
+    )
+    harness = _service_harness(snapshot=snapshot)
+
+    result = await _ok_call(harness, "light", "turn_on", target={"area_id": "area-garage"})
+
+    assert result is None
+    assert _action_keys_via_state(harness) == ["service_target_not_visible"]
+    error = cast(dict[str, object], harness.runtime.state.actions[0]["error"])
+    guidance = cast(Mapping[str, object], error["guidance"])
+    assert guidance["confidence"] not in {"exact", "high"}
+    assert not str(guidance["next_step"]).startswith("Use `")
+    candidates = cast(list[Mapping[str, object]], guidance["candidates"])
+    assert candidates == []
+    message = str(error["message"])
+    assert "Did you mean" not in message
+
+
 def _service_harness(
     *,
     actions_enabled: bool = True,
@@ -693,6 +858,24 @@ def _config() -> SafeConfig:
             wind_speed_unit="m/s",
             accumulated_precipitation_unit="mm",
         ),
+    )
+
+
+def _area(area_id: str, name: str, floor_id: str | None = None) -> SafeAreaEntry:
+    """Build a minimal visible area record for selector guidance tests."""
+    return SafeAreaEntry(
+        id=area_id,
+        area_id=area_id,
+        name=name,
+        aliases=(),
+        floor_id=floor_id,
+        labels=(),
+        icon=None,
+        picture=None,
+        humidity_entity_id=None,
+        temperature_entity_id=None,
+        created_at="2026-06-29T00:00:00+00:00",
+        modified_at="2026-06-29T00:00:00+00:00",
     )
 
 

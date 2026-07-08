@@ -22,10 +22,7 @@ __all__ = (
 def advise(snapshot: HomeSnapshot, ctx: FailureContext) -> Guidance:
     """Return recovery guidance for a failed literal using only a frozen snapshot."""
     # Exact/unique entity resolution is the trusted fast path already used by service-call recovery.
-    if (
-        ctx.intent in {Intent.READ_STATE, Intent.RESOLVE_SELECTOR, Intent.QUERY_HISTORY, Intent.CAPTURE_IMAGE}
-        and ctx.domain
-    ):
+    if _uses_entity_resolution_fast_path(ctx):
         resolution = resolve_target_entity(snapshot, ctx.requested, ctx.domain)
         if resolution.resolved is not None:
             candidate = _candidate_for_entity(snapshot, resolution.resolved)
@@ -85,6 +82,15 @@ def _candidate_for_entity(snapshot: HomeSnapshot, entity_id: str) -> CandidateDi
         if candidate["id"] == entity_id:
             return candidate
     raise KeyError(entity_id)
+
+
+def _uses_entity_resolution_fast_path(ctx: FailureContext) -> bool:
+    """Return whether this context should run visible-entity resolution before scoring."""
+    if not ctx.domain:
+        return False
+    if ctx.intent == Intent.RESOLVE_SELECTOR:
+        return ctx.selector in {"", "entity_id"}
+    return ctx.intent in {Intent.READ_STATE, Intent.QUERY_HISTORY, Intent.CAPTURE_IMAGE}
 
 
 def _payload_candidate(candidate: CandidateDict, match: Match) -> Candidate:

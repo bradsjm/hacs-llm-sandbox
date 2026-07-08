@@ -28,6 +28,7 @@ class FailureContext:
     requested: str
     domain: str = ""
     service: str = ""
+    selector: str = ""
     service_data: Mapping[str, object] = field(default_factory=lambda: MappingProxyType({}))
     available_attributes: tuple[str, ...] = ()
     table_name: str = ""
