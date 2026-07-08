@@ -106,13 +106,15 @@ The integration's `scripts/check` is unaffected by this package. `optimize-evals
 
 Each `(candidate, model, case)` runs until the Pydantic AI agent emits a terminal natural-language answer with no tool calls, or until `expected.max_tool_calls or config.max_tool_calls` is exceeded and the harness records `tool_calls_exceeded`. It then produces a score in `[0.0, 1.0]`:
 
-- **Required outcome gates** (any failure caps the case at `0.0`): required answer facts are present, excluded answer facts are absent, recorded actions match the expected side effects (or no actions were recorded when none are expected), and tool calls stay within the case cap.
+- **Required outcome gates** (any failure caps the case at `0.0`): the case has a meaningful oracle; `answer_values` (plus legacy `expected_values`) appear in the final answer; `provenance_values` appear in tool payloads when specified; each `tool_result_check_*` finds a successful, relevant recorder result shape that is non-empty unless the expected outcome explicitly allows no data with `min_results: 0`; excluded answer facts are absent; tool execution succeeds; allowed actions match exact expected side effects, or blocked actions satisfy `blocked_outcome`; and tool calls stay within the case cap.
+- **Allowed actions are exact side effects:** split calls may satisfy the exact expected target union for the same domain/service/service-data effect, but supersets, duplicate calls, unrelated side effects, and action errors fail.
+- **Blocked actions are UX checks:** they require graceful inability/acknowledgement, no success claim, no excessive retries, and no hidden detail leakage. Sandbox/tool enforcement belongs in unit or integration tests, not LLM evals.
 - **Efficiency** applies only after required gates pass: `min(1.0, reference_tool_calls / actual_tool_calls)` (with `actual=0` treated as `1.0`) when `reference_tool_calls` is set.
 - Default max tool calls is `8`; per-case `expected.max_tool_calls` can lower or raise the cap.
 
 ## Adding cases
 
-Edit `data/cases.yaml`. It is a native `pydantic_evals.Dataset` file with one authored `Case` per eval case (`name` mirrors `inputs.id`); `cases.py` loads it with `Dataset.from_file()` and exposes the stable `CASES: list[EvalCase]` surface. Each case references a fixture by `home` name and pins the action setting, the initiating context, and deterministic expectations:
+Edit `data/cases.yaml`. It is a native `pydantic_evals.Dataset` file with one authored `Case` per eval case (`name` mirrors `inputs.id`); `cases.py` loads it with `Dataset.from_file()` and exposes the stable `CASES: list[EvalCase]` surface. Each case must be a realistic human Home Assistant task, not a tool-contract, sandbox-enforcement, or malformed-input test. Do not reintroduce removed tool-contract/recovery/malformed-input cases as LLM evals; they belong in unit/integration tests. Prompts should not ask for entity IDs, tool names, raw service names, selectors, or implementation details unless a real user would naturally ask that way. Each case references a fixture by `home` name and pins the action setting, the initiating context, and deterministic expectations:
 
 ```yaml
 name: llm_sandbox_cases
@@ -129,15 +131,26 @@ cases:
       device_id: null
       language: en
     expected:
-      expected_values:
+      answer_values:
       - '25.2'
+      provenance_values: []
+      tool_result_checks: []
       answer_excludes: []
       actions: []
       max_tool_calls: 3
       reference_tool_calls: 1
 ```
 
-Categories: `state_read`, `registry_read`, `recorder_read`, `action_allowed`, `action_blocked`, `complex`, `recovery`. Expectations are outcome-evidence: `expected_values`, `answer_excludes`, `actions`, `max_tool_calls`, and `reference_tool_calls`. `expected_values` are distinctive tokens (e.g. the observed state value `25.2`, or an entity id for registry cases) audited whole-word and case-insensitively across the final answer **and** every tool return payload — never against tool-call arguments. Scoring also requires `execution_ok` (the last tool event must not be an error envelope) and `actions_match` (bidirectional side-effect match); provider/infra `model_error` cells are excluded from means and counted as incomplete. Recorder cases can be solved with explicit ids or supported selectors (`entity_ids`/`statistic_ids`, `area_id`, `device_id`, `floor_id`, `label_id`, `domain`, bounded time window args) through native function calling.
+Categories: `state_read`, `registry_read`, `recorder_read`, `action_allowed`, `action_blocked`, `complex`, `recovery`. New cases should use the current outcome fields:
+
+- `answer_values` — distinctive whole-word tokens that must appear in the final visible answer.
+- `provenance_values` — entity IDs, default IDs, selector-expansion facts, or other hidden/tool-payload evidence that should not be required in final prose.
+- `tool_result_checks` — structured recorder evidence for `get_history`, `get_statistics`, or `get_logbook`; recorder/history/statistics/logbook cases must include checks for successful, relevant result shapes that are non-empty unless the expected outcome explicitly allows no data with `min_results: 0`.
+- `blocked_outcome` — UX expectations for deliberately blocked actions: allowed error keys, acknowledgement values, answer exclusions, success-claim exclusions, and maximum attempts.
+- `actions` — exact allowed side effects, with split calls allowed only when they satisfy the expected target union and no extra/duplicate/error side effects occur.
+- `answer_excludes`, `max_tool_calls`, and `reference_tool_calls` — final-answer exclusions, hard call cap, and optional efficiency reference.
+
+`expected_values` is the legacy migration bucket for final-answer evidence; do not use it for new cases. Scoring also requires `execution_ok` and excludes provider/infra `model_error` cells from means while counting them as incomplete. Recorder evals may be solved by supported selectors through native function calling, but the prompt should only mention selectors when that is natural user phrasing.
 
 Recorder eval execution calls the production `GetHistoryTool` / `GetStatisticsTool` / `GetLogbookTool.run_query(...)` cores with a fixture-backed `RecorderSource`; result envelopes are the production envelopes, including cursor and recoverable-error shapes.
 

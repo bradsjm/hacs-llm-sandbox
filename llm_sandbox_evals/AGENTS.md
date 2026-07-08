@@ -6,6 +6,17 @@
 
 It is **not** part of the integration runtime. See `README.md` for usage.
 
+## Eval Authoring Rules
+
+Eval cases are realistic human Home Assistant tasks. They are **not** tool-contract, sandbox-enforcement, malformed-input, or unit/integration-test cases.
+
+- Write `user_request` prompts the way a real person would ask Assist. Do not ask for entity IDs, tool names, raw service names, selectors, or implementation details unless that is natural user language for the scenario.
+- Use `expected.answer_values` for final user-visible facts. Entity IDs, default IDs, selector expansion facts, and other hidden evidence belong in `expected.provenance_values` or structured tool checks, not final prose requirements. `expected.expected_values` is legacy migration-only.
+- Recorder/history/statistics/logbook cases must include `expected.tool_result_checks` that prove a successful, non-empty, relevant result shape for the production recorder tool output.
+- Allowed-action cases score exact side effects. Split service calls may satisfy the expected target union for the same domain/service/service-data effect, but supersets, duplicate calls, unrelated side effects, and action errors fail.
+- Blocked-action cases measure user experience: graceful inability or acknowledgement, no success claim, bounded retries, and no hidden detail leakage. Tool-enforcement behavior belongs in unit/integration tests, not LLM evals.
+- Removed tool-contract, recovery, and malformed-input cases belong in unit/integration tests. Do not reintroduce them as LLM eval cases.
+
 ## Tool Purpose and Alignment
 
 `execute_home_code` should help an LLM complete the user's Home Assistant task, not force the LLM to write perfect Python.
@@ -69,7 +80,7 @@ The harness owns the snapshot lifecycle and builds a fresh scoped snapshot per c
 - `agent_runner.py` — Pydantic AI `Agent`/`Tool.from_schema` wiring, production schema conversion, real-model inference, reasoning settings, and the offline `FunctionModel` stub.
 - `runtime.py` — `EvalRuntime`, fixture-backed `RecorderSource`, runtime context factory, and SQL/history/statistics fixture seams for `execute_home_code`.
 - `tools.py` — `EVAL_SCOPE`, `apply_scope`, `RecordingInvoker`, and action normalization helpers only; no tool emulators.
-- `scoring.py` — `check_case(...)`, `score_case(...)`, `mean_score(...)`, `is_incomplete(...)`. Outcome-evidence gates (`evidence_present`, `execution_ok`, `actions_match`, `tool_calls_within_max`) + tool-call efficiency scoring; `model_error` cells are flagged incomplete and excluded from means.
+- `scoring.py` — `check_case(...)`, `score_case(...)`, `mean_score(...)`, `is_incomplete(...)`. Outcome-evidence gates (`meaningful_oracle`, `answer_evidence_present`, optional `provenance_evidence_present`, optional `tool_result_check_*`, `execution_ok`, exact `actions_match` or blocked-action `blocked_outcome`, `tool_calls_within_max`) + tool-call efficiency scoring; `model_error` cells are flagged incomplete and excluded from means.
 - `harness.py` — `run_case(...) -> CaseTrace`; the bounded per-cell task body reused by native experiments and DSPy. Captures per-call `ToolEvent`s (tool name, args, return payload) from the agent conversation.
 - `experiment.py` — native `pydantic_evals` `Dataset` construction, deterministic `SandboxOutcome` evaluator, report-level candidate/model analyses, and `run_matrix(...) -> EvaluationReport`.
 - `reports.py` — `write_report_json(...)`, `load_report_payload(...)`, and `render_report_summary(...)` for the single saved `report.json` artifact.
@@ -86,7 +97,7 @@ The harness owns the snapshot lifecycle and builds a fresh scoped snapshot per c
 
 ## How To Extend
 
-- **Add a case:** append one native Dataset `Case` to `data/cases.yaml` with `name` matching `inputs.id`; do not hand-parse the file in code. Reference a real fixture `home`; keep `expected` outcome-evidence (`expected_values`, `answer_excludes`, `actions`, `max_tool_calls`, `reference_tool_calls`). `expected_values` are distinctive tokens audited (whole-word, case-insensitive) across the final answer + every tool return payload — never tool-call arguments.
+- **Add a case:** append one native Dataset `Case` to `data/cases.yaml` with `name` matching `inputs.id`; do not hand-parse the file in code. Reference a real fixture `home`; keep `expected` outcome-evidence (`answer_values`, `provenance_values`, `tool_result_checks`, `blocked_outcome`, `answer_excludes`, `actions`, `max_tool_calls`, `reference_tool_calls`). Use realistic human `user_request` text and keep removed tool-contract/recovery/malformed-input coverage in unit/integration tests. `expected_values` is a legacy final-answer bucket kept only for migration.
 - **Add a fixture:** add `homes/<name>.py` with `snapshot()`/`recorder()` and `NAME`, then register in `homes/__init__.py`. Mirror `home_default.py`'s helpers (effective-area rule, sorted tuple `SnapshotIndexes`, nested `SafeContext`).
 - **Add a candidate:** add a `PromptCandidate` and expose via `prompts.load_candidates`. `baseline` is auto-built; unknown ids currently raise.
 - **Add a model:** no code needed — pass any Pydantic AI provider-prefixed id (`openai:...`, `anthropic:...`, `openrouter:...`) to `--models`.

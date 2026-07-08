@@ -53,7 +53,7 @@ async def run_case(
         messages = result.all_messages()
         tool_call_count = _tool_call_count(messages)
         tool_events = _tool_events(messages)
-        recorded_actions = _recorded_actions_from_tool_events(tool_events)
+        recorded_actions = _recorded_actions_from_tool_events(tool_events, runtime.invoker.calls)
         checks = check_case(case, output, recorded_actions, tool_call_count, tool_events)
         return CaseTrace(
             case_id=case.id,
@@ -164,9 +164,19 @@ def _tool_events(messages: Sequence[object]) -> tuple[ToolEvent, ...]:
     return tuple(events)
 
 
-def _recorded_actions_from_tool_events(tool_events: tuple[ToolEvent, ...]) -> tuple[dict[str, object], ...]:
-    """Return all execute_home_code action records, including blocked/error actions."""
+def _recorded_actions_from_tool_events(
+    tool_events: tuple[ToolEvent, ...], proposed_actions: Sequence[dict[str, object]] = ()
+) -> tuple[dict[str, object], ...]:
+    """Return all execute_home_code action records, including proposed service data.
+
+    Production model-facing action records are intentionally compact and omit the
+    original request ``service_data``. Eval scoring needs that proposed data for
+    exact side-effect identity, so successful records are enriched from the
+    eval-only ``RecordingInvoker`` calls that were dispatched through the private
+    runtime seam. Blocked policy records are still sourced only from tool output.
+    """
     actions: list[dict[str, object]] = []
+    proposed_index = 0
     for event in tool_events:
         # Branch boundary: only execute_home_code result envelopes carry action records.
         if event.tool_name != _TOOL_EXECUTE_HOME_CODE:
@@ -178,8 +188,33 @@ def _recorded_actions_from_tool_events(tool_events: tuple[ToolEvent, ...]) -> tu
             # Safety constraint: scorer input is copied from JSON-safe tool output,
             # never from the live/recording invoker seam.
             if isinstance(action, dict):
-                actions.append(_for_scoring(action))
+                normalized = _for_scoring(action)
+                if normalized.get("status") != "error":
+                    normalized, proposed_index = _enrich_action_from_proposed(
+                        normalized, proposed_actions, proposed_index
+                    )
+                actions.append(normalized)
     return tuple(actions)
+
+
+def _enrich_action_from_proposed(
+    action: dict[str, object], proposed_actions: Sequence[dict[str, object]], start_index: int
+) -> tuple[dict[str, object], int]:
+    """Attach proposed service_data to one successful compact action record."""
+    for index in range(start_index, len(proposed_actions)):
+        proposed = proposed_actions[index]
+        if not _same_action_identity(action, proposed):
+            continue
+        enriched = dict(action)
+        if "service_data" not in enriched:
+            enriched["service_data"] = proposed.get("service_data")
+        return enriched, index + 1
+    return action, start_index
+
+
+def _same_action_identity(action: dict[str, object], proposed: dict[str, object]) -> bool:
+    """Return whether a compact output record matches a proposed invoker action."""
+    return action.get("domain") == proposed.get("domain") and action.get("service") == proposed.get("service")
 
 
 def _coerce_args(args: object) -> dict[str, object]:

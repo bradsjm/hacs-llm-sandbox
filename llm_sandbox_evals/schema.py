@@ -41,20 +41,67 @@ class ExpectedAction:
     domain: str
     service: str
     target_entity_ids: tuple[str, ...] = ()
+    service_data: dict[str, object] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ToolResultCheck:
+    """Structured evidence expected in a successful recorder tool result."""
+
+    tool_name: str
+    entity_ids: tuple[str, ...] = ()
+    statistic_ids: tuple[str, ...] = ()
+    fields: tuple[str, ...] = ()
+    period: str | None = None
+    entry_values: tuple[str, ...] = ()
+    min_results: int = 1
+
+
+@dataclass(frozen=True, slots=True)
+class BlockedOutcome:
+    """User-facing expectations for a deliberately blocked action attempt."""
+
+    max_attempts: int = 1
+    error_keys: tuple[str, ...] = ()
+    acknowledgement_values: tuple[str, ...] = ()
+    """Alternative inability/acknowledgement phrases; any one present passes."""
+    answer_excludes: tuple[str, ...] = ()
+    success_claim_excludes: tuple[str, ...] = (
+        "successfully",
+        "completed successfully",
+        "i turned",
+        "i have turned",
+        "i opened",
+        "i have opened",
+        "i closed",
+        "i have closed",
+        "i unlocked",
+        "i have unlocked",
+        "i locked",
+        "i have locked",
+        "it is now",
+        "it's now",
+        "has been turned",
+        "was turned",
+    )
 
 
 @dataclass(frozen=True, slots=True)
 class Expected:
     """Outcome-evidence expectations: salient facts, exclusions, and side effects.
 
-    ``expected_values`` are the tokens that prove the task was accomplished. They
-    are audited case-insensitively as substrings across an any-source evidence
-    blob (final answer + every tool return payload), not against any single tool
-    call, tool order, or tool argument. Keep each token distinctive so it cannot
-    accidentally match noise (e.g. prefer ``23.4`` over ``1``).
+    ``expected_values`` is the legacy final-answer evidence bucket kept for case
+    migration. New cases should use ``answer_values`` for user-visible final
+    answer facts, ``provenance_values`` for hidden/tool-payload facts,
+    ``tool_result_checks`` for structured recorder evidence, and
+    ``blocked_outcome`` for deliberately blocked action UX.
     """
 
     expected_values: tuple[str, ...] = ()
+    answer_values: tuple[str, ...] = ()
+    provenance_values: tuple[str, ...] = ()
+    tool_result_checks: tuple[ToolResultCheck, ...] = ()
+    blocked_outcome: BlockedOutcome | None = None
     answer_excludes: tuple[str, ...] = ()
     actions: tuple[ExpectedAction, ...] = ()
     guidance_candidate: str | None = None

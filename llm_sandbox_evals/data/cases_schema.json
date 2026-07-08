@@ -1,5 +1,67 @@
 {
   "$defs": {
+    "BlockedOutcome": {
+      "description": "User-facing expectations for a deliberately blocked action attempt.",
+      "properties": {
+        "max_attempts": {
+          "default": 1,
+          "title": "Max Attempts",
+          "type": "integer"
+        },
+        "error_keys": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Error Keys",
+          "type": "array"
+        },
+        "acknowledgement_values": {
+          "description": "Alternative inability/acknowledgement phrases; any one present passes.",
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Acknowledgement Values",
+          "type": "array"
+        },
+        "answer_excludes": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Answer Excludes",
+          "type": "array"
+        },
+        "success_claim_excludes": {
+          "default": [
+            "successfully",
+            "completed successfully",
+            "i turned",
+            "i have turned",
+            "i opened",
+            "i have opened",
+            "i closed",
+            "i have closed",
+            "i unlocked",
+            "i have unlocked",
+            "i locked",
+            "i have locked",
+            "it is now",
+            "it's now",
+            "has been turned",
+            "was turned"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "title": "Success Claim Excludes",
+          "type": "array"
+        }
+      },
+      "title": "BlockedOutcome",
+      "type": "object"
+    },
     "Case": {
       "additionalProperties": false,
       "properties": {
@@ -212,7 +274,7 @@
       "type": "object"
     },
     "Expected": {
-      "description": "Outcome-evidence expectations: salient facts, exclusions, and side effects.",
+      "description": "Outcome-evidence expectations: salient facts, exclusions, and side effects.\n\n``expected_values`` is the legacy final-answer evidence bucket kept for case\nmigration. New cases should use ``answer_values`` for user-visible final\nanswer facts, ``provenance_values`` for hidden/tool-payload facts,\n``tool_result_checks`` for structured recorder evidence, and\n``blocked_outcome`` for deliberately blocked action UX.",
       "properties": {
         "expected_values": {
           "default": [],
@@ -221,6 +283,41 @@
           },
           "title": "Expected Values",
           "type": "array"
+        },
+        "answer_values": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Answer Values",
+          "type": "array"
+        },
+        "provenance_values": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Provenance Values",
+          "type": "array"
+        },
+        "tool_result_checks": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ToolResultCheck"
+          },
+          "title": "Tool Result Checks",
+          "type": "array"
+        },
+        "blocked_outcome": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BlockedOutcome"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "answer_excludes": {
           "default": [],
@@ -289,6 +386,19 @@
           },
           "title": "Target Entity Ids",
           "type": "array"
+        },
+        "service_data": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Service Data"
         }
       },
       "required": [
@@ -1099,6 +1209,69 @@
         "function_tools"
       ],
       "title": "ToolOrOutput",
+      "type": "object"
+    },
+    "ToolResultCheck": {
+      "description": "Structured evidence expected in a successful recorder tool result.",
+      "properties": {
+        "tool_name": {
+          "title": "Tool Name",
+          "type": "string"
+        },
+        "entity_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Entity Ids",
+          "type": "array"
+        },
+        "statistic_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Statistic Ids",
+          "type": "array"
+        },
+        "fields": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Fields",
+          "type": "array"
+        },
+        "period": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Period"
+        },
+        "entry_values": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Entry Values",
+          "type": "array"
+        },
+        "min_results": {
+          "default": 1,
+          "title": "Min Results",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "tool_name"
+      ],
+      "title": "ToolResultCheck",
       "type": "object"
     },
     "short_spec_Contains": {
