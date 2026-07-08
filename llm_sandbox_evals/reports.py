@@ -138,7 +138,10 @@ def _cell_json(report_case: ReportCase[MatrixCellRef, CaseTrace, MatrixCellMeta]
         "model_id": str(metadata["model_id"]),
         "score": 0.0 if score is None else float(score.value),
         "tool_calls": trace.tool_call_count,
-        "checks": [{"name": check.name, "passed": check.passed, "required": check.required} for check in trace.checks],
+        "checks": [
+            {"name": check.name, "passed": check.passed, "required": check.required, "feedback": check.feedback}
+            for check in trace.checks
+        ],
         "trace": _trace_json(trace),
     }
 

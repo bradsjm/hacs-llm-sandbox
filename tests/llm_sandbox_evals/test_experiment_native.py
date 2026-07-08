@@ -44,6 +44,8 @@ async def test_run_matrix_stub_slice_writes_reloadable_report_json(tmp_path: Pat
         ("baseline", "stub", "state_living_temperature")
     ]
     assert cast(float, payload.cells[0]["score"]) == pytest.approx(1.0)
+    checks = cast(list[dict[str, object]], payload.cells[0]["checks"])
+    assert {"name", "passed", "required", "feedback"} <= checks[0].keys()
     # The stub read the temperature entity, so one tool event with its return is persisted.
     tool_events = cast(list[dict[str, object]], payload.cells[0]["trace"]["tool_events"])
     assert len(tool_events) == 1
