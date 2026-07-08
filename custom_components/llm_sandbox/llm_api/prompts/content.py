@@ -1,6 +1,7 @@
 """Action sections and tool description builders for LLM-facing prompts."""
 
 from ...snapshot.models import HomeSnapshot
+from ..data.home_db import render_query_schema_prompt
 
 _INVENTORY_AREA_NAME_CAP = 30
 _DOMAIN_COUNT_SEPARATOR = "\N{MULTIPLICATION SIGN}"
@@ -182,9 +183,8 @@ def build_execute_home_code_description() -> str:
     return (
         "Execute bounded Python/Monty code against a frozen, read-only Home Assistant view. "
         "Read states and registries using the native Home Assistant patterns documented in the API prompt. "
-        "await hass.query(sql, hours=N) runs read-only SQLite over states, history, and statistics; "
-        "history and statistics load on demand and can be narrowed with entity_ids or "
-        "area_id/floor_id/device_id/label_id/domain. "
+        f"{render_query_schema_prompt(compact=True, include_heading=False).removeprefix('- ')} "
+        "The query load can be narrowed with entity_ids or area_id/floor_id/device_id/label_id/domain. "
         "Service-call availability follows the API prompt. "
         "Success returns {execution:{status:'ok'}, output:<data>} with printed only when print() emitted lines "
         "and resolutions only when a remembered missing literal was rewritten to a visible entity id. "

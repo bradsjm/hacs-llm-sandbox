@@ -314,7 +314,20 @@ async def async_execute_home_code(
         payload["actions"] = actions
         # Policy blocks are action outcomes, not code failures, so execution.status remains ok.
         if isinstance(actions, list) and (summary := _failed_action_summary(actions)) is not None:
-            payload["notes"] = [*runtime.state.notes, summary]
+            execution_payload["action_status"] = "error"
+            execution_payload["action_failures"] = _failed_action_keys(actions)
+            payload["notes"] = [summary, *runtime.state.notes]
     if runtime.state.notes:
         payload.setdefault("notes", list(runtime.state.notes))
     return payload
+
+
+def _failed_action_keys(actions: Sequence[object]) -> list[str]:
+    """Return stable error keys for failed service actions."""
+    failed: list[str] = []
+    for action in actions:
+        if not isinstance(action, dict) or action.get("status") != "error":
+            continue
+        error = action.get("error")
+        failed.append(str(error.get("key", "unknown_error")) if isinstance(error, dict) else "unknown_error")
+    return failed

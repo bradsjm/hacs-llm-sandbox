@@ -104,7 +104,7 @@ The safety model rests on two ideas: a **frozen snapshot** and an **isolated san
 
 ### Read-only SQL queries
 
-`execute_home_code` can call `await hass.query(sql, hours=N)` to run read-only SQLite over visible `states` plus bounded recorder `history` and `statistics`. History and statistics rows load only when referenced, and their scope can be narrowed with `entity_ids` or HA-native selectors (`area_id`, `floor_id`, `device_id`, `label_id`, `domain`). For discoverability, the in-memory database also exposes recorder-compatible views: `states_meta`, `statistics_meta`, `statistics_short_term`, `state_history`, and `long_term_statistics`.
+`execute_home_code` can call `await hass.query(sql, hours=N)` to run read-only SQLite over a fresh per-run in-memory database, not Home Assistant's live recorder database. It exposes visible `states` plus bounded recorder `history` and `statistics`; `states.attributes` is JSON text queryable with SQLite JSON functions such as `json_extract()`. History and statistics rows load only when referenced, and their scope can be narrowed with `entity_ids` or HA-native selectors (`area_id`, `floor_id`, `device_id`, `label_id`, `domain`). For discoverability, the in-memory database also exposes recorder-compatible views: `states_meta`, `statistics_meta`, `statistics_short_term`, `state_history`, and `long_term_statistics`. It does not expose registry tables; use the registry facades or the denormalized state/history columns (`area_id`, `floor_id`, `device_id`, `domain`) for location/entity filtering.
 
 ## Things to know before you install
 

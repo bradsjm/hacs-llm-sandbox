@@ -132,7 +132,7 @@ def test_refine_reclassifies_mutation_builtin_without_attributes(name: str, snap
     assert name in refined_message
 
 
-def test_refine_unknown_name_guides_to_available_globals(snapshot: HomeSnapshot) -> None:
+def test_refine_arbitrary_unknown_name_omits_misleading_candidates(snapshot: HomeSnapshot) -> None:
     refined_kind, refined_message, guidance = refine_code_error(
         "MontyTypingError",
         "unresolved-reference: name `nope` is used when not defined",
@@ -141,9 +141,23 @@ def test_refine_unknown_name_guides_to_available_globals(snapshot: HomeSnapshot)
     )
 
     assert refined_kind == "NameError"
-    assert _candidate_ids(guidance)
-    assert _confidence(guidance) != "none"
+    assert guidance is None
     assert "nope" in refined_message
+    assert "Available sandbox globals include" in refined_message
+
+
+def test_refine_plausible_global_typo_keeps_candidate_guidance(snapshot: HomeSnapshot) -> None:
+    refined_kind, refined_message, guidance = refine_code_error(
+        "MontyTypingError",
+        "unresolved-reference: name `statez` is used when not defined",
+        "statez.async_all()",
+        snapshot,
+    )
+
+    assert refined_kind == "NameError"
+    assert "states" in _candidate_ids(guidance)
+    assert _confidence(guidance) == "high"
+    assert "statez" in refined_message
 
 
 @pytest.mark.parametrize(

@@ -24,6 +24,7 @@ from custom_components.llm_sandbox.llm_api.facades import (
     SafeServiceRegistry,
     build_facades,
 )
+from custom_components.llm_sandbox.llm_api.facades.services import ServiceDiscoveryFacts
 from custom_components.llm_sandbox.llm_api.prompts import resolve_profile
 from custom_components.llm_sandbox.llm_api.sandbox_context import (
     RuntimeContext,
@@ -37,6 +38,9 @@ from custom_components.llm_sandbox.snapshot.models import (
     SafeAreaEntry,
     SafeConfig,
     SafeContext,
+    SafeDeviceEntry,
+    SafeFloorEntry,
+    SafeLabelEntry,
     SafeState,
     SafeUnitSystem,
     ServiceSchemaBrief,
@@ -44,6 +48,7 @@ from custom_components.llm_sandbox.snapshot.models import (
 )
 from custom_components.llm_sandbox.types import ActionRecord, ProposedAction
 from homeassistant.core import Context, SupportsResponse
+from homeassistant.exceptions import ServiceNotSupported
 
 LIGHT_TURN_ON_BRIEF: ServiceSchemaBrief = {
     "fields": [
@@ -300,8 +305,8 @@ async def test_service_validation_error_uses_translation_key_and_message() -> No
     assert _action_keys(payload) == ["invalid_light_target"]
 
 
-async def test_voluptuous_invalid_is_service_call_failed_action_error() -> None:
-    """Schema failures without HA translation metadata use the generic call-failed key."""
+async def test_voluptuous_invalid_is_service_data_invalid_action_error() -> None:
+    """Schema failures without HA translation metadata are not reported as missing services."""
     harness = _service_harness(invoker=RecordingInvoker(errors=[vol.Invalid("bad value")]))
 
     payload = await _helper_error_for(
@@ -314,9 +319,14 @@ async def test_voluptuous_invalid_is_service_call_failed_action_error() -> None:
     assert payload["execution"]["status"] == "helper_error"
     assert isinstance(payload["execution"]["message"], str)
     assert payload["execution"]["message"]
-    assert payload["execution"]["message"] != "service_call_failed"
+    assert payload["execution"]["message"] != "service_data_invalid"
     assert _action_statuses(payload) == ["error"]
-    assert _action_keys(payload) == ["service_call_failed"]
+    assert _action_keys(payload) == ["service_data_invalid"]
+    action = _first_action(payload)
+    error = cast(Mapping[str, object], action["error"])
+    assert "exists" in str(error["message"])
+    assert "service_data" in str(error["message"])
+    assert "guidance" not in error
 
 
 async def test_expired_per_call_deadline_records_timeout_action_error() -> None:
@@ -520,6 +530,7 @@ async def test_async_services_for_target_reports_per_entity_services() -> None:
         },
     )
     harness = _service_harness(snapshot=snapshot)
+    clear_runtime()
 
     result = harness.services.async_services_for_target({"entity_id": "light.bedroom"})
 
@@ -531,6 +542,115 @@ async def test_async_services_for_target_reports_per_entity_services() -> None:
             }
         }
     }
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        pytest.param({"entity_id": "light.bedroom"}, id="entity-id"),
+        pytest.param({"device_id": "device-bedroom"}, id="device-id"),
+        pytest.param({"area_id": "area-bedroom"}, id="area-id"),
+        pytest.param({"floor_id": "floor-main"}, id="floor-id"),
+        pytest.param({"label_id": "label-night"}, id="label-id"),
+        pytest.param({"label": "label-night"}, id="label"),
+    ],
+)
+async def test_async_services_for_target_resolves_selectors_without_runtime_context(
+    target: Mapping[str, object],
+) -> None:
+    """Discovery expands HA selectors from bounded facts, not runtime snapshot lookup."""
+    snapshot = replace(
+        _snapshot(),
+        services_target={"light": {"turn_on": {"entity": [{"domain": ["light"]}]}}},
+    )
+    harness = _service_harness(snapshot=snapshot)
+    clear_runtime()
+
+    result = harness.services.async_services_for_target(target)
+
+    assert set(result) == {"light.bedroom"}
+    assert result["light.bedroom"]["light"]["turn_on"]["fields"] == ["brightness_pct"]
+
+
+async def test_services_facade_does_not_expose_snapshot_surface() -> None:
+    """The Monty-visible services facade never stores the full snapshot."""
+    from custom_components.llm_sandbox.llm_api.contracts import MONTY_TYPE_STUBS
+    from custom_components.llm_sandbox.llm_api.normalization.builtin_normalization import public_surface
+
+    harness = _service_harness()
+    clear_runtime()
+
+    assert not hasattr(harness.services, "snapshot")
+    assert not hasattr(harness.services, "_snapshot")
+    assert isinstance(harness.services._discovery, ServiceDiscoveryFacts)
+    assert "snapshot" not in public_surface(SafeServiceRegistry)
+    assert "_snapshot" not in public_surface(SafeServiceRegistry)
+    assert "class SafeServiceRegistry" in MONTY_TYPE_STUBS
+    assert "snapshot: HomeSnapshot" not in MONTY_TYPE_STUBS
+    assert "_snapshot: HomeSnapshot" not in MONTY_TYPE_STUBS
+
+
+async def test_live_service_not_supported_guidance_lists_entities_supporting_service() -> None:
+    """Multi-target live support failures suggest only entities that support the service."""
+    snapshot = replace(
+        _snapshot(),
+        states={
+            "light.supported": _state(
+                "light.supported", "on", "Supported Light", attributes={"supported_features": 4}
+            ),
+            "light.plain": _state("light.plain", "on", "Plain Light"),
+        },
+        areas={"area-bedroom": _area("area-bedroom", "Bedroom")},
+        indexes=SnapshotIndexes(
+            entity_ids_by_device_id={},
+            entity_ids_by_area_id={"area-bedroom": ("light.supported", "light.plain")},
+            device_ids_by_area_id={},
+            entity_ids_by_config_entry_id={},
+            entity_ids_by_label={},
+            device_ids_by_label={},
+            area_ids_by_floor_id={},
+        ),
+        services_target={"light": {"turn_on": {"entity": [{"domain": ["light"], "supported_features": [4]}]}}},
+    )
+    harness = _service_harness(
+        snapshot=snapshot,
+        invoker=RecordingInvoker(errors=[ServiceNotSupported("light", "turn_on", "light.plain")]),
+    )
+
+    payload = await _helper_error_for(harness, "light", "turn_on", target={"area_id": "area-bedroom"})
+
+    error = cast(Mapping[str, object], _first_action(payload)["error"])
+    assert error["key"] == "service_target_not_supported"
+    assert _guidance_candidate_ids(error["guidance"]) == {"light.supported"}
+
+
+async def test_live_service_not_supported_guidance_lists_single_entity_supported_services() -> None:
+    """Single-target live support failures suggest services supported by that entity."""
+    snapshot = replace(
+        _snapshot(),
+        states={"light.plain": _state("light.plain", "on", "Plain Light")},
+        services={"light": ("toggle", "turn_on")},
+        services_supports_response={
+            "light": {"toggle": SupportsResponse.NONE.value, "turn_on": SupportsResponse.NONE.value}
+        },
+        services_schema={"light": {"toggle": SWITCH_TURN_ON_BRIEF, "turn_on": LIGHT_TURN_ON_BRIEF}},
+        services_target={
+            "light": {
+                "toggle": {"entity": [{"domain": ["light"]}]},
+                "turn_on": {"entity": [{"domain": ["light"], "supported_features": [4]}]},
+            }
+        },
+    )
+    harness = _service_harness(
+        snapshot=snapshot,
+        invoker=RecordingInvoker(errors=[ServiceNotSupported("light", "turn_on", "light.plain")]),
+    )
+
+    payload = await _helper_error_for(harness, "light", "turn_on", target={"entity_id": "light.plain"})
+
+    error = cast(Mapping[str, object], _first_action(payload)["error"])
+    assert error["key"] == "service_target_not_supported"
+    assert _guidance_candidate_ids(error["guidance"]) == {"light.toggle"}
 
 
 async def test_cross_domain_target_is_blocked_with_service_supported_fix() -> None:
@@ -635,6 +755,59 @@ async def test_area_selector_typo_guidance_uses_area_context() -> None:
     assert "Area" in message
     assert "area-bedrom" in message
     assert "'light'" not in message
+
+
+@pytest.mark.parametrize(
+    ("selector", "requested", "expected_id", "case_name"),
+    [
+        pytest.param(
+            "device_id",
+            "device-bedrom",
+            "device-bedroom",
+            "device",
+            id="device",
+        ),
+        pytest.param(
+            "floor_id",
+            "floor-mian",
+            "floor-main",
+            "floor",
+            id="floor",
+        ),
+        pytest.param(
+            "label_id",
+            "label-nigt",
+            "label-night",
+            "label",
+            id="label-id",
+        ),
+        pytest.param(
+            "label",
+            "label-nigt",
+            "label-night",
+            "label",
+            id="label",
+        ),
+    ],
+)
+async def test_aggregate_selector_typo_guidance_uses_same_selector_kind(
+    selector: str,
+    requested: str,
+    expected_id: str,
+    case_name: str,
+) -> None:
+    """Aggregate selector typo guidance suggests selector ids/names, not entity ids."""
+    snapshot = _aggregate_selector_snapshot(case_name)
+    harness = _service_harness(snapshot=snapshot)
+
+    result = await _ok_call(harness, "light", "turn_on", target={selector: requested})
+
+    assert result is None
+    error = cast(dict[str, object], harness.runtime.state.actions[0]["error"])
+    guidance = cast(Mapping[str, object], error["guidance"])
+    candidates = cast(list[Mapping[str, object]], guidance["candidates"])
+    assert candidates[0]["id"] == expected_id
+    assert candidates[0]["id"] not in snapshot.states
 
 
 async def test_existing_area_with_no_light_entities_does_not_suggest_same_area() -> None:
@@ -874,6 +1047,72 @@ def _area(area_id: str, name: str, floor_id: str | None = None) -> SafeAreaEntry
         picture=None,
         humidity_entity_id=None,
         temperature_entity_id=None,
+        created_at="2026-06-29T00:00:00+00:00",
+        modified_at="2026-06-29T00:00:00+00:00",
+    )
+
+
+def _aggregate_selector_snapshot(case_name: str) -> HomeSnapshot:
+    """Build selector-specific snapshots after helper constructors are defined."""
+    snapshot = _snapshot()
+    if case_name == "device":
+        return replace(
+            snapshot,
+            devices={"device-bedroom": _device("device-bedroom", "Bedroom Device")},
+            indexes=replace(snapshot.indexes, entity_ids_by_device_id={"device-bedroom": ("light.bedroom",)}),
+        )
+    if case_name == "floor":
+        return replace(snapshot, floors={"floor-main": _floor("floor-main", "Main")})
+    return replace(snapshot, labels={"label-night": _label("label-night", "Night")})
+
+
+def _device(device_id: str, name: str) -> SafeDeviceEntry:
+    """Build a minimal visible device record for selector guidance tests."""
+    return SafeDeviceEntry(
+        id=device_id,
+        name=name,
+        name_by_user=None,
+        manufacturer=None,
+        model=None,
+        model_id=None,
+        sw_version=None,
+        hw_version=None,
+        serial_number=None,
+        area_id=None,
+        labels=(),
+        identifiers=(),
+        connections=(),
+        configuration_url=None,
+        entry_type=None,
+        config_entries=(),
+        via_device_id=None,
+        disabled_by=None,
+    )
+
+
+def _floor(floor_id: str, name: str) -> SafeFloorEntry:
+    """Build a minimal visible floor record for selector guidance tests."""
+    return SafeFloorEntry(
+        floor_id=floor_id,
+        id=floor_id,
+        name=name,
+        aliases=(),
+        level=None,
+        icon=None,
+        created_at="2026-06-29T00:00:00+00:00",
+        modified_at="2026-06-29T00:00:00+00:00",
+    )
+
+
+def _label(label_id: str, name: str) -> SafeLabelEntry:
+    """Build a minimal visible label record for selector guidance tests."""
+    return SafeLabelEntry(
+        label_id=label_id,
+        name=name,
+        normalized_name=name.lower(),
+        description=None,
+        color=None,
+        icon=None,
         created_at="2026-06-29T00:00:00+00:00",
         modified_at="2026-06-29T00:00:00+00:00",
     )

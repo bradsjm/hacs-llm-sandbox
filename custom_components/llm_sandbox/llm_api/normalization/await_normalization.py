@@ -122,6 +122,133 @@ class _SubscriptRewriter(ast.NodeTransformer):
 
     def __init__(self) -> None:
         self.rewrote = False
+        self._shadowed_scopes: list[set[str]] = [set()]
+
+    def visit_Module(self, node: ast.Module) -> ast.AST:
+        """Visit top-level statements in execution order so assignments shadow later sugar."""
+        node.body = [self.visit(statement) for statement in node.body]
+        return node
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.AST:
+        """Normalize function bodies with Python-local bindings treated as shadows."""
+        return self._visit_function(node)
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> ast.AST:
+        """Normalize async function bodies with Python-local bindings treated as shadows."""
+        return self._visit_function(node)
+
+    def visit_Lambda(self, node: ast.Lambda) -> ast.AST:
+        """Lambda arguments shadow facade globals inside the expression body."""
+        node.args = self.visit(node.args)
+        self._shadowed_scopes.append(_argument_names(node.args))
+        try:
+            node.body = self.visit(node.body)
+        finally:
+            self._shadowed_scopes.pop()
+        return node
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> ast.AST:
+        """Class names bind after their definition; class bodies get their own scope."""
+        self._shadowed_scopes[-1].update(_target_names(node))
+        node.decorator_list = [self.visit(decorator) for decorator in node.decorator_list]
+        node.bases = [self.visit(base) for base in node.bases]
+        node.keywords = [self.visit(keyword) for keyword in node.keywords]
+        self._shadowed_scopes.append(set())
+        try:
+            node.body = [self.visit(statement) for statement in node.body]
+        finally:
+            self._shadowed_scopes.pop()
+        return node
+
+    def visit_For(self, node: ast.For) -> ast.AST:
+        """For-loop targets shadow facade globals throughout the loop body."""
+        node.iter = self.visit(node.iter)
+        node.target = self.visit(node.target)
+        self._shadowed_scopes[-1].update(_target_names(node.target))
+        node.body = [self.visit(statement) for statement in node.body]
+        node.orelse = [self.visit(statement) for statement in node.orelse]
+        return node
+
+    def visit_AsyncFor(self, node: ast.AsyncFor) -> ast.AST:
+        """Async for-loop targets shadow facade globals throughout the loop body."""
+        node.iter = self.visit(node.iter)
+        node.target = self.visit(node.target)
+        self._shadowed_scopes[-1].update(_target_names(node.target))
+        node.body = [self.visit(statement) for statement in node.body]
+        node.orelse = [self.visit(statement) for statement in node.orelse]
+        return node
+
+    def visit_With(self, node: ast.With) -> ast.AST:
+        """With ``as`` targets shadow facade globals throughout the with body."""
+        for item in node.items:
+            item.context_expr = self.visit(item.context_expr)
+            if item.optional_vars is not None:
+                item.optional_vars = self.visit(item.optional_vars)
+                self._shadowed_scopes[-1].update(_target_names(item.optional_vars))
+        node.body = [self.visit(statement) for statement in node.body]
+        return node
+
+    def visit_AsyncWith(self, node: ast.AsyncWith) -> ast.AST:
+        """Async with ``as`` targets shadow facade globals throughout the body."""
+        for item in node.items:
+            item.context_expr = self.visit(item.context_expr)
+            if item.optional_vars is not None:
+                item.optional_vars = self.visit(item.optional_vars)
+                self._shadowed_scopes[-1].update(_target_names(item.optional_vars))
+        node.body = [self.visit(statement) for statement in node.body]
+        return node
+
+    def visit_ExceptHandler(self, node: ast.ExceptHandler) -> ast.AST:
+        """Exception aliases shadow facade globals inside the handler body."""
+        if node.type is not None:
+            node.type = self.visit(node.type)
+        self._shadowed_scopes.append({node.name} if node.name in {"hass", "states"} else set())
+        try:
+            node.body = [self.visit(statement) for statement in node.body]
+        finally:
+            self._shadowed_scopes.pop()
+        return node
+
+    def visit_Assign(self, node: ast.Assign) -> ast.AST:
+        """Assignments shadow facade globals only after their value is evaluated."""
+        node.value = self.visit(node.value)
+        node.targets = [self.visit(target) for target in node.targets]
+        for target in node.targets:
+            self._shadowed_scopes[-1].update(_target_names(target))
+        return node
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> ast.AST:
+        """Annotated assignments shadow facade globals after evaluating value/annotation."""
+        node.annotation = self.visit(node.annotation)
+        if node.value is not None:
+            node.value = self.visit(node.value)
+        node.target = self.visit(node.target)
+        self._shadowed_scopes[-1].update(_target_names(node.target))
+        return node
+
+    def visit_AugAssign(self, node: ast.AugAssign) -> ast.AST:
+        """Augmented assignments read the previous root before shadowing future sugar."""
+        node.target = self.visit(node.target)
+        node.value = self.visit(node.value)
+        self._shadowed_scopes[-1].update(_target_names(node.target))
+        return node
+
+    def visit_NamedExpr(self, node: ast.NamedExpr) -> ast.AST:
+        """Walrus targets shadow facade globals after evaluating the value."""
+        node.value = self.visit(node.value)
+        node.target = self.visit(node.target)
+        self._shadowed_scopes[-1].update(_target_names(node.target))
+        return node
+
+    def visit_Import(self, node: ast.Import) -> ast.AST:
+        """Import aliases can replace facade globals for following statements."""
+        self._shadowed_scopes[-1].update(_import_names(node.names))
+        return node
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> ast.AST:
+        """Imported names can replace facade globals for following statements."""
+        self._shadowed_scopes[-1].update(_import_names(node.names))
+        return node
 
     def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
         """Recurse first so nested facade subscripts are rewritten from inside out."""
@@ -193,10 +320,147 @@ class _SubscriptRewriter(ast.NodeTransformer):
         # Monty does not dispatch ``[]`` to dataclass ``__getitem__``. Keep the
         # public state-machine sugar by calling the HA-native ``get`` method.
         if isinstance(node, ast.Name):
-            return node.id == "states"
+            return node.id == "states" and not self._is_shadowed("states")
         if isinstance(node, ast.Attribute):
-            return node.attr == "states" and isinstance(node.value, ast.Name) and node.value.id == "hass"
+            return (
+                node.attr == "states"
+                and isinstance(node.value, ast.Name)
+                and node.value.id == "hass"
+                and not self._is_shadowed("hass")
+            )
         return False
+
+    def _visit_function(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> ast.AST:
+        self._shadowed_scopes[-1].update(_target_names(node))
+        node.decorator_list = [self.visit(decorator) for decorator in node.decorator_list]
+        node.args = self.visit(node.args)
+        node.returns = self.visit(node.returns) if node.returns is not None else None
+        self._shadowed_scopes.append(_function_shadowed_names(node))
+        try:
+            node.body = [self.visit(statement) for statement in node.body]
+        finally:
+            self._shadowed_scopes.pop()
+        return node
+
+    def _is_shadowed(self, name: str) -> bool:
+        return any(name in scope for scope in reversed(self._shadowed_scopes))
+
+
+def _function_shadowed_names(node: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
+    shadowed = _argument_names(node.args)
+    collector = _FacadeBindingCollector()
+    for statement in node.body:
+        collector.visit(statement)
+    shadowed.update(collector.names)
+    return shadowed
+
+
+def _argument_names(args: ast.arguments) -> set[str]:
+    names = {arg.arg for arg in [*args.posonlyargs, *args.args, *args.kwonlyargs] if arg.arg in {"hass", "states"}}
+    if args.vararg is not None and args.vararg.arg in {"hass", "states"}:
+        names.add(args.vararg.arg)
+    if args.kwarg is not None and args.kwarg.arg in {"hass", "states"}:
+        names.add(args.kwarg.arg)
+    return names
+
+
+def _import_names(aliases: list[ast.alias]) -> set[str]:
+    names: set[str] = set()
+    for alias in aliases:
+        name = alias.asname or alias.name.split(".", maxsplit=1)[0]
+        if name in {"hass", "states"}:
+            names.add(name)
+    return names
+
+
+def _target_names(node: ast.AST) -> set[str]:
+    if isinstance(node, ast.Name) and node.id in {"hass", "states"}:
+        return {node.id}
+    if isinstance(node, ast.Starred):
+        return _target_names(node.value)
+    if isinstance(node, ast.Tuple | ast.List):
+        names: set[str] = set()
+        for element in node.elts:
+            names.update(_target_names(element))
+        return names
+    return set()
+
+
+class _FacadeBindingCollector(ast.NodeVisitor):
+    """Collect function-local bindings that shadow facade root globals."""
+
+    def __init__(self) -> None:
+        self.names: set[str] = set()
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self.names.update(_target_names(node))
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        self.names.update(_target_names(node))
+
+    def visit_Lambda(self, _node: ast.Lambda) -> None:
+        return
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        self.names.update(_target_names(node))
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        for target in node.targets:
+            self.names.update(_target_names(target))
+        self.generic_visit(node.value)
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        self.names.update(_target_names(node.target))
+        if node.value is not None:
+            self.visit(node.value)
+
+    def visit_AugAssign(self, node: ast.AugAssign) -> None:
+        self.names.update(_target_names(node.target))
+        self.visit(node.value)
+
+    def visit_NamedExpr(self, node: ast.NamedExpr) -> None:
+        self.names.update(_target_names(node.target))
+        self.visit(node.value)
+
+    def visit_For(self, node: ast.For) -> None:
+        self.names.update(_target_names(node.target))
+        self.visit(node.iter)
+        for statement in [*node.body, *node.orelse]:
+            self.visit(statement)
+
+    def visit_AsyncFor(self, node: ast.AsyncFor) -> None:
+        self.names.update(_target_names(node.target))
+        self.visit(node.iter)
+        for statement in [*node.body, *node.orelse]:
+            self.visit(statement)
+
+    def visit_With(self, node: ast.With) -> None:
+        for item in node.items:
+            if item.optional_vars is not None:
+                self.names.update(_target_names(item.optional_vars))
+            self.visit(item.context_expr)
+        for statement in node.body:
+            self.visit(statement)
+
+    def visit_AsyncWith(self, node: ast.AsyncWith) -> None:
+        for item in node.items:
+            if item.optional_vars is not None:
+                self.names.update(_target_names(item.optional_vars))
+            self.visit(item.context_expr)
+        for statement in node.body:
+            self.visit(statement)
+
+    def visit_ExceptHandler(self, node: ast.ExceptHandler) -> None:
+        if node.name in {"hass", "states"}:
+            self.names.add(node.name)
+        for statement in node.body:
+            self.visit(statement)
+
+    def visit_Import(self, node: ast.Import) -> None:
+        self.names.update(_import_names(node.names))
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+        self.names.update(_import_names(node.names))
 
 
 class _AwaitWrapper(ast.NodeTransformer):
@@ -205,9 +469,136 @@ class _AwaitWrapper(ast.NodeTransformer):
     def __init__(self, async_method_names: set[str]) -> None:
         self._async_method_names = async_method_names
         self.wrapped = False
+        self._shadowed_scopes: list[set[str]] = [set()]
         # True while visiting the operand of an Await node. Prevents wrapping
         # a Call that is already the direct operand of an Await.
         self._inside_await_operand = False
+
+    def visit_Module(self, node: ast.Module) -> ast.AST:
+        """Visit top-level statements in execution order so assignments shadow later calls."""
+        node.body = [self.visit(statement) for statement in node.body]
+        return node
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.AST:
+        """Normalize function bodies with Python-local bindings treated as shadows."""
+        return self._visit_function(node)
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> ast.AST:
+        """Normalize async function bodies with Python-local bindings treated as shadows."""
+        return self._visit_function(node)
+
+    def visit_Lambda(self, node: ast.Lambda) -> ast.AST:
+        """Lambda arguments shadow facade globals inside the expression body."""
+        node.args = self.visit(node.args)
+        self._shadowed_scopes.append(_argument_names(node.args))
+        try:
+            node.body = self.visit(node.body)
+        finally:
+            self._shadowed_scopes.pop()
+        return node
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> ast.AST:
+        """Class names bind after their definition; class bodies get their own scope."""
+        self._shadowed_scopes[-1].update(_target_names(node))
+        node.decorator_list = [self.visit(decorator) for decorator in node.decorator_list]
+        node.bases = [self.visit(base) for base in node.bases]
+        node.keywords = [self.visit(keyword) for keyword in node.keywords]
+        self._shadowed_scopes.append(set())
+        try:
+            node.body = [self.visit(statement) for statement in node.body]
+        finally:
+            self._shadowed_scopes.pop()
+        return node
+
+    def visit_For(self, node: ast.For) -> ast.AST:
+        """For-loop targets shadow facade globals throughout the loop body."""
+        node.iter = self.visit(node.iter)
+        node.target = self.visit(node.target)
+        self._shadowed_scopes[-1].update(_target_names(node.target))
+        node.body = [self.visit(statement) for statement in node.body]
+        node.orelse = [self.visit(statement) for statement in node.orelse]
+        return node
+
+    def visit_AsyncFor(self, node: ast.AsyncFor) -> ast.AST:
+        """Async for-loop targets shadow facade globals throughout the loop body."""
+        node.iter = self.visit(node.iter)
+        node.target = self.visit(node.target)
+        self._shadowed_scopes[-1].update(_target_names(node.target))
+        node.body = [self.visit(statement) for statement in node.body]
+        node.orelse = [self.visit(statement) for statement in node.orelse]
+        return node
+
+    def visit_With(self, node: ast.With) -> ast.AST:
+        """With ``as`` targets shadow facade globals throughout the with body."""
+        for item in node.items:
+            item.context_expr = self.visit(item.context_expr)
+            if item.optional_vars is not None:
+                item.optional_vars = self.visit(item.optional_vars)
+                self._shadowed_scopes[-1].update(_target_names(item.optional_vars))
+        node.body = [self.visit(statement) for statement in node.body]
+        return node
+
+    def visit_AsyncWith(self, node: ast.AsyncWith) -> ast.AST:
+        """Async with ``as`` targets shadow facade globals throughout the body."""
+        for item in node.items:
+            item.context_expr = self.visit(item.context_expr)
+            if item.optional_vars is not None:
+                item.optional_vars = self.visit(item.optional_vars)
+                self._shadowed_scopes[-1].update(_target_names(item.optional_vars))
+        node.body = [self.visit(statement) for statement in node.body]
+        return node
+
+    def visit_ExceptHandler(self, node: ast.ExceptHandler) -> ast.AST:
+        """Exception aliases shadow facade globals inside the handler body."""
+        if node.type is not None:
+            node.type = self.visit(node.type)
+        self._shadowed_scopes.append({node.name} if node.name in {"hass", "states"} else set())
+        try:
+            node.body = [self.visit(statement) for statement in node.body]
+        finally:
+            self._shadowed_scopes.pop()
+        return node
+
+    def visit_Assign(self, node: ast.Assign) -> ast.AST:
+        """Assignments shadow facade globals only after their value is evaluated."""
+        node.value = self.visit(node.value)
+        node.targets = [self.visit(target) for target in node.targets]
+        for target in node.targets:
+            self._shadowed_scopes[-1].update(_target_names(target))
+        return node
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> ast.AST:
+        """Annotated assignments shadow facade globals after evaluating value/annotation."""
+        node.annotation = self.visit(node.annotation)
+        if node.value is not None:
+            node.value = self.visit(node.value)
+        node.target = self.visit(node.target)
+        self._shadowed_scopes[-1].update(_target_names(node.target))
+        return node
+
+    def visit_AugAssign(self, node: ast.AugAssign) -> ast.AST:
+        """Augmented assignments read the previous root before shadowing future calls."""
+        node.target = self.visit(node.target)
+        node.value = self.visit(node.value)
+        self._shadowed_scopes[-1].update(_target_names(node.target))
+        return node
+
+    def visit_NamedExpr(self, node: ast.NamedExpr) -> ast.AST:
+        """Walrus targets shadow facade globals after evaluating the value."""
+        node.value = self.visit(node.value)
+        node.target = self.visit(node.target)
+        self._shadowed_scopes[-1].update(_target_names(node.target))
+        return node
+
+    def visit_Import(self, node: ast.Import) -> ast.AST:
+        """Import aliases can replace facade globals for following statements."""
+        self._shadowed_scopes[-1].update(_import_names(node.names))
+        return node
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> ast.AST:
+        """Imported names can replace facade globals for following statements."""
+        self._shadowed_scopes[-1].update(_import_names(node.names))
+        return node
 
     def visit_Await(self, node: ast.Await) -> ast.AST:
         old = self._inside_await_operand
@@ -235,9 +626,26 @@ class _AwaitWrapper(ast.NodeTransformer):
         # is an API call we may auto-await. Anything else (a local variable, a
         # call result) is out of scope: do not rewrite it.
         if isinstance(node, ast.Name):
-            return node.id in _VIEW_GLOBALS
+            if node.id == "hass":
+                return not self._is_shadowed("hass")
+            return node.id in _VIEW_GLOBALS and not self._is_shadowed(node.id)
         if isinstance(node, ast.Attribute):
             return self._is_view_rooted(node.value)
         if isinstance(node, ast.Subscript):
             return self._is_view_rooted(node.value)
         return False
+
+    def _is_shadowed(self, name: str) -> bool:
+        return any(name in scope for scope in reversed(self._shadowed_scopes))
+
+    def _visit_function(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> ast.AST:
+        self._shadowed_scopes[-1].update(_target_names(node))
+        node.decorator_list = [self.visit(decorator) for decorator in node.decorator_list]
+        node.args = self.visit(node.args)
+        node.returns = self.visit(node.returns) if node.returns is not None else None
+        self._shadowed_scopes.append(_function_shadowed_names(node))
+        try:
+            node.body = [self.visit(statement) for statement in node.body]
+        finally:
+            self._shadowed_scopes.pop()
+        return node

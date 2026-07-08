@@ -1,10 +1,46 @@
 """Behavioral tests for the bounded home SQLite database."""
 
 import pytest
-from custom_components.llm_sandbox.llm_api.data.home_db import MAX_HISTORY_LOAD_ROWS, HomeDatabase
+from custom_components.llm_sandbox.llm_api.data.home_db import (
+    MAX_HISTORY_LOAD_ROWS,
+    SCHEMA_TABLES,
+    SCHEMA_VIEWS,
+    HomeDatabase,
+    columns_for_table,
+    render_query_schema_prompt,
+)
 from custom_components.llm_sandbox.llm_api.errors import HelperExecutionError
 
 from tests.components.llm_sandbox.llm_api.tools.test_analytics import _snapshot
+
+
+@pytest.mark.parametrize(
+    "schema_name",
+    [
+        *(pytest.param(name, id=f"table-{name}") for name in SCHEMA_TABLES),
+        *(pytest.param(name, id=f"view-{name}") for name in SCHEMA_VIEWS),
+    ],
+)
+def test_query_schema_prompt_lists_declared_columns(schema_name: str) -> None:
+    """LLM-facing SQL schema text is rendered from the table/view source of truth."""
+    prompt = render_query_schema_prompt()
+
+    assert f"{schema_name}(" in prompt
+    assert set(columns_for_table(schema_name)) <= set(
+        prompt.split(f"{schema_name}(", 1)[1].split(")", 1)[0].split(", ")
+    )
+
+
+def test_query_schema_prompt_describes_runtime_contract() -> None:
+    """SQL prompt guidance describes the sandbox database rather than HA recorder internals."""
+    prompt = render_query_schema_prompt()
+
+    assert "await hass.query(sql, hours=N)" in prompt
+    assert "fresh per-run in-memory database" in prompt
+    assert "not Home Assistant's live recorder database" in prompt
+    assert "json_extract(attributes" in prompt
+    assert "load on demand" in prompt
+    assert "There are no registry tables" in prompt
 
 
 def test_home_db_queries_visible_states_and_json_attributes() -> None:

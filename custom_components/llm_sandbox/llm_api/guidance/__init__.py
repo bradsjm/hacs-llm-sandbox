@@ -97,14 +97,16 @@ def _payload_candidate(candidate: CandidateDict, match: Match) -> Candidate:
     """Convert an internal candidate mapping into the public payload dataclass."""
     candidate_id = str(candidate.get("id", ""))
     name = str(candidate.get("name", ""))
-    detail_parts = [
-        str(candidate.get("area_name", "")),
-        str(candidate.get("floor_name", "")),
-        str(candidate.get("device_class", "")),
-        str(candidate.get("unit", "")),
-    ]
+    detail_parts = [_detail_part(candidate.get(key)) for key in ("area_name", "floor_name", "device_class", "unit")]
     detail = ", ".join(part for part in detail_parts if part)
     return Candidate(id=candidate_id, name=name, match=match.label, detail=detail)
+
+
+def _detail_part(value: object) -> str:
+    """Return a candidate detail segment, omitting absent/empty values."""
+    if value is None or value == "":
+        return ""
+    return str(value)
 
 
 def _cross_kind_candidates(snapshot: HomeSnapshot, ctx: FailureContext) -> tuple[CandidateDict, ...]:

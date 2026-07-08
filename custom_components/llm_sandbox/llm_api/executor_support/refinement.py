@@ -75,10 +75,21 @@ def _refine_unresolved_reference(kind: str, message: str, code: str, snapshot: H
             "Use the pre-bound globals instead.",
             None,
         )
+    guidance = advise(snapshot, FailureContext(intent=Intent.CODE_NAME, requested=name)).to_payload()
+    confidence = guidance.get("confidence")
+    if confidence in {"exact", "high"}:
+        return (
+            "NameError",
+            f"`{name}` is not defined; use an available sandbox global or assign it before use.",
+            guidance,
+        )
+    from ..contracts import AVAILABLE_GLOBALS
+
+    globals_hint = ", ".join(sorted(AVAILABLE_GLOBALS)[:8])
     return (
         "NameError",
-        f"`{name}` is not defined; use an available sandbox global or assign it before use.",
-        advise(snapshot, FailureContext(intent=Intent.CODE_NAME, requested=name)).to_payload(),
+        f"`{name}` is not defined; assign it before use. Available sandbox globals include: {globals_hint}.",
+        None,
     )
 
 

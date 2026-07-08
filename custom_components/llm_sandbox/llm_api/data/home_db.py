@@ -107,6 +107,36 @@ def columns_for_table(name: str) -> tuple[str, ...]:
     return ()
 
 
+def render_query_schema_prompt(*, compact: bool = False, include_heading: bool = True) -> str:
+    """Render LLM-facing SQL guidance from the actual in-memory schema."""
+    table_parts = [f"{name}({', '.join(columns_for_table(name))})" for name in SCHEMA_TABLES]
+    view_parts = [f"{name}({', '.join(columns_for_table(name))})" for name in SCHEMA_VIEWS]
+    heading = "## SQL query\n" if include_heading else ""
+    if compact:
+        return (
+            f"{heading}"
+            "- await hass.query(sql, hours=N) runs read-only SQLite over one per-run in-memory database, "
+            f"not HA's live recorder. Tables: {'; '.join(table_parts)}. Views: {'; '.join(view_parts)}. "
+            "states.attributes is JSON text; use json_extract(attributes, '$.<key>'). History/statistics load "
+            "on demand when referenced. No registry tables: use facades or denormalized area_id/floor_id/"
+            "device_id/domain columns for location filtering."
+        )
+    return (
+        f"{heading}"
+        "- await hass.query(sql, hours=N) runs read-only SQLite against a fresh per-run in-memory database "
+        "populated only from the frozen visible snapshot and bounded recorder loads; it is not Home Assistant's "
+        "live recorder database.\n"
+        f"- Base tables: {'; '.join(table_parts)}.\n"
+        f"- Compatibility views: {'; '.join(view_parts)}.\n"
+        "- states.attributes is JSON text; use SQLite JSON functions such as "
+        "json_extract(attributes, '$.<key>') for attribute filters.\n"
+        "- history and statistics rows load on demand only when the SQL references history/state_history or "
+        "statistics/long_term_statistics/statistics_meta/statistics_short_term; hours=N bounds that load.\n"
+        "- There are no registry tables. Use registry facades before querying, or use the denormalized "
+        "states/history columns area_id, floor_id, device_id, and domain for location/entity filtering."
+    )
+
+
 _LEADING_SQL_COMMENT = re.compile(r"^\s*(?:--[^\n]*\n|/\*.*?\*/)", re.DOTALL)
 _SQL_COLUMN_QUALIFIER = re.compile(
     r"no such column:\s+"

@@ -81,7 +81,9 @@ async def test_eval_runtime_records_actions_disabled_without_invoking() -> None:
         'await hass.services.async_call("light", "turn_on", target={"entity_id": "light.living"})\nresult = "done"',
     )
 
-    assert result["execution"] == {"status": "ok"}
+    assert result["execution"]["status"] == "ok"
+    assert result["execution"]["action_status"] == "error"
+    assert result["execution"]["action_failures"] == ["actions_disabled"]
     assert result["output"] == "done"
     action = _single_action(result)
     assert action["status"] == "error"
@@ -96,7 +98,9 @@ async def test_eval_runtime_records_service_target_not_visible_without_invoking(
         'result = "done"',
     )
 
-    assert result["execution"] == {"status": "ok"}
+    assert result["execution"]["status"] == "ok"
+    assert result["execution"]["action_status"] == "error"
+    assert result["execution"]["action_failures"] == ["service_target_not_visible"]
     assert result["output"] == "done"
     action = _single_action(result)
     assert action["status"] == "error"
@@ -110,7 +114,9 @@ async def test_eval_runtime_records_service_not_found_without_invoking() -> None
         'await hass.services.async_call("light", "missing", target={"entity_id": "light.living"})\nresult = "done"',
     )
 
-    assert result["execution"] == {"status": "ok"}
+    assert result["execution"]["status"] == "ok"
+    assert result["execution"]["action_status"] == "error"
+    assert result["execution"]["action_failures"] == ["service_not_found"]
     assert result["output"] == "done"
     action = _single_action(result)
     assert action["status"] == "error"

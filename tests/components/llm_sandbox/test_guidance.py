@@ -215,7 +215,7 @@ def test_policy_decides_confidence_from_ranked_signal(case_name: str, expected: 
         ),
         pytest.param(
             FailureContext(intent=Intent.CODE_NAME, requested="statez"),
-            False,
+            True,
             id="code-name",
         ),
         pytest.param(
@@ -269,6 +269,31 @@ def test_to_payload_uses_documented_json_shape_and_round_trips() -> None:
     assert set(candidates[0]) == {"id", "name", "match", "detail"}
     assert payload["cross_kind"] == ""
     assert json.loads(json.dumps(payload)) == payload
+
+
+def test_candidate_detail_omits_absent_values() -> None:
+    """Candidate detail strings include useful values but never stringify None."""
+    snapshot = replace(
+        _home_snapshot(),
+        states={
+            "sensor.none_detail": _state(
+                "sensor.none_detail",
+                "1",
+                "None Detail",
+                attributes={"device_class": None, "unit_of_measurement": "W"},
+            )
+        },
+        entities={},
+        areas={},
+        floors={},
+    )
+
+    guidance = advise(
+        snapshot, FailureContext(intent=Intent.READ_STATE, requested="sensor.none_detail", domain="sensor")
+    )
+
+    assert "W" in guidance.candidates[0].detail
+    assert "None" not in guidance.candidates[0].detail
 
 
 def test_report_context_location_scope_override() -> None:

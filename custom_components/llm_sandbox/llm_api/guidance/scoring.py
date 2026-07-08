@@ -267,6 +267,7 @@ def _allows_token_typos(ctx: FailureContext) -> bool:
         Intent.QUERY_HISTORY,
         Intent.CAPTURE_IMAGE,
         Intent.CALL_SERVICE,
+        Intent.CODE_NAME,
     }
 
 

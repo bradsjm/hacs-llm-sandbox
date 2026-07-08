@@ -136,6 +136,30 @@ VIEW_CLASSES = [
             id="rewrite-state-machine-len",
         ),
         pytest.param(
+            "states = hass.states.async_all('lieght')\nresult = len(states)",
+            "states = hass.states.async_all('lieght')\nresult = len(states)",
+            set(),
+            id="local-states-shadow-keeps-len",
+        ),
+        pytest.param(
+            "states = {'light.bedroom': 'on'}\nresult = states['light.bedroom']",
+            "states = {'light.bedroom': 'on'}\nresult = states['light.bedroom']",
+            set(),
+            id="local-states-shadow-keeps-subscript",
+        ),
+        pytest.param(
+            "hass = obj\nresult = hass.states['light.bedroom']",
+            "hass = obj\nresult = hass.states['light.bedroom']",
+            set(),
+            id="local-hass-shadow-keeps-subscript",
+        ),
+        pytest.param(
+            "def f():\n    hass = object()\nresult = hass.services.async_call('light', 'turn_on')",
+            "def f():\n    hass = object()\nresult = await hass.services.async_call('light', 'turn_on')",
+            {AWAITED_ASYNC_CALLS},
+            id="function-local-hass-shadow-does-not-leak",
+        ),
+        pytest.param(
             "result = x.get('foo')",
             "result = x.get('foo')",
             set(),

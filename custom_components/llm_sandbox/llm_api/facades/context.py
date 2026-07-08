@@ -21,7 +21,7 @@ from .registries import (
     SafeLabelRegistry,
     SafeNotificationRegistry,
 )
-from .services import SafeServiceRegistry
+from .services import SafeServiceRegistry, service_discovery_facts
 from .state import (
     SafeDateFacade,
     SafeDateTimeFacade,
@@ -108,6 +108,7 @@ def build_facades(
         services=snapshot.services,
         services_supports_response=snapshot.services_supports_response,
         services_schema=snapshot.services_schema,
+        _discovery=service_discovery_facts(snapshot),
     )
     hass = SafeHass(states=state_machine, services=service_registry, config=snapshot.config)
 

@@ -5,24 +5,48 @@
 import asyncio
 import time
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, cast
 
+import voluptuous as vol
 from homeassistant.core import SupportsResponse
+from homeassistant.exceptions import ServiceNotSupported
 from homeassistant.util.json import JsonValueType
 
 from ...runtime import SandboxSettings
-from ...snapshot.models import HomeSnapshot, ServiceSchemaBrief
+from ...snapshot.models import HomeSnapshot, ServiceSchemaBrief, ServiceTargetBrief
 from ...types import ActionRecord, ProposedAction, TranslationPlaceholders
 from ..data.selectors import AGGREGATE_SELECTOR_KEYS, expand_aggregate_selectors
 from ..errors import HelperExecutionError
 from ..executor_support import helper_response, json_safe
-from ..guidance import FailureContext, Intent, advise
+from ..guidance import Candidate, Confidence, FailureContext, Guidance, Intent, advise
 from ..resolution import _DISCOVERY_LIMIT, bounded_strings, resolve_target_entity
 from ..sandbox_context import require_runtime, require_snapshot
 from ..target_matching import raw_service_field_names, service_accepts_domain, services_for_entity
 
 _TARGET_SELECTOR_KEYS = frozenset(("entity_id", "device_id", "area_id", "label_id", "label", "floor_id"))
+
+
+@dataclass(frozen=True, slots=True)
+class ServiceDiscoveryFacts:
+    """Minimal service-discovery facts derived from one frozen snapshot."""
+
+    entities: Mapping[str, _ServiceEntityFacts]
+    entity_ids_by_device_id: Mapping[str, tuple[str, ...]]
+    entity_ids_by_area_id: Mapping[str, tuple[str, ...]]
+    entity_ids_by_label: Mapping[str, tuple[str, ...]]
+    area_ids_by_floor_id: Mapping[str, tuple[str, ...]]
+    services_target: Mapping[str, Mapping[str, ServiceTargetBrief]]
+
+
+@dataclass(frozen=True, slots=True)
+class _ServiceEntityFacts:
+    """Entity facts needed for service-target discovery matching."""
+
+    domain: str
+    device_class: str | None
+    supported_features: int
+    integration: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,6 +62,7 @@ class SafeServiceRegistry:
     services: Mapping[str, tuple[str, ...]]
     services_supports_response: Mapping[str, Mapping[str, str]]
     services_schema: Mapping[str, Mapping[str, ServiceSchemaBrief]]
+    _discovery: ServiceDiscoveryFacts = field(default_factory=lambda: ServiceDiscoveryFacts({}, {}, {}, {}, {}, {}))
 
     def has_service(self, domain: str, service: str) -> bool:
         """Return True if ``domain.service`` exists in the service catalog."""
@@ -77,13 +102,12 @@ class SafeServiceRegistry:
         snapshot; no live Home Assistant call. Output is bounded to
         ``_DISCOVERY_LIMIT`` entities; each service lists its field names.
         """
-        snapshot = require_snapshot()
-        entity_ids = sorted(_expand_target_entities(snapshot, target))
+        entity_ids = sorted(_expand_target_entities(self._discovery, target))
         if not entity_ids:
             return {}
         result: dict[str, dict[str, dict[str, object]]] = {}
         for entity_id in entity_ids[:_DISCOVERY_LIMIT]:
-            matched = services_for_entity(snapshot, entity_id)
+            matched = _services_for_entity(self._discovery, entity_id)
             if not matched:
                 continue
             per_entity: dict[str, dict[str, object]] = {}
@@ -342,20 +366,16 @@ class SafeServiceRegistry:
                 ) from err
             except Exception as err:
                 helper_err = self._service_call_error(err, domain, service)
+                guidance = None
+                if helper_err.key == "service_target_not_supported":
+                    guidance = _service_target_unsupported_guidance(
+                        require_snapshot(), domain, service, resolved_target
+                    )
                 record["status"] = "error"
                 record["error"] = _action_error(
                     helper_err.key,
-                    f"Service '{domain}.{service}' failed validation or execution: {err.__class__.__name__}.",
-                    guidance=advise(
-                        require_snapshot(),
-                        FailureContext(
-                            intent=Intent.CALL_SERVICE,
-                            requested=service,
-                            domain=domain,
-                            service=service,
-                            service_data=cleaned_service_data or {},
-                        ),
-                    ).to_payload(),
+                    _service_call_failure_message(err, domain, service, helper_err.key),
+                    guidance=guidance,
                 )
                 raise helper_err from err
             if return_response:
@@ -488,6 +508,18 @@ class SafeServiceRegistry:
     ) -> HelperExecutionError:
         """Classify live Home Assistant service-call and schema failures."""
         translation_key = getattr(err, "translation_key", None)
+        if isinstance(err, vol.Invalid):
+            return HelperExecutionError(
+                "services.async_call",
+                "service_data_invalid",
+                {"domain": domain, "service": service, "reason": _voluptuous_reason(err)},
+            )
+        if isinstance(err, ServiceNotSupported):
+            return HelperExecutionError(
+                "services.async_call",
+                "service_target_not_supported",
+                {"domain": domain, "service": service},
+            )
         if translation_key is None:
             key = "service_call_failed"
             placeholders: TranslationPlaceholders = {
@@ -517,6 +549,49 @@ class SafeServiceRegistry:
         )
 
 
+def service_discovery_facts(snapshot: HomeSnapshot) -> ServiceDiscoveryFacts:
+    """Build the bounded facts ``hass.services`` needs for sync discovery."""
+    return ServiceDiscoveryFacts(
+        entities={
+            entity_id: _ServiceEntityFacts(
+                domain=state.domain,
+                device_class=_discovery_device_class(state.attributes, snapshot.entities.get(entity_id)),
+                supported_features=_discovery_supported_features(state.attributes, snapshot.entities.get(entity_id)),
+                integration=_discovery_integration(state.platform, snapshot.entities.get(entity_id)),
+            )
+            for entity_id, state in snapshot.states.items()
+        },
+        entity_ids_by_device_id=dict(snapshot.indexes.entity_ids_by_device_id),
+        entity_ids_by_area_id=dict(snapshot.indexes.entity_ids_by_area_id),
+        entity_ids_by_label=dict(snapshot.indexes.entity_ids_by_label),
+        area_ids_by_floor_id=dict(snapshot.indexes.area_ids_by_floor_id),
+        services_target=dict(snapshot.services_target),
+    )
+
+
+def _discovery_device_class(attributes: Mapping[str, object], entry: object) -> str | None:
+    """Return only the device-class fact used by service-target matching."""
+    value = attributes.get("device_class")
+    if isinstance(value, str):
+        return value
+    return getattr(entry, "device_class", None) or getattr(entry, "original_device_class", None)
+
+
+def _discovery_supported_features(attributes: Mapping[str, object], entry: object) -> int:
+    """Return only the supported-features fact used by service-target matching."""
+    value = attributes.get("supported_features")
+    if isinstance(value, int):
+        return value
+    entry_features = getattr(entry, "supported_features", 0)
+    return entry_features if isinstance(entry_features, int) else 0
+
+
+def _discovery_integration(state_platform: str | None, entry: object) -> str | None:
+    """Return only the integration/platform fact used by service-target matching."""
+    entry_platform = getattr(entry, "platform", None)
+    return entry_platform if isinstance(entry_platform, str) else state_platform
+
+
 def _target_values(value: object) -> list[str]:
     """Return HA target selector values as strings."""
     if isinstance(value, str):
@@ -526,7 +601,7 @@ def _target_values(value: object) -> list[str]:
     return [str(value)]
 
 
-def _expand_target_entities(snapshot: HomeSnapshot, target: Mapping[str, object] | None) -> set[str]:
+def _expand_target_entities(facts: ServiceDiscoveryFacts, target: Mapping[str, object] | None) -> set[str]:
     """Resolve HA target selectors to visible entity ids for read-only discovery.
 
     Unlike ``_visible_target`` this performs no fuzzy auto-resolution and records
@@ -537,12 +612,90 @@ def _expand_target_entities(snapshot: HomeSnapshot, target: Mapping[str, object]
     entity_ids: set[str] = set()
     if "entity_id" in target:
         for entity_id in _target_values(target["entity_id"]):
-            if entity_id in snapshot.states:
+            if entity_id in facts.entities:
                 entity_ids.add(entity_id)
-    for requested_expansions in expand_aggregate_selectors(snapshot, target).values():
+    for requested_expansions in _expand_discovery_selectors(facts, target).values():
         for _requested, resolved in requested_expansions:
             entity_ids.update(resolved)
     return entity_ids
+
+
+def _expand_discovery_selectors(
+    facts: ServiceDiscoveryFacts,
+    target: Mapping[str, object],
+) -> dict[str, tuple[tuple[str, tuple[str, ...]], ...]]:
+    """Expand aggregate selectors from bounded service-discovery facts."""
+    expansions: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {}
+    for selector in AGGREGATE_SELECTOR_KEYS:
+        if selector not in target:
+            continue
+        resolved_values = tuple(
+            (requested, resolved)
+            for requested in _target_values(target[selector])
+            if (resolved := _expand_discovery_selector(facts, selector, requested))
+        )
+        if resolved_values:
+            expansions[selector] = resolved_values
+    return expansions
+
+
+def _expand_discovery_selector(facts: ServiceDiscoveryFacts, selector: str, value: object) -> tuple[str, ...]:
+    """Expand one aggregate selector without access to the full snapshot."""
+    requested = str(value)
+    if selector == "device_id":
+        return tuple(facts.entity_ids_by_device_id.get(requested, ()))
+    if selector == "area_id":
+        return tuple(facts.entity_ids_by_area_id.get(requested, ()))
+    if selector in {"label", "label_id"}:
+        return tuple(facts.entity_ids_by_label.get(requested, ()))
+    if selector == "floor_id":
+        entity_ids: list[str] = []
+        for area_id in facts.area_ids_by_floor_id.get(requested, ()):
+            entity_ids.extend(facts.entity_ids_by_area_id.get(area_id, ()))
+        return tuple(entity_ids)
+    return ()
+
+
+def _services_for_entity(facts: ServiceDiscoveryFacts, entity_id: str) -> tuple[str, ...]:
+    """Return service ids whose bounded target facts accept the entity."""
+    entity = facts.entities.get(entity_id)
+    if entity is None:
+        return ()
+    matched: list[str] = []
+    for domain, service_briefs in facts.services_target.items():
+        for service, brief in service_briefs.items():
+            if _service_targets_entity(brief, entity):
+                matched.append(f"{domain}.{service}")
+    return tuple(sorted(matched))
+
+
+def _service_targets_entity(brief: ServiceTargetBrief, entity: _ServiceEntityFacts) -> bool:
+    """Whether a service target accepts an entity using bounded facts only."""
+    filters = brief.get("entity")
+    if not isinstance(filters, list) or not filters:
+        return True
+    return any(_service_target_filter_matches(target_filter, entity) for target_filter in filters)
+
+
+def _service_target_filter_matches(target_filter: Mapping[str, object], entity: _ServiceEntityFacts) -> bool:
+    """Mirror HA service target filtering without retaining state/registry records."""
+    domains = target_filter.get("domain")
+    if isinstance(domains, list) and domains and entity.domain not in domains:
+        return False
+    integration = target_filter.get("integration")
+    if isinstance(integration, str) and integration and entity.integration != integration:
+        return False
+    device_classes = target_filter.get("device_class")
+    if isinstance(device_classes, list) and device_classes and entity.device_class not in device_classes:
+        return False
+    features = target_filter.get("supported_features")
+    return not (
+        isinstance(features, list)
+        and features
+        and not any(
+            isinstance(feature, int) and feature & entity.supported_features == feature for feature in features
+        )
+    )
 
 
 def _selector_exists(snapshot: HomeSnapshot, selector: str, requested: str) -> bool:
@@ -685,11 +838,112 @@ def _service_target_not_supported_message(
     return f"Service '{domain}.{service}' does not target {', '.join(excluded_domains)} entities.{accepted}"
 
 
+def _service_target_unsupported_guidance(
+    snapshot: HomeSnapshot,
+    domain: str,
+    service: str,
+    resolved_target: Mapping[str, object] | None,
+) -> dict[str, object]:
+    """Return live target-support guidance from service/entity compatibility facts."""
+    service_id = f"{domain}.{service}"
+    entity_ids = _resolved_entity_ids(resolved_target)
+    if len(entity_ids) == 1:
+        entity_id = entity_ids[0]
+        supported_services = tuple(item for item in services_for_entity(snapshot, entity_id) if item != service_id)
+        return _supported_service_guidance(entity_id, supported_services).to_payload()
+    supported_entities = tuple(
+        entity_id for entity_id in sorted(snapshot.states) if service_id in services_for_entity(snapshot, entity_id)
+    )
+    return _supported_entity_guidance(snapshot, service_id, supported_entities).to_payload()
+
+
+def _resolved_entity_ids(resolved_target: Mapping[str, object] | None) -> tuple[str, ...]:
+    """Return entity ids from a resolved service target."""
+    raw_entity_ids = resolved_target.get("entity_id") if isinstance(resolved_target, Mapping) else None
+    if isinstance(raw_entity_ids, str):
+        return (raw_entity_ids,)
+    if isinstance(raw_entity_ids, list):
+        return tuple(str(entity_id) for entity_id in raw_entity_ids)
+    return ()
+
+
+def _supported_entity_guidance(snapshot: HomeSnapshot, service_id: str, entity_ids: tuple[str, ...]) -> Guidance:
+    """Build a guidance payload listing entities that support the failed service."""
+    candidates = [
+        Candidate(
+            id=entity_id,
+            name=snapshot.states[entity_id].name or "",
+            match="supports service",
+            detail=snapshot.states[entity_id].domain,
+        )
+        for entity_id in entity_ids
+    ]
+    if candidates:
+        return Guidance(
+            confidence=Confidence.LISTING,
+            candidates=candidates,
+            reason=f"`{service_id}` is supported by other visible entities.",
+            next_step="Pick a listed entity id that supports the requested service and retry.",
+        )
+    return Guidance(
+        confidence=Confidence.NONE,
+        candidates=[],
+        reason=f"No visible entity is known to support `{service_id}`.",
+        next_step="Inspect the service and target capabilities before retrying.",
+    )
+
+
+def _supported_service_guidance(entity_id: str, service_ids: tuple[str, ...]) -> Guidance:
+    """Build a guidance payload listing services supported by one target entity."""
+    candidates = [
+        Candidate(
+            id=service_id,
+            name=service_id.partition(".")[2].replace("_", " "),
+            match="supported service",
+            detail=entity_id,
+        )
+        for service_id in service_ids
+    ]
+    if candidates:
+        return Guidance(
+            confidence=Confidence.LISTING,
+            candidates=candidates,
+            reason=f"The target `{entity_id}` supports other visible services.",
+            next_step="Pick a listed service id supported by the target entity and retry.",
+        )
+    return Guidance(
+        confidence=Confidence.NONE,
+        candidates=[],
+        reason=f"No visible services are known to support `{entity_id}`.",
+        next_step="Inspect the target entity capabilities before retrying.",
+    )
+
+
+def _service_call_failure_message(err: Exception, domain: str, service: str, key: str) -> str:
+    """Return an LLM-facing live service failure message for an action record."""
+    if key == "service_data_invalid":
+        return f"Service '{domain}.{service}' exists, but service_data failed validation: {_voluptuous_reason(err)}."
+    if key == "service_target_not_supported":
+        return f"Service '{domain}.{service}' is not supported for the requested target."
+    return f"Service '{domain}.{service}' failed validation or execution: {err.__class__.__name__}."
+
+
+def _voluptuous_reason(err: Exception) -> str:
+    """Return a compact voluptuous validation reason without service-name guidance."""
+    if isinstance(err, vol.MultipleInvalid) and err.errors:
+        return "; ".join(_voluptuous_reason(item) for item in err.errors)
+    if isinstance(err, vol.Invalid):
+        path = ".".join(str(part) for part in err.path if part is not None)
+        reason = str(err.msg or err)
+        return f"{path}: {reason}" if path else reason
+    return err.__class__.__name__
+
+
 def _service_field_names(brief: ServiceSchemaBrief | None) -> list[str] | None:
     """Return bounded field names from a service schema brief."""
     if brief is None:
         return None
-    names = sorted(str(field["name"]) for field in raw_service_field_names(brief))
+    names = sorted(str(service_field["name"]) for service_field in raw_service_field_names(brief))
     return bounded_strings(names) if names else None
 
 

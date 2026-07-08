@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 
 from ...const import DEFAULT_PROMPT_PROFILE
+from ..data.home_db import render_query_schema_prompt
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,6 +160,8 @@ _STANDARD = PromptProfile(
         "- hass.services.supports_response('<domain>', '<service>') -> response mode; "
         "it is not an existence check.\n"
         "\n"
+        f"{render_query_schema_prompt()}\n"
+        "\n"
         "## Execution rules\n"
         "- Keep code self-contained; use the pre-bound globals and plain Python "
         "instead of importing helpers.\n"
@@ -261,6 +264,8 @@ _TERSE = PromptProfile(
         "->per-entity services with supports_response,field names.\n"
         "- hass.services.supports_response(domain,service)->response mode, not existence check.\n"
         "\n"
+        f"{render_query_schema_prompt(compact=True)}\n"
+        "\n"
         "## Execution rules\n"
         "- Self-contained; pre-bound globals/plain Python.\n"
         "- Builtins: len,sum,min,max,sorted,dict,list,set,tuple,enumerate,zip,round,range,abs,any,all,map,"
@@ -317,6 +322,8 @@ _MINIMAL = PromptProfile(
         "## Service catalog (reads)\n"
         "- hass.services.has_service('<domain>', '<service>') -> bool.\n"
         "- hass.services.async_services_for_domain('<domain>') -> per-service metadata; {} for unknown domains.\n"
+        "\n"
+        f"{render_query_schema_prompt(compact=True)}\n"
         "\n"
         "## Execution rules\n"
         "- Keep code self-contained; use pre-bound globals and plain Python.\n"

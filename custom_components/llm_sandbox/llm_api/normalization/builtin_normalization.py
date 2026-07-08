@@ -19,7 +19,7 @@ WRAPPED_NEXT_ITER = "wrapped_next_iter"
 
 def public_surface(cls: type) -> frozenset[str]:
     """Return public dataclass fields and supported methods for ``cls``."""
-    field_names = {field.name for field in fields(cls)}
+    field_names = {field.name for field in fields(cls) if not field.name.startswith("_")}
     method_names: set[str] = set()
     for name, _member in inspect.getmembers(cls, predicate=inspect.isfunction):
         if name.startswith("_") and name not in _SUPPORTED_OPERATOR_DUNDERS:

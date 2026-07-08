@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Any, cast
 
 import pytest
-from custom_components.llm_sandbox.const import DEFAULT_PROMPT_PROFILE, TOOL_EXECUTE_HOME_CODE
+from custom_components.llm_sandbox.const import CONF_ACTIONS_ENABLED, DEFAULT_PROMPT_PROFILE, TOOL_EXECUTE_HOME_CODE
 from custom_components.llm_sandbox.llm_api import executor
 from custom_components.llm_sandbox.llm_api.data.home_db import MAX_HISTORY_LOAD_ROWS
 from custom_components.llm_sandbox.llm_api.errors import HelperExecutionError
@@ -747,6 +747,36 @@ result = ret
     assert "response" not in action
     assert "error" not in action
     assert events == ["turn_on"]
+
+
+async def test_policy_blocked_service_call_adds_action_failure_metadata(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+) -> None:
+    """Policy-blocked calls keep status ok but expose unmistakable action failure metadata."""
+    mock_config_entry.add_to_hass(hass)
+    hass.config_entries.async_update_entry(
+        mock_config_entry,
+        options={**mock_config_entry.options, CONF_ACTIONS_ENABLED: False},
+    )
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    result = await _run_code(
+        hass,
+        mock_config_entry,
+        """
+await hass.services.async_call("light", "turn_on", target={"entity_id": "light.bedroom"})
+result = {"status": "unexpectedly_succeeded"}
+""",
+    )
+
+    assert result["execution"]["status"] == "ok"
+    assert result["execution"]["action_status"] == "error"
+    assert result["execution"]["action_failures"] == ["actions_disabled"]
+    assert result["output"] == {"status": "unexpectedly_succeeded"}
+    assert result["actions"][0]["status"] == "error"
+    assert result["notes"][0].startswith("1 of 1 service calls were blocked or failed")
 
 
 async def test_action_payload_is_json_safe(
