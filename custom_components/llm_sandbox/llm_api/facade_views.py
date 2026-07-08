@@ -891,7 +891,7 @@ class SafeServiceRegistry:
                     entity_ids.add(entity_id)
                     continue
                 resolve_domain = entity_id.split(".", 1)[0] if "." in entity_id else domain
-                outcome = resolve_target_entity(snapshot, entity_id, resolve_domain, memory=memory)
+                outcome = resolve_target_entity(snapshot, entity_id, resolve_domain)
                 if outcome.is_resolved:
                     resolved_entity_id = cast(str, outcome.resolved)
                     entity_ids.add(resolved_entity_id)
@@ -909,7 +909,6 @@ class SafeServiceRegistry:
                             domain=resolve_domain,
                             service=service or "",
                         ),
-                        memory=memory,
                     ).to_payload()
                     return _UnresolvedTarget(
                         requested=entity_id,
@@ -938,7 +937,6 @@ class SafeServiceRegistry:
                     domain=domain,
                     service=service or "",
                 ),
-                memory=memory,
             ).to_payload()
             return _UnresolvedTarget(
                 requested=supported_values[0],

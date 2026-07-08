@@ -60,7 +60,6 @@ def _missing_state_checker(ctx: LegacyNoteContext) -> str | None:
     guidance = advise(
         ctx.snapshot,
         FailureContext(intent=Intent.READ_STATE, requested=requested, domain=domain),
-        memory=ctx.memory,
     )
     if MEMORY_WRITE_ALLOWED[guidance.confidence] and guidance.candidates:
         # Safety boundary: only high-confidence guidance may become future automatic literal substitution.

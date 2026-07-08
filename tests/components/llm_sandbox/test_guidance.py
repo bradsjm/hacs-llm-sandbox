@@ -27,7 +27,6 @@ from custom_components.llm_sandbox.llm_api.guidance.sources import (
     sql_column_candidates,
     sql_table_candidates,
 )
-from custom_components.llm_sandbox.llm_api.resolution_memory import ResolutionMemory
 from custom_components.llm_sandbox.snapshot.builder import enrich_states
 from custom_components.llm_sandbox.snapshot.models import (
     HomeSnapshot,
@@ -56,7 +55,6 @@ class ScoreSignalCase:
     requested: str
     candidate: CandidateMapping
     ctx: FailureContext
-    memory: ResolutionMemory | None
     snapshot: HomeSnapshot | None
     assertion: Callable[[Match], bool]
 
@@ -76,14 +74,13 @@ class ScoreSignalCase:
         pytest.param("service-field-overlap", id="service-field-overlap"),
         pytest.param("service-support-target", id="service-support-target"),
         pytest.param("service-support-domain-fallback", id="service-support-domain-fallback"),
-        pytest.param("memory-rank", id="memory-rank"),
     ],
 )
 def test_score_signals_rank_by_domain_relevant_evidence(case_name: str) -> None:
     """A. Score exposes the expected public signal for each recovery cue."""
     case = _score_signal_cases()[case_name]
 
-    match = score(case.requested, case.candidate, case.ctx, memory=case.memory, snapshot=case.snapshot)
+    match = score(case.requested, case.candidate, case.ctx, snapshot=case.snapshot)
 
     assert case.assertion(match)
 
@@ -96,7 +93,7 @@ def test_score_tiebreak_sorts_identical_signal_candidates_by_id() -> None:
         {"kind": "entity", "id": "sensor.alpha", "name": "Alpha", "domain": "sensor"},
     )
 
-    ranked = [(candidate, score(ctx.requested, candidate, ctx, memory=None)) for candidate in candidates]
+    ranked = [(candidate, score(ctx.requested, candidate, ctx)) for candidate in candidates]
     ranked.sort(key=lambda item: item[1].key(), reverse=True)
 
     assert [str(candidate["id"]) for candidate, _match in ranked] == ["sensor.alpha", "sensor.beta"]
@@ -326,35 +323,29 @@ def test_report_real_office_blinds_close_is_domain_filtered() -> None:
     "requested",
     [pytest.param("switch.garage_opener", id="hidden-garage"), pytest.param("switch.nope", id="nonexistent")],
 )
-def test_report_blocked_hidden_garage_opener_is_not_imperative_and_does_not_write_memory(requested: str) -> None:
-    """E. Hidden or absent switch guidance must not say Use X or mutate memory."""
-    memory = ResolutionMemory()
+def test_report_blocked_hidden_garage_opener_is_not_imperative(requested: str) -> None:
+    """E. Hidden or absent switch guidance must not say Use X."""
     guidance = advise(
         _home_snapshot(),
         FailureContext(intent=Intent.READ_STATE, requested=requested, domain="switch"),
-        memory=memory,
     )
 
     assert guidance.confidence in {Confidence.NONE, Confidence.LISTING}
     assert not MEMORY_WRITE_ALLOWED[guidance.confidence]
     assert not guidance.next_step.startswith("Use `")
     assert "switch.garage_opener" not in {candidate.id for candidate in guidance.candidates}
-    assert memory.remembered_entity_ids() == ()
 
 
 def test_report_action_domain_not_allowed_gets_non_imperative_guidance() -> None:
     """E. A service request outside available domains gets bounded absence/listing guidance."""
-    memory = ResolutionMemory()
     guidance = advise(
         _home_snapshot(),
         FailureContext(intent=Intent.CALL_SERVICE, requested="unlock", domain="lock", service="unlock"),
-        memory=memory,
     )
 
     assert guidance.confidence in {Confidence.NONE, Confidence.LISTING}
     assert guidance.reason
     assert not guidance.next_step.startswith("Use `")
-    assert memory.remembered_entity_ids() == ()
 
 
 def test_report_complex_hot_living_turn_on_fan_ranks_field_aware_service_first() -> None:
@@ -452,29 +443,11 @@ def test_guard_bare_requested_uses_context_domain() -> None:
         pytest.param(FailureContext(intent=Intent.SQL_TABLE, requested="missing_table"), id="sql-table"),
     ],
 )
-def test_guard_low_confidence_outcomes_do_not_mutate_memory(ctx: FailureContext) -> None:
-    """F. Listing and absence guidance never write advisory resolution memory."""
-    memory = ResolutionMemory()
-
-    guidance = advise(_home_snapshot(), ctx, memory=memory)
+def test_guard_low_confidence_outcomes_are_non_imperative(ctx: FailureContext) -> None:
+    """F. Listing and absence guidance never carry imperative wording."""
+    guidance = advise(_home_snapshot(), ctx)
 
     assert not MEMORY_WRITE_ALLOWED[guidance.confidence]
-    assert memory.remembered_entity_ids() == ()
-
-
-def test_guard_stale_memory_is_ignored() -> None:
-    """F. Memory entries for ids absent from the fresh snapshot cannot force a high-confidence result."""
-    memory = ResolutionMemory()
-    memory.record("sensor.old_temp", "sensor.missing")
-
-    guidance = advise(
-        _home_snapshot(),
-        FailureContext(intent=Intent.READ_STATE, requested="sensor.old_temp", domain="sensor"),
-        memory=memory,
-    )
-
-    assert guidance.confidence is not Confidence.HIGH
-    assert "sensor.missing" not in {candidate.id for candidate in guidance.candidates}
 
 
 def test_guard_advise_is_deterministic() -> None:
@@ -491,8 +464,6 @@ def test_guard_advise_is_deterministic() -> None:
 def _score_signal_cases() -> dict[str, ScoreSignalCase]:
     """Return score signal cases built after the local snapshot helper is available."""
     snapshot = _home_snapshot()
-    memory = ResolutionMemory()
-    memory.record("remember this", "sensor.remembered")
     fallback_snapshot = replace(snapshot, services_target={})
     fan_selector = FailureContext(
         intent=Intent.RESOLVE_SELECTOR,
@@ -507,14 +478,12 @@ def _score_signal_cases() -> dict[str, ScoreSignalCase]:
             {"kind": "entity", "id": "sensor.living_temp", "name": "Living Temperature", "domain": "sensor"},
             FailureContext(intent=Intent.READ_STATE, requested="sensor.living_temp", domain="sensor"),
             None,
-            None,
             lambda match: match.exact == 1,
         ),
         "name-token": ScoreSignalCase(
             "bedroom",
             {"kind": "entity", "id": "light.bedroom", "name": "Bedroom Light", "domain": "light"},
             FailureContext(intent=Intent.READ_STATE, requested="bedroom", domain="light"),
-            None,
             None,
             lambda match: match.token_overlap > 0.0,
         ),
@@ -523,14 +492,12 @@ def _score_signal_cases() -> dict[str, ScoreSignalCase]:
             {"kind": "entity", "id": "sensor.living_temp", "object_id": "living_temp", "name": "Living Temp"},
             FailureContext(intent=Intent.READ_STATE, requested="temperature", domain="sensor"),
             None,
-            None,
             lambda match: match.token_overlap > 0.0,
         ),
         "abbreviation-hum": ScoreSignalCase(
             "humidity",
             {"kind": "entity", "id": "sensor.bedroom_hum", "object_id": "bedroom_hum", "name": "Bedroom Hum"},
             FailureContext(intent=Intent.READ_STATE, requested="humidity", domain="sensor"),
-            None,
             None,
             lambda match: match.token_overlap > 0.0,
         ),
@@ -539,14 +506,12 @@ def _score_signal_cases() -> dict[str, ScoreSignalCase]:
             {"kind": "entity", "id": "sensor.outdoor", "name": "Outdoor Sensor", "device_class": "temperature"},
             FailureContext(intent=Intent.READ_STATE, requested="temperature", domain="sensor"),
             None,
-            None,
             lambda match: match.capability == 2,
         ),
         "unit-vocabulary": ScoreSignalCase(
             "c",
             {"kind": "entity", "id": "sensor.outdoor", "name": "Outdoor Sensor", "unit": "°C"},
             FailureContext(intent=Intent.READ_STATE, requested="c", domain="sensor"),
-            None,
             None,
             lambda match: match.capability >= 1,
         ),
@@ -555,14 +520,12 @@ def _score_signal_cases() -> dict[str, ScoreSignalCase]:
             {"kind": "entity", "id": "light.living", "name": "Lamp", "area_name": "Living Room"},
             FailureContext(intent=Intent.RESOLVE_SELECTOR, requested="living", domain="light"),
             None,
-            None,
             lambda match: match.area_floor > 0,
         ),
         "floor-token": ScoreSignalCase(
             "upstairs",
             {"kind": "entity", "id": "light.bedroom", "name": "Lamp", "floor_name": "Upstairs"},
             FailureContext(intent=Intent.RESOLVE_SELECTOR, requested="upstairs", domain="light"),
-            None,
             None,
             lambda match: match.area_floor > 0,
         ),
@@ -576,7 +539,6 @@ def _score_signal_cases() -> dict[str, ScoreSignalCase]:
                 "aliases": ("desk lamp",),
             },
             FailureContext(intent=Intent.READ_STATE, requested="desk", domain="light"),
-            None,
             None,
             lambda match: match.token_overlap > 0.0,
         ),
@@ -595,14 +557,12 @@ def _score_signal_cases() -> dict[str, ScoreSignalCase]:
                 service_data={"temperature": 21},
             ),
             None,
-            None,
             lambda match: match.field_overlap > 0,
         ),
         "service-support-target": ScoreSignalCase(
             "fan target",
             {"kind": "entity", "id": "fan.living_fan", "name": "Living Room Fan", "domain": "fan"},
             fan_selector,
-            None,
             snapshot,
             lambda match: match.service_support > 0,
         ),
@@ -610,17 +570,8 @@ def _score_signal_cases() -> dict[str, ScoreSignalCase]:
             "fan target",
             {"kind": "entity", "id": "fan.living_fan", "name": "Living Room Fan", "domain": "fan"},
             fan_selector,
-            None,
             fallback_snapshot,
             lambda match: match.service_support > 0,
-        ),
-        "memory-rank": ScoreSignalCase(
-            "remember this",
-            {"kind": "entity", "id": "sensor.remembered", "name": "Remembered", "domain": "sensor"},
-            FailureContext(intent=Intent.READ_STATE, requested="remember this", domain="sensor"),
-            memory,
-            None,
-            lambda match: match.memory == 1,
         ),
     }
 
@@ -645,7 +596,6 @@ def _match(
     capability: int = 0,
     area_floor: int = 0,
     service_support: int = 0,
-    memory: int = 0,
     field_overlap: int = 0,
     tiebreak: str = "",
     label: str = "id",
@@ -657,7 +607,6 @@ def _match(
         capability,
         area_floor,
         service_support,
-        memory,
         field_overlap,
         tiebreak,
         label,

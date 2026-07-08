@@ -4,17 +4,14 @@ Exact entity-id matches win. Otherwise, target resolution uses deterministic
 same-domain token containment (one token set is a subset of the other) over
 snapshot-derived ``object_id`` and ``name`` tokens. A unique match
 auto-resolves; ambiguous matches return candidates so the caller can
-self-describe available targets. Optional conversation memory is advisory only:
-it can reorder or break ties only for entity ids still present in the fresh
-snapshot candidate set. This module never touches live Home Assistant objects
-and performs no I/O.
+self-describe available targets. This module never touches live Home Assistant
+objects and performs no I/O.
 """
 
 import re
 from dataclasses import dataclass
 
 from ..snapshot.models import HomeSnapshot
-from .resolution_memory import ResolutionMemory
 
 _DISCOVERY_LIMIT = 8
 
@@ -58,8 +55,6 @@ def resolve_target_entity(
     snapshot: HomeSnapshot,
     requested_entity_id: str,
     domain: str,
-    *,
-    memory: ResolutionMemory | None = None,
 ) -> TargetResolution:
     """Resolve by exact id or same-domain token containment over visible states."""
     # Exact visible entity ids are authoritative and bypass fuzzy matching.
@@ -102,10 +97,6 @@ def resolve_target_entity(
             key=lambda candidate: candidate.entity_id,
         )
     )
-
-    remembered = memory.lookup(requested_entity_id) if memory is not None else None
-    if remembered is not None and remembered in {candidate.entity_id for candidate in candidates}:
-        return TargetResolution(resolved=remembered)
 
     # A unique containment match is safe to auto-resolve deterministically.
     if len(candidates) == 1:

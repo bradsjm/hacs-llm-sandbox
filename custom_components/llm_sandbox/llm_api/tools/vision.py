@@ -67,7 +67,6 @@ def _image_guidance(snapshot: HomeSnapshot, requested_entity_id: str) -> dict[st
             requested=requested_entity_id,
             domain=domain if domain in _IMAGE_DOMAINS else "camera",
         ),
-        memory=None,
     ).to_payload()
 
 

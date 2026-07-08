@@ -12,7 +12,6 @@ from dataclasses import dataclass
 
 from ...snapshot.models import HomeSnapshot
 from ..resolution import bounded_strings
-from ..resolution_memory import ResolutionMemory
 from ..target_matching import service_accepts_domain
 from .context import FailureContext, Intent
 from .sources import CandidateDict, entity_candidates, service_candidates
@@ -36,12 +35,11 @@ class Match:
     capability: int
     area_floor: int
     service_support: int
-    memory: int
     field_overlap: int
     tiebreak: str
     label: str
 
-    def key(self) -> tuple[int, float, int, int, int, int, int, str]:
+    def key(self) -> tuple[int, float, int, int, int, int, str]:
         """Return a sortable key where higher signal values win and ids sort deterministically."""
         return (
             self.exact,
@@ -49,7 +47,6 @@ class Match:
             self.capability,
             self.area_floor,
             self.service_support,
-            self.memory,
             self.field_overlap,
             _reverse_tiebreak(self.tiebreak),
         )
@@ -70,7 +67,6 @@ def score(
     candidate: Mapping[str, object],
     ctx: FailureContext,
     *,
-    memory: ResolutionMemory | None,
     snapshot: HomeSnapshot | None = None,
 ) -> Match:
     """Score one candidate against the requested literal and failure context."""
@@ -117,12 +113,6 @@ def score(
     if exact == 0 and capability == 0 and area_floor == 0 and overlap == 0.0 and service_support > 0:
         label = f"supports: {ctx.domain}.{ctx.service}"
 
-    remembered = memory.lookup(requested) if memory is not None else None
-    memory_signal = int(bool(remembered and remembered == candidate_id))
-    # Memory can boost a still-visible candidate but cannot create high-confidence guidance alone.
-    if exact == 0 and not label.startswith(("name", "device_class", "unit", "area", "supports")) and memory_signal:
-        label = "memory"
-
     field_overlap = _field_overlap_signal(candidate, ctx)
     # Service-data field overlap ranks service name near-misses by the fields the LLM attempted to pass.
     if exact == 0 and field_overlap > 0 and candidate.get("kind") == "service":
@@ -134,7 +124,6 @@ def score(
         capability=capability,
         area_floor=area_floor,
         service_support=service_support,
-        memory=memory_signal,
         field_overlap=field_overlap,
         tiebreak=candidate_id,
         label=label,
@@ -145,17 +134,13 @@ def ranked_candidates(
     snapshot: HomeSnapshot,
     ctx: FailureContext,
     candidates: tuple[CandidateDict, ...],
-    *,
-    memory: ResolutionMemory | None,
 ) -> tuple[list[tuple[CandidateDict, Match]], int]:
     """Return up to the discovery limit of ranked candidates plus the overflow count.
 
     Overflow (not the bound itself) is returned so callers report honest totals
     instead of reconstructing them from a magic literal.
     """
-    scored = [
-        (candidate, score(ctx.requested, candidate, ctx, memory=memory, snapshot=snapshot)) for candidate in candidates
-    ]
+    scored = [(candidate, score(ctx.requested, candidate, ctx, snapshot=snapshot)) for candidate in candidates]
     scored.sort(key=lambda item: item[1].key(), reverse=True)
     bounded_ids = bounded_strings([str(item[0].get("id", "")) for item in scored])
     limit = len(bounded_ids) - (1 if bounded_ids and bounded_ids[-1] == "..." else 0)

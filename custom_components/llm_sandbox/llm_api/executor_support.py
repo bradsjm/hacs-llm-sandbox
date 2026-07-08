@@ -240,7 +240,6 @@ def _refine_unresolved_reference(kind: str, message: str, code: str, snapshot: H
             guidance = advise(
                 snapshot,
                 FailureContext(intent=Intent.CODE_ATTRIBUTE, requested=name, available_attributes=attributes),
-                memory=None,
             ).to_payload()
         return (
             "NameError",
@@ -263,7 +262,7 @@ def _refine_unresolved_reference(kind: str, message: str, code: str, snapshot: H
     return (
         "NameError",
         f"`{name}` is not defined; use an available sandbox global or assign it before use.",
-        advise(snapshot, FailureContext(intent=Intent.CODE_NAME, requested=name), memory=None).to_payload(),
+        advise(snapshot, FailureContext(intent=Intent.CODE_NAME, requested=name)).to_payload(),
     )
 
 
@@ -336,7 +335,6 @@ def _refine_missing_attribute(_kind: str, message: str, _code: str, snapshot: Ho
         guidance = advise(
             snapshot,
             FailureContext(intent=Intent.CODE_ATTRIBUTE, requested=attr, available_attributes=tuple(sorted(surface))),
-            memory=None,
         ).to_payload()
         return "AttributeError", _scrub_class_name(message, class_name), guidance
     return "AttributeError", message, None

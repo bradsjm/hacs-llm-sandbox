@@ -190,7 +190,6 @@ def recorder_error_envelope(
                     requested=entity_id,
                     domain=entity_id.split(".", 1)[0],
                 ),
-                memory=None,
             ).to_payload()
         return tool_error_envelope(
             key,
@@ -211,7 +210,6 @@ def recorder_error_envelope(
                     requested=requested,
                     domain=placeholders.get("domain", ""),
                 ),
-                memory=None,
             ).to_payload()
         return tool_error_envelope(
             key,

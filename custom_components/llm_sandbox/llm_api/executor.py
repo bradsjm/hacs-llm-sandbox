@@ -123,7 +123,6 @@ def _read_path_fix(
         guidance = advise(
             snapshot,
             FailureContext(intent=Intent.READ_STATE, requested=requested, domain=domain),
-            memory=None,
         ).to_payload()
         return (
             kind,
@@ -145,7 +144,6 @@ def _read_path_fix(
                 domain=state.domain,
                 available_attributes=valid_names,
             ),
-            memory=None,
         ).to_payload()
         return (
             kind,

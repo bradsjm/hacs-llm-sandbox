@@ -385,7 +385,6 @@ class HomeDatabase:
                 guidance=advise(
                     self.snapshot,
                     FailureContext(intent=Intent.SQL_TABLE, requested=requested),
-                    memory=None,
                 ).to_payload(),
             )
         if "no such column" in lowered:
@@ -405,7 +404,6 @@ class HomeDatabase:
                 guidance=advise(
                     self.snapshot,
                     FailureContext(intent=Intent.SQL_COLUMN, requested=requested, table_name=table),
-                    memory=None,
                 ).to_payload(),
             )
         if "not authorized" in lowered or "readonly" in lowered or "only select" in lowered:

@@ -2,7 +2,6 @@
 
 from ...snapshot.models import HomeSnapshot
 from ..resolution import resolve_target_entity
-from ..resolution_memory import ResolutionMemory
 from .context import FailureContext, Intent
 from .payload import Candidate, Guidance
 from .policy import Confidence, decide, reason_next_step
@@ -20,14 +19,14 @@ __all__ = (
 )
 
 
-def advise(snapshot: HomeSnapshot, ctx: FailureContext, *, memory: ResolutionMemory | None = None) -> Guidance:
+def advise(snapshot: HomeSnapshot, ctx: FailureContext) -> Guidance:
     """Return recovery guidance for a failed literal using only a frozen snapshot."""
     # Exact/unique entity resolution is the trusted fast path already used by service-call recovery.
     if (
         ctx.intent in {Intent.READ_STATE, Intent.RESOLVE_SELECTOR, Intent.QUERY_HISTORY, Intent.CAPTURE_IMAGE}
         and ctx.domain
     ):
-        resolution = resolve_target_entity(snapshot, ctx.requested, ctx.domain, memory=memory)
+        resolution = resolve_target_entity(snapshot, ctx.requested, ctx.domain)
         if resolution.resolved is not None:
             candidate = _candidate_for_entity(snapshot, resolution.resolved)
             reason = f"`{ctx.requested}` resolves to visible entity `{resolution.resolved}`."
@@ -42,7 +41,6 @@ def advise(snapshot: HomeSnapshot, ctx: FailureContext, *, memory: ResolutionMem
                             capability=0,
                             area_floor=0,
                             service_support=0,
-                            memory=0,
                             field_overlap=0,
                             tiebreak=resolution.resolved,
                             label="id",
@@ -68,7 +66,7 @@ def advise(snapshot: HomeSnapshot, ctx: FailureContext, *, memory: ResolutionMem
         if scoped:
             candidates, cross_kind = scoped
 
-    ranked, overflow = ranked_candidates(snapshot, ctx, candidates, memory=memory)
+    ranked, overflow = ranked_candidates(snapshot, ctx, candidates)
     confidence = decide(ranked, ctx)
     top = ranked[0][0] if ranked else None
     reason, next_step = reason_next_step(confidence, top, ctx, shown=len(ranked), overflow=overflow)
