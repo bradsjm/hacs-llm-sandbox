@@ -103,8 +103,11 @@ async def test_get_camera_image_rejects_oversized_capture(
 
     assert result["status"] == "error"
     assert result["error"]["key"] == "image_too_large"
-    assert isinstance(result["error"]["message"], str)
-    assert result["error"]["message"]
+    message = str(result["error"]["message"])
+    assert "camera.front_door" in message
+    assert str(vision.DEFAULT_IMAGE_TARGET_WIDTH) in message
+    assert "1" in message
+    assert "target_width" in message
 
 
 async def test_get_camera_image_maps_capture_failure(
@@ -118,8 +121,7 @@ async def test_get_camera_image_maps_capture_failure(
 
     assert result["status"] == "error"
     assert result["error"]["key"] == "capture_failed"
-    assert isinstance(result["error"]["message"], str)
-    assert result["error"]["message"]
+    assert "camera.front_door" in str(result["error"]["message"])
 
 
 async def test_get_camera_image_rejects_invalid_tool_input(
@@ -131,8 +133,9 @@ async def test_get_camera_image_rejects_invalid_tool_input(
 
     assert result["status"] == "error"
     assert result["error"]["key"] == "invalid_tool_input"
-    assert isinstance(result["error"]["message"], str)
-    assert result["error"]["message"]
+    message = str(result["error"]["message"])
+    assert "not_an_entity" in message
+    assert "schema" in message
 
 
 async def test_get_camera_image_rejects_unsupported_visible_domain(

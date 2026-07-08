@@ -53,7 +53,6 @@ from ..data.history import (
 from ..data.recorder_scope import (
     ENTITY_NOT_VISIBLE,
     SELECTOR_NO_MATCH,
-    TIME_WINDOW_TOO_LARGE,
     _clamp_window,
     _validate_visibility,
     resolve_entity_ids,
@@ -128,21 +127,6 @@ _ALL_STAT_QUERY_TYPES: frozenset[StatisticQueryType] = frozenset({"last_reset", 
 # Relative window size in hours, accepted by every recorder tool as an
 # alternative to absolute ISO start/end (the sandbox forbids timedelta math).
 _HOURS_ARG = vol.All(vol.Coerce(float), vol.Range(min=0))
-
-# Static messages keyed by recoverable error key. Entity and selector recovery
-# is snapshot-specific and handled separately through structured guidance.
-_RECORDER_GUIDANCE: dict[str, str] = {
-    TIME_WINDOW_TOO_LARGE: "The requested time window is too large.",
-    RECORDER_UNAVAILABLE: "The recorder integration is not available.",
-    "logbook_unavailable": "The logbook integration is not available.",
-    QUERY_FAILED: "The recorder query failed.",
-    INVALID_CURSOR: "The pagination cursor is invalid or expired.",
-    "invalid_tool_input": "Invalid tool input.",
-    "analytics_unknown_op": "The requested analytics operation is not supported.",
-    "analytics_unknown_group_key": "The requested analytics group key is not supported.",
-    "analytics_bad_bucket": "The requested analytics bucket is invalid.",
-}
-
 
 # Window anchor + async row fetchers. Production closures over a live hass
 # (via _production_recorder_source); eval closures over frozen fixtures.
@@ -221,7 +205,7 @@ def recorder_error_envelope(
             message=f"Selector(s) {selectors or 'requested'} matched no visible entities.",
             guidance=guidance,
         )
-    return tool_error_envelope(key, placeholders, message=_RECORDER_GUIDANCE.get(key), guidance=None)
+    return tool_error_envelope(key, placeholders)
 
 
 def recorder_available(hass: HomeAssistant) -> bool:

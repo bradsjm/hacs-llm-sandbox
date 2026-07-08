@@ -17,7 +17,7 @@ from ...runtime import SandboxSettings
 from ...snapshot.models import HomeSnapshot, ServiceSchemaBrief, ServiceTargetBrief
 from ...types import ActionRecord, ProposedAction, TranslationPlaceholders
 from ..data.selectors import AGGREGATE_SELECTOR_KEYS, expand_aggregate_selectors
-from ..errors import HelperExecutionError
+from ..errors import HelperExecutionError, tool_error_message
 from ..executor_support import helper_response, json_safe
 from ..guidance import Candidate, Confidence, FailureContext, Guidance, Intent, advise
 from ..resolution import _DISCOVERY_LIMIT, bounded_strings, resolve_target_entity
@@ -265,7 +265,7 @@ class SafeServiceRegistry:
 
             def _block(
                 key: str,
-                _placeholders: TranslationPlaceholders,
+                placeholders: TranslationPlaceholders,
                 *,
                 message: str,
                 guidance: Mapping[str, object] | None = None,
@@ -278,7 +278,7 @@ class SafeServiceRegistry:
                         _request_action(raw_target),
                         status="error",
                         response=None,
-                        error=_action_error(key, message, guidance=guidance),
+                        error=_action_error(key, message, placeholders, guidance=guidance),
                     )
                 )
 
@@ -1014,14 +1014,16 @@ class _UnresolvedTarget:
 def _action_error(
     key: str,
     message: str,
+    placeholders: TranslationPlaceholders | None = None,
     *,
     guidance: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     """Build the JSON-safe action error shape."""
     clean = " ".join(message.split())
+    resolved = clean if clean and clean != key else tool_error_message(key, placeholders or {})
     error: dict[str, object] = {
         "key": key,
-        "message": clean if clean and clean != key else f"Resolve '{key}' before retrying.",
+        "message": resolved or f"Resolve '{key}' before retrying.",
     }
     if guidance:
         error["guidance"] = dict(guidance)

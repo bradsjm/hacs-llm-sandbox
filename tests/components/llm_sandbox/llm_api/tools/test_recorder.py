@@ -272,13 +272,32 @@ async def test_recorder_snapshot_visibility_is_fresh_per_call(
 
 
 @pytest.mark.parametrize(
-    ("tool_cls", "tool_name", "tool_args", "days"),
+    ("tool_cls", "tool_name", "tool_args", "days", "max_hours"),
     [
-        pytest.param(GetHistoryTool, TOOL_GET_HISTORY, {"entity_ids": ["light.bedroom"]}, 30, id="history"),
         pytest.param(
-            GetStatisticsTool, TOOL_GET_STATISTICS, {"statistic_ids": ["light.bedroom"]}, 400, id="statistics"
+            GetHistoryTool,
+            TOOL_GET_HISTORY,
+            {"entity_ids": ["light.bedroom"]},
+            30,
+            recorder.MAX_RECORDER_LOOKBACK_HOURS,
+            id="history",
         ),
-        pytest.param(GetLogbookTool, TOOL_GET_LOGBOOK, {"entity_ids": ["light.bedroom"]}, 30, id="logbook"),
+        pytest.param(
+            GetStatisticsTool,
+            TOOL_GET_STATISTICS,
+            {"statistic_ids": ["light.bedroom"]},
+            400,
+            recorder.MAX_STATISTICS_LOOKBACK_HOURS,
+            id="statistics",
+        ),
+        pytest.param(
+            GetLogbookTool,
+            TOOL_GET_LOGBOOK,
+            {"entity_ids": ["light.bedroom"]},
+            30,
+            recorder.MAX_RECORDER_LOOKBACK_HOURS,
+            id="logbook",
+        ),
     ],
 )
 async def test_window_too_large_rejected(
@@ -288,6 +307,7 @@ async def test_window_too_large_rejected(
     tool_name: str,
     tool_args: dict[str, object],
     days: int,
+    max_hours: int,
 ) -> None:
     """Windows beyond the recorder lookback cap return the stable error key."""
     end = dt_util.utcnow()
@@ -304,7 +324,42 @@ async def test_window_too_large_rejected(
     assert result["status"] == "error"
     assert result["error"]["key"] == "time_window_too_large"
     assert isinstance(result["error"]["message"], str)
-    assert result["error"]["message"]
+    assert str(max_hours) in result["error"]["message"]
+    assert "hours" in result["error"]["message"]
+
+
+@pytest.mark.parametrize(
+    ("key", "placeholders", "tokens"),
+    [
+        pytest.param(
+            "analytics_unknown_op", {"op": "median", "valid": "count, sum"}, ("median", "count, sum"), id="op"
+        ),
+        pytest.param(
+            "analytics_unknown_group_key",
+            {"group_key": "room", "valid": "domain, entity_id"},
+            ("room", "domain, entity_id"),
+            id="group-key",
+        ),
+        pytest.param("analytics_bad_bucket", {"bucket": "7x", "examples": "15m, 1h"}, ("7x", "15m, 1h"), id="bucket"),
+        pytest.param(
+            "invalid_tool_input",
+            {"error": "aggregate cannot be combined with cursor"},
+            ("aggregate", "cursor"),
+            id="invalid-input",
+        ),
+    ],
+)
+def test_recorder_error_messages_include_rejected_values(
+    key: str,
+    placeholders: dict[str, str],
+    tokens: tuple[str, ...],
+) -> None:
+    """Recorder fallback envelopes name rejected analytics/input values."""
+    result = recorder.recorder_error_envelope(key, placeholders)
+
+    assert result["status"] == "error"
+    assert result["error"]["key"] == key
+    assert all(token in str(result["error"]["message"]) for token in tokens)
 
 
 @pytest.mark.parametrize(
@@ -686,6 +741,8 @@ async def test_history_non_empty_attributes_with_analytics_rejected(
 
     assert result["status"] == "error"
     assert result["error"]["key"] == "invalid_tool_input"
+    assert "aggregate" in str(result["error"]["message"])
+    assert "attributes" in str(result["error"]["message"])
 
 
 async def _call_history(

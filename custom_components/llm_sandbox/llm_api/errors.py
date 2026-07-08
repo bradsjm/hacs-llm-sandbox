@@ -1,6 +1,6 @@
 """Structured error payload helpers for LLM Sandbox LLM tools."""
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal, NotRequired, TypedDict, cast
 from uuid import uuid4
@@ -71,6 +71,7 @@ class SetupErrorPayload(TypedDict):
 
 
 type _ExecutionStatus = Literal["helper_error", "code_error", "setup_error"]
+type _ToolErrorMessageBuilder = Callable[[TranslationPlaceholders], str]
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,6 +157,14 @@ def helper_error_payload(
     return cast(HelperErrorPayload, _build_error_payload(execution, printed=printed, actions=actions))
 
 
+def tool_error_message(key: str, placeholders: TranslationPlaceholders) -> str | None:
+    """Return a compact placeholder-aware LLM-facing message for a known key."""
+    builder = _TOOL_ERROR_MESSAGES.get(key)
+    if builder is None:
+        return None
+    return builder(placeholders)
+
+
 def code_error_payload(
     *,
     kind: str | None,
@@ -185,7 +194,7 @@ def setup_error_payload(
     """Return compact setup-error execution payload."""
     execution = _build_execution_payload(
         "setup_error",
-        _message_or_key_fallback(_setup_error_message(placeholders), key),
+        _message_or_key_fallback(_setup_error_message(key, placeholders), key),
         guidance=guidance,
     )
     return cast(SetupErrorPayload, _build_error_payload(execution))
@@ -203,7 +212,7 @@ def helper_error_from_exception(err: Exception) -> HelperExecutionError | None:
 
 def tool_error_envelope(
     key: str,
-    _placeholders: TranslationPlaceholders,
+    placeholders: TranslationPlaceholders,
     *,
     message: str | None = None,
     guidance: Mapping[str, object] | None = None,
@@ -211,7 +220,7 @@ def tool_error_envelope(
     """Return a JSON-safe recoverable error envelope for LLM tool callers."""
     error: dict[str, Any] = {
         "key": key,
-        "message": _message_or_key_fallback(message, key),
+        "message": _message_or_key_fallback(message or tool_error_message(key, placeholders), key),
     }
     # Guidance is omitted when unavailable to match execution error payloads.
     if guidance:
@@ -238,8 +247,10 @@ def tool_error_from_exception(err: Exception) -> tuple[str, TranslationPlacehold
     return None
 
 
-def _setup_error_message(placeholders: TranslationPlaceholders) -> str | None:
+def _setup_error_message(key: str, placeholders: TranslationPlaceholders) -> str | None:
     """Return a specific setup-error reason when the placeholders carry one."""
+    if message := tool_error_message(key, placeholders):
+        return message
     if reason := placeholders.get("error") or placeholders.get("reason"):
         return f"Setup failed: {reason}."
     return None
@@ -258,3 +269,50 @@ def _message_or_key_fallback(message: str | None, key: str | None) -> str:
     if key:
         return f"Resolve the '{key}' error before retrying."
     return "Fix the sandbox error before retrying."
+
+
+_TOOL_ERROR_MESSAGES: dict[str, _ToolErrorMessageBuilder] = {
+    "monty_code_required": lambda _p: "Pass a non-empty code string.",
+    "monty_code_too_long": lambda p: f"Shorten code to {p.get('max_length', 'the allowed')} characters or less.",
+    "unknown_config_entry": lambda p: (
+        f"Tool instance for config entry {p.get('config_entry_id', 'unknown')} cannot run because the entry is unknown or unloaded."
+    ),
+    "config_entry_not_loaded": lambda p: (
+        f"Integration entry {p.get('config_entry_id', 'unknown')} must be loaded before retrying."
+    ),
+    "invalid_tool_input": lambda p: (
+        f"Correct the tool arguments against the schema: {p.get('error')}."
+        if p.get("error")
+        else "Correct the tool arguments against the schema."
+    ),
+    "time_window_too_large": lambda p: (
+        f"Requested time window is too large; shorten start/end or use hours <= {p.get('max_hours', 'the limit')}."
+    ),
+    "recorder_unavailable": lambda _p: (
+        "Recorder-backed history/statistics/logbook queries require the recorder integration."
+    ),
+    "logbook_unavailable": lambda _p: "get_logbook requires the logbook integration.",
+    "query_failed": lambda p: (
+        f"Recorder query failed: {p.get('error')}." if p.get("error") else "Recorder query failed."
+    ),
+    "invalid_cursor": lambda _p: "Pagination cursor is invalid; restart pagination without cursor.",
+    "analytics_unknown_op": lambda p: (
+        f"Analytics operation '{p.get('op', 'unknown')}' is unsupported. Valid operations: {p.get('valid', 'none listed')}."
+    ),
+    "analytics_unknown_group_key": lambda p: (
+        f"Analytics group key '{p.get('group_key', 'unknown')}' is unsupported. Valid group keys: {p.get('valid', 'none listed')}."
+    ),
+    "analytics_bad_bucket": lambda p: (
+        f"Analytics bucket '{p.get('bucket', 'unknown')}' is invalid. Examples: {p.get('examples', '15m, 1h, 1d')}."
+    ),
+    "capture_failed": lambda p: (
+        f"Capture failed for {p.get('entity_id', 'the requested entity')}: {p.get('error')}."
+        if p.get("error")
+        else f"Capture failed for {p.get('entity_id', 'the requested entity')}."
+    ),
+    "image_too_large": lambda p: (
+        f"Captured image for {p.get('entity_id', 'the requested entity')} exceeds {p.get('max_bytes', 'the byte budget')} bytes at target_width {p.get('target_width', 'the requested width')}; retry with a smaller target_width."
+    ),
+    "sql_too_long": lambda p: f"Shorten the SQL query to {p.get('max_length', 'the allowed')} characters or less.",
+    "sql_timeout": lambda _p: "SQL query timed out; narrow the query before retrying.",
+}

@@ -8,6 +8,7 @@ from custom_components.llm_sandbox.llm_api.executor_support import (
     ExecutionState,
     error_key,
     error_placeholders,
+    helper_error_payload_for_state,
     helper_response,
     json_safe,
     underlying_exception,
@@ -103,3 +104,30 @@ def test_error_key_and_placeholders_extract_stable_fields() -> None:
 
     assert error_key(err) == "invalid_tool_input"
     assert error_placeholders(err) == {"field": "code", "limit": "10"}
+
+
+@pytest.mark.parametrize(
+    ("err", "tokens"),
+    [
+        pytest.param(
+            HelperExecutionError("query", "sql_too_long", {"max_length": "4000"}),
+            ("SQL", "4000"),
+            id="sql-too-long",
+        ),
+        pytest.param(HelperExecutionError("query", "sql_timeout", {}), ("SQL", "timed out"), id="sql-timeout"),
+        pytest.param(
+            HelperExecutionError("query", "sql_unknown", {"reason": "bad column"}),
+            ("bad column", "query"),
+            id="reason-first",
+        ),
+    ],
+)
+def test_helper_error_payload_messages_are_specific(
+    err: HelperExecutionError,
+    tokens: tuple[str, ...],
+) -> None:
+    """Helper payloads use shared specific messages while preserving reason overrides."""
+    payload = helper_error_payload_for_state(err, ExecutionState(helper_call_limit=2))
+
+    message = payload["execution"]["message"]
+    assert all(token in message for token in tokens)

@@ -13,6 +13,7 @@ from ..errors import (
     HelperExecutionError,
     code_error_payload,
     helper_error_payload,
+    tool_error_message,
 )
 from .state import ExecutionState
 
@@ -84,4 +85,6 @@ def _helper_error_message(err: HelperExecutionError, state: ExecutionState) -> s
         return f"Stopped after {state.helper_call_limit} service calls; do not retry the same call."
     if reason := err.placeholders.get("reason"):
         return f"Fix the {err.helper} call failure: {reason}."
+    if message := tool_error_message(err.key, err.placeholders):
+        return message
     return f"Resolve the {err.helper} error '{err.key}' before retrying."

@@ -47,14 +47,6 @@ _IMAGE_DOMAINS = ("camera", "image")
 _VISION_NULL_OMIT: frozenset[str] = frozenset({"target_width", "question"})
 _VISION_EMPTY_STRING_OMIT: frozenset[str] = frozenset({"target_width", "question"})
 
-# Static messages keyed by recoverable error key. Camera/image entity recovery is
-# snapshot-specific and handled separately through structured guidance.
-_VISION_GUIDANCE: dict[str, str] = {
-    CAPTURE_FAILED: "The live image capture failed.",
-    IMAGE_TOO_LARGE: "The captured frame exceeds the inline image budget after downscaling.",
-    "invalid_tool_input": "Invalid tool input.",
-}
-
 
 def _image_guidance(snapshot: HomeSnapshot, requested_entity_id: str) -> dict[str, object]:
     """Return structured recovery guidance for a bad camera/image entity."""
@@ -94,7 +86,7 @@ def _envelope(
             message="Only camera.* and image.* entities can be captured.",
             guidance=guidance,
         )
-    return tool_error_envelope(key, placeholders, message=_VISION_GUIDANCE.get(key), guidance=None)
+    return tool_error_envelope(key, placeholders)
 
 
 @final
@@ -242,7 +234,14 @@ async def _capture_image_envelope(
     # PIL work is CPU-bound and the resulting bytes stay outside Monty.
     scaled, scaled_mime = await hass.async_add_executor_job(_downscale, frame_data, target_width)
     if len(scaled) > MAX_IMAGE_ATTACHMENT_BYTES:
-        return _envelope(IMAGE_TOO_LARGE, {"entity_id": entity_id})
+        return _envelope(
+            IMAGE_TOO_LARGE,
+            {
+                "entity_id": entity_id,
+                "target_width": str(target_width),
+                "max_bytes": str(MAX_IMAGE_ATTACHMENT_BYTES),
+            },
+        )
     return cast(
         JsonObjectType,
         {
