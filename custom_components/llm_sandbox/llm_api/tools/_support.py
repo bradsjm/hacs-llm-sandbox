@@ -1,10 +1,12 @@
 """Shared setup helpers for LLM Sandbox tools.
 
 These resolve the loaded LLM Sandbox config entry (and its settings) that every
-tool call needs. Kept in a neutral module so neither ``code.py`` nor
-``recorder.py`` has to import from ``api.py`` (which would recreate a cycle).
+tool call needs, and provide input normalization shared across tool modules.
+Kept in a neutral module so neither ``code.py`` nor ``recorder.py`` has to
+import from ``api.py`` (which would recreate a cycle).
 """
 
+from collections.abc import Mapping
 from typing import cast
 
 from homeassistant.config_entries import ConfigEntryState
@@ -13,6 +15,36 @@ from homeassistant.core import HomeAssistant
 from ...const import DOMAIN
 from ...runtime import SandboxConfigEntry, SandboxRuntime
 from ..errors import setup_error_payload
+
+
+def _omit_empty_optional_args(
+    args: Mapping[str, object],
+    *,
+    null_keys: frozenset[str],
+    empty_string_keys: frozenset[str] = frozenset(),
+    empty_list_keys: frozenset[str] = frozenset(),
+) -> dict[str, object]:
+    """Omit empty/null optional arguments before voluptuous validation.
+
+    Implements Postel's law for LLM tool inputs: a null, empty-string, or
+    empty-list optional value is dropped as if never sent, so the schema
+    applies its default (or treats the key as absent). Required keys and
+    non-empty values are preserved unchanged; malformed non-empty values still
+    surface the natural schema error.
+    """
+    result: dict[str, object] = {}
+    for key, value in args.items():
+        # A null optional value is dropped for every key in null_keys.
+        if value is None and key in null_keys:
+            continue
+        # An empty-string optional value is dropped for scalar-string keys.
+        if isinstance(value, str) and value == "" and key in empty_string_keys:
+            continue
+        # An empty-list optional value is dropped for list keys.
+        if isinstance(value, list) and not value and key in empty_list_keys:
+            continue
+        result[key] = value
+    return result
 
 
 def _require_loaded_entry(hass: HomeAssistant, entry_id: str) -> SandboxConfigEntry:

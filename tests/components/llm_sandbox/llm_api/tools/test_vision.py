@@ -156,6 +156,28 @@ async def test_get_camera_image_rejects_unsupported_visible_domain(
     assert "camera.front_door" in fix
 
 
+@pytest.mark.parametrize(
+    "tool_args",
+    [
+        pytest.param({"image_entity": "camera.front_door", "target_width": None}, id="null-target-width"),
+        pytest.param({"image_entity": "camera.front_door", "target_width": ""}, id="empty-target-width"),
+        pytest.param({"image_entity": "camera.front_door", "question": None}, id="null-question"),
+        pytest.param({"image_entity": "camera.front_door", "question": ""}, id="empty-question"),
+    ],
+)
+async def test_get_camera_image_omits_empty_optional_args(
+    hass: HomeAssistant,
+    loaded_entry: MockConfigEntry,
+    tool_args: dict[str, object],
+) -> None:
+    """Empty/null optional target_width and question are ignored as if omitted."""
+    _seed_camera(hass)
+    with patch.object(vision, "_async_get_camera_image", return_value=(_tiny_jpeg(), "image/jpeg")):
+        result = await _call_tool(hass, loaded_entry, tool_args)
+
+    assert result["_type"] == "ha_multimodal_tool_result"
+
+
 def _seed_camera(hass: HomeAssistant, *, object_id: str = "front_door", name: str = "Front Door") -> None:
     """Register a visible camera entity and set its live state."""
     er.async_get(hass).async_get_or_create("camera", "test", object_id, suggested_object_id=object_id)

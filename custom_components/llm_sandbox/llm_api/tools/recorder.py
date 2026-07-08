@@ -57,13 +57,63 @@ from ._analytics import (
     run_analytics,
 )
 from ._cursor import _LOGBOOK_CURSOR_KEY, INVALID_CURSOR, Cursor, decode_cursor, encode_cursor, paginate_stream
-from ._support import _require_loaded_entry_error, _require_sandbox_runtime
+from ._support import _omit_empty_optional_args, _require_loaded_entry_error, _require_sandbox_runtime
 
 RECORDER_UNAVAILABLE = "recorder_unavailable"
 ENTITY_NOT_VISIBLE = "entity_not_visible"
 SELECTOR_NO_MATCH = "selector_no_match"
 TIME_WINDOW_TOO_LARGE = "time_window_too_large"
 QUERY_FAILED = "query_failed"
+
+# Optional recorder keys whose null value is dropped before schema validation
+# (Postel's law): every optional argument the recorder tools accept.
+_RECORDER_NULL_OMIT: frozenset[str] = frozenset(
+    {
+        "start",
+        "end",
+        "area_id",
+        "device_id",
+        "floor_id",
+        "label_id",
+        "domain",
+        "from_state",
+        "to_state",
+        "bucket",
+        "order_by",
+        "cursor",
+        "entity_ids",
+        "statistic_ids",
+        "attributes",
+        "group_by",
+        "where",
+        "types",
+        "hours",
+        "aggregate",
+        "limit",
+        "period",
+    }
+)
+# Optional scalar keys whose empty-string value is dropped before validation.
+_RECORDER_EMPTY_STRING_OMIT: frozenset[str] = frozenset(
+    {
+        "start",
+        "end",
+        "area_id",
+        "device_id",
+        "floor_id",
+        "label_id",
+        "domain",
+        "from_state",
+        "to_state",
+        "bucket",
+        "order_by",
+        "cursor",
+    }
+)
+# Optional list keys whose empty-list value is dropped before validation.
+_RECORDER_EMPTY_LIST_OMIT: frozenset[str] = frozenset(
+    {"entity_ids", "statistic_ids", "attributes", "group_by", "where", "types"}
+)
 type StatisticValueType = Literal["mean", "min", "max", "state", "sum"]
 type StatisticQueryType = Literal["change", "last_reset", "max", "mean", "min", "state", "sum"]
 
@@ -305,7 +355,14 @@ class _RecorderTool(llm.Tool):
 
     def _normalize_args(self, args: Mapping[str, object]) -> dict[str, object]:
         """Normalize tool-specific input aliases before voluptuous validation."""
-        return dict(args)
+        # Drop empty/null optional values so they behave as if omitted (Postel's
+        # law) before the schema validates them.
+        return _omit_empty_optional_args(
+            args,
+            null_keys=_RECORDER_NULL_OMIT,
+            empty_string_keys=_RECORDER_EMPTY_STRING_OMIT,
+            empty_list_keys=_RECORDER_EMPTY_LIST_OMIT,
+        )
 
     async def _query(
         self,
@@ -884,7 +941,14 @@ class GetHistoryTool(_RecorderTool):
             data["bucket"] = data.pop("resample")
         if "interval" in data and "bucket" not in data:
             data["bucket"] = data.pop("interval")
-        return data
+        # Aliases are canonicalized first so their empty/null values drop
+        # through the shared omission (e.g. resample:"" -> bucket:"" -> omitted).
+        return _omit_empty_optional_args(
+            data,
+            null_keys=_RECORDER_NULL_OMIT,
+            empty_string_keys=_RECORDER_EMPTY_STRING_OMIT,
+            empty_list_keys=_RECORDER_EMPTY_LIST_OMIT,
+        )
 
     @override
     async def _query(

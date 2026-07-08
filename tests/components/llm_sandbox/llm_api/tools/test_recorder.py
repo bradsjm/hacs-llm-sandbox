@@ -591,6 +591,107 @@ async def test_invalid_input_returns_invalid_tool_input(
     assert result["error"]["message"]
 
 
+@pytest.mark.parametrize(
+    ("tool_cls", "tool_name", "tool_args"),
+    [
+        pytest.param(
+            GetHistoryTool,
+            TOOL_GET_HISTORY,
+            {
+                "entity_ids": ["light.bedroom"],
+                "start": "",
+                "end": "",
+                "area_id": "",
+                "device_id": "",
+                "from_state": "",
+                "to_state": "",
+                "bucket": "",
+                "order_by": "",
+                "cursor": "",
+                "attributes": [],
+                "group_by": [],
+                "where": [],
+                "hours": None,
+                "aggregate": None,
+                "limit": None,
+            },
+            id="history",
+        ),
+        pytest.param(
+            GetStatisticsTool,
+            TOOL_GET_STATISTICS,
+            {
+                "statistic_ids": ["light.bedroom"],
+                "start": "",
+                "end": "",
+                "types": [],
+                "cursor": "",
+                "hours": None,
+                "period": None,
+            },
+            id="statistics",
+        ),
+        pytest.param(
+            GetLogbookTool,
+            TOOL_GET_LOGBOOK,
+            {
+                "entity_ids": ["light.bedroom"],
+                "start": "",
+                "end": "",
+                "cursor": "",
+                "hours": None,
+            },
+            id="logbook",
+        ),
+    ],
+)
+async def test_empty_optional_args_omitted(
+    hass: HomeAssistant,
+    recorder_entry: MockConfigEntry,
+    tool_cls: type[GetHistoryTool | GetStatisticsTool | GetLogbookTool],
+    tool_name: str,
+    tool_args: dict[str, object],
+) -> None:
+    """Empty/null optional values are ignored as if omitted (Postel's law)."""
+    hass.states.async_set("light.bedroom", "on", {"friendly_name": "Bedroom Light"})
+    await _sync_recorder(hass)
+
+    result = await _call_tool(tool_cls(recorder_entry.entry_id), tool_name, hass, tool_args)
+
+    assert "status" not in result
+
+
+async def test_history_empty_entity_ids_ignored_with_domain_scope(
+    hass: HomeAssistant,
+    recorder_entry: MockConfigEntry,
+) -> None:
+    """An empty entity_ids list is ignored when a domain selector supplies scope."""
+    hass.states.async_set("light.bedroom", "on", {"friendly_name": "Bedroom Light"})
+    await _sync_recorder(hass)
+
+    result = await _call_history(hass, recorder_entry, {"entity_ids": [], "domain": "light"})
+
+    assert "light.bedroom" in result["entities"]
+
+
+async def test_history_non_empty_attributes_with_analytics_rejected(
+    hass: HomeAssistant,
+    recorder_entry: MockConfigEntry,
+) -> None:
+    """Non-empty attributes combined with analytics still returns invalid_tool_input."""
+    hass.states.async_set("light.bedroom", "on", {"friendly_name": "Bedroom Light"})
+    await _sync_recorder(hass)
+
+    result = await _call_history(
+        hass,
+        recorder_entry,
+        {"entity_ids": ["light.bedroom"], "attributes": ["brightness"], "aggregate": "state_counts"},
+    )
+
+    assert result["status"] == "error"
+    assert result["error"]["key"] == "invalid_tool_input"
+
+
 async def _call_history(
     hass: HomeAssistant,
     entry: MockConfigEntry,

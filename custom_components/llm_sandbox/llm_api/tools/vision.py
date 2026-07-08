@@ -33,7 +33,7 @@ from .._hinting import error_guidance
 from ..errors import tool_error_envelope, tool_error_from_exception
 from ..prompts import build_get_camera_image_description
 from ..resolution import _DISCOVERY_LIMIT, bounded_strings, candidates_for_domain, resolve_target_entity
-from ._support import _require_loaded_entry_error, _require_sandbox_runtime
+from ._support import _omit_empty_optional_args, _require_loaded_entry_error, _require_sandbox_runtime
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -42,6 +42,11 @@ CAPTURE_FAILED = "capture_failed"
 IMAGE_TOO_LARGE = "image_too_large"
 UNSUPPORTED_IMAGE_DOMAIN = "unsupported_image_domain"
 _IMAGE_DOMAINS = ("camera", "image")
+
+# Optional vision keys whose null or empty-string value is dropped before schema
+# validation (Postel's law) so defaults apply instead of surfacing a schema error.
+_VISION_NULL_OMIT: frozenset[str] = frozenset({"target_width", "question"})
+_VISION_EMPTY_STRING_OMIT: frozenset[str] = frozenset({"target_width", "question"})
 
 # Actionable guidance keyed by the recoverable error key. Message/hints are
 # surfaced inline to the LLM so a follow-up call can succeed; stable keys stay
@@ -155,7 +160,18 @@ class GetCameraImageTool(llm.Tool):
         llm_context: llm.LLMContext,
     ) -> JsonObjectType:
         try:
-            data = cast(dict[str, object], self.parameters(tool_input.tool_args))
+            # Drop empty/null optional values before validation so defaults apply
+            # instead of surfacing a schema error (Postel's law).
+            data = cast(
+                dict[str, object],
+                self.parameters(
+                    _omit_empty_optional_args(
+                        tool_input.tool_args,
+                        null_keys=_VISION_NULL_OMIT,
+                        empty_string_keys=_VISION_EMPTY_STRING_OMIT,
+                    )
+                ),
+            )
         except Exception as err:
             mapped = tool_error_from_exception(err)
             if mapped is None:
