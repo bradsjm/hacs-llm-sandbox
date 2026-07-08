@@ -49,18 +49,16 @@ from ..snapshot.models import (
 from ..types import ActionRecord, ProposedAction, TranslationPlaceholders
 from .errors import HelperExecutionError, RecoverableToolError
 from .executor_support import helper_response, json_safe
+from .guidance import FailureContext, Intent, advise
 from .home_db import MAX_HISTORY_LOAD_ROWS, HomeDatabase, QueryResult, ensure_sql_allowed
 from .resolution import (
     _DISCOVERY_LIMIT,
-    CandidateTarget,
     bounded_strings,
-    candidates_for_domain,
-    rank_candidates_for_service,
     resolve_target_entity,
 )
 from .runtime import require_runtime, require_snapshot
 from .selector_expansion import AGGREGATE_SELECTOR_KEYS, expand_aggregate_selectors
-from .target_matching import entities_for_service, raw_service_field_names, service_accepts_domain, services_for_entity
+from .target_matching import raw_service_field_names, service_accepts_domain, services_for_entity
 from .tools._analytics import HistoryRow, analytics_spec_from_data, run_analytics
 from .tools.recorder import (
     DEFAULT_HISTORY_WINDOW_HOURS,
@@ -609,8 +607,11 @@ class SafeServiceRegistry:
     def _policy_block(
         self,
         settings: SandboxSettings,
+        snapshot: HomeSnapshot,
         domain: str,
         service: str,
+        service_data: Mapping[str, object] | None,
+        target: Mapping[str, object] | None,
         blocking: bool,
         return_response: bool,
     ) -> _PolicyBlock | None:
@@ -619,27 +620,32 @@ class SafeServiceRegistry:
             return _PolicyBlock("actions_disabled", {}, message="Service calls are disabled for this sandbox.")
         if settings.action_domains and domain not in settings.action_domains:
             valid_domains = bounded_strings(sorted(settings.action_domains))
+            guidance: Mapping[str, object] = advise(
+                snapshot,
+                FailureContext(intent=Intent.CALL_SERVICE, requested=service, domain=domain, service=service),
+            ).to_payload()
             return _PolicyBlock(
                 "action_domain_not_allowed",
                 cast(TranslationPlaceholders, {"domain": domain}),
                 message=_valid_domains_message(domain, valid_domains),
-                fix=valid_domains,
+                guidance=guidance,
             )
         if not self.has_service(domain, service):
+            guidance = _service_not_found_guidance(snapshot, domain, service, service_data, target)
             if not self.services.get(domain):
                 valid_domains = bounded_strings(sorted(self.services))
                 return _PolicyBlock(
                     "service_not_found",
                     cast(TranslationPlaceholders, {"domain": domain, "service": service}),
                     message=_valid_domains_message(domain, valid_domains),
-                    fix=valid_domains,
+                    guidance=guidance,
                 )
             valid_services = bounded_strings(sorted(self.services[domain]))
             return _PolicyBlock(
                 "service_not_found",
                 cast(TranslationPlaceholders, {"domain": domain, "service": service}),
                 message=_valid_services_message(domain, service, valid_services),
-                fix=valid_services,
+                guidance=guidance,
             )
         supports_response = self.services_supports_response[domain][service]
         if return_response and not blocking:
@@ -685,12 +691,15 @@ class SafeServiceRegistry:
         # that does not constrain domains returns None (not False) and skips blocking.
         if any(service_accepts_domain(target_brief, entity_domain) is not False for entity_domain in excluded):
             return None
-        valid = _bounded_entity_ids(entities_for_service(snapshot, domain, service))
+        guidance = advise(
+            snapshot,
+            FailureContext(intent=Intent.RESOLVE_SELECTOR, requested=service, domain=domain, service=service),
+        ).to_payload()
         return _PolicyBlock(
             "service_target_not_supported",
             cast(TranslationPlaceholders, {"domain": domain, "service": service}),
-            message=_service_target_not_supported_message(domain, service, excluded, valid),
-            fix=valid,
+            message=_service_target_not_supported_message(domain, service, excluded, guidance),
+            guidance=guidance,
         )
 
     async def async_call(
@@ -742,7 +751,7 @@ class SafeServiceRegistry:
                 _placeholders: TranslationPlaceholders,
                 *,
                 message: str,
-                fix: list[str] | None = None,
+                guidance: Mapping[str, object] | None = None,
             ) -> None:
                 # Policy blocks are non-raising: record an errored action and let
                 # the call return None so execution stays status="ok" with a
@@ -752,13 +761,25 @@ class SafeServiceRegistry:
                         _request_action(raw_target),
                         status="error",
                         response=None,
-                        error=_action_error(key, message, fix=fix),
+                        error=_action_error(key, message, guidance=guidance),
                     )
                 )
 
             # Policy gate (non-raising).
-            if (block := self._policy_block(settings, domain, service, blocking, return_response)) is not None:
-                _block(block.key, block.placeholders, message=block.message, fix=block.fix)
+            snapshot = require_snapshot()
+            if (
+                block := self._policy_block(
+                    settings,
+                    snapshot,
+                    domain,
+                    service,
+                    cleaned_service_data,
+                    raw_target,
+                    blocking,
+                    return_response,
+                )
+            ) is not None:
+                _block(block.key, block.placeholders, message=block.message, guidance=block.guidance)
                 return None
 
             # Target visibility resolution with auto-resolve.
@@ -767,8 +788,8 @@ class SafeServiceRegistry:
                 _block(
                     "service_target_not_visible",
                     cast(TranslationPlaceholders, {"entity_id": target_outcome.requested}),
-                    message=target_outcome.hint,
-                    fix=target_outcome.fix,
+                    message=_target_not_found_message(target_outcome.requested, domain, target_outcome.guidance),
+                    guidance=target_outcome.guidance,
                 )
                 return None
             resolved_target = target_outcome.target
@@ -776,9 +797,8 @@ class SafeServiceRegistry:
             # Conservative stable-fact pre-block: a service whose declared target
             # excludes every resolved entity's domain is blocked with guidance
             # instead of forwarding a call Home Assistant would reject live.
-            snapshot = require_snapshot()
             if (cap_block := self._target_capability_block(snapshot, domain, service, resolved_target)) is not None:
-                _block(cap_block.key, cap_block.placeholders, message=cap_block.message, fix=cap_block.fix)
+                _block(cap_block.key, cap_block.placeholders, message=cap_block.message, guidance=cap_block.guidance)
                 return None
 
             action = _request_action(resolved_target)
@@ -828,7 +848,16 @@ class SafeServiceRegistry:
                 record["error"] = _action_error(
                     helper_err.key,
                     f"Service '{domain}.{service}' failed validation or execution: {err.__class__.__name__}.",
-                    fix=_service_field_names(self.services_schema.get(domain, {}).get(service)),
+                    guidance=advise(
+                        require_snapshot(),
+                        FailureContext(
+                            intent=Intent.CALL_SERVICE,
+                            requested=service,
+                            domain=domain,
+                            service=service,
+                            service_data=cleaned_service_data or {},
+                        ),
+                    ).to_payload(),
                 )
                 raise helper_err from err
             if return_response:
@@ -872,19 +901,19 @@ class SafeServiceRegistry:
                         memory.record(entity_id, resolved_entity_id)
                     adjustments.append(_target_entity_resolved_adjustment(entity_id, resolved_entity_id))
                 else:
-                    candidates: tuple[CandidateTarget, ...] = outcome.candidates or candidates_for_domain(
-                        snapshot, resolve_domain, limit=_DISCOVERY_LIMIT + 1, memory=memory
-                    )
-                    if service is not None:
-                        # Target-aware ranking: entities the service accepts sort first.
-                        candidates = rank_candidates_for_service(
-                            snapshot, candidates, resolve_domain, service, requested=entity_id, memory=memory
-                        )
-                    fix = _candidate_ids(candidates)
+                    guidance = advise(
+                        snapshot,
+                        FailureContext(
+                            intent=Intent.RESOLVE_SELECTOR,
+                            requested=entity_id,
+                            domain=resolve_domain,
+                            service=service or "",
+                        ),
+                        memory=memory,
+                    ).to_payload()
                     return _UnresolvedTarget(
                         requested=entity_id,
-                        hint=_target_not_found_message(entity_id, resolve_domain, fix),
-                        fix=fix,
+                        guidance=guidance,
                     )
         for selector in AGGREGATE_SELECTOR_KEYS:
             if selector not in target:
@@ -894,27 +923,31 @@ class SafeServiceRegistry:
                 supported_values.append(requested)
         for selector, requested_expansions in expand_aggregate_selectors(snapshot, target).items():
             for requested, resolved in requested_expansions:
-                entity_ids.update(resolved)
-                adjustments.append(_target_selector_expanded_adjustment(selector, requested, resolved))
+                domain_resolved = _domain_filtered_entity_ids(snapshot, resolved, domain)
+                entity_ids.update(domain_resolved)
+                adjustments.append(_target_selector_expanded_adjustment(selector, requested, domain_resolved))
 
         if entity_ids:
             return _ResolvedTarget({"entity_id": sorted(entity_ids)}, tuple(adjustments))
         if supported_values:
-            fallback_candidates = candidates_for_domain(snapshot, domain, limit=_DISCOVERY_LIMIT + 1, memory=memory)
-            if service is not None:
-                fallback_candidates = rank_candidates_for_service(
-                    snapshot, fallback_candidates, domain, service, requested=supported_values[0], memory=memory
-                )
-            fallback_fix = _candidate_ids(fallback_candidates)
+            guidance = advise(
+                snapshot,
+                FailureContext(
+                    intent=Intent.RESOLVE_SELECTOR,
+                    requested=supported_values[0],
+                    domain=domain,
+                    service=service or "",
+                ),
+                memory=memory,
+            ).to_payload()
             return _UnresolvedTarget(
                 requested=supported_values[0],
-                hint=_target_not_found_message(supported_values[0], domain, fallback_fix),
-                fix=fallback_fix,
+                guidance=guidance,
             )
         if supported_keys:
             return _UnresolvedTarget(
                 requested=supported_keys[0],
-                hint="No visible entities resolved for the requested target.",
+                guidance=None,
             )
         return _ResolvedTarget(cast(dict[str, object], json_safe(target)))
 
@@ -965,7 +998,12 @@ def _history_entity_ids(snapshot: HomeSnapshot, entity_ids: str | list[str] | No
         ids = [str(entity_id) for entity_id in entity_ids]
     missing = [entity_id for entity_id in ids if entity_id not in snapshot.states]
     if missing:
-        raise HelperExecutionError("history", "entity_not_visible", {"entity_id": missing[0]})
+        domain = missing[0].split(".", 1)[0] if "." in missing[0] else ""
+        guidance = advise(
+            snapshot,
+            FailureContext(intent=Intent.QUERY_HISTORY, requested=missing[0], domain=domain),
+        ).to_payload()
+        raise HelperExecutionError("history", "entity_not_visible", {"entity_id": missing[0]}, guidance=guidance)
     if not ids or len(ids) > MAX_RECORDER_ENTITY_IDS:
         raise HelperExecutionError(
             "history",
@@ -1018,7 +1056,8 @@ def _query_scope(
         try:
             return resolve_entity_ids(snapshot, data, "entity_ids"), False
         except RecoverableToolError as err:
-            raise HelperExecutionError("query", err.key, err.placeholders) from err
+            guidance = _query_scope_guidance(snapshot, data, err.placeholders)
+            raise HelperExecutionError("query", err.key, err.placeholders, guidance=guidance) from err
     # Advisory literal scan: only accept tokens that are real visible entity ids.
     literal_ids = sorted(set(re.findall(r"['\"]([a-zA-Z0-9_]+\.[a-zA-Z0-9_]+)['\"]", sql)) & set(snapshot.states))
     if literal_ids:
@@ -1516,14 +1555,96 @@ def _expand_target_entities(snapshot: HomeSnapshot, target: Mapping[str, object]
     return entity_ids
 
 
-def _bounded_entity_ids(entity_ids: tuple[str, ...] | list[str]) -> list[str]:
-    """Bound a raw entity-id list to the discovery limit plus overflow marker."""
-    return bounded_strings(sorted(entity_ids))
+def _domain_filtered_entity_ids(snapshot: HomeSnapshot, entity_ids: tuple[str, ...], domain: str) -> tuple[str, ...]:
+    """Return selector-expanded entity ids scoped to the requested service domain."""
+    if not domain:
+        return tuple(sorted(entity_ids))
+    return tuple(sorted(entity_id for entity_id in entity_ids if snapshot.states[entity_id].domain == domain))
 
 
-def _candidate_ids(candidates: tuple[CandidateTarget, ...]) -> list[str]:
-    """Return bounded candidate entity ids for model repair."""
-    return bounded_strings([candidate.entity_id for candidate in candidates])
+def _service_not_found_guidance(
+    snapshot: HomeSnapshot,
+    domain: str,
+    service: str,
+    service_data: Mapping[str, object] | None,
+    target: Mapping[str, object] | None,
+) -> Mapping[str, object]:
+    """Return service-name guidance, annotated when the requested target is not visible."""
+    guidance = advise(
+        snapshot,
+        FailureContext(
+            intent=Intent.CALL_SERVICE,
+            requested=service,
+            domain=domain if domain in snapshot.services else "",
+            service=service,
+            service_data=service_data or {},
+        ),
+    ).to_payload()
+    if (missing_target := _first_missing_target_literal(snapshot, target)) is not None:
+        guidance = dict(guidance)
+        reason = str(guidance.get("reason", ""))
+        guidance["reason"] = f"{reason} Target `{missing_target}` is not visible in the current snapshot.".strip()
+    return guidance
+
+
+def _first_missing_target_literal(snapshot: HomeSnapshot, target: Mapping[str, object] | None) -> str | None:
+    """Return the first target selector literal absent from the frozen visible snapshot."""
+    if not isinstance(target, Mapping):
+        return None
+    indexes: dict[str, Mapping[str, object]] = {
+        "entity_id": snapshot.states,
+        "area_id": snapshot.areas,
+        "device_id": snapshot.devices,
+        "floor_id": snapshot.floors,
+        "label_id": snapshot.labels,
+        "label": snapshot.labels,
+    }
+    for selector, visible in indexes.items():
+        if selector not in target:
+            continue
+        # Visibility fact only annotates guidance; policy blocking remains unchanged.
+        for requested in _target_values(target[selector]):
+            if requested not in visible:
+                return requested
+    return None
+
+
+def _query_scope_guidance(
+    snapshot: HomeSnapshot,
+    data: Mapping[str, object],
+    placeholders: Mapping[str, str],
+) -> Mapping[str, object] | None:
+    """Return QUERY_HISTORY guidance for facade query selector failures."""
+    requested = str(placeholders.get("entity_id") or placeholders.get("area_id") or placeholders.get("selector") or "")
+    domain = str(data.get("domain") or "")
+    entity_ids = data.get("entity_ids")
+    if not requested and isinstance(entity_ids, list) and entity_ids:
+        requested = str(entity_ids[0])
+    if not requested:
+        return None
+    if not domain and "." in requested:
+        domain = requested.split(".", 1)[0]
+    return advise(
+        snapshot,
+        FailureContext(intent=Intent.QUERY_HISTORY, requested=requested, domain=domain),
+    ).to_payload()
+
+
+def _guidance_candidate_ids(guidance: Mapping[str, object] | None) -> list[str]:
+    """Return candidate ids from a serialized guidance payload for legacy message prose."""
+    if not guidance:
+        return []
+    candidates = guidance.get("candidates")
+    if not isinstance(candidates, list):
+        return []
+    ids: list[str] = []
+    for candidate in candidates:
+        if not isinstance(candidate, Mapping):
+            continue
+        candidate_id = candidate.get("id")
+        if isinstance(candidate_id, str) and candidate_id:
+            ids.append(candidate_id)
+    return ids
 
 
 def _valid_domains_message(domain: str, valid_domains: list[str]) -> str:
@@ -1540,10 +1661,11 @@ def _valid_services_message(domain: str, service: str, valid_services: list[str]
     return f"No service '{service}' on '{domain}'."
 
 
-def _target_not_found_message(requested: str, domain: str, fix: list[str]) -> str:
+def _target_not_found_message(requested: str, domain: str, guidance: Mapping[str, object] | None) -> str:
     """Return the compact target-layer repair message."""
-    if fix:
-        return f"Target '{requested}' not found in '{domain}'. Did you mean: {', '.join(fix)}."
+    candidate_ids = _guidance_candidate_ids(guidance)
+    if candidate_ids:
+        return f"Target '{requested}' not found in '{domain}'. Did you mean: {', '.join(candidate_ids)}."
     return f"Target '{requested}' not found in '{domain}'."
 
 
@@ -1551,10 +1673,11 @@ def _service_target_not_supported_message(
     domain: str,
     service: str,
     excluded_domains: list[str],
-    fix: list[str],
+    guidance: Mapping[str, object] | None,
 ) -> str:
     """Return the compact domain-mismatch repair message."""
-    accepted = f" Try: {', '.join(fix)}." if fix else ""
+    candidate_ids = _guidance_candidate_ids(guidance)
+    accepted = f" Try: {', '.join(candidate_ids)}." if candidate_ids else ""
     return f"Service '{domain}.{service}' does not target {', '.join(excluded_domains)} entities.{accepted}"
 
 
@@ -1609,7 +1732,7 @@ class _PolicyBlock:
     key: str
     placeholders: TranslationPlaceholders
     message: str
-    fix: list[str] | None = None
+    guidance: Mapping[str, object] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1622,18 +1745,17 @@ class _ResolvedTarget:
 
 @dataclass(frozen=True, slots=True)
 class _UnresolvedTarget:
-    """A target that could not resolve to visible entities; carries discovery hints."""
+    """A target that could not resolve to visible entities; carries structured guidance."""
 
     requested: str
-    hint: str
-    fix: list[str] | None = None
+    guidance: Mapping[str, object] | None = None
 
 
 def _action_error(
     key: str,
     message: str,
     *,
-    fix: list[str] | None = None,
+    guidance: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     """Build the JSON-safe action error shape."""
     clean = " ".join(message.split())
@@ -1641,8 +1763,8 @@ def _action_error(
         "key": key,
         "message": clean if clean and clean != key else f"Resolve '{key}' before retrying.",
     }
-    if fix:
-        error["fix"] = fix
+    if guidance:
+        error["guidance"] = dict(guidance)
     return error
 
 
@@ -1693,7 +1815,7 @@ def _target_entity_resolved_adjustment(requested_entity_id: str, resolved_entity
         "target_entity_resolved",
         (
             f"Resolved requested target entity_id {requested_entity_id} to visible entity {resolved_entity_id} "
-            "before execution; no retry needed."
+            "before execution; report the applied entity id to the user; no retry needed."
         ),
         requested={"entity_id": requested_entity_id},
         applied={"entity_id": [resolved_entity_id]},

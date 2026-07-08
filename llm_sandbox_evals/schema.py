@@ -57,6 +57,7 @@ class Expected:
     expected_values: tuple[str, ...] = ()
     answer_excludes: tuple[str, ...] = ()
     actions: tuple[ExpectedAction, ...] = ()
+    guidance_candidate: str | None = None
     max_tool_calls: int = 8
     reference_tool_calls: int | None = None
 

@@ -680,6 +680,7 @@ cases:
       - sensor.living_temp
       answer_excludes: []
       actions: []
+      guidance_candidate: sensor.living_temp
       max_tool_calls: 5
       reference_tool_calls: 2
     action_domains: []
@@ -731,6 +732,7 @@ cases:
         service: turn_off
         target_entity_ids:
         - light.living
+      guidance_candidate: light.living
       max_tool_calls: 5
       reference_tool_calls: 2
     action_domains: []
@@ -759,6 +761,7 @@ cases:
         service: turn_on
         target_entity_ids:
         - light.living
+      guidance_candidate: light.turn_on
       max_tool_calls: 5
       reference_tool_calls: 2
     action_domains: []
@@ -1203,6 +1206,7 @@ cases:
       - light.living
       answer_excludes: []
       actions: []
+      guidance_candidate: area_living
       max_tool_calls: 5
       reference_tool_calls: 2
     action_domains: []

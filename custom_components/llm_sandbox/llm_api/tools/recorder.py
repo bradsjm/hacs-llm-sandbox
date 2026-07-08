@@ -41,11 +41,10 @@ from ...const import (
 from ...snapshot import build_recorder_snapshot
 from ...snapshot.models import HomeSnapshot
 from ...types import TranslationPlaceholders
-from .._hinting import error_guidance
 from ..errors import RecoverableToolError, tool_error_envelope, tool_error_from_exception
 from ..executor_support import json_safe
+from ..guidance import FailureContext, Intent, advise
 from ..prompts import build_get_history_description, build_get_logbook_description, build_get_statistics_description
-from ..resolution import _DISCOVERY_LIMIT, bounded_strings, candidates_for_domain, resolve_target_entity
 from ..selector_expansion import expand_aggregate_selectors
 from ._analytics import (
     AGGREGATORS,
@@ -126,46 +125,18 @@ _ALL_STAT_QUERY_TYPES: frozenset[StatisticQueryType] = frozenset({"last_reset", 
 # alternative to absolute ISO start/end (the sandbox forbids timedelta math).
 _HOURS_ARG = vol.All(vol.Coerce(float), vol.Range(min=0))
 
-# Actionable guidance keyed by the recoverable error key. Entity visibility
-# errors are snapshot-specific and are handled separately so they can include
-# concrete visible candidates for the requested domain.
-_RECORDER_GUIDANCE: dict[str, tuple[str, list[str]]] = {
-    TIME_WINDOW_TOO_LARGE: (
-        "The requested time window is too large.",
-        ["Reduce the window to at most {max_hours} hours.", "Pass hours=<n> or a smaller start/end range."],
-    ),
-    RECORDER_UNAVAILABLE: (
-        "The recorder integration is not available.",
-        ["Ask the user to enable the recorder integration, or query live state via execute_home_code instead."],
-    ),
-    "logbook_unavailable": (
-        "The logbook integration is not available.",
-        ["Ask the user to enable the logbook integration, or query history via get_history instead."],
-    ),
-    QUERY_FAILED: (
-        "The recorder query failed.",
-        ["Check the argument values; the recorder error was: {error}."],
-    ),
-    INVALID_CURSOR: (
-        "The pagination cursor is invalid or expired.",
-        ["Re-issue the original query without a cursor to start a new page sequence."],
-    ),
-    "invalid_tool_input": (
-        "Invalid tool input.",
-        ["Check argument names and types; the validation error was: {error}."],
-    ),
-    "analytics_unknown_op": (
-        "The requested analytics operation is not supported.",
-        ["Use one of: {valid}."],
-    ),
-    "analytics_unknown_group_key": (
-        "The requested analytics group key is not supported.",
-        ["Use one of: {valid}."],
-    ),
-    "analytics_bad_bucket": (
-        "The requested analytics bucket is invalid.",
-        ["Use bucket examples like {examples}."],
-    ),
+# Static messages keyed by recoverable error key. Entity and selector recovery
+# is snapshot-specific and handled separately through structured guidance.
+_RECORDER_GUIDANCE: dict[str, str] = {
+    TIME_WINDOW_TOO_LARGE: "The requested time window is too large.",
+    RECORDER_UNAVAILABLE: "The recorder integration is not available.",
+    "logbook_unavailable": "The logbook integration is not available.",
+    QUERY_FAILED: "The recorder query failed.",
+    INVALID_CURSOR: "The pagination cursor is invalid or expired.",
+    "invalid_tool_input": "Invalid tool input.",
+    "analytics_unknown_op": "The requested analytics operation is not supported.",
+    "analytics_unknown_group_key": "The requested analytics group key is not supported.",
+    "analytics_bad_bucket": "The requested analytics bucket is invalid.",
 }
 
 
@@ -201,40 +172,6 @@ class RecorderSource:
     fetch_logbook: LogbookFetcher
 
 
-def _candidate_ids(snapshot: HomeSnapshot, requested_entity_id: str) -> list[str] | None:
-    """Return deterministic visible candidates for an invisible requested entity."""
-    domain = requested_entity_id.split(".", 1)[0]
-    resolution = resolve_target_entity(snapshot, requested_entity_id, domain)
-    if resolution.resolved is not None:
-        ids = [resolution.resolved]
-    elif resolution.candidates:
-        ids = [candidate.entity_id for candidate in resolution.candidates]
-    else:
-        candidates = candidates_for_domain(snapshot, domain, limit=_DISCOVERY_LIMIT + 1)
-        ids = [candidate.entity_id for candidate in candidates]
-    if not ids:
-        return None
-    return bounded_strings(sorted(ids))
-
-
-def _selector_candidate_ids(snapshot: HomeSnapshot, selectors: str) -> list[str] | None:
-    """Return bounded candidate ids for the provided location selector field names."""
-    id_pools: list[str] = []
-    for field in selectors.split(", "):
-        # Match the snapshot id universe for each requested selector type.
-        if field == "area_id":
-            id_pools.extend(snapshot.areas)
-        elif field == "device_id":
-            id_pools.extend(snapshot.devices)
-        elif field == "floor_id":
-            id_pools.extend(snapshot.floors)
-        elif field == "label_id":
-            id_pools.extend(snapshot.labels)
-    if not id_pools:
-        return None
-    return bounded_strings(sorted(set(id_pools)))
-
-
 def recorder_error_envelope(
     key: str,
     placeholders: TranslationPlaceholders,
@@ -243,24 +180,46 @@ def recorder_error_envelope(
     """Build a recoverable recorder error envelope with actionable guidance."""
     if key == ENTITY_NOT_VISIBLE:
         entity_id = placeholders.get("entity_id", "the requested entity")
-        fix = _candidate_ids(snapshot, entity_id) if snapshot is not None else None
+        guidance = None
+        # Entity visibility failures have a concrete requested entity to recover.
+        if snapshot is not None:
+            guidance = advise(
+                snapshot,
+                FailureContext(
+                    intent=Intent.QUERY_HISTORY,
+                    requested=entity_id,
+                    domain=entity_id.split(".", 1)[0],
+                ),
+                memory=None,
+            ).to_payload()
         return tool_error_envelope(
             key,
             placeholders,
             message=f"Entity '{entity_id}' is not visible to this LLM tool.",
-            fix=fix,
+            guidance=guidance,
         )
     if key == SELECTOR_NO_MATCH:
         selectors = placeholders.get("selectors", "")
-        fix = _selector_candidate_ids(snapshot, selectors) if snapshot is not None else None
+        requested = placeholders.get("selector_id", selectors or "requested selector")
+        guidance = None
+        # Selector failures recover from the concrete selector id when available.
+        if snapshot is not None:
+            guidance = advise(
+                snapshot,
+                FailureContext(
+                    intent=Intent.RESOLVE_SELECTOR,
+                    requested=requested,
+                    domain=placeholders.get("domain", ""),
+                ),
+                memory=None,
+            ).to_payload()
         return tool_error_envelope(
             key,
             placeholders,
             message=f"Selector(s) {selectors or 'requested'} matched no visible entities.",
-            fix=fix,
+            guidance=guidance,
         )
-    message, fix = error_guidance(_RECORDER_GUIDANCE, key, placeholders)
-    return tool_error_envelope(key, placeholders, message=message, fix=fix)
+    return tool_error_envelope(key, placeholders, message=_RECORDER_GUIDANCE.get(key), guidance=None)
 
 
 def recorder_available(hass: HomeAssistant) -> bool:
@@ -442,9 +401,14 @@ def resolve_entity_ids(snapshot: HomeSnapshot, data: dict[str, object], id_key: 
     # area_id), not a cue to widen. Name the selector and surface candidate ids
     # so the LLM can correct, mirroring the explicit-id visibility error.
     if selector_present and not selector_ids:
+        selector_id = _as_list(data.get(provided_selectors[0]))[0]
         raise RecoverableToolError(
             SELECTOR_NO_MATCH,
-            {"selectors": ", ".join(provided_selectors)},
+            {
+                "selectors": ", ".join(provided_selectors),
+                "selector_id": selector_id,
+                "domain": next(iter(domains), ""),
+            },
         )
 
     def _domain_matches(entity_id: str) -> bool:

@@ -17,6 +17,7 @@ from custom_components.llm_sandbox.snapshot.models import (
     SafeRegistryEntry,
     SafeState,
     SafeUnitSystem,
+    ServiceTargetBrief,
     SnapshotIndexes,
 )
 from homeassistant.core import SupportsResponse
@@ -138,6 +139,7 @@ def snapshot() -> HomeSnapshot:
         notifications=[],
         config_entries=[],
         services_schema={},
+        services_target=_services_target(services),
     )
 
 
@@ -345,6 +347,31 @@ def _services_supports_response(services: Mapping[str, tuple[str, ...]]) -> dict
         domain: dict.fromkeys(domain_services, SupportsResponse.NONE.value)
         for domain, domain_services in services.items()
     }
+
+
+def _services_target(
+    services: Mapping[str, tuple[str, ...]],
+) -> dict[str, dict[str, ServiceTargetBrief]]:
+    """Build service target metadata for entity-targeting domains in the real fixture."""
+    entity_domains = {
+        "alarm_control_panel",
+        "climate",
+        "cover",
+        "fan",
+        "light",
+        "switch",
+        "weather",
+    }
+    return {
+        domain: {service: _domain_target(domain) for service in domain_services}
+        for domain, domain_services in services.items()
+        if domain in entity_domains
+    }
+
+
+def _domain_target(domain: str) -> ServiceTargetBrief:
+    """Build service target metadata for one entity domain."""
+    return {"entity": [{"domain": [domain]}]}
 
 
 def _indexes(

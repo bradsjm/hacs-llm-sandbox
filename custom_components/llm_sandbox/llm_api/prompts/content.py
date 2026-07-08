@@ -5,6 +5,20 @@ from ...snapshot.models import HomeSnapshot
 _INVENTORY_AREA_NAME_CAP = 30
 _DOMAIN_COUNT_SEPARATOR = "\N{MULTIPLICATION SIGN}"
 
+ERROR_GUIDANCE_PROMPT = (
+    "## Error guidance\n"
+    "- Recoverable errors may include guidance: {confidence, candidates, reason, next_step, cross_kind}. "
+    "confidence controls candidates: exact/high means a strong single suggestion to act on; "
+    "ambiguous/listing means choose carefully from the list; none means nothing matched. "
+    "next_step is the concrete next action.\n"
+    "- candidates are {id, name, match, detail}.\n"
+    "- In execute_home_code success, actions[] may include status:'error' even when execution.status:'ok'; "
+    "blocked or failed service calls are recorded action outcomes, not code crashes, and top-level notes "
+    "summarizes failed actions.\n"
+    "- If a target was auto-resolved, success includes resolutions:[{requested, applied}] and action records "
+    "carry resolved_from; report the applied id, not the requested alias."
+)
+
 ACTIONS_ENABLED_PROMPT = (
     "## Service calls (enabled)\n"
     "- await hass.services.async_call('<domain>', '<service>', service_data, "
@@ -21,8 +35,9 @@ ACTIONS_ENABLED_PROMPT = (
     "earlier calls.\n"
     "- Action results are compact records with service, target, status, and "
     "resolved_from or error when relevant.\n"
-    "- Errors include a specific message and may include fix candidates such as "
-    "valid domains, services, entities, or fields to correct in one retry.\n"
+    "- An action with status:'error' under execution.status:'ok' is a recorded "
+    "blocked or failed call, not a code crash; read top-level notes for the "
+    "summary and any error.guidance for the next step.\n"
 )
 
 
@@ -47,7 +62,7 @@ def compose_system_prompt(
     # actions are enabled, the rejection notice otherwise. The static tool
     # descriptions stay action-neutral.
     section = ACTIONS_ENABLED_PROMPT if actions_enabled else ACTIONS_DISABLED_PROMPT
-    prompt = f"{base_prompt}\n\n{section}"
+    prompt = f"{base_prompt}\n\n{section}\n\n{ERROR_GUIDANCE_PROMPT}"
     # Dynamic inventory comes before request-location scope so the location hint
     # stays the final, most specific request context.
     if inventory_section is not None:
@@ -173,9 +188,9 @@ def build_execute_home_code_description() -> str:
         "Service-call availability follows the API prompt. "
         "Success returns {execution:{status:'ok'}, output:<data>} with printed only when print() emitted lines "
         "and resolutions only when a remembered missing literal was rewritten to a visible entity id. "
-        "If output is empty because a literal entity id is missing, note gives one imperative retry hint naming "
-        "the missing id and a visible replacement. Errors return {execution:{status:'code_error'|'helper_error'|"
-        "'setup_error', kind?, message, fix?}, output:null}; fix, when present, lists concrete retry candidates."
+        "If output is empty because a literal entity id is missing, note names the missing id and structured "
+        "guidance may describe visible replacements. Errors return {execution:{status:'code_error'|'helper_error'|"
+        "'setup_error', kind?, message, guidance?}, output:null}."
     )
 
 
@@ -199,8 +214,7 @@ def build_get_history_description() -> str:
         "first_seen/last_seen may include to_state to find when a specific state first or last appeared. "
         "For declarative analytics, pass aggregate={field:[ops]}, group_by=[...], bucket='1h', where=[...], "
         "order_by, or limit to return {window, rows} as list[dict] with no cursor. "
-        "Errors return {status:'error', error:{key, message, fix?}}; entity_not_visible fix names "
-        "concrete visible entity candidates."
+        "Errors return {status:'error', error:{key, message, guidance?}}."
     )
 
 
@@ -219,8 +233,7 @@ def build_get_statistics_description() -> str:
         "value has fields plus rows of [t, {field: value}]. Pass types (mean/min/max/state/sum) to select "
         "which statistic fields to include; omitted or null fields are left out. The first page returns the newest rows; when more remain, "
         "next_cursor appears — pass it back as cursor (omit window args) to fetch the next older page. "
-        "Errors return {status:'error', error:{key, message, fix?}}; entity_not_visible fix names "
-        "concrete visible entity candidates."
+        "Errors return {status:'error', error:{key, message, guidance?}}."
     )
 
 
@@ -235,8 +248,7 @@ def build_get_logbook_description() -> str:
         "Success returns {window, entries}, where entries is a flat list of timeline records each carrying "
         "its entity_id. The first page returns the newest entries; when more remain, next_cursor appears — "
         "pass it back as cursor (omit window args) to fetch the next older page. "
-        "Errors return {status:'error', error:{key, message, fix?}}; entity_not_visible fix names "
-        "concrete visible entity candidates."
+        "Errors return {status:'error', error:{key, message, guidance?}}."
     )
 
 
@@ -246,5 +258,5 @@ def build_get_camera_image_description() -> str:
         "Capture a single live frame from a visible camera or image entity and return it as an "
         "inline image for visual analysis. Use this to answer questions about what is currently "
         "visible. Only entities visible under the configured scope can be captured. "
-        "Errors return {status:'error', error:{key, message, fix?}}."
+        "Errors return {status:'error', error:{key, message, guidance?}}."
     )

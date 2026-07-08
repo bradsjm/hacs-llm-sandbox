@@ -10,7 +10,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from ..snapshot.models import HomeSnapshot
-from .resolution import _DISCOVERY_LIMIT, bounded_strings, candidates_for_domain, resolve_target_entity
+from .guidance import Candidate, FailureContext, Intent, advise
+from .guidance.policy import MEMORY_WRITE_ALLOWED
 from .resolution_memory import ResolutionMemory
 
 
@@ -51,9 +52,26 @@ def _forecast_attribute_checker(ctx: LegacyNoteContext) -> str | None:
 def _missing_state_checker(ctx: LegacyNoteContext) -> str | None:
     """Preserve the existing empty-result note for literal missing state ids."""
     referenced_missing = _referenced_missing(ctx.code, ctx.snapshot)
-    if referenced_missing and _is_empty_output(ctx.result):
-        return _missing_state_note(ctx.snapshot, referenced_missing[0], ctx.memory)
-    return None
+    if not referenced_missing or not _is_empty_output(ctx.result):
+        return None
+
+    requested = referenced_missing[0]
+    domain = requested.split(".", 1)[0] if "." in requested else requested
+    guidance = advise(
+        ctx.snapshot,
+        FailureContext(intent=Intent.READ_STATE, requested=requested, domain=domain),
+        memory=ctx.memory,
+    )
+    if MEMORY_WRITE_ALLOWED[guidance.confidence] and guidance.candidates:
+        # Safety boundary: only high-confidence guidance may become future automatic literal substitution.
+        resolved_id = guidance.candidates[0].id
+        if ctx.memory is not None:
+            ctx.memory.record(requested, resolved_id)
+        next_step = guidance.next_step or f"Use `{resolved_id}` and retry."
+    else:
+        # Safety boundary: ambiguous/listing/absence guidance is informational only and never trains memory.
+        next_step = guidance.next_step
+    return _missing_state_note(requested, guidance.reason, next_step, guidance.candidates)
 
 
 LEGACY_NOTE_CHECKERS: tuple[LegacyNoteChecker, ...] = (
@@ -170,34 +188,32 @@ def _literal_str(node: ast.AST) -> object:
     return object()  # non-string / non-literal: never matches an entity id
 
 
-def _entity_candidates(
-    snapshot: HomeSnapshot,
-    requested_entity_id: str,
-    *,
-    memory: ResolutionMemory | None = None,
-) -> list[str]:
-    """Return token-ranked visible entity candidates for a missing state id."""
-    domain = requested_entity_id.split(".", 1)[0] if "." in requested_entity_id else requested_entity_id
-    outcome = resolve_target_entity(snapshot, requested_entity_id, domain, memory=memory)
-    if outcome.resolved is not None:
-        return [outcome.resolved]
-    candidates = outcome.candidates or candidates_for_domain(
-        snapshot, domain, limit=_DISCOVERY_LIMIT + 1, memory=memory
-    )
-    return bounded_strings([candidate.entity_id for candidate in candidates])
-
-
 def _missing_state_note(
-    snapshot: HomeSnapshot,
     requested_entity_id: str,
-    memory: ResolutionMemory | None,
+    reason: str,
+    next_step: str,
+    candidates: list[Candidate],
 ) -> str:
-    """Return an imperative empty-result repair note for a missing state id."""
-    candidates = _entity_candidates(snapshot, requested_entity_id, memory=memory)
-    if candidates and candidates[0] != "...":
-        if memory is not None:
-            # Remember the offered visible fix so a repeated literal can be
-            # substituted during the next execution against a fresh snapshot.
-            memory.record(requested_entity_id, candidates[0])
-        return f"No data: '{requested_entity_id}' does not exist. Use '{candidates[0]}' and re-run."
-    return f"No data: '{requested_entity_id}' does not exist and no visible replacement was found."
+    """Return a single empty-result repair note from guidance wording."""
+    candidate_text = _candidate_text(candidates)
+    parts = [f"No data: '{requested_entity_id}' does not exist.", reason]
+    if candidate_text:
+        parts.append(candidate_text)
+    if next_step:
+        parts.append(next_step)
+    return " ".join(parts)
+
+
+def _candidate_text(candidates: list[Candidate]) -> str:
+    """Return compact candidate ids and names for low-confidence guidance."""
+    if not candidates:
+        return ""
+    labels = []
+    for candidate in candidates:
+        candidate_id = candidate.id
+        candidate_name = candidate.name
+        if candidate_name:
+            labels.append(f"{candidate_id} ({candidate_name})")
+        else:
+            labels.append(str(candidate_id))
+    return "Candidates: " + ", ".join(labels) + "."

@@ -29,10 +29,9 @@ from ...const import (
 from ...snapshot import build_vision_snapshot
 from ...snapshot.models import HomeSnapshot
 from ...types import TranslationPlaceholders
-from .._hinting import error_guidance
 from ..errors import tool_error_envelope, tool_error_from_exception
+from ..guidance import FailureContext, Intent, advise
 from ..prompts import build_get_camera_image_description
-from ..resolution import _DISCOVERY_LIMIT, bounded_strings, candidates_for_domain, resolve_target_entity
 from ._support import _omit_empty_optional_args, _require_loaded_entry_error, _require_sandbox_runtime
 
 _LOGGER = logging.getLogger(__name__)
@@ -48,52 +47,28 @@ _IMAGE_DOMAINS = ("camera", "image")
 _VISION_NULL_OMIT: frozenset[str] = frozenset({"target_width", "question"})
 _VISION_EMPTY_STRING_OMIT: frozenset[str] = frozenset({"target_width", "question"})
 
-# Actionable guidance keyed by the recoverable error key. Message/hints are
-# surfaced inline to the LLM so a follow-up call can succeed; stable keys stay
-# translated in en.json for the human-facing contract. Mirrors the recorder
-# tools' guidance contract so every recoverable tool error is self-remedying.
-_VISION_GUIDANCE: dict[str, tuple[str, list[str]]] = {
-    CAPTURE_FAILED: (
-        "The live image capture failed.",
-        ["Confirm {entity_id} is online and producing frames, then retry."],
-    ),
-    IMAGE_TOO_LARGE: (
-        "The captured frame exceeds the inline image budget after downscaling.",
-        ["Retry with a smaller target_width; {entity_id} produced too many bytes."],
-    ),
-    "invalid_tool_input": (
-        "Invalid tool input.",
-        ["Check argument names and types; the validation error was: {error}."],
-    ),
+# Static messages keyed by recoverable error key. Camera/image entity recovery is
+# snapshot-specific and handled separately through structured guidance.
+_VISION_GUIDANCE: dict[str, str] = {
+    CAPTURE_FAILED: "The live image capture failed.",
+    IMAGE_TOO_LARGE: "The captured frame exceeds the inline image budget after downscaling.",
+    "invalid_tool_input": "Invalid tool input.",
 }
 
 
-def _image_candidate_ids(snapshot: HomeSnapshot, requested_entity_id: str) -> list[str] | None:
-    """Return deterministic visible camera/image candidates for a bad image entity."""
+def _image_guidance(snapshot: HomeSnapshot, requested_entity_id: str) -> dict[str, object]:
+    """Return structured recovery guidance for a bad camera/image entity."""
     domain = requested_entity_id.split(".", 1)[0]
-    ids: list[str] = []
-
-    # Same-domain resolution preserves recorder-style near-miss hints for image
-    # entities while wrong-domain requests fall back to the full capturable set.
-    if domain in _IMAGE_DOMAINS:
-        resolution = resolve_target_entity(snapshot, requested_entity_id, domain)
-        if resolution.resolved is not None:
-            ids = [resolution.resolved]
-        elif resolution.candidates:
-            ids = sorted(candidate.entity_id for candidate in resolution.candidates)
-
-    # If no near-miss exists, offer the visible camera/image surface directly.
-    if not ids:
-        for image_domain in _IMAGE_DOMAINS:
-            ids.extend(
-                candidate.entity_id
-                for candidate in candidates_for_domain(snapshot, image_domain, limit=_DISCOVERY_LIMIT + 1)
-            )
-        ids = sorted(ids)
-
-    if not ids:
-        return None
-    return bounded_strings(ids)
+    # The guidance engine ranks the domain-specific capturable surface for this failed entity.
+    return advise(
+        snapshot,
+        FailureContext(
+            intent=Intent.CAPTURE_IMAGE,
+            requested=requested_entity_id,
+            domain=domain if domain in _IMAGE_DOMAINS else "camera",
+        ),
+        memory=None,
+    ).to_payload()
 
 
 def _envelope(
@@ -104,24 +79,23 @@ def _envelope(
     """Build a recoverable vision error envelope with actionable guidance."""
     if key == ENTITY_NOT_VISIBLE:
         entity_id = placeholders.get("entity_id")
-        fix = _image_candidate_ids(snapshot, entity_id) if snapshot is not None and entity_id is not None else None
+        guidance = _image_guidance(snapshot, entity_id) if snapshot is not None and entity_id is not None else None
         return tool_error_envelope(
             key,
             placeholders,
             message="Only snapshot-visible camera/image entities are capturable.",
-            fix=fix,
+            guidance=guidance,
         )
     if key == UNSUPPORTED_IMAGE_DOMAIN:
         entity_id = placeholders.get("entity_id")
-        fix = _image_candidate_ids(snapshot, entity_id) if snapshot is not None and entity_id is not None else None
+        guidance = _image_guidance(snapshot, entity_id) if snapshot is not None and entity_id is not None else None
         return tool_error_envelope(
             key,
             placeholders,
             message="Only camera.* and image.* entities can be captured.",
-            fix=fix,
+            guidance=guidance,
         )
-    message, fix = error_guidance(_VISION_GUIDANCE, key, placeholders)
-    return tool_error_envelope(key, placeholders, message=message, fix=fix)
+    return tool_error_envelope(key, placeholders, message=_VISION_GUIDANCE.get(key), guidance=None)
 
 
 @final

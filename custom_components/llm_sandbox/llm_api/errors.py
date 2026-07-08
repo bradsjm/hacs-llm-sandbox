@@ -18,7 +18,7 @@ class HelperErrorExecutionPayload(TypedDict):
     status: Literal["helper_error"]
     message: str
     kind: NotRequired[str]
-    fix: NotRequired[list[str]]
+    guidance: NotRequired[Mapping[str, object]]
     adjustments: NotRequired[list[dict[str, object]]]
 
 
@@ -28,7 +28,7 @@ class CodeErrorExecutionPayload(TypedDict):
     status: Literal["code_error"]
     message: str
     kind: NotRequired[str]
-    fix: NotRequired[list[str]]
+    guidance: NotRequired[Mapping[str, object]]
     adjustments: NotRequired[list[dict[str, object]]]
 
 
@@ -38,7 +38,7 @@ class SetupErrorExecutionPayload(TypedDict):
     status: Literal["setup_error"]
     message: str
     kind: NotRequired[str]
-    fix: NotRequired[list[str]]
+    guidance: NotRequired[Mapping[str, object]]
 
 
 class HelperErrorPayload(TypedDict):
@@ -80,7 +80,7 @@ class HelperExecutionError(Exception):
     helper: str
     key: str
     placeholders: TranslationPlaceholders
-    fix: list[str] | None = None
+    guidance: Mapping[str, object] | None = None
     marker: str = field(default_factory=lambda: f"llm_sandbox_helper_error:{uuid4().hex}")
 
     def __post_init__(self) -> None:
@@ -105,15 +105,16 @@ def _build_execution_payload(
     message: str,
     *,
     kind: str | None = None,
-    fix: list[str] | None = None,
+    guidance: Mapping[str, object] | None = None,
     adjustments: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     """Return shared execution metadata for code/helper/setup errors."""
     execution: dict[str, object] = {"status": status, "message": message}
     if kind:
         execution["kind"] = kind
-    if fix:
-        execution["fix"] = fix
+    # Guidance is omitted when unavailable to keep the error payload compact.
+    if guidance:
+        execution["guidance"] = dict(guidance)
     if adjustments:
         execution["adjustments"] = adjustments
     return execution
@@ -139,7 +140,7 @@ def helper_error_payload(
     *,
     message: str,
     kind: str | None = None,
-    fix: list[str] | None = None,
+    guidance: Mapping[str, object] | None = None,
     adjustments: list[dict[str, object]],
     printed: list[str],
     actions: list[ActionRecord] | None = None,
@@ -149,7 +150,7 @@ def helper_error_payload(
         "helper_error",
         _message_or_key_fallback(message, err.key),
         kind=kind,
-        fix=fix,
+        guidance=guidance,
         adjustments=adjustments,
     )
     return cast(HelperErrorPayload, _build_error_payload(execution, printed=printed, actions=actions))
@@ -162,24 +163,30 @@ def code_error_payload(
     adjustments: list[dict[str, object]],
     printed: list[str],
     actions: list[ActionRecord] | None = None,
-    fix: list[str] | None = None,
+    guidance: Mapping[str, object] | None = None,
 ) -> CodeErrorPayload:
     """Return compact code-error execution payload."""
     execution = _build_execution_payload(
         "code_error",
         _message_or_key_fallback(message, kind),
         kind=kind,
-        fix=fix,
+        guidance=guidance,
         adjustments=adjustments,
     )
     return cast(CodeErrorPayload, _build_error_payload(execution, printed=printed, actions=actions))
 
 
-def setup_error_payload(key: str, placeholders: TranslationPlaceholders) -> SetupErrorPayload:
+def setup_error_payload(
+    key: str,
+    placeholders: TranslationPlaceholders,
+    *,
+    guidance: Mapping[str, object] | None = None,
+) -> SetupErrorPayload:
     """Return compact setup-error execution payload."""
     execution = _build_execution_payload(
         "setup_error",
         _message_or_key_fallback(_setup_error_message(placeholders), key),
+        guidance=guidance,
     )
     return cast(SetupErrorPayload, _build_error_payload(execution))
 
@@ -199,15 +206,16 @@ def tool_error_envelope(
     _placeholders: TranslationPlaceholders,
     *,
     message: str | None = None,
-    fix: list[str] | None = None,
+    guidance: Mapping[str, object] | None = None,
 ) -> JsonObjectType:
     """Return a JSON-safe recoverable error envelope for LLM tool callers."""
     error: dict[str, Any] = {
         "key": key,
         "message": _message_or_key_fallback(message, key),
     }
-    if fix:
-        error["fix"] = fix
+    # Guidance is omitted when unavailable to match execution error payloads.
+    if guidance:
+        error["guidance"] = dict(guidance)
     return cast(
         JsonObjectType,
         {

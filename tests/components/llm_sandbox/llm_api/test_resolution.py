@@ -1,14 +1,9 @@
 """Unit tests for snapshot-backed service target resolution."""
 
 from collections.abc import Sequence
-from dataclasses import replace
 
 import pytest
-from custom_components.llm_sandbox.llm_api.resolution import (
-    available_hint,
-    rank_candidates_for_service,
-    resolve_target_entity,
-)
+from custom_components.llm_sandbox.llm_api.resolution import resolve_target_entity
 from custom_components.llm_sandbox.llm_api.resolution_memory import ResolutionMemory
 from custom_components.llm_sandbox.snapshot.models import (
     HomeSnapshot,
@@ -135,67 +130,6 @@ def test_resolve_target_entity_returns_ambiguous_candidates_for_multiple_contain
     assert result.resolved is None
     assert not result.is_resolved
     assert [candidate.entity_id for candidate in result.candidates] == ["fan.ceiling", "fan.living_ceiling"]
-
-
-@pytest.mark.parametrize(
-    ("state_count", "expect_overflow"),
-    [
-        pytest.param(8, False, id="at-discovery-limit"),
-        pytest.param(9, True, id="above-discovery-limit"),
-    ],
-)
-def test_available_hint_marks_overflow_only_above_discovery_limit(
-    state_count: int,
-    expect_overflow: bool,
-) -> None:
-    """Visible-domain hints signal overflow only when more entities exist than displayed."""
-    state_specs = tuple((f"light.fixture_{index}", f"Fixture {index}") for index in range(state_count))
-
-    hint = available_hint(_snapshot(state_specs), "light")
-
-    assert hint.endswith(" ...") is expect_overflow
-
-
-def test_rank_candidates_for_service_surfaces_targeted_entities_first() -> None:
-    """Fix-list candidates the service targets sort ahead of unrelated same-domain entities."""
-    from custom_components.llm_sandbox.llm_api.resolution import CandidateTarget
-
-    snapshot = replace(
-        _snapshot(
-            (
-                ("cover.blind_supported", None),
-                ("cover.blind_plain", None),
-            )
-        ),
-        services_target={
-            "cover": {
-                "stop_cover": {
-                    "entity": [{"domain": ["cover"], "supported_features": [4]}],
-                }
-            }
-        },
-        states={
-            "cover.blind_supported": _state_with_features("cover.blind_supported", 4),
-            "cover.blind_plain": _state_with_features("cover.blind_plain", 0),
-        },
-    )
-    candidates = (
-        CandidateTarget(entity_id="cover.blind_plain", name=None, object_id="blind_plain"),
-        CandidateTarget(entity_id="cover.blind_supported", name=None, object_id="blind_supported"),
-    )
-
-    ranked = rank_candidates_for_service(snapshot, candidates, "cover", "stop_cover")
-
-    assert [candidate.entity_id for candidate in ranked] == [
-        "cover.blind_supported",
-        "cover.blind_plain",
-    ]
-
-
-def _state_with_features(entity_id: str, supported_features: int) -> SafeState:
-    """Build a state record carrying a supported_features attribute."""
-    base = _state(entity_id, None)
-    return replace(base, attributes={"supported_features": supported_features})
 
 
 def _snapshot(state_specs: Sequence[tuple[str, str | None]]) -> HomeSnapshot:

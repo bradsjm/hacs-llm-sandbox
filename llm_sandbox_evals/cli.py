@@ -320,9 +320,7 @@ def _run_eval(args: argparse.Namespace) -> int:
     selected_cases = _select_cases(config.cases, config.homes)
     _say(_eval_banner(config, len(selected_cases)))
 
-    report = asyncio.run(
-        experiment.run_matrix(config, logfire_enabled=args.logfire, on_complete=_progress_reporter)
-    )
+    report = asyncio.run(experiment.run_matrix(config, logfire_enabled=args.logfire, on_complete=_progress_reporter))
     run_id = _derive_run_id()
     created_at = datetime.now(UTC).isoformat()
     run_dir = reports.write_report_json(report, config, run_id=run_id, created_at=created_at)

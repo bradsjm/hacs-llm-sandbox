@@ -31,16 +31,82 @@ _READ_ONLY_ACTIONS = {
     sqlite3.SQLITE_FUNCTION,
     sqlite3.SQLITE_PRAGMA,
 }
-_SCHEMA_TABLE_NAMES: tuple[str, ...] = (
-    "states",
-    "history",
-    "statistics",
-    "states_meta",
-    "statistics_meta",
-    "statistics_short_term",
-    "state_history",
-    "long_term_statistics",
-)
+
+# Single source of truth for the in-memory SQL surface. Base tables carry their
+# column vocabulary with SQLite types so the DDL and the guidance candidates can
+# never drift. Views declare a base table plus either an explicit column subset
+# or None (select *); the third flag records DISTINCT views.
+SCHEMA_TABLES: dict[str, tuple[tuple[str, str], ...]] = {
+    "states": (
+        ("entity_id", "text primary key"),
+        ("domain", "text"),
+        ("object_id", "text"),
+        ("name", "text"),
+        ("state", "text"),
+        ("value", "real"),
+        ("attributes", "text"),
+        ("area_id", "text"),
+        ("floor_id", "text"),
+        ("device_id", "text"),
+        ("platform", "text"),
+        ("unique_id", "text"),
+        ("last_changed", "text"),
+        ("last_changed_ts", "real"),
+        ("last_updated", "text"),
+        ("last_updated_ts", "real"),
+    ),
+    "history": (
+        ("entity_id", "text"),
+        ("domain", "text"),
+        ("area_id", "text"),
+        ("floor_id", "text"),
+        ("device_id", "text"),
+        ("when_iso", "text"),
+        ("when_ts", "real"),
+        ("state", "text"),
+        ("value", "real"),
+    ),
+    "statistics": (
+        ("statistic_id", "text"),
+        ("entity_id", "text"),
+        ("when_iso", "text"),
+        ("when_ts", "real"),
+        ("mean", "real"),
+        ("min", "real"),
+        ("max", "real"),
+        ("state", "real"),
+        ("sum", "real"),
+    ),
+}
+# View name -> (base table, explicit columns or None for select *, distinct).
+SCHEMA_VIEWS: dict[str, tuple[str, tuple[str, ...] | None, bool]] = {
+    "state_history": ("history", None, False),
+    "long_term_statistics": ("statistics", None, False),
+    "states_meta": ("states", ("entity_id", "state", "attributes", "last_updated_ts", "last_changed_ts"), False),
+    "statistics_meta": ("statistics", ("statistic_id", "entity_id"), True),
+    "statistics_short_term": ("statistics", None, False),
+}
+_SCHEMA_TABLE_NAMES: tuple[str, ...] = (*SCHEMA_TABLES, *SCHEMA_VIEWS)
+
+
+def columns_for_table(name: str) -> tuple[str, ...]:
+    """Return the column vocabulary for a known table or view (empty when unknown).
+
+    Single-sourced from ``SCHEMA_TABLES``/``SCHEMA_VIEWS`` so the DDL and the
+    guidance candidates cannot diverge. An unknown name returns an empty tuple
+    rather than masking the error with another table's columns.
+    """
+    table = SCHEMA_TABLES.get(name)
+    if table is not None:
+        return tuple(column for column, _type in table)
+    view = SCHEMA_VIEWS.get(name)
+    if view is not None:
+        base, explicit, _distinct = view
+        # select * mirrors the base table columns; explicit selects carry their subset.
+        return explicit if explicit is not None else columns_for_table(base)
+    return ()
+
+
 _LEADING_SQL_COMMENT = re.compile(r"^\s*(?:--[^\n]*\n|/\*.*?\*/)", re.DOTALL)
 _SQL_COLUMN_QUALIFIER = re.compile(
     r"no such column:\s+"
@@ -207,38 +273,25 @@ class HomeDatabase:
         self._conn = None
 
     def _create_schema(self) -> None:
-        self.conn.executescript(
-            """
-            create table states(
-                entity_id text primary key, domain text, object_id text, name text, state text, value real,
-                attributes text, area_id text, floor_id text, device_id text, platform text, unique_id text,
-                last_changed text, last_changed_ts real, last_updated text, last_updated_ts real
-            );
-            create table history(
-                entity_id text, domain text, area_id text, floor_id text, device_id text,
-                when_iso text, when_ts real, state text, value real
-            );
-            -- Dedup on every loaded column so only byte-identical rows collapse on a
-            -- re-load; COALESCE normalizes NULLs (SQLite treats NULLs as distinct in
-            -- unique indexes) so two identical rows with nullable fields still dedup.
-            create unique index history_row_unique on history(
-                entity_id, when_iso, state,
-                coalesce(when_ts, -1), coalesce(value, -1e308),
-                coalesce(area_id, ''), coalesce(floor_id, ''), coalesce(device_id, ''), coalesce(domain, '')
-            );
-            create table statistics(
-                statistic_id text, entity_id text, when_iso text, when_ts real,
-                mean real, min real, max real, state real, sum real
-            );
-            create unique index statistics_row_unique on statistics(statistic_id, when_iso);
-            create view state_history as select * from history;
-            create view long_term_statistics as select * from statistics;
-            -- Name-only aliases for recorder-schema reflexes.
-            create view states_meta as select entity_id, state, attributes, last_updated_ts, last_changed_ts from states;
-            create view statistics_meta as select distinct statistic_id, entity_id from statistics;
-            create view statistics_short_term as select * from statistics;
-            """
+        statements: list[str] = []
+        for table, columns in SCHEMA_TABLES.items():
+            body = ", ".join(f"{name} {type_}" for name, type_ in columns)
+            statements.append(f"create table {table}({body});")
+        for view, (base, explicit, distinct) in SCHEMA_VIEWS.items():
+            select = "*" if explicit is None else ", ".join(explicit)
+            distinct_sql = "distinct " if distinct else ""
+            statements.append(f"create view {view} as select {distinct_sql}{select} from {base};")
+        # Dedup on every loaded column so only byte-identical rows collapse on a
+        # re-load; COALESCE normalizes NULLs (SQLite treats NULLs as distinct in
+        # unique indexes) so two identical rows with nullable fields still dedup.
+        statements.append(
+            "create unique index history_row_unique on history("
+            "entity_id, when_iso, state,"
+            "coalesce(when_ts, -1), coalesce(value, -1e308),"
+            "coalesce(area_id, ''), coalesce(floor_id, ''), coalesce(device_id, ''), coalesce(domain, ''));"
         )
+        statements.append("create unique index statistics_row_unique on statistics(statistic_id, when_iso);")
+        self.conn.executescript("\n".join(statements))
 
     def _arm_user_sql_guard(self, deadline: float) -> None:
         """Temporarily guard one user SQL statement while trusted loads remain possible later."""
@@ -319,28 +372,41 @@ class HomeDatabase:
         }
 
     def _refine_sql_error(self, message: str) -> HelperExecutionError:
-        """Return a structured SQL helper error with targeted fix candidates."""
+        """Return a structured SQL helper error with targeted guidance."""
+        from .guidance import FailureContext, Intent, advise
+
         lowered = message.lower()
         if "no such table" in lowered:
+            requested = message.rsplit(":", 1)[-1].strip() or message
             return HelperExecutionError(
                 "query",
                 "sql_unknown_table",
                 {"reason": message},
-                fix=_bounded_list(_SCHEMA_TABLE_NAMES),
+                guidance=advise(
+                    self.snapshot,
+                    FailureContext(intent=Intent.SQL_TABLE, requested=requested),
+                    memory=None,
+                ).to_payload(),
             )
         if "no such column" in lowered:
+            requested = message.rsplit(":", 1)[-1].strip() or message
             table = None
             if match := _SQL_COLUMN_QUALIFIER.search(message):
                 table_ref = match.group("table")
                 table = _unquote_identifier(table_ref) if table_ref else None
-            if table not in _SCHEMA_TABLE_NAMES:
-                table = "states"
-            columns = tuple(str(row["name"]) for row in self.conn.execute(f"pragma table_info({table})"))
+                requested = _unquote_identifier(match.group(2))
+            # SQLite omits the table qualifier for unqualified column errors; default
+            # to ``states``, the primary table LLM-queried read paths target.
+            table = table if table in _SCHEMA_TABLE_NAMES else "states"
             return HelperExecutionError(
                 "query",
                 "sql_unknown_column",
                 {"reason": message},
-                fix=_bounded_list(columns),
+                guidance=advise(
+                    self.snapshot,
+                    FailureContext(intent=Intent.SQL_COLUMN, requested=requested, table_name=table),
+                    memory=None,
+                ).to_payload(),
             )
         if "not authorized" in lowered or "readonly" in lowered or "only select" in lowered:
             return HelperExecutionError("query", "sql_read_only", {"reason": message})
@@ -411,14 +477,6 @@ def _authorize(action: int, arg1: str | None, _arg2: str | None, _db: str | None
     if action == sqlite3.SQLITE_PRAGMA and (arg1 or "").lower() not in {"table_info", "table_list"}:
         return sqlite3.SQLITE_DENY
     return sqlite3.SQLITE_OK
-
-
-def _bounded_list(names: tuple[str, ...], limit: int = 8) -> list[str]:
-    """Return a deterministic bounded candidate list."""
-    bounded = sorted(names)[:limit]
-    if len(names) > limit:
-        bounded.append("...")
-    return bounded
 
 
 def _timestamp(value: str) -> float | None:

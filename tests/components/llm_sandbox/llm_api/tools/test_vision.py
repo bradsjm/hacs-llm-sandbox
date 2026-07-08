@@ -2,6 +2,7 @@
 
 import base64
 import io
+from collections.abc import Mapping
 from typing import cast
 from unittest.mock import patch
 
@@ -53,9 +54,8 @@ async def test_get_camera_image_rejects_non_visible_entity(
     assert result["error"]["key"] == "entity_not_visible"
     assert isinstance(result["error"]["message"], str)
     assert result["error"]["message"]
-    fix = cast(list[str], result["error"]["fix"])
-    assert "camera.back_yard" in fix
-    assert "image.porch_snapshot" in fix
+    candidates = _guidance_candidate_ids(result["error"]["guidance"])
+    assert "camera.back_yard" in candidates
 
 
 async def test_get_camera_image_visibility_is_fresh_per_call(
@@ -85,7 +85,7 @@ async def test_get_camera_image_offers_near_miss_candidate(
 
     assert result["status"] == "error"
     assert result["error"]["key"] == "entity_not_visible"
-    assert result["error"]["fix"] == ["camera.front_door"]
+    assert "camera.front_door" in _guidance_candidate_ids(result["error"]["guidance"])
 
 
 async def test_get_camera_image_rejects_oversized_capture(
@@ -105,7 +105,6 @@ async def test_get_camera_image_rejects_oversized_capture(
     assert result["error"]["key"] == "image_too_large"
     assert isinstance(result["error"]["message"], str)
     assert result["error"]["message"]
-    assert isinstance(result["error"]["fix"], list)
 
 
 async def test_get_camera_image_maps_capture_failure(
@@ -121,7 +120,6 @@ async def test_get_camera_image_maps_capture_failure(
     assert result["error"]["key"] == "capture_failed"
     assert isinstance(result["error"]["message"], str)
     assert result["error"]["message"]
-    assert isinstance(result["error"]["fix"], list)
 
 
 async def test_get_camera_image_rejects_invalid_tool_input(
@@ -135,7 +133,6 @@ async def test_get_camera_image_rejects_invalid_tool_input(
     assert result["error"]["key"] == "invalid_tool_input"
     assert isinstance(result["error"]["message"], str)
     assert result["error"]["message"]
-    assert isinstance(result["error"]["fix"], list)
 
 
 async def test_get_camera_image_rejects_unsupported_visible_domain(
@@ -152,8 +149,7 @@ async def test_get_camera_image_rejects_unsupported_visible_domain(
     assert result["error"]["key"] == "unsupported_image_domain"
     assert isinstance(result["error"]["message"], str)
     assert result["error"]["message"]
-    fix = cast(list[str], result["error"]["fix"])
-    assert "camera.front_door" in fix
+    assert "sensor.foo" in _guidance_candidate_ids(result["error"]["guidance"])
 
 
 @pytest.mark.parametrize(
@@ -196,6 +192,14 @@ def _tiny_jpeg() -> bytes:
     buffer = io.BytesIO()
     image.save(buffer, format="JPEG")
     return buffer.getvalue()
+
+
+def _guidance_candidate_ids(guidance: object) -> set[str]:
+    """Return candidate ids from a serialized vision-error guidance payload."""
+    assert isinstance(guidance, Mapping)
+    candidates = guidance["candidates"]
+    assert isinstance(candidates, list)
+    return {str(candidate["id"]) for candidate in candidates if isinstance(candidate, Mapping)}
 
 
 async def _call_tool(

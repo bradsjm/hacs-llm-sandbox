@@ -238,6 +238,18 @@
           "title": "Actions",
           "type": "array"
         },
+        "guidance_candidate": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Guidance Candidate"
+        },
         "max_tool_calls": {
           "default": 8,
           "title": "Max Tool Calls",

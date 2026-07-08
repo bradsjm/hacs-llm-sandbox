@@ -13,6 +13,7 @@ from homeassistant.exceptions import ServiceValidationError
 from homeassistant.util.json import JsonValueType
 
 from ..const import DEFAULT_HELPER_CALL_BUDGET, DOMAIN
+from ..snapshot.models import HomeSnapshot
 from ..types import ActionRecord, TranslationPlaceholders
 from .errors import (
     CodeErrorPayload,
@@ -22,6 +23,7 @@ from .errors import (
     code_error_payload,
     helper_error_payload,
 )
+from .guidance import FailureContext, Intent, advise
 from .home_db import HomeDatabase
 
 
@@ -158,7 +160,7 @@ def helper_error_payload_for_state(
         err,
         message=_helper_error_message(err, state),
         kind=err.key,
-        fix=err.fix,
+        guidance=err.guidance,
         adjustments=list(state.adjustments),
         printed=list(state.printed),
         actions=cast(list[ActionRecord], json_safe(state.actions)),
@@ -173,21 +175,16 @@ def code_error_payload_for_state(
     kind: str,
     message: str,
     state: ExecutionState,
-    available_attributes: list[str] | None = None,
+    guidance: dict[str, object] | None = None,
 ) -> CodeErrorPayload:
     """Build a code-execution error response using current state."""
-    fix = available_attributes
-    if kind == "NameError" and fix is None and "not defined" in message:
-        from .contracts import AVAILABLE_GLOBALS
-
-        fix = list(AVAILABLE_GLOBALS)
     payload = code_error_payload(
         kind=kind,
         message=message,
         adjustments=list(state.adjustments),
         printed=list(state.printed),
         actions=cast(list[ActionRecord], json_safe(state.actions)),
-        fix=fix,
+        guidance=guidance,
     )
     if state.notes:
         payload["notes"] = list(state.notes)
@@ -203,11 +200,11 @@ def _helper_error_message(err: HelperExecutionError, state: ExecutionState) -> s
     return f"Resolve the {err.helper} error '{err.key}' before retrying."
 
 
-type RefineResult = tuple[str, str, list[str] | None]
-type ErrorRefiner = Callable[[str, str, str], RefineResult | None]
+type RefineResult = tuple[str, str, dict[str, object] | None]
+type ErrorRefiner = Callable[[str, str, str, HomeSnapshot], RefineResult | None]
 
 
-def refine_code_error(kind: str, message: str, code: str) -> RefineResult:
+def refine_code_error(kind: str, message: str, code: str, snapshot: HomeSnapshot) -> RefineResult:
     """Refine Monty/type-check errors into actionable sandbox guidance.
 
     Runs the ordered ``REFINERS`` registry; the first rule that applies wins.
@@ -219,12 +216,12 @@ def refine_code_error(kind: str, message: str, code: str) -> RefineResult:
     # Monty appends informational lines that are noisy in LLM-facing payloads.
     cleaned_message = "\n".join(line for line in message.splitlines() if not line.strip().startswith("info:"))
     for refine in REFINERS:
-        if (result := refine(kind, cleaned_message, code)) is not None:
+        if (result := refine(kind, cleaned_message, code, snapshot)) is not None:
             return result
     return kind, cleaned_message, None
 
 
-def _refine_unresolved_reference(kind: str, message: str, code: str) -> RefineResult | None:
+def _refine_unresolved_reference(kind: str, message: str, code: str, snapshot: HomeSnapshot) -> RefineResult | None:
     """Convert Monty unresolved-reference wording into a familiar NameError."""
     if "unresolved-reference" not in message and "used when not defined" not in message:
         return None
@@ -236,11 +233,19 @@ def _refine_unresolved_reference(kind: str, message: str, code: str) -> RefineRe
     if name in {"dir", "vars"}:
         from .builtin_normalization import GLOBAL_TYPE_MAP, public_surface
 
-        attributes = _attributes_for_first_discovery_call(code, name, GLOBAL_TYPE_MAP, public_surface)
+        attributes = tuple(_attributes_for_first_discovery_call(code, name, GLOBAL_TYPE_MAP, public_surface) or ())
+        guidance = None
+        # Discovery helpers fail on a specific facade surface, so rank that surface when known.
+        if attributes:
+            guidance = advise(
+                snapshot,
+                FailureContext(intent=Intent.CODE_ATTRIBUTE, requested=name, available_attributes=attributes),
+                memory=None,
+            ).to_payload()
         return (
             "NameError",
             f"`{name}` is not available in the sandbox; use the listed attributes or direct attribute access.",
-            attributes,
+            guidance,
         )
     if name in {"setattr", "delattr"}:
         return (
@@ -258,11 +263,11 @@ def _refine_unresolved_reference(kind: str, message: str, code: str) -> RefineRe
     return (
         "NameError",
         f"`{name}` is not defined; use an available sandbox global or assign it before use.",
-        None,
+        advise(snapshot, FailureContext(intent=Intent.CODE_NAME, requested=name), memory=None).to_payload(),
     )
 
 
-def _refine_unresolved_import(_kind: str, message: str, _code: str) -> RefineResult | None:
+def _refine_unresolved_import(_kind: str, message: str, _code: str, _snapshot: HomeSnapshot) -> RefineResult | None:
     """Only json/math/re are importable; guide toward built-in equivalents."""
     if (module_name := _extract_unresolved_import(message)) is None:
         return None
@@ -274,7 +279,7 @@ def _refine_unresolved_import(_kind: str, message: str, _code: str) -> RefineRes
     )
 
 
-def _refine_percent_format(_kind: str, message: str, _code: str) -> RefineResult | None:
+def _refine_percent_format(_kind: str, message: str, _code: str, _snapshot: HomeSnapshot) -> RefineResult | None:
     """Redirect % string formatting to f-strings."""
     if "unsupported operand type(s) for %" not in message:
         return None
@@ -285,7 +290,9 @@ def _refine_percent_format(_kind: str, message: str, _code: str) -> RefineResult
     )
 
 
-def _refine_collection_dict_method(_kind: str, message: str, _code: str) -> RefineResult | None:
+def _refine_collection_dict_method(
+    _kind: str, message: str, _code: str, _snapshot: HomeSnapshot
+) -> RefineResult | None:
     """Guide dict-method misuse on list/tuple/set results (e.g. async_all().items())."""
     if re.search(r"'(list|tuple|set)' object has no attribute '(items|keys|values)'", message) is None:
         return None
@@ -298,7 +305,7 @@ def _refine_collection_dict_method(_kind: str, message: str, _code: str) -> Refi
     )
 
 
-def _refine_none_deref(_kind: str, message: str, _code: str) -> RefineResult | None:
+def _refine_none_deref(_kind: str, message: str, _code: str, _snapshot: HomeSnapshot) -> RefineResult | None:
     """Guide method calls on None, typically a missing state or attribute."""
     if re.search(r"'NoneType' object has no attribute '\w+'", message) is None:
         return None
@@ -310,7 +317,7 @@ def _refine_none_deref(_kind: str, message: str, _code: str) -> RefineResult | N
     )
 
 
-def _refine_missing_attribute(_kind: str, message: str, _code: str) -> RefineResult | None:
+def _refine_missing_attribute(_kind: str, message: str, _code: str, snapshot: HomeSnapshot) -> RefineResult | None:
     """Surface the known public attributes for safe facade/record objects."""
     if (attr_match := re.search(r"'(\w+)' object has no attribute '(\w+)'", message)) is None:
         return None
@@ -326,7 +333,12 @@ def _refine_missing_attribute(_kind: str, message: str, _code: str) -> RefineRes
 
     # Scrub internal class names and surface the known public attribute set.
     if (surface := surface_for_class_name(class_name)) is not None:
-        return "AttributeError", _scrub_class_name(message, class_name), sorted(surface)
+        guidance = advise(
+            snapshot,
+            FailureContext(intent=Intent.CODE_ATTRIBUTE, requested=attr, available_attributes=tuple(sorted(surface))),
+            memory=None,
+        ).to_payload()
+        return "AttributeError", _scrub_class_name(message, class_name), guidance
     return "AttributeError", message, None
 
 

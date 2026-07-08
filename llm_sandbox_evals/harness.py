@@ -18,6 +18,8 @@ from llm_sandbox_evals.schema import CaseTrace, CheckResult, EvalCase, PromptCan
 from llm_sandbox_evals.scoring import check_case, score_case
 from llm_sandbox_evals.tools import EVAL_SCOPE, _for_scoring, apply_scope
 
+_TOOL_EXECUTE_HOME_CODE = "execute_home_code"
+
 
 async def run_case(
     candidate: PromptCandidate,
@@ -51,7 +53,7 @@ async def run_case(
         messages = result.all_messages()
         tool_call_count = _tool_call_count(messages)
         tool_events = _tool_events(messages)
-        recorded_actions = tuple(_for_scoring(action) for action in runtime.invoker.calls)
+        recorded_actions = _recorded_actions_from_tool_events(tool_events)
         checks = check_case(case, output, recorded_actions, tool_call_count, tool_events)
         return CaseTrace(
             case_id=case.id,
@@ -160,6 +162,24 @@ def _tool_events(messages: Sequence[object]) -> tuple[ToolEvent, ...]:
             )
         )
     return tuple(events)
+
+
+def _recorded_actions_from_tool_events(tool_events: tuple[ToolEvent, ...]) -> tuple[dict[str, object], ...]:
+    """Return all execute_home_code action records, including blocked/error actions."""
+    actions: list[dict[str, object]] = []
+    for event in tool_events:
+        # Branch boundary: only execute_home_code result envelopes carry action records.
+        if event.tool_name != _TOOL_EXECUTE_HOME_CODE:
+            continue
+        raw_actions = event.output.get("actions")
+        if not isinstance(raw_actions, list):
+            continue
+        for action in raw_actions:
+            # Safety constraint: scorer input is copied from JSON-safe tool output,
+            # never from the live/recording invoker seam.
+            if isinstance(action, dict):
+                actions.append(_for_scoring(action))
+    return tuple(actions)
 
 
 def _coerce_args(args: object) -> dict[str, object]:

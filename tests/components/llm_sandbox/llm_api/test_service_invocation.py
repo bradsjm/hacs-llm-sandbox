@@ -274,7 +274,7 @@ async def test_service_not_found_records_blocked_action_and_returns_none() -> No
     assert isinstance(action_error["message"], str)
     assert action_error["message"]
     assert action_error["message"] != action_error["key"]
-    assert action_error["fix"] == ["get_state", "turn_on"]
+    assert {"light.get_state", "light.turn_on"} <= _guidance_candidate_ids(action_error["guidance"])
     assert harness.invoker.calls == []
 
 
@@ -458,7 +458,7 @@ async def test_ambiguous_entity_target_blocks_with_candidates() -> None:
     action_error = cast(dict[str, object], harness.runtime.state.actions[0]["error"])
     assert isinstance(action_error["message"], str)
     assert action_error["message"]
-    assert set(cast(list[str], action_error["fix"])) == {"switch.outlet", "switch.kitchen"}
+    assert {"switch.outlet", "switch.kitchen"} <= _guidance_candidate_ids(action_error["guidance"])
     assert harness.invoker.calls == []
 
 
@@ -547,7 +547,7 @@ async def test_cross_domain_target_is_blocked_with_service_supported_fix() -> No
     assert _action_keys_via_state(harness) == ["service_target_not_supported"]
     error = cast(dict[str, object], harness.runtime.state.actions[0]["error"])
     # The fix names the visible entity the service does target (light.bedroom), not the switch.
-    assert error["fix"] == ["light.bedroom"]
+    assert "light.bedroom" in _guidance_candidate_ids(error["guidance"])
     assert harness.invoker.calls == []
 
 
@@ -573,7 +573,7 @@ async def test_unresolved_target_fix_list_ranks_service_supported_entities_first
     assert result is None
     assert _action_keys_via_state(harness) == ["service_target_not_visible"]
     error = cast(dict[str, object], harness.runtime.state.actions[0]["error"])
-    assert error["fix"] == ["cover.blind_supported", "cover.blind_plain"]
+    assert {"cover.blind_supported", "cover.blind_plain"} <= _guidance_candidate_ids(error["guidance"])
 
 
 def _service_harness(
@@ -826,6 +826,14 @@ def _action_keys_via_state(harness: ServiceHarness) -> list[str]:
         for action in harness.runtime.state.actions
         if action.get("error")
     ]
+
+
+def _guidance_candidate_ids(guidance: object) -> set[str]:
+    """Return candidate ids from a serialized action-error guidance payload."""
+    assert isinstance(guidance, Mapping)
+    candidates = guidance["candidates"]
+    assert isinstance(candidates, list)
+    return {str(candidate["id"]) for candidate in candidates if isinstance(candidate, Mapping)}
 
 
 def _code_actions(payload: CodeErrorPayload) -> list[ActionRecord]:

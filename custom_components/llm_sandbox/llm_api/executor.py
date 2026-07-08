@@ -1,6 +1,8 @@
 """Monty-backed code executor for the LLM Sandbox facade runtime."""
 
 import asyncio
+import re
+from collections.abc import Sequence
 
 import pydantic_monty  # Required manifest dependency; do not convert to a dynamic import.
 from homeassistant.exceptions import HomeAssistantError
@@ -26,9 +28,9 @@ from .executor_support import (
 )
 from .facade_registry import MONTY_DATACLASS_REGISTRY
 from .facade_views import SafeLLMContext, build_facades
+from .guidance import FailureContext, Intent, advise
 from .legacy_notes import (
     LegacyNoteContext,
-    _entity_candidates,
     _referenced_missing,
     _referenced_visible_state_id,
     compute_legacy_note,
@@ -111,26 +113,73 @@ def _read_path_fix(
     message: str,
     code: str,
     snapshot: HomeSnapshot,
-    fallback_fix: list[str] | None,
-) -> tuple[str, list[str] | None]:
-    """Augment code-error repair candidates with snapshot-aware state/entity facts."""
+    fallback_guidance: dict[str, object] | None,
+) -> tuple[str, str, dict[str, object] | None]:
+    """Augment code-error guidance with snapshot-aware state/entity facts."""
     missing = _referenced_missing(code, snapshot)
     if kind == "AttributeError" and missing and ("NoneType" in message or "value is None" in message):
-        fix = _entity_candidates(snapshot, missing[0])
-        if fix:
-            return f"State '{missing[0]}' was not found; use one of: {', '.join(fix)}.", fix
-        return f"State '{missing[0]}' was not found; choose a visible entity id before reading its state.", None
+        requested = missing[0]
+        domain = requested.split(".", 1)[0] if "." in requested else ""
+        guidance = advise(
+            snapshot,
+            FailureContext(intent=Intent.READ_STATE, requested=requested, domain=domain),
+            memory=None,
+        ).to_payload()
+        return (
+            kind,
+            f"State '{requested}' was not found; choose a visible entity id before reading its state.",
+            guidance,
+        )
     if (
         kind in {"AttributeError", "KeyError"}
         and (entity_id := _referenced_visible_state_id(code, snapshot)) is not None
     ):
         state = snapshot.states[entity_id]
-        valid_names = ["state", *sorted(state.attributes)]
+        valid_names = ("state", *sorted(state.attributes))
+        requested = _missing_attribute_name(message)
+        guidance = advise(
+            snapshot,
+            FailureContext(
+                intent=Intent.CODE_ATTRIBUTE,
+                requested=requested,
+                domain=state.domain,
+                available_attributes=valid_names,
+            ),
+            memory=None,
+        ).to_payload()
         return (
+            kind,
             f"Read '{entity_id}' using one of these valid fields or attributes: {', '.join(valid_names)}.",
-            valid_names,
+            guidance,
         )
-    return message, fallback_fix
+    return kind, message, fallback_guidance
+
+
+def _missing_attribute_name(message: str) -> str:
+    """Extract the missing attribute/key name from common Python error messages."""
+    # AttributeError/KeyError wording differs by runtime; fall back to the whole message for ranking only.
+    if match := re.search(r"(?:attribute|has no attribute) ['\"]([^'\"]+)['\"]", message):
+        return match.group(1)
+    if match := re.search(r"['\"]([^'\"]+)['\"]", message):
+        return match.group(1)
+    return message
+
+
+def _failed_action_summary(actions: Sequence[object]) -> str | None:
+    """Return an unmissable note for blocked/failed service calls, if any."""
+    failed: list[str] = []
+    for action in actions:
+        if not isinstance(action, dict) or action.get("status") != "error":
+            continue
+        error = action.get("error")
+        failed.append(str(error.get("key", "unknown_error")) if isinstance(error, dict) else "unknown_error")
+    if not failed:
+        return None
+    names = ", ".join(failed)
+    return (
+        f"{len(failed)} of {len(actions)} service calls were blocked or failed ({names}); "
+        "the code output alone does not confirm these actions completed."
+    )
 
 
 async def async_execute_home_code(
@@ -225,16 +274,18 @@ async def async_execute_home_code(
             if specific.__class__ is Exception and specific.args == (candidate.marker,):
                 return helper_error_payload_for_state(candidate, runtime.state)
         specific = underlying_exception(err)
-        refined_kind, refined_message, available_attributes = refine_code_error(
-            specific.__class__.__name__, str(specific) or str(err), resolved_code
+        refined_kind, refined_message, guidance = refine_code_error(
+            specific.__class__.__name__, str(specific) or str(err), resolved_code, snapshot
         )
         clean_message = _strip_monty_diagnostic(refined_message)
-        clean_message, fix = _read_path_fix(refined_kind, clean_message, resolved_code, snapshot, available_attributes)
+        refined_kind, clean_message, guidance = _read_path_fix(
+            refined_kind, clean_message, resolved_code, snapshot, guidance
+        )
         return code_error_payload_for_state(
             kind=refined_kind,
             message=clean_message,
             state=runtime.state,
-            available_attributes=fix,
+            guidance=guidance,
         )
     finally:
         # Capture print output even on success; CollectString.output is a
@@ -261,7 +312,11 @@ async def async_execute_home_code(
     if runtime.state.printed:
         payload["printed"] = list(runtime.state.printed)
     if runtime.state.actions:
-        payload["actions"] = json_safe(runtime.state.actions)
+        actions = json_safe(runtime.state.actions)
+        payload["actions"] = actions
+        # Policy blocks are action outcomes, not code failures, so execution.status remains ok.
+        if isinstance(actions, list) and (summary := _failed_action_summary(actions)) is not None:
+            payload["notes"] = [*runtime.state.notes, summary]
     if runtime.state.notes:
-        payload["notes"] = list(runtime.state.notes)
+        payload.setdefault("notes", list(runtime.state.notes))
     return payload

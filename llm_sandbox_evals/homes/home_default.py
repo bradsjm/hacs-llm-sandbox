@@ -19,6 +19,7 @@ from custom_components.llm_sandbox.snapshot.models import (
     SafeRegistryEntry,
     SafeState,
     SafeUnitSystem,
+    ServiceTargetBrief,
     SnapshotIndexes,
 )
 from homeassistant.core import SupportsResponse
@@ -301,6 +302,12 @@ def snapshot() -> HomeSnapshot:
         notifications=notifications,
         config_entries=config_entries,
         services_schema={},
+        services_target={
+            "climate": {"set_temperature": _domain_target("climate")},
+            "fan": {"set_percentage": _domain_target("fan")},
+            "light": {"turn_off": _domain_target("light"), "turn_on": _domain_target("light")},
+            "switch": {"toggle": _domain_target("switch")},
+        },
     )
 
 
@@ -427,6 +434,11 @@ def _config() -> SafeConfig:
             accumulated_precipitation_unit="mm",
         ),
     )
+
+
+def _domain_target(domain: str) -> ServiceTargetBrief:
+    """Build service target metadata for one entity domain."""
+    return {"entity": [{"domain": [domain]}]}
 
 
 def _state(entity_id: str, state: str, name: str, last_changed: str, attributes: dict[str, object]) -> SafeState:

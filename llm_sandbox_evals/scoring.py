@@ -6,6 +6,16 @@ from collections.abc import Iterable, Mapping
 
 from llm_sandbox_evals.schema import CheckResult, EvalCase, ExpectedAction, ToolEvent
 
+_REGISTERED_TOOL_NAMES = frozenset(
+    {
+        "execute_home_code",
+        "get_history",
+        "get_logbook",
+        "get_statistics",
+    }
+)
+_GUIDANCE_PASSING_CONFIDENCE = frozenset({"exact", "high", "ambiguous"})
+
 
 def check_case(
     case: EvalCase,
@@ -46,6 +56,9 @@ def check_case(
 
     checks.append(_execution_ok_check(tool_events))
     checks.append(_actions_check(case.expected.actions, recorded_actions))
+    guidance_check = _guidance_quality_check(case.expected.guidance_candidate, tool_events)
+    if guidance_check is not None:
+        checks.append(guidance_check)
     checks.append(
         CheckResult(
             name="tool_calls_within_max",
@@ -115,7 +128,7 @@ def _token_present(token: str, evidence_lower: str) -> bool:
 
 
 def _execution_ok_check(tool_events: tuple[ToolEvent, ...]) -> CheckResult:
-    """Return the required gate asserting the final tool event was not an error envelope."""
+    """Return the required gate asserting no tool event produced an error envelope."""
     # Branch boundary: no tool events means the model answered without invoking a
     # tool. execution_ok passes vacuously; the evidence gate is responsible for
     # catching a non-accomplished task in that case.
@@ -126,22 +139,34 @@ def _execution_ok_check(tool_events: tuple[ToolEvent, ...]) -> CheckResult:
             required=True,
             feedback="no_tool_events",
         )
-    last = tool_events[-1]
-    error = _envelope_error_kind(last.output)
+    errors = [error for event in tool_events if (error := _tool_event_error_kind(event)) is not None]
     return CheckResult(
         name="execution_ok",
-        passed=error is None,
+        passed=not errors,
         required=True,
-        feedback="ok" if error is None else f"error={last.tool_name}:{error}",
+        feedback="ok" if not errors else f"error={';'.join(errors)}",
     )
+
+
+def _tool_event_error_kind(event: ToolEvent) -> str | None:
+    """Return the error kind for a tool event, including unknown/hallucinated tools."""
+    if event.tool_name not in _REGISTERED_TOOL_NAMES:
+        return f"{event.tool_name}:unknown_tool"
+    # Branch boundary: Pydantic AI may surface a hallucinated tool as an empty return.
+    if not event.output:
+        return f"{event.tool_name}:empty_output"
+    error = _envelope_error_kind(event.output)
+    if error is None:
+        return None
+    return f"{event.tool_name}:{error}"
 
 
 def _envelope_error_kind(content: object) -> str | None:
     """Return the error kind embedded in a tool return envelope, else None.
 
-    Execute payloads carry ``execution.status`` (``ok`` on success); recorder
-    payloads carry a top-level ``status == "error"``. Any other shape is treated
-    as a non-error (success envelopes omit ``status``).
+    Execute payloads carry ``execution.status`` (``ok`` when code ran) and may
+    still include errored ``actions``. Recorder payloads carry a top-level
+    ``status == "error"``. Any other non-empty shape is treated as success.
     """
     if not isinstance(content, Mapping):
         return None
@@ -151,6 +176,9 @@ def _envelope_error_kind(content: object) -> str | None:
         status = execution.get("status")
         if status != "ok":
             return str(status) if status is not None else "unknown"
+        action_error = _action_error_kind(content)
+        if action_error is not None:
+            return action_error
         return None
     if content.get("status") == "error":
         error = content.get("error")
@@ -158,7 +186,97 @@ def _envelope_error_kind(content: object) -> str | None:
             kind = error.get("key")
             return str(kind) if kind is not None else "error"
         return "error"
+    action_error = _action_error_kind(content)
+    if action_error is not None:
+        return action_error
     return None
+
+
+def _action_error_kind(content: Mapping[object, object]) -> str | None:
+    """Return the first errored action key embedded in an execute envelope."""
+    actions = content.get("actions")
+    if not isinstance(actions, list):
+        return None
+    for action in actions:
+        if not isinstance(action, Mapping) or action.get("status") != "error":
+            continue
+        error = action.get("error")
+        if isinstance(error, Mapping):
+            key = error.get("key")
+            return f"action_error:{key}" if key is not None else "action_error"
+        return "action_error"
+    return None
+
+
+def _guidance_quality_check(expected_candidate: str | None, tool_events: tuple[ToolEvent, ...]) -> CheckResult | None:
+    """Return the optional gate requiring useful structured guidance on failures."""
+    if expected_candidate is None:
+        return None
+    failing_events = [event for event in tool_events if _tool_event_error_kind(event) is not None]
+    if not failing_events:
+        return CheckResult(
+            name="guidance_quality",
+            passed=True,
+            required=True,
+            feedback=f"no_failure_for={expected_candidate}",
+        )
+    for event in failing_events:
+        if _guidance_has_candidate(event.output, expected_candidate):
+            return CheckResult(
+                name="guidance_quality",
+                passed=True,
+                required=True,
+                feedback=f"candidate={expected_candidate}",
+            )
+    return CheckResult(
+        name="guidance_quality",
+        passed=False,
+        required=True,
+        feedback=f"missing={expected_candidate}",
+    )
+
+
+def _guidance_has_candidate(content: Mapping[str, object], expected_candidate: str) -> bool:
+    """Return whether a failing envelope/action guidance includes the expected candidate."""
+    for guidance in _guidance_payloads(content):
+        if guidance.get("confidence") not in _GUIDANCE_PASSING_CONFIDENCE:
+            continue
+        candidates = guidance.get("candidates")
+        if not isinstance(candidates, list):
+            continue
+        for candidate in candidates:
+            if not isinstance(candidate, Mapping):
+                continue
+            if candidate.get("id") == expected_candidate or candidate.get("name") == expected_candidate:
+                return True
+    return False
+
+
+def _guidance_payloads(content: Mapping[str, object]) -> list[Mapping[str, object]]:
+    """Collect structured guidance payloads from execution, tool, and action errors."""
+    payloads: list[Mapping[str, object]] = []
+    execution = content.get("execution")
+    if isinstance(execution, Mapping):
+        guidance = execution.get("guidance")
+        if isinstance(guidance, Mapping):
+            payloads.append(guidance)
+    error = content.get("error")
+    if isinstance(error, Mapping):
+        guidance = error.get("guidance")
+        if isinstance(guidance, Mapping):
+            payloads.append(guidance)
+    actions = content.get("actions")
+    if isinstance(actions, list):
+        for action in actions:
+            if not isinstance(action, Mapping):
+                continue
+            action_error = action.get("error")
+            if not isinstance(action_error, Mapping):
+                continue
+            guidance = action_error.get("guidance")
+            if isinstance(guidance, Mapping):
+                payloads.append(guidance)
+    return payloads
 
 
 def _efficiency_value(reference: int, actual: int) -> float:
@@ -223,6 +341,8 @@ def _actions_check(
 def _has_matching_action(expected_action: ExpectedAction, recorded_actions: tuple[dict[str, object], ...]) -> bool:
     """Return whether an expected service action appears in the aggregated actions."""
     for action in recorded_actions:
+        if action.get("status") == "error":
+            continue
         domain = action.get("domain")
         service = action.get("service")
         if domain != expected_action.domain or service != expected_action.service:

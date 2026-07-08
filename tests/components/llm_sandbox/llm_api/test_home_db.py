@@ -197,9 +197,10 @@ def test_home_db_unknown_column_error_carries_fix() -> None:
         db.close()
 
     assert err.value.key == "sql_unknown_column"
-    assert err.value.fix is not None
-    assert len(err.value.fix) > 0
-    assert "entity_id" in err.value.fix
+    assert err.value.guidance is not None
+    candidates = err.value.guidance["candidates"]
+    assert isinstance(candidates, list)
+    assert "entity_id" in {str(candidate["id"]) for candidate in candidates if isinstance(candidate, dict)}
 
 
 def test_home_db_unknown_table_error_carries_fix() -> None:
@@ -213,9 +214,10 @@ def test_home_db_unknown_table_error_carries_fix() -> None:
         db.close()
 
     assert err.value.key == "sql_unknown_table"
-    assert err.value.fix is not None
-    assert len(err.value.fix) > 0
-    assert "states" in err.value.fix
+    assert err.value.guidance is not None
+    candidates = err.value.guidance["candidates"]
+    assert isinstance(candidates, list)
+    assert "states" in {str(candidate["id"]) for candidate in candidates if isinstance(candidate, dict)}
 
 
 @pytest.mark.parametrize(

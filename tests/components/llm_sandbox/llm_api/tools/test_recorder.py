@@ -1,6 +1,7 @@
 """Behavior tests for recorder-backed LLM tools."""
 
 import time
+from collections.abc import Mapping
 from datetime import timedelta
 from typing import cast
 
@@ -248,9 +249,7 @@ async def test_non_visible_entity_rejected(
     assert result["error"]["key"] == "entity_not_visible"
     assert isinstance(result["error"]["message"], str)
     assert result["error"]["message"]
-    fix = result["error"]["fix"]
-    assert isinstance(fix, list)
-    assert fix
+    assert _guidance_candidate_ids(result["error"]["guidance"])
 
 
 async def test_recorder_snapshot_visibility_is_fresh_per_call(
@@ -306,7 +305,6 @@ async def test_window_too_large_rejected(
     assert result["error"]["key"] == "time_window_too_large"
     assert isinstance(result["error"]["message"], str)
     assert result["error"]["message"]
-    assert isinstance(result["error"]["fix"], list)
 
 
 @pytest.mark.parametrize(
@@ -397,9 +395,7 @@ async def test_history_bad_area_errors_with_candidates(
     assert result["error"]["key"] == "selector_no_match"
     assert isinstance(result["error"]["message"], str)
     assert result["error"]["message"]
-    fix = result["error"]["fix"]
-    assert isinstance(fix, list)
-    assert bedroom.id in fix
+    assert "light.bedroom" in _guidance_candidate_ids(result["error"]["guidance"])
 
 
 async def test_history_paginates_large_result(
@@ -711,6 +707,14 @@ async def _sync_recorder(hass: HomeAssistant) -> None:
 def _row_states(rows: list[list[object]]) -> list[str]:
     """Return the state/value field from compact recorder rows."""
     return [str(row[1]) for row in rows]
+
+
+def _guidance_candidate_ids(guidance: object) -> set[str]:
+    """Return candidate ids from a serialized recorder-error guidance payload."""
+    assert isinstance(guidance, Mapping)
+    candidates = guidance["candidates"]
+    assert isinstance(candidates, list)
+    return {str(candidate["id"]) for candidate in candidates if isinstance(candidate, Mapping)}
 
 
 async def _call_statistics(

@@ -461,7 +461,7 @@ async def test_missing_entity_read_attaches_note(
     hass: HomeAssistant,
     loaded_entry: MockConfigEntry,
 ) -> None:
-    """An empty literal state read adds a repair note, then rewrites on the next run."""
+    """An empty literal state read adds a repair note without training weak memory."""
     code = """
 result = hass.states.get("light.kitchen_main")
 """
@@ -486,8 +486,8 @@ result = state.entity_id if state is not None else None
     )
 
     assert follow_up["execution"]["status"] == "ok"
-    assert follow_up["output"] == "light.bedroom"
-    assert follow_up["resolutions"] == [{"requested": "light.kitchen_main", "applied": "light.bedroom"}]
+    assert follow_up["output"] is None
+    assert "resolutions" not in follow_up
 
 
 async def test_map_filter_normalize_and_run(
