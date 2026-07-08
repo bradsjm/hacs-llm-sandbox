@@ -18,13 +18,13 @@ It does all of this inside a [**minimal, secure Python interpreter written in Ru
 
 ## What it gives Assist
 
-Once enabled, the assistant gains five tools it can call during a conversation:
+Once enabled, the assistant can call these tools during a conversation. Recorder-backed tools are offered only when Home Assistant's recorder integration is available; `get_logbook` also requires logbook runtime data.
 
 | Tool | What it's for |
 | --- | --- |
 | **`execute_home_code`** | The assistant writes and runs a short Python snippet to read and reason over your home — current states, the entity/device/area/floor/label registries, repairs, persistent notifications, secret-stripped config entries, and read-only SQL via `await hass.query(...)` over visible snapshot states plus bounded recorder history/statistics. |
 | **`get_history`** | Recorded **state history** — raw changes up to 24 hours, legacy summaries such as transitions and time-in-state, or declarative analytics (`aggregate`, `group_by`, `bucket`, `where`, `order_by`, `limit`) up to 30 days. |
-| **`get_statistics`** | Pre-aggregated **long-term statistics** (mean / min / max) over a period. Up to 30 days. |
+| **`get_statistics`** | Pre-aggregated **long-term statistics** (`mean`, `min`, `max`, `state`, `sum`) over a period. Up to 30 days. |
 | **`get_logbook`** | The **activity timeline** — what happened and why (e.g. "did the front door open after midnight?"). Up to 24 hours. |
 | **`get_camera_image`** | Captures a **live frame** from a camera or image entity so a multimodal model can look at it ("what's on the front porch right now?"). |
 
@@ -88,7 +88,7 @@ Open the integration's **Configure** dialog. Options are grouped into four secti
 | Maximum execution time | 12 seconds | 3–30 s |
 | Maximum service calls per request | 32 | 1–100 |
 
-**Prompt** — the base instructions sent to the model. Ships with a single **Standard** profile.
+**Prompt** — the base instructions sent to the model. Ships with **Standard**, **Terse**, and **Minimal** profiles.
 
 ## How it works
 

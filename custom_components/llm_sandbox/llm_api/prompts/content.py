@@ -207,7 +207,7 @@ def build_get_history_description() -> str:
 def build_get_statistics_description() -> str:
     """Return the get_statistics tool description."""
     return (
-        "Return pre-aggregated long-term statistics (mean/min/max and raw "
+        "Return pre-aggregated long-term statistics (mean/min/max/state/sum and raw "
         "recorder units) for visible statistic IDs over a bounded UTC window. "
         "These are historical aggregates over a period, not current values; for "
         "a current value or an average of current states, read states in "

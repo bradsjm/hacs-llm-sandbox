@@ -54,6 +54,7 @@ Flags:
 - `--target-model` — model to optimize against (required; must be a real model, not `stub`).
 - `--proposer-model` — model COPRO uses to propose rewrites (defaults to the target model).
 - `--breadth` / `--depth` — COPRO search breadth/depth (defaults 5/2). COPRO requires breadth greater than 1. Cost scales as `breadth × depth × trainset`.
+- `--length-penalty` — penalty coefficient applied when selecting COPRO candidates to tie-break toward smaller prompts at equal quality (default: `0.02`; `0` disables the size tie-break).
 - `--cases` — case ids/categories used as the optimization trainset (keep small to bound cost).
 - `--cross-eval-models` — models for the baseline-vs-optimized leaderboard.
 - `--prompt-profile PROFILE_ID` — selects one production prompt profile for the baseline candidate and runtime settings (default: `standard`). This is separate from `--candidates`, which selects eval prompt candidates.
@@ -74,14 +75,14 @@ uv run --group dev --group evals python -m llm_sandbox_evals eval \
 
 ```
 python -m llm_sandbox_evals eval [--models id,...] [--candidates id,...] [--prompt-profile ID] [--cases id,...|category,...] [--concurrency N] [--max-tool-calls N] [--model-timeout SECONDS] [--reasoning LEVEL] [--logfire] [--runs-dir PATH]
-python -m llm_sandbox_evals optimize --target-model ID [--proposer-model ID] [--prompt-profile ID] [--breadth N] [--depth N] [--cases ...] [--cross-eval-models ...] [--target-reasoning LEVEL] [--proposer-reasoning LEVEL] [--reasoning LEVEL] [--runs-dir PATH]
+python -m llm_sandbox_evals optimize --target-model ID [--proposer-model ID] [--prompt-profile ID] [--breadth N] [--depth N] [--length-penalty COEFF] [--cases ...] [--cross-eval-models ...] [--target-reasoning LEVEL] [--proposer-reasoning LEVEL] [--reasoning LEVEL] [--runs-dir PATH]
 python -m llm_sandbox_evals report <run_id> [--runs-dir PATH]
 ```
 
 - `eval` builds a native `pydantic_evals.Dataset`, runs the matrix, prints the native `EvaluationReport` summary, and writes artifacts under `eval_data/runs/<run_id>/`.
 - `optimize` runs DSPy COPRO against one target model and cross-evaluates the winner (see *Optimizing the prompt* above).
 - `report <run_id>` re-renders saved native analyses and cell scores from `report.json` and makes no model calls.
-- `--cases` accepts case ids **or** category names (`state_read`, `registry_read`, `recorder_read`, `action_allowed`, `action_blocked`, `complex`).
+- `--cases` accepts case ids **or** category names (`state_read`, `registry_read`, `recorder_read`, `action_allowed`, `action_blocked`, `complex`, `recovery`).
 - `--candidates` accepts `baseline`, `profile:<id>` production profiles, and `optimized:<path>` (a saved `optimized_candidate.json`).
 - `--prompt-profile PROFILE_ID` selects one production base prompt profile for the whole run (default: `standard`); it is not comma-separated and is separate from `--candidates`.
 - `terse` and `minimal` are condensed production profiles for capability-vs-size analysis; compare them with `--candidates baseline,profile:terse,profile:minimal` or select one via `--prompt-profile`.

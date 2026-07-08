@@ -11,8 +11,8 @@ from .runtime import SandboxConfigEntry, SandboxRuntime, settings_from_entry
 async def async_setup(hass: HomeAssistant, _config: Mapping[str, object]) -> bool:
     """Set up LLM Sandbox.
 
-    No domain services are registered in the MVP. The integration exposes a
-    single LLM API tool, ``execute_home_code``, registered per config entry.
+    No domain services are registered. The integration exposes its tools through
+    one LLM API registered per config entry.
     """
     _ = hass
     return True

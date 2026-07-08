@@ -30,8 +30,8 @@
               "actions_enabled": "Enable actions on visible entities"
             },
             "data_description": {
-              "action_domains": "Restrict proposed calls to these service domains. Leave empty to allow all domains when actions are enabled.",
-              "actions_enabled": "Master switch for proposing service calls. When off, hass.services.async_call is rejected."
+              "action_domains": "Restrict service calls to these domains. Leave empty to allow all domains when actions are enabled.",
+              "actions_enabled": "Master switch for performing service calls. When off, hass.services.async_call is rejected."
             },
             "name": "Action restrictions"
           },
@@ -90,6 +90,9 @@
     "service_target_not_visible": {
       "message": "Entity {entity_id} is not available to control."
     },
+    "service_target_not_supported": {
+      "message": "Service {domain}.{service} does not target the requested entities."
+    },
     "service_call_timeout": {
       "message": "Service call to {domain}.{service} timed out."
     },
@@ -126,6 +129,18 @@
     "entity_not_visible": {
       "message": "Entity {entity_id} is not available."
     },
+    "selector_no_match": {
+      "message": "Selector(s) {selectors} matched no visible entities."
+    },
+    "capture_failed": {
+      "message": "Unable to capture image from {entity_id}."
+    },
+    "image_too_large": {
+      "message": "Captured image from {entity_id} exceeds the size budget."
+    },
+    "unsupported_image_domain": {
+      "message": "Entity {entity_id} is not a camera or image entity."
+    },
     "time_window_too_large": {
       "message": "The requested time window exceeds the maximum of {max_hours} hours."
     },
@@ -134,6 +149,36 @@
     },
     "query_failed": {
       "message": "The query failed: {error}"
+    },
+    "invalid_cursor": {
+      "message": "The pagination cursor is invalid or expired."
+    },
+    "analytics_unknown_op": {
+      "message": "Unsupported analytics operation {op}."
+    },
+    "analytics_unknown_group_key": {
+      "message": "Unsupported analytics group key {group_key}."
+    },
+    "analytics_bad_bucket": {
+      "message": "Invalid analytics bucket {bucket}."
+    },
+    "sql_too_long": {
+      "message": "SQL must not exceed {max_length} characters."
+    },
+    "sql_unknown_table": {
+      "message": "Unknown SQL table: {reason}."
+    },
+    "sql_unknown_column": {
+      "message": "Unknown SQL column: {reason}."
+    },
+    "sql_read_only": {
+      "message": "Only read-only SQL is allowed: {reason}."
+    },
+    "sql_syntax_error": {
+      "message": "SQL syntax error: {reason}."
+    },
+    "sql_timeout": {
+      "message": "SQL query timed out."
     }
   }
 }
