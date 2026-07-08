@@ -58,14 +58,14 @@
           "section_visibility": {
             "data": {
               "exclude_config": "Exclude configuration entities",
-              "exclude_diagnostic": "Exclude diagnostic entities",
               "exclude_hidden": "Exclude hidden entities",
+              "include_all_diagnostics": "Include all diagnostic entities",
               "restrict_to_assist_exposed": "Restrict to Assist-exposed entities"
             },
             "data_description": {
               "exclude_config": "Drop entities in the configuration category.",
-              "exclude_diagnostic": "Drop entities in the diagnostic category.",
               "exclude_hidden": "Drop entities hidden in the registry.",
+              "include_all_diagnostics": "When off, only diagnostic entities with useful device classes are included. When on, every diagnostic entity is included.",
               "restrict_to_assist_exposed": "When on, only entities exposed to Assist are visible. Other restrictions below still apply."
             },
             "name": "Visibility restrictions"

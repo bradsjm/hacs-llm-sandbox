@@ -99,6 +99,43 @@ def test_score_tiebreak_sorts_identical_signal_candidates_by_id() -> None:
     assert [str(candidate["id"]) for candidate, _match in ranked] == ["sensor.alpha", "sensor.beta"]
 
 
+def test_score_tiebreak_sorts_diagnostic_below_equal_non_diagnostic() -> None:
+    """A. Diagnostics sort lower only after all semantic ranking signals tie."""
+    ctx = FailureContext(intent=Intent.READ_STATE, requested="missing", domain="sensor")
+    candidates: tuple[CandidateMapping, ...] = (
+        {"kind": "entity", "id": "sensor.alpha", "name": "Alpha", "domain": "sensor", "entity_category": "diagnostic"},
+        {"kind": "entity", "id": "sensor.beta", "name": "Beta", "domain": "sensor", "entity_category": ""},
+    )
+
+    ranked = [(candidate, score(ctx.requested, candidate, ctx)) for candidate in candidates]
+    ranked.sort(key=lambda item: item[1].key(), reverse=True)
+
+    assert [str(candidate["id"]) for candidate, _match in ranked] == ["sensor.beta", "sensor.alpha"]
+
+
+def test_policy_keeps_equal_semantic_diagnostic_tiebreak_ambiguous() -> None:
+    """C. Diagnostic demotion affects ordering only, not confidence or memory writes."""
+    ctx = FailureContext(intent=Intent.READ_STATE, requested="battery", domain="sensor")
+    candidates: tuple[CandidateMapping, ...] = (
+        {
+            "kind": "entity",
+            "id": "sensor.alpha",
+            "name": "Battery",
+            "domain": "sensor",
+            "entity_category": "diagnostic",
+        },
+        {"kind": "entity", "id": "sensor.beta", "name": "Battery", "domain": "sensor", "entity_category": ""},
+    )
+
+    ranked = [(candidate, score(ctx.requested, candidate, ctx)) for candidate in candidates]
+    ranked.sort(key=lambda item: item[1].key(), reverse=True)
+    confidence = decide(ranked, ctx)
+
+    assert [str(candidate["id"]) for candidate, _match in ranked] == ["sensor.beta", "sensor.alpha"]
+    assert confidence is Confidence.AMBIGUOUS
+    assert not MEMORY_WRITE_ALLOWED[confidence]
+
+
 def test_sources_expose_visible_structural_candidate_surfaces() -> None:
     """B. Candidate sources expose scoped, structured, visible inventory facts."""
     snapshot = _home_snapshot()
@@ -109,7 +146,9 @@ def test_sources_expose_visible_structural_candidate_surfaces() -> None:
     table_names = {str(candidate["id"]) for candidate in sql_table_candidates()}
     state_columns = {str(candidate["id"]) for candidate in sql_column_candidates("states")}
 
-    assert {"name", "area_name", "floor_name", "device_class", "unit", "domain"} <= set(sensors["sensor.living_temp"])
+    assert {"name", "area_name", "floor_name", "device_class", "unit", "domain", "entity_category"} <= set(
+        sensors["sensor.living_temp"]
+    )
     assert "switch.garage_opener" not in all_entities
     assert set(sensors) == {"sensor.bedroom_humidity", "sensor.living_temp", "sensor.office_temp"}
     assert {str(candidate["kind"]) for candidate in area_candidates(snapshot)} == {"area"}
@@ -622,6 +661,7 @@ def _match(
     area_floor: int = 0,
     service_support: int = 0,
     field_overlap: int = 0,
+    non_diagnostic: int = 1,
     tiebreak: str = "",
     label: str = "id",
 ) -> Match:
@@ -633,6 +673,7 @@ def _match(
         area_floor,
         service_support,
         field_overlap,
+        non_diagnostic,
         tiebreak,
         label,
     )

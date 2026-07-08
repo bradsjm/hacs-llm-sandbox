@@ -14,7 +14,7 @@ CONF_PROMPT_PROFILE: Final = "prompt_profile"
 CONF_RESTRICT_TO_ASSIST_EXPOSED: Final = "restrict_to_assist_exposed"
 CONF_EXCLUDE_HIDDEN: Final = "exclude_hidden"
 CONF_EXCLUDE_CONFIG: Final = "exclude_config"
-CONF_EXCLUDE_DIAGNOSTIC: Final = "exclude_diagnostic"
+CONF_INCLUDE_ALL_DIAGNOSTICS: Final = "include_all_diagnostics"
 CONF_ACTIONS_ENABLED: Final = "actions_enabled"
 CONF_ACTION_DOMAINS: Final = "action_domains"
 SECTION_PROMPT: Final = "section_prompt"
@@ -28,7 +28,7 @@ DEFAULT_PROMPT_PROFILE: Final = "standard"
 DEFAULT_RESTRICT_TO_ASSIST_EXPOSED: Final = True
 DEFAULT_EXCLUDE_HIDDEN: Final = True
 DEFAULT_EXCLUDE_CONFIG: Final = True
-DEFAULT_EXCLUDE_DIAGNOSTIC: Final = True
+DEFAULT_INCLUDE_ALL_DIAGNOSTICS: Final = False
 DEFAULT_ACTIONS_ENABLED: Final = False
 DEFAULT_ACTION_DOMAINS: Final[tuple[str, ...]] = ()
 

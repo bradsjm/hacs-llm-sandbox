@@ -26,7 +26,8 @@ DEFAULT_PRODUCT_SCOPE = SnapshotScope(
     assistant="conversation",
     restrict_to_assist_exposed=False,
     exclude_hidden=True,
-    excluded_entity_categories=frozenset({"config", "diagnostic"}),
+    excluded_entity_categories=frozenset({"config"}),
+    include_all_diagnostics=False,
 )
 
 
@@ -47,6 +48,7 @@ def _add_entity(
     entity_category: er.EntityCategory | None = None,
     hidden_by: er.RegistryEntryHider | None = None,
     disabled_by: er.RegistryEntryDisabler | None = None,
+    device_class: str | None = None,
 ) -> None:
     """Add a registry entity and matching state unless disabled."""
     domain, object_id = entity_id.split(".", 1)
@@ -60,7 +62,7 @@ def _add_entity(
         entity_category=entity_category,
         disabled_by=disabled_by,
     )
-    registry.async_update_entity(entity_id, area_id=area_id, hidden_by=hidden_by)
+    registry.async_update_entity(entity_id, area_id=area_id, hidden_by=hidden_by, device_class=device_class)
     if disabled_by is None:
         hass.states.async_set(entity_id, "on", {"friendly_name": object_id.replace("_", " ").title()})
 
@@ -376,7 +378,7 @@ async def test_snapshot_device_identifiers_and_connections_are_json_safe(hass: H
     [
         pytest.param(None, None, True, id="normal"),
         pytest.param(er.EntityCategory.CONFIG, None, False, id="config"),
-        pytest.param(er.EntityCategory.DIAGNOSTIC, None, False, id="diagnostic"),
+        pytest.param(er.EntityCategory.DIAGNOSTIC, None, False, id="diagnostic-without-useful-device-class"),
         pytest.param(None, er.RegistryEntryHider.USER, False, id="hidden"),
     ],
 )
@@ -407,6 +409,42 @@ async def test_build_snapshot_visibility_keeps_state_only_entity(hass: HomeAssis
 
     assert "input_boolean.foo" in snapshot.states
     assert "input_boolean.foo" not in snapshot.entities
+
+
+@pytest.mark.parametrize(
+    ("device_class", "include_all_diagnostics", "expected_visible"),
+    [
+        pytest.param("battery", False, True, id="useful-device-class"),
+        pytest.param("uptime", False, False, id="non-useful-device-class"),
+        pytest.param(None, False, False, id="no-device-class"),
+        pytest.param("uptime", True, True, id="include-all"),
+    ],
+)
+async def test_build_snapshot_selective_diagnostic_visibility(
+    hass: HomeAssistant,
+    device_class: str | None,
+    include_all_diagnostics: bool,
+    expected_visible: bool,
+) -> None:
+    _add_entity(
+        hass,
+        "sensor.diagnostic_detail",
+        "diagnostic_detail",
+        entity_category=er.EntityCategory.DIAGNOSTIC,
+        device_class=device_class,
+    )
+    scope = SnapshotScope(
+        assistant="conversation",
+        restrict_to_assist_exposed=False,
+        exclude_hidden=True,
+        excluded_entity_categories=frozenset({"config"}),
+        include_all_diagnostics=include_all_diagnostics,
+    )
+
+    snapshot = build_snapshot(hass, scope=scope)
+
+    assert ("sensor.diagnostic_detail" in snapshot.states) is expected_visible
+    assert ("sensor.diagnostic_detail" in snapshot.entities) is expected_visible
 
 
 async def test_build_snapshot_visibility_excludes_entity_drops_orphan_device(hass: HomeAssistant) -> None:
@@ -588,6 +626,7 @@ async def test_build_snapshot_assist_restrict_delegates_to_ha_exposure(hass: Hom
         restrict_to_assist_exposed=True,
         exclude_hidden=False,
         excluded_entity_categories=frozenset(),
+        include_all_diagnostics=True,
     )
 
     snapshot = build_snapshot(hass, scope=scope)
@@ -609,6 +648,7 @@ async def test_build_snapshot_combined_restrictions_intersect(hass: HomeAssistan
         restrict_to_assist_exposed=True,
         exclude_hidden=True,
         excluded_entity_categories=frozenset(),
+        include_all_diagnostics=True,
     )
 
     snapshot = build_snapshot(hass, scope=scope)

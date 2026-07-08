@@ -38,6 +38,7 @@ def entity_candidates(snapshot: HomeSnapshot, domain: str = "") -> tuple[Candida
                 "unit": unit if isinstance(unit, str) else "",
                 "domain": state.domain,
                 "aliases": entry.aliases if entry is not None else (),
+                "entity_category": entry.entity_category if entry is not None else "",
             }
         )
     return tuple(candidates)

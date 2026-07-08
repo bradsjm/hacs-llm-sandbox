@@ -9,7 +9,12 @@ EVAL_SCOPE: SnapshotScope = SnapshotScope(
     assistant="conversation",
     restrict_to_assist_exposed=False,
     exclude_hidden=True,
-    excluded_entity_categories=frozenset({"config", "diagnostic"}),
+    excluded_entity_categories=frozenset({"config"}),
+    include_all_diagnostics=False,
+)
+
+USEFUL_DIAGNOSTIC_DEVICE_CLASSES = frozenset(
+    {"battery", "battery_charging", "signal_strength", "connectivity", "problem", "power"}
 )
 
 
@@ -37,8 +42,15 @@ def apply_scope(
         # Branch boundary: hidden registry entities are excluded when the eval scope asks for it.
         if scope.exclude_hidden and entry.hidden_by is not None:
             continue
-        # Branch boundary: config/diagnostic registry entities are excluded by the eval scope.
+        # Branch boundary: configured registry categories are excluded by the eval scope.
         if entry.entity_category in scope.excluded_entity_categories:
+            continue
+        # Branch boundary: selective diagnostics mirror product snapshot filtering for offline evals.
+        if (
+            entry.entity_category == "diagnostic"
+            and not scope.include_all_diagnostics
+            and (entry.device_class or entry.original_device_class) not in USEFUL_DIAGNOSTIC_DEVICE_CLASSES
+        ):
             continue
         visible.add(entity_id)
 

@@ -40,10 +40,11 @@ class Match:
     area_floor: int
     service_support: int
     field_overlap: int
+    non_diagnostic: int
     tiebreak: str
     label: str
 
-    def key(self) -> tuple[int, float, int, int, int, int, str]:
+    def key(self) -> tuple[int, float, int, int, int, int, int, str]:
         """Return a sortable key where higher signal values win and ids sort deterministically."""
         return (
             self.exact,
@@ -52,7 +53,19 @@ class Match:
             self.area_floor,
             self.service_support,
             self.field_overlap,
+            self.non_diagnostic,
             _reverse_tiebreak(self.tiebreak),
+        )
+
+    def semantic_key(self) -> tuple[int, float, int, int, int, int]:
+        """Return ranking signals that affect confidence, excluding ordering-only tie-breaks."""
+        return (
+            self.exact,
+            self.token_overlap,
+            self.capability,
+            self.area_floor,
+            self.service_support,
+            self.field_overlap,
         )
 
     @property
@@ -133,6 +146,7 @@ def score(
         area_floor=area_floor,
         service_support=service_support,
         field_overlap=field_overlap,
+        non_diagnostic=0 if candidate.get("entity_category") == "diagnostic" else 1,
         tiebreak=candidate_id,
         label=label,
     )

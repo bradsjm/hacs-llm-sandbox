@@ -25,10 +25,10 @@ from .const import (
     CONF_ACTIONS_ENABLED,
     CONF_ASSISTANT,
     CONF_EXCLUDE_CONFIG,
-    CONF_EXCLUDE_DIAGNOSTIC,
     CONF_EXCLUDE_HIDDEN,
     CONF_EXECUTION_TIMEOUT,
     CONF_HELPER_CALL_BUDGET,
+    CONF_INCLUDE_ALL_DIAGNOSTICS,
     CONF_NAME,
     CONF_PROMPT_PROFILE,
     CONF_RESTRICT_TO_ASSIST_EXPOSED,
@@ -102,8 +102,8 @@ class LlmSandboxOptionsFlow(OptionsFlow):
                 default=option_value(options, CONF_EXCLUDE_CONFIG),
             ): BooleanSelector(),
             vol.Required(
-                CONF_EXCLUDE_DIAGNOSTIC,
-                default=option_value(options, CONF_EXCLUDE_DIAGNOSTIC),
+                CONF_INCLUDE_ALL_DIAGNOSTICS,
+                default=option_value(options, CONF_INCLUDE_ALL_DIAGNOSTICS),
             ): BooleanSelector(),
         }
         actions_fields: VolDictType = {

@@ -9,10 +9,10 @@ from custom_components.llm_sandbox.const import (
     CONF_ACTIONS_ENABLED,
     CONF_ASSISTANT,
     CONF_EXCLUDE_CONFIG,
-    CONF_EXCLUDE_DIAGNOSTIC,
     CONF_EXCLUDE_HIDDEN,
     CONF_EXECUTION_TIMEOUT,
     CONF_HELPER_CALL_BUDGET,
+    CONF_INCLUDE_ALL_DIAGNOSTICS,
     CONF_NAME,
     CONF_PROMPT_PROFILE,
     CONF_RESTRICT_TO_ASSIST_EXPOSED,
@@ -96,7 +96,8 @@ def test_settings_from_entry_defaults() -> None:
             assistant=DEFAULT_ASSISTANT,
             restrict_to_assist_exposed=DEFAULT_RESTRICT_TO_ASSIST_EXPOSED,
             exclude_hidden=DEFAULT_EXCLUDE_HIDDEN,
-            excluded_entity_categories=frozenset({"config", "diagnostic"}),
+            excluded_entity_categories=frozenset({"config"}),
+            include_all_diagnostics=False,
         ),
         actions_enabled=DEFAULT_ACTIONS_ENABLED,
         action_domains=frozenset(),
@@ -116,31 +117,34 @@ def test_settings_from_entry_rejects_unknown_prompt_profile() -> None:
 
 
 @pytest.mark.parametrize(
-    ("options", "expected_assist", "expected_hidden", "expected_categories"),
+    ("options", "expected_assist", "expected_hidden", "expected_categories", "expected_all_diagnostics"),
     [
-        pytest.param({}, True, True, frozenset({"config", "diagnostic"}), id="defaults"),
+        pytest.param({}, True, True, frozenset({"config"}), False, id="defaults"),
         pytest.param(
-            {CONF_RESTRICT_TO_ASSIST_EXPOSED: False}, False, True, frozenset({"config", "diagnostic"}), id="assist-off"
+            {CONF_RESTRICT_TO_ASSIST_EXPOSED: False}, False, True, frozenset({"config"}), False, id="assist-off"
         ),
         pytest.param(
             {CONF_EXCLUDE_CONFIG: False},
             True,
             True,
-            frozenset({"diagnostic"}),
+            frozenset(),
+            False,
             id="config-off",
         ),
         pytest.param(
-            {CONF_EXCLUDE_DIAGNOSTIC: False},
+            {CONF_INCLUDE_ALL_DIAGNOSTICS: True},
             True,
             True,
             frozenset({"config"}),
-            id="diagnostic-off",
+            True,
+            id="include-all-diagnostics",
         ),
         pytest.param(
             {CONF_EXCLUDE_HIDDEN: False},
             True,
             False,
-            frozenset({"config", "diagnostic"}),
+            frozenset({"config"}),
+            False,
             id="hidden-off",
         ),
     ],
@@ -150,6 +154,7 @@ def test_settings_from_entry_visibility_options(
     expected_assist: bool,
     expected_hidden: bool,
     expected_categories: frozenset[str],
+    expected_all_diagnostics: bool,
 ) -> None:
     entry = MockConfigEntry(
         domain=DOMAIN,
@@ -163,6 +168,7 @@ def test_settings_from_entry_visibility_options(
     assert settings.scope.restrict_to_assist_exposed is expected_assist
     assert settings.scope.exclude_hidden is expected_hidden
     assert settings.scope.excluded_entity_categories == expected_categories
+    assert settings.scope.include_all_diagnostics is expected_all_diagnostics
 
 
 @pytest.mark.parametrize(
@@ -216,7 +222,7 @@ async def test_options_flow_section_submission_flattens(
             CONF_RESTRICT_TO_ASSIST_EXPOSED: False,
             CONF_EXCLUDE_HIDDEN: False,
             CONF_EXCLUDE_CONFIG: False,
-            CONF_EXCLUDE_DIAGNOSTIC: True,
+            CONF_INCLUDE_ALL_DIAGNOSTICS: True,
         },
         SECTION_ACTIONS: {
             CONF_ACTIONS_ENABLED: True,
@@ -234,7 +240,7 @@ async def test_options_flow_section_submission_flattens(
         CONF_RESTRICT_TO_ASSIST_EXPOSED: False,
         CONF_EXCLUDE_HIDDEN: False,
         CONF_EXCLUDE_CONFIG: False,
-        CONF_EXCLUDE_DIAGNOSTIC: True,
+        CONF_INCLUDE_ALL_DIAGNOSTICS: True,
         CONF_ACTIONS_ENABLED: True,
         CONF_ACTION_DOMAINS: ["light"],
     }

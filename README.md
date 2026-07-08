@@ -72,7 +72,7 @@ Open the integration's **Configure** dialog. Options are grouped into four secti
 | Restrict to Assist-exposed entities | On | Only entities you've exposed to Assist are visible. |
 | Exclude hidden entities | On | Entities marked hidden in the registry are dropped. |
 | Exclude configuration entities | On | `config`-category entities are dropped. |
-| Exclude diagnostic entities | On | `diagnostic`-category entities are dropped. |
+| Include all diagnostic entities | Off | When off, only diagnostic entities with useful device classes are included. When on, every diagnostic entity is included. |
 
 **Action restrictions** — whether the assistant can *do* things, not just read.
 

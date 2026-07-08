@@ -35,13 +35,13 @@ def decide(ranked: Sequence[tuple[dict[str, object], object]], _ctx: FailureCont
     if len(ranked) > 1 and isinstance(ranked[1][1], Match):
         second = ranked[1][1]
         # Comparable top scores are ambiguous: never say "Use X" or write resolution memory here.
-        if top.key()[:-1] == second.key()[:-1] or (
+        if top.semantic_key() == second.semantic_key() or (
             top.token_overlap > 0 and second.token_overlap >= top.token_overlap * _AMBIGUITY_OVERLAP_RATIO
         ):
             return Confidence.AMBIGUOUS
     # High confidence requires a clear semantic signal, not merely a domain/service fallback or memory hit.
     if top.strong_non_exact and (
-        len(ranked) == 1 or not isinstance(ranked[1][1], Match) or top.key()[:-1] > ranked[1][1].key()[:-1]
+        len(ranked) == 1 or not isinstance(ranked[1][1], Match) or top.semantic_key() > ranked[1][1].semantic_key()
     ):
         return Confidence.HIGH
     # Listing is intentionally non-imperative for weak candidates such as domain-only or memory-only matches.

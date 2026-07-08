@@ -54,6 +54,9 @@ from .models import (
 )
 
 SERVICE_SCHEMA_FIELD_LIMIT = 12
+USEFUL_DIAGNOSTIC_DEVICE_CLASSES = frozenset(
+    {"battery", "battery_charging", "signal_strength", "connectivity", "problem", "power"}
+)
 
 
 def build_snapshot(
@@ -326,7 +329,13 @@ def _passes_visibility(
         return True
     if scope.exclude_hidden and entry.hidden_by is not None:
         return False
-    return entry.entity_category not in scope.excluded_entity_categories
+    # Category exclusions drop explicitly disabled noise categories before diagnostic selectivity applies.
+    if entry.entity_category in scope.excluded_entity_categories:
+        return False
+    # Selective diagnostics keep useful status signals while hiding low-value diagnostic noise by default.
+    if entry.entity_category == "diagnostic" and not scope.include_all_diagnostics:
+        return _has_useful_diagnostic_device_class(entry)
+    return True
 
 
 def _passes_live_visibility(
@@ -345,7 +354,19 @@ def _passes_live_visibility(
         return True
     if scope.exclude_hidden and entry.hidden_by is not None:
         return False
-    return _enum_value(entry.entity_category) not in scope.excluded_entity_categories
+    entity_category = _enum_value(entry.entity_category)
+    # Category exclusions drop explicitly disabled noise categories before diagnostic selectivity applies.
+    if entity_category in scope.excluded_entity_categories:
+        return False
+    # Selective diagnostics keep useful status signals while hiding low-value diagnostic noise by default.
+    if entity_category == "diagnostic" and not scope.include_all_diagnostics:
+        return _has_useful_diagnostic_device_class(entry)
+    return True
+
+
+def _has_useful_diagnostic_device_class(entry: SafeRegistryEntry | er.RegistryEntry) -> bool:
+    """Return whether registry metadata marks a diagnostic entity as useful."""
+    return (entry.device_class or entry.original_device_class) in USEFUL_DIAGNOSTIC_DEVICE_CLASSES
 
 
 def _derive_collections(

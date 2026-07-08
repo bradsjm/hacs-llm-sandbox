@@ -39,6 +39,7 @@ def advise(snapshot: HomeSnapshot, ctx: FailureContext) -> Guidance:
                             area_floor=0,
                             service_support=0,
                             field_overlap=0,
+                            non_diagnostic=1,
                             tiebreak=resolution.resolved,
                             label="id",
                         ),

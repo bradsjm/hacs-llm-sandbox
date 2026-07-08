@@ -316,6 +316,7 @@ class SnapshotScope:
     restrict_to_assist_exposed: bool
     exclude_hidden: bool
     excluded_entity_categories: frozenset[str]
+    include_all_diagnostics: bool
 
 
 # No-arg build_snapshot default: all optional restrictions off for callers that
@@ -325,6 +326,7 @@ DEFAULT_SCOPE: SnapshotScope = SnapshotScope(
     restrict_to_assist_exposed=False,
     exclude_hidden=False,
     excluded_entity_categories=frozenset(),
+    include_all_diagnostics=True,
 )
 
 

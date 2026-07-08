@@ -11,19 +11,19 @@ from .const import (
     CONF_ACTIONS_ENABLED,
     CONF_ASSISTANT,
     CONF_EXCLUDE_CONFIG,
-    CONF_EXCLUDE_DIAGNOSTIC,
     CONF_EXCLUDE_HIDDEN,
     CONF_EXECUTION_TIMEOUT,
     CONF_HELPER_CALL_BUDGET,
+    CONF_INCLUDE_ALL_DIAGNOSTICS,
     CONF_PROMPT_PROFILE,
     CONF_RESTRICT_TO_ASSIST_EXPOSED,
     DEFAULT_ACTION_DOMAINS,
     DEFAULT_ACTIONS_ENABLED,
     DEFAULT_EXCLUDE_CONFIG,
-    DEFAULT_EXCLUDE_DIAGNOSTIC,
     DEFAULT_EXCLUDE_HIDDEN,
     DEFAULT_EXECUTION_TIMEOUT_SECONDS,
     DEFAULT_HELPER_CALL_BUDGET,
+    DEFAULT_INCLUDE_ALL_DIAGNOSTICS,
     DEFAULT_PROMPT_PROFILE,
     DEFAULT_RESTRICT_TO_ASSIST_EXPOSED,
 )
@@ -37,7 +37,7 @@ OPTION_DEFAULTS: Mapping[str, object] = {
     CONF_RESTRICT_TO_ASSIST_EXPOSED: DEFAULT_RESTRICT_TO_ASSIST_EXPOSED,
     CONF_EXCLUDE_HIDDEN: DEFAULT_EXCLUDE_HIDDEN,
     CONF_EXCLUDE_CONFIG: DEFAULT_EXCLUDE_CONFIG,
-    CONF_EXCLUDE_DIAGNOSTIC: DEFAULT_EXCLUDE_DIAGNOSTIC,
+    CONF_INCLUDE_ALL_DIAGNOSTICS: DEFAULT_INCLUDE_ALL_DIAGNOSTICS,
     CONF_ACTIONS_ENABLED: DEFAULT_ACTIONS_ENABLED,
     CONF_ACTION_DOMAINS: DEFAULT_ACTION_DOMAINS,
     CONF_EXECUTION_TIMEOUT: DEFAULT_EXECUTION_TIMEOUT_SECONDS,
@@ -68,19 +68,16 @@ def settings_from_entry(entry: SandboxConfigEntry) -> SandboxSettings:
     options = entry.options
     assistant = entry.data[CONF_ASSISTANT]
     exclude_config = bool(option_value(options, CONF_EXCLUDE_CONFIG))
-    exclude_diagnostic = bool(option_value(options, CONF_EXCLUDE_DIAGNOSTIC))
     excluded_categories: set[str] = set()
     # Visibility category restrictions are assembled from independent toggles.
     if exclude_config:
         excluded_categories.add("config")
-    # Visibility category restrictions are assembled from independent toggles.
-    if exclude_diagnostic:
-        excluded_categories.add("diagnostic")
     scope = SnapshotScope(
         assistant=assistant,
         restrict_to_assist_exposed=bool(option_value(options, CONF_RESTRICT_TO_ASSIST_EXPOSED)),
         exclude_hidden=bool(option_value(options, CONF_EXCLUDE_HIDDEN)),
         excluded_entity_categories=frozenset(excluded_categories),
+        include_all_diagnostics=bool(option_value(options, CONF_INCLUDE_ALL_DIAGNOSTICS)),
     )
     prompt_profile = resolve_profile(str(option_value(options, CONF_PROMPT_PROFILE)))
     return SandboxSettings(
