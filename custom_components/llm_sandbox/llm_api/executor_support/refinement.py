@@ -1,204 +1,20 @@
-"""Shared helper and runtime support for the Monty executor."""
+"""Monty error refinement and exception helpers."""
 
 import ast
-import inspect
-import math
 import re
-from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass, field
-from typing import Protocol, cast
+from collections.abc import Callable, Mapping
+from typing import TYPE_CHECKING, cast
 
 import pydantic_monty  # Required manifest dependency; do not convert to a dynamic import.
 from homeassistant.exceptions import ServiceValidationError
-from homeassistant.util.json import JsonValueType
 
-from ..const import DEFAULT_HELPER_CALL_BUDGET, DOMAIN
-from ..snapshot.models import HomeSnapshot
-from ..types import ActionRecord, TranslationPlaceholders
-from .errors import (
-    CodeErrorPayload,
-    HelperErrorPayload,
-    HelperExecutionError,
-    RecoverableToolError,
-    code_error_payload,
-    helper_error_payload,
-)
-from .guidance import FailureContext, Intent, advise
-from .home_db import HomeDatabase
+from ...const import DOMAIN
+from ...snapshot.models import HomeSnapshot
+from ...types import TranslationPlaceholders
+from ..guidance import FailureContext, Intent, advise
 
-
-class MontyRunner(Protocol):
-    """Runtime shape required from the optional Monty dependency."""
-
-    async def run_async(
-        self,
-        *,
-        inputs: Mapping[str, object],
-        limits: pydantic_monty.ResourceLimits | None = None,
-        external_functions: Mapping[str, object],
-        print_callback: object = None,
-    ) -> object:
-        """Execute Monty code with JSON inputs and helper functions."""
-        ...
-
-
-class MontyFactory(Protocol):
-    """Callable factory exposed as pydantic_monty.Monty."""
-
-    def __call__(
-        self,
-        code: str,
-        *,
-        inputs: list[str],
-        script_name: str,
-        type_check: bool,
-        type_check_stubs: str,
-        dataclass_registry: list[type[object]] | None,
-    ) -> MontyRunner:
-        """Construct a runnable Monty program instance."""
-        ...
-
-
-@dataclass(slots=True)
-class ExecutionState:
-    """Mutable per-run bookkeeping for helper call budget enforcement."""
-
-    helper_calls: int = 0
-    helper_call_limit: int = DEFAULT_HELPER_CALL_BUDGET
-    # Internal forgiveness-layer labels. Payloads expose these as concise
-    # adjustments that tell the model the change was already applied.
-    normalizations: list[str] = field(default_factory=list)
-    adjustments: list[dict[str, object]] = field(default_factory=list)
-    # Captured print() output, one entry per call. Independent of the helper
-    # call budget: print() routes through Monty's print_callback, not helper_response.
-    printed: list[str] = field(default_factory=list)
-    # Service action outcomes recorded by the services facade. Actions execute
-    # sequentially, and prior successful entries remain when a later call fails.
-    actions: list[ActionRecord] = field(default_factory=list)
-    # Last helper validation error raised inside a facade method. Monty wraps
-    # such exceptions into MontyRuntimeError without preserving __cause__, so
-    # the executor recovers the structured error from here only when Monty's
-    # generic wrapper carries the error's opaque per-run marker. Cleared at
-    # the start of each helper call so a user try/except that swallows a
-    # helper error cannot shadow a later helper-path failure.
-    last_helper_error: HelperExecutionError | None = None
-    # Per-run SQL database and transparency notes. The database is created lazily
-    # by hass.query() and closed by executor cleanup before runtime context reset.
-    home_db: HomeDatabase | None = None
-    notes: list[str] = field(default_factory=list)
-    # Set when this run dispatched at least one live service call, so later
-    # recorder-backed reads synchronize before reading (read-after-write).
-    live_write_dispatched: bool = False
-
-
-async def helper_response(
-    state: ExecutionState,
-    helper: str,
-    callback: Callable[[], object],
-    *,
-    count_call: bool = True,
-) -> JsonValueType:
-    """Run one approved helper and return a raw JSON-safe result."""
-    if count_call:
-        state.helper_calls += 1
-        if state.helper_calls > state.helper_call_limit:
-            err = HelperExecutionError(helper, "call_budget_exceeded", {})
-            state.last_helper_error = err
-            raise err
-    # Clear any prior helper error so a user try/except that swallowed a
-    # previous helper error cannot shadow a later genuine code error.
-    state.last_helper_error = None
-    try:
-        value = callback()
-        if inspect.isawaitable(value):
-            value = await cast(Awaitable[JsonValueType], value)
-    except HelperExecutionError as err:
-        state.last_helper_error = err
-        raise
-    except RecoverableToolError as err:
-        helper_err = HelperExecutionError(helper, err.key, err.placeholders)
-        state.last_helper_error = helper_err
-        raise helper_err from err
-    except ServiceValidationError as err:
-        helper_err = HelperExecutionError(
-            helper,
-            error_key(err),
-            error_placeholders(err),
-        )
-        state.last_helper_error = helper_err
-        raise helper_err from err
-    return json_safe(value)
-
-
-def json_safe(value: object) -> JsonValueType:
-    """Convert arbitrary values into JSON-safe structures."""
-    if isinstance(value, float) and not math.isfinite(value):
-        return str(value)
-    if value is None or isinstance(value, str | int | float | bool):
-        return value
-    sandbox_json = getattr(value, "__llm_sandbox_json__", None)
-    if callable(sandbox_json):
-        return json_safe(sandbox_json())
-    if isinstance(value, Mapping):
-        mapping_items = cast(Mapping[object, object], value)
-        return {str(key): json_safe(item) for key, item in mapping_items.items()}
-    if isinstance(value, Sequence) and not isinstance(value, str):
-        sequence_items = cast(Sequence[object], value)
-        return [json_safe(item) for item in sequence_items]
-    if isinstance(value, set):
-        set_items = cast(set[object], value)
-        return [json_safe(item) for item in set_items]
-    return str(value)
-
-
-def helper_error_payload_for_state(
-    err: HelperExecutionError,
-    state: ExecutionState,
-) -> HelperErrorPayload:
-    """Build a helper-error response using current execution state."""
-    payload = helper_error_payload(
-        err,
-        message=_helper_error_message(err, state),
-        kind=err.key,
-        guidance=err.guidance,
-        adjustments=list(state.adjustments),
-        printed=list(state.printed),
-        actions=cast(list[ActionRecord], json_safe(state.actions)),
-    )
-    if state.notes:
-        payload["notes"] = list(state.notes)
-    return payload
-
-
-def code_error_payload_for_state(
-    *,
-    kind: str,
-    message: str,
-    state: ExecutionState,
-    guidance: dict[str, object] | None = None,
-) -> CodeErrorPayload:
-    """Build a code-execution error response using current state."""
-    payload = code_error_payload(
-        kind=kind,
-        message=message,
-        adjustments=list(state.adjustments),
-        printed=list(state.printed),
-        actions=cast(list[ActionRecord], json_safe(state.actions)),
-        guidance=guidance,
-    )
-    if state.notes:
-        payload["notes"] = list(state.notes)
-    return payload
-
-
-def _helper_error_message(err: HelperExecutionError, state: ExecutionState) -> str:
-    """Return one actionable sentence for a helper execution error."""
-    if err.key == "call_budget_exceeded":
-        return f"Stopped after {state.helper_call_limit} service calls; do not retry the same call."
-    if reason := err.placeholders.get("reason"):
-        return f"Fix the {err.helper} call failure: {reason}."
-    return f"Resolve the {err.helper} error '{err.key}' before retrying."
-
+if TYPE_CHECKING:
+    from .state import MontyFactory
 
 type RefineResult = tuple[str, str, dict[str, object] | None]
 type ErrorRefiner = Callable[[str, str, str, HomeSnapshot], RefineResult | None]
@@ -231,7 +47,7 @@ def _refine_unresolved_reference(kind: str, message: str, code: str, snapshot: H
         return kind, clean_message, None
     name = name_match.group(1)
     if name in {"dir", "vars"}:
-        from .builtin_normalization import GLOBAL_TYPE_MAP, public_surface
+        from ..normalization.builtin_normalization import GLOBAL_TYPE_MAP, public_surface
 
         attributes = tuple(_attributes_for_first_discovery_call(code, name, GLOBAL_TYPE_MAP, public_surface) or ())
         guidance = None
@@ -328,7 +144,7 @@ def _refine_missing_attribute(_kind: str, message: str, _code: str, snapshot: Ho
             'str.format() is not available in the sandbox; use an f-string (e.g. f"{x}") instead.',
             None,
         )
-    from .builtin_normalization import surface_for_class_name
+    from ..normalization.builtin_normalization import surface_for_class_name
 
     # Scrub internal class names and surface the known public attribute set.
     if (surface := surface_for_class_name(class_name)) is not None:
@@ -388,7 +204,7 @@ def _friendly_class_name(class_name: str) -> str | None:
     """Map an internal class name to the LLM-visible name it was accessed through."""
     if class_name in _RECORD_FRIENDLY_NAMES:
         return _RECORD_FRIENDLY_NAMES[class_name]
-    from .builtin_normalization import GLOBAL_TYPE_MAP
+    from ..normalization.builtin_normalization import GLOBAL_TYPE_MAP
 
     # Facades: prefer the longest global alias (long names read clearer than er/dr).
     aliases = [name for name, cls in GLOBAL_TYPE_MAP.items() if cls.__name__ == class_name]
@@ -479,6 +295,8 @@ def load_monty_factory() -> MontyFactory:
     blocking-call detector instruments that path inside the event loop) and do
     NOT treat the dependency as optional.
     """
+    from .state import MontyFactory
+
     return cast(MontyFactory, pydantic_monty.Monty)
 
 

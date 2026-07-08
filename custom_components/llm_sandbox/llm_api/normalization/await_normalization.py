@@ -15,7 +15,7 @@ hand-maintained allowlist is required.
 import ast
 import inspect
 
-from .facade_registry import SYNC_SUBSCRIPT_GLOBALS
+from ..facade_registry import SYNC_SUBSCRIPT_GLOBALS
 
 AWAITED_ASYNC_CALLS = "awaited_async_calls"
 STRIPPED_AWAIT_FROM_SYNC = "stripped_await_from_sync"

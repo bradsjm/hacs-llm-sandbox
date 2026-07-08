@@ -11,8 +11,8 @@ from typing import cast
 
 from homeassistant.util import dt as dt_util
 
-from ..snapshot.models import HomeSnapshot, SafeState
-from .errors import HelperExecutionError
+from ...snapshot.models import HomeSnapshot, SafeState
+from ..errors import HelperExecutionError
 from .numeric import finite_float
 
 MAX_SQL_RESULT_ROWS = 500
@@ -373,7 +373,7 @@ class HomeDatabase:
 
     def _refine_sql_error(self, message: str) -> HelperExecutionError:
         """Return a structured SQL helper error with targeted guidance."""
-        from .guidance import FailureContext, Intent, advise
+        from ..guidance import FailureContext, Intent, advise
 
         lowered = message.lower()
         if "no such table" in lowered:

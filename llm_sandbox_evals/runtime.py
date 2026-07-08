@@ -9,11 +9,11 @@ from types import ModuleType
 from typing import cast
 
 from custom_components.llm_sandbox.const import DEFAULT_HELPER_CALL_BUDGET
+from custom_components.llm_sandbox.llm_api.data.history import HistoryRow, flat_history_rows
 from custom_components.llm_sandbox.llm_api.executor_support import ExecutionState
 from custom_components.llm_sandbox.llm_api.prompts import PromptProfile
 from custom_components.llm_sandbox.llm_api.resolution_memory import ResolutionMemory
-from custom_components.llm_sandbox.llm_api.runtime import RuntimeContext
-from custom_components.llm_sandbox.llm_api.tools._analytics import HistoryRow, flat_history_rows
+from custom_components.llm_sandbox.llm_api.sandbox_context import RuntimeContext
 from custom_components.llm_sandbox.llm_api.tools.code import ExecuteHomeCodeTool
 from custom_components.llm_sandbox.llm_api.tools.recorder import (
     GetHistoryTool,

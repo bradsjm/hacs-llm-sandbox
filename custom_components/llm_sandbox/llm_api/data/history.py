@@ -14,7 +14,7 @@ from homeassistant.util import dt as dt_util
 
 from ...snapshot.models import HomeSnapshot
 from ..errors import RecoverableToolError
-from ..numeric import finite_float
+from .numeric import finite_float
 
 type AggregateMode = Literal[
     "count_transitions",

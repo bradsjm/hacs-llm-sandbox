@@ -24,9 +24,9 @@ from ...types import ProposedAction
 from ..errors import RecoverableToolError, setup_error_payload, tool_error_from_exception
 from ..executor import MAX_MONTY_CODE_CHARS, async_execute_home_code
 from ..executor_support import ExecutionState
-from ..facade_views import build_llm_context
+from ..facades import build_llm_context
 from ..prompts import build_execute_home_code_description
-from ..runtime import RuntimeContext
+from ..sandbox_context import RuntimeContext
 from ._support import _require_loaded_entry_error, _require_sandbox_runtime
 from .recorder import RECORDER_UNAVAILABLE, fetch_flat_history_rows, fetch_flat_statistics_rows, recorder_available
 

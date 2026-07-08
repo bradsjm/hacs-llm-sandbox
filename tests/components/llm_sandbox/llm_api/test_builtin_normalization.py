@@ -1,7 +1,7 @@
 """Tests for Monty builtin-forgiveness normalization."""
 
 import pytest
-from custom_components.llm_sandbox.llm_api.builtin_normalization import (
+from custom_components.llm_sandbox.llm_api.normalization.builtin_normalization import (
     TYPE_NAME_RESOLVED,
     WRAPPED_NEXT_ITER,
     normalize_builtins,

@@ -1,8 +1,8 @@
 """Behavioral tests for the bounded home SQLite database."""
 
 import pytest
+from custom_components.llm_sandbox.llm_api.data.home_db import MAX_HISTORY_LOAD_ROWS, HomeDatabase
 from custom_components.llm_sandbox.llm_api.errors import HelperExecutionError
-from custom_components.llm_sandbox.llm_api.home_db import MAX_HISTORY_LOAD_ROWS, HomeDatabase
 
 from tests.components.llm_sandbox.llm_api.tools.test_analytics import _snapshot
 

@@ -18,7 +18,7 @@ from ..snapshot.models import (
     SafeState,
     SafeUnitSystem,
 )
-from .facade_views import (
+from .facades import (
     SafeAreaRegistry,
     SafeCategoryRegistry,
     SafeConfigEntries,

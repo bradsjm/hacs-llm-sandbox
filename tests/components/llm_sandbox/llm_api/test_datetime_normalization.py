@@ -1,7 +1,7 @@
 """Tests for datetime import normalization."""
 
 import pytest
-from custom_components.llm_sandbox.llm_api.datetime_normalization import (
+from custom_components.llm_sandbox.llm_api.normalization.datetime_normalization import (
     DATETIME_IMPORTS_RESOLVED,
     normalize_datetime_imports,
 )

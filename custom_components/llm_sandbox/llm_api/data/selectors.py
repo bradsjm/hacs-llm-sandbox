@@ -2,7 +2,7 @@
 
 from collections.abc import Mapping
 
-from ..snapshot.models import HomeSnapshot
+from ...snapshot.models import HomeSnapshot
 
 AGGREGATE_SELECTOR_KEYS = ("device_id", "area_id", "label_id", "label", "floor_id")
 

@@ -1,7 +1,7 @@
 """Tests for Monty result binding helpers."""
 
 import pytest
-from custom_components.llm_sandbox.llm_api.result_binding import (
+from custom_components.llm_sandbox.llm_api.normalization.result_binding import (
     PROMOTED_LAST_EXPRESSION,
     RESULT_NONE_DEFAULT,
     append_result_expression,

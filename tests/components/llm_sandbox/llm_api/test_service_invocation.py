@@ -19,13 +19,13 @@ from custom_components.llm_sandbox.llm_api.executor_support import (
     helper_error_payload_for_state,
     validation_error,
 )
-from custom_components.llm_sandbox.llm_api.facade_views import (
+from custom_components.llm_sandbox.llm_api.facades import (
     SafeHass,
     SafeServiceRegistry,
     build_facades,
 )
 from custom_components.llm_sandbox.llm_api.prompts import resolve_profile
-from custom_components.llm_sandbox.llm_api.runtime import (
+from custom_components.llm_sandbox.llm_api.sandbox_context import (
     RuntimeContext,
     activate_runtime,
     clear_runtime,

@@ -9,15 +9,15 @@ from typing import Any, cast
 import pytest
 from custom_components.llm_sandbox.const import DEFAULT_PROMPT_PROFILE, TOOL_EXECUTE_HOME_CODE
 from custom_components.llm_sandbox.llm_api import executor
+from custom_components.llm_sandbox.llm_api.data.home_db import MAX_HISTORY_LOAD_ROWS
 from custom_components.llm_sandbox.llm_api.errors import HelperExecutionError
 from custom_components.llm_sandbox.llm_api.executor_support import ExecutionState
-from custom_components.llm_sandbox.llm_api.facade_views import (
+from custom_components.llm_sandbox.llm_api.facades import (
     SafeHass as SandboxHass,
 )
-from custom_components.llm_sandbox.llm_api.facade_views import build_facades
-from custom_components.llm_sandbox.llm_api.home_db import MAX_HISTORY_LOAD_ROWS
+from custom_components.llm_sandbox.llm_api.facades import build_facades
 from custom_components.llm_sandbox.llm_api.prompts.profiles import resolve_profile
-from custom_components.llm_sandbox.llm_api.runtime import RuntimeContext, activate_runtime, clear_runtime
+from custom_components.llm_sandbox.llm_api.sandbox_context import RuntimeContext, activate_runtime, clear_runtime
 from custom_components.llm_sandbox.llm_api.tools.code import ExecuteHomeCodeTool
 from custom_components.llm_sandbox.llm_api.tools.recorder import MAX_HISTORY_STATES, MAX_RECORDER_ENTITY_IDS
 from custom_components.llm_sandbox.runtime import SandboxSettings

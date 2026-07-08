@@ -10,7 +10,7 @@ import ast
 import inspect
 from dataclasses import fields
 
-from .facade_registry import ATTRIBUTE_REACHABLE_RECORDS, FACADE_CLASSES, GLOBAL_TYPE_MAP
+from ..facade_registry import ATTRIBUTE_REACHABLE_RECORDS, FACADE_CLASSES, GLOBAL_TYPE_MAP
 
 _SUPPORTED_OPERATOR_DUNDERS = frozenset({"__getitem__", "__contains__", "__len__", "__iter__"})
 TYPE_NAME_RESOLVED = "type_name_resolved"

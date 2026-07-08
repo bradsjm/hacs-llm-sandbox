@@ -8,13 +8,13 @@ import pytest
 from custom_components.llm_sandbox.llm_api.contracts import MONTY_TYPE_STUBS
 
 
-def test_facade_views_and_executor_import_in_fresh_process() -> None:
+def test_facades_and_executor_import_in_fresh_process() -> None:
     """Direct imports do not depend on package-level tool import order."""
     result = subprocess.run(
         [
             sys.executable,
             "-c",
-            "import custom_components.llm_sandbox.llm_api.facade_views; "
+            "import custom_components.llm_sandbox.llm_api.facades; "
             "import custom_components.llm_sandbox.llm_api.executor",
         ],
         check=False,

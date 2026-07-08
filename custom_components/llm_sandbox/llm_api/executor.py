@@ -9,10 +9,7 @@ from homeassistant.exceptions import HomeAssistantError
 
 from ..const import DOMAIN
 from ..snapshot.models import HomeSnapshot
-from . import await_normalization, result_binding
-from .builtin_normalization import normalize_builtins
 from .contracts import MONTY_TYPE_STUBS
-from .datetime_normalization import normalize_datetime_imports
 from .errors import CodeErrorPayload, HelperErrorPayload, HelperExecutionError, helper_error_from_exception
 from .executor_support import (
     ExecutionState,
@@ -27,7 +24,7 @@ from .executor_support import (
     validation_error,
 )
 from .facade_registry import MONTY_DATACLASS_REGISTRY
-from .facade_views import SafeLLMContext, build_facades
+from .facades import SafeLLMContext, build_facades
 from .guidance import FailureContext, Intent, advise
 from .legacy_notes import (
     LegacyNoteContext,
@@ -36,7 +33,10 @@ from .legacy_notes import (
     compute_legacy_note,
 )
 from .literal_resolution import substitute_remembered_literals
-from .runtime import RuntimeContext, activate_runtime, clear_runtime
+from .normalization import await_normalization, result_binding
+from .normalization.builtin_normalization import normalize_builtins
+from .normalization.datetime_normalization import normalize_datetime_imports
+from .sandbox_context import RuntimeContext, activate_runtime, clear_runtime
 
 MAX_MONTY_CODE_CHARS = 8000
 MONTY_MAX_ALLOCATIONS = 250_000

@@ -1,0 +1,87 @@
+"""JSON-safe output and executor payload builders."""
+
+import math
+from collections.abc import Mapping, Sequence
+from typing import cast
+
+from homeassistant.util.json import JsonValueType
+
+from ...types import ActionRecord
+from ..errors import (
+    CodeErrorPayload,
+    HelperErrorPayload,
+    HelperExecutionError,
+    code_error_payload,
+    helper_error_payload,
+)
+from .state import ExecutionState
+
+
+def json_safe(value: object) -> JsonValueType:
+    """Convert arbitrary values into JSON-safe structures."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return str(value)
+    if value is None or isinstance(value, str | int | float | bool):
+        return value
+    sandbox_json = getattr(value, "__llm_sandbox_json__", None)
+    if callable(sandbox_json):
+        return json_safe(sandbox_json())
+    if isinstance(value, Mapping):
+        mapping_items = cast(Mapping[object, object], value)
+        return {str(key): json_safe(item) for key, item in mapping_items.items()}
+    if isinstance(value, Sequence) and not isinstance(value, str):
+        sequence_items = cast(Sequence[object], value)
+        return [json_safe(item) for item in sequence_items]
+    if isinstance(value, set):
+        set_items = cast(set[object], value)
+        return [json_safe(item) for item in set_items]
+    return str(value)
+
+
+def helper_error_payload_for_state(
+    err: HelperExecutionError,
+    state: ExecutionState,
+) -> HelperErrorPayload:
+    """Build a helper-error response using current execution state."""
+    payload = helper_error_payload(
+        err,
+        message=_helper_error_message(err, state),
+        kind=err.key,
+        guidance=err.guidance,
+        adjustments=list(state.adjustments),
+        printed=list(state.printed),
+        actions=cast(list[ActionRecord], json_safe(state.actions)),
+    )
+    if state.notes:
+        payload["notes"] = list(state.notes)
+    return payload
+
+
+def code_error_payload_for_state(
+    *,
+    kind: str,
+    message: str,
+    state: ExecutionState,
+    guidance: dict[str, object] | None = None,
+) -> CodeErrorPayload:
+    """Build a code-execution error response using current state."""
+    payload = code_error_payload(
+        kind=kind,
+        message=message,
+        adjustments=list(state.adjustments),
+        printed=list(state.printed),
+        actions=cast(list[ActionRecord], json_safe(state.actions)),
+        guidance=guidance,
+    )
+    if state.notes:
+        payload["notes"] = list(state.notes)
+    return payload
+
+
+def _helper_error_message(err: HelperExecutionError, state: ExecutionState) -> str:
+    """Return one actionable sentence for a helper execution error."""
+    if err.key == "call_budget_exceeded":
+        return f"Stopped after {state.helper_call_limit} service calls; do not retry the same call."
+    if reason := err.placeholders.get("reason"):
+        return f"Fix the {err.helper} call failure: {reason}."
+    return f"Resolve the {err.helper} error '{err.key}' before retrying."

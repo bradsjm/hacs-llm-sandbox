@@ -1,13 +1,7 @@
 """Tests for Monty await-forgiveness normalization."""
 
 import pytest
-from custom_components.llm_sandbox.llm_api.await_normalization import (
-    AWAITED_ASYNC_CALLS,
-    REWROTE_SYNC_SUBSCRIPT,
-    STRIPPED_AWAIT_FROM_SYNC,
-    normalize_awaits,
-)
-from custom_components.llm_sandbox.llm_api.facade_views import (
+from custom_components.llm_sandbox.llm_api.facades import (
     SafeAreaRegistry,
     SafeCategoryRegistry,
     SafeDate,
@@ -22,6 +16,12 @@ from custom_components.llm_sandbox.llm_api.facade_views import (
     SafeLLMContext,
     SafeServiceRegistry,
     SafeStateMachine,
+)
+from custom_components.llm_sandbox.llm_api.normalization.await_normalization import (
+    AWAITED_ASYNC_CALLS,
+    REWROTE_SYNC_SUBSCRIPT,
+    STRIPPED_AWAIT_FROM_SYNC,
+    normalize_awaits,
 )
 
 VIEW_CLASSES = [

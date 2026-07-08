@@ -1,6 +1,6 @@
 import pytest
 from custom_components.llm_sandbox.const import DEFAULT_PROMPT_PROFILE
-from custom_components.llm_sandbox.llm_api.tools._analytics import AGGREGATORS
+from custom_components.llm_sandbox.llm_api.data.history import AGGREGATORS
 from custom_components.llm_sandbox.llm_api.tools.recorder import GetHistoryTool
 from llm_sandbox_evals.prompts import candidate_prompt_sizes, load_candidates
 from voluptuous_openapi import convert

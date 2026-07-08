@@ -4,7 +4,7 @@ from collections.abc import Iterable, Mapping
 from typing import cast
 
 from ...snapshot.models import HomeSnapshot, ServiceSchemaBrief
-from ..home_db import _SCHEMA_TABLE_NAMES, columns_for_table
+from ..data.home_db import _SCHEMA_TABLE_NAMES, columns_for_table
 from ..target_matching import raw_service_field_names
 
 type CandidateDict = dict[str, object]
