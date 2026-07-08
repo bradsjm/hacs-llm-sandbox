@@ -6,9 +6,7 @@ import pytest
 from custom_components.llm_sandbox.const import DEFAULT_PROMPT_PROFILE
 from llm_sandbox_evals.config import EvalConfig
 from llm_sandbox_evals.experiment import MatrixCellRef, build_dataset, run_matrix
-from llm_sandbox_evals.models import ModelAdapter, ModelResponseError, StubAdapter
 from llm_sandbox_evals.schema import (
-    AgentStep,
     CaseContext,
     CaseTrace,
     CheckResult,
@@ -16,9 +14,12 @@ from llm_sandbox_evals.schema import (
     Expected,
     PromptCandidate,
 )
+from pydantic_ai.messages import ModelMessage, ModelResponse
+from pydantic_ai.models import Model
+from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_evals.reporting.analyses import ScalarResult, TableResult
 
-from llm_sandbox_evals import experiment, reports
+from llm_sandbox_evals import agent_runner, reports
 
 
 async def test_run_matrix_stub_slice_writes_reloadable_report_json(tmp_path: Path) -> None:
@@ -75,7 +76,7 @@ async def test_sandbox_outcome_reports_score_required_gate_and_model_error_label
 async def test_candidate_matrix_report_aggregates_candidate_model_and_category_means(tmp_path: Path) -> None:
     config = _config(tmp_path, models=["model-a", "model-b"], cases=None)
     candidates = [_candidate("baseline", api_prompt="baseline prompt"), _candidate("compact", api_prompt="short")]
-    selected_cases = [_case("case-state", "state_read"), _case("case-recorder", "recorder_read", par_turns=2)]
+    selected_cases = [_case("case-state", "state_read"), _case("case-recorder", "recorder_read")]
     dataset = build_dataset(config, candidates, selected_cases)
     outcomes = {
         ("baseline", "model-a", "case-state"): (0.8, 1),
@@ -89,8 +90,8 @@ async def test_candidate_matrix_report_aggregates_candidate_model_and_category_m
     }
 
     async def task(cell: MatrixCellRef) -> CaseTrace:
-        score, turns = outcomes[(cell.candidate_id, cell.model_id, cell.case_id)]
-        return _trace(cell, score=score, turns=turns)
+        score, tool_calls = outcomes[(cell.candidate_id, cell.model_id, cell.case_id)]
+        return _trace(cell, score=score, tool_call_count=tool_calls)
 
     report = await dataset.evaluate(task, name="candidate-matrix", progress=False, retry_task=None)
     ranking = _table(report.analyses, "Candidate ranking")
@@ -101,7 +102,7 @@ async def test_candidate_matrix_report_aggregates_candidate_model_and_category_m
         "Candidate",
         "Mean",
         "MinModel",
-        "Turns",
+        "ToolCalls",
         "PromptChars",
         "SizeRatio",
         "state_read",
@@ -121,10 +122,17 @@ async def test_candidate_matrix_report_aggregates_candidate_model_and_category_m
 async def test_run_matrix_keeps_scoring_other_models_when_one_model_errors(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    original_make_model = agent_runner.make_model
+
+    def make_model(model_id: str) -> Model:
+        if model_id == "bad-model":
+            return FunctionModel(_raiseing_model, model_name="bad-model")
+        return original_make_model(model_id)
+
     monkeypatch.setattr(
-        experiment,
-        "get_adapter",
-        _adapter_factory({"bad-model": FailingAdapter(), "stub": StubAdapter()}),
+        agent_runner,
+        "make_model",
+        make_model,
     )
     config = _config(tmp_path, models=["bad-model", "stub"], cases=["state_living_temperature"])
 
@@ -137,28 +145,8 @@ async def test_run_matrix_keeps_scoring_other_models_when_one_model_errors(
     assert traces_by_model["stub"].score == pytest.approx(1.0)
 
 
-class FailingAdapter:
-    async def respond(
-        self,
-        model_id: str,
-        messages: list[dict[str, object]],
-        tools: list[dict[str, object]],
-    ) -> AgentStep:
-        _ = (model_id, messages, tools)
-        raise ModelResponseError("provider rejected model", detail="provider rejected model")
-
-
-def _adapter_factory(adapters: dict[str, ModelAdapter]) -> object:
-    def adapter_for(
-        model_id: str,
-        reasoning_effort: str | None = None,
-        *,
-        model_timeout: float = 75.0,
-    ) -> ModelAdapter:
-        _ = (reasoning_effort, model_timeout)
-        return adapters[model_id]
-
-    return adapter_for
+async def _raiseing_model(_messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+    raise RuntimeError("provider rejected model")
 
 
 def _config(
@@ -189,7 +177,7 @@ def _candidate(candidate_id: str, *, api_prompt: str = "prompt") -> PromptCandid
     )
 
 
-def _case(case_id: str, category: str, *, par_turns: int = 1) -> EvalCase:
+def _case(case_id: str, category: str) -> EvalCase:
     return EvalCase(
         id=case_id,
         category=category,
@@ -197,8 +185,7 @@ def _case(case_id: str, category: str, *, par_turns: int = 1) -> EvalCase:
         user_request="exercise native experiment aggregation",
         actions_enabled=False,
         llm_context=CaseContext(),
-        expected=Expected(tool_name="execute_home_code"),
-        par_turns=par_turns,
+        expected=Expected(),
     )
 
 
@@ -207,7 +194,7 @@ def _trace(
     *,
     score: float,
     checks: tuple[CheckResult, ...] = (CheckResult("tool_used", True, True, ""),),
-    turns: int = 1,
+    tool_call_count: int = 1,
 ) -> CaseTrace:
     return CaseTrace(
         case_id=cell.case_id,
@@ -215,16 +202,11 @@ def _trace(
         candidate_id=cell.candidate_id,
         model_id=cell.model_id,
         score=score,
-        prompt="[]",
-        raw_output="{}",
-        tool_call=None,
-        tool_result=None,
+        output="done",
+        tool_call_count=tool_call_count,
         recorded_actions=(),
         checks=checks,
-        turns=turns,
-        par_turns=cell.par_turns,
-        final_answer="done",
-        steps=(),
+        error=None,
     )
 
 

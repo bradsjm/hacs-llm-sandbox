@@ -2,350 +2,135 @@ from datetime import UTC, datetime, timedelta
 from types import ModuleType
 from typing import cast
 
-import pytest
-from custom_components.llm_sandbox.const import (
-    DEFAULT_PROMPT_PROFILE,
-    MAX_HISTORY_STATES,
-    MAX_LOGBOOK_ENTRIES,
-    MAX_STATISTICS_ROWS,
-    TOOL_EXECUTE_HOME_CODE,
-    TOOL_GET_HISTORY,
-    TOOL_GET_LOGBOOK,
-    TOOL_GET_STATISTICS,
-)
+from custom_components.llm_sandbox.const import DEFAULT_PROMPT_PROFILE, MAX_HISTORY_STATES, MAX_LOGBOOK_ENTRIES
 from custom_components.llm_sandbox.llm_api.prompts.profiles import resolve_profile
+from custom_components.llm_sandbox.llm_api.tools.recorder import GetHistoryTool, GetLogbookTool
 from custom_components.llm_sandbox.snapshot.models import HomeSnapshot
+from homeassistant.helpers import llm
 from llm_sandbox_evals.homes import get_home
-from llm_sandbox_evals.schema import CaseContext, EvalCase, Expected, ToolOutcome
-
-from llm_sandbox_evals import tools as eval_tools
+from llm_sandbox_evals.prompts import baseline_candidate
+from llm_sandbox_evals.runtime import build_eval_runtime, build_fixture_recorder_source
+from llm_sandbox_evals.schema import CaseContext, EvalCase, Expected
+from llm_sandbox_evals.tools import EVAL_SCOPE, apply_scope
 
 _CREATED_AT = datetime(2026, 6, 29, 12, tzinfo=UTC)
 _LIVING_TEMP = "sensor.living_temp"
 _LIVING_LIGHT = "light.living"
 
 
-@pytest.mark.parametrize(
-    ("aggregate", "expected_summary"),
-    [
-        pytest.param("count_transitions", {"transitions": 2}, id="count-transitions"),
-        pytest.param("state_counts", {"state_counts": {"24.4": 1, "24.9": 1, "25.2": 1}}, id="state-counts"),
-    ],
-)
-def test_history_aggregate_envelopes_match_production_shape(
-    aggregate: str, expected_summary: dict[str, object]
-) -> None:
-    outcome = eval_tools._run_history(
-        {"entity_ids": [_LIVING_TEMP], "hours": 24, "aggregate": aggregate},
-        _case(TOOL_GET_HISTORY),
-        _snapshot(),
+async def test_history_run_query_uses_production_aggregate_shape() -> None:
+    snapshot = _snapshot()
+    source = build_fixture_recorder_source(snapshot, get_home("home_default"))
+    tool = GetHistoryTool("eval")
+    data = cast(
+        dict[str, object],
+        tool.parameters({"entity_ids": [_LIVING_TEMP], "hours": 24, "aggregate": "state_counts"}),
     )
 
-    assert _result(outcome) == {
-        "window": {
-            "start": "2026-06-28T12:00:00+00:00",
-            "end": "2026-06-29T12:00:00+00:00",
-        },
-        "mode": aggregate,
-        "summary": {_LIVING_TEMP: expected_summary},
-    }
-
-
-@pytest.mark.parametrize(
-    ("aggregate", "to_state", "expected_summary"),
-    [
-        pytest.param(
-            "first_seen",
-            "on",
-            {"first_seen": {"state": "on", "at": "2026-06-29T01:00:00+00:00"}},
-            id="first-seen-on",
-        ),
-        pytest.param(
-            "last_seen",
-            "on",
-            {"last_seen": {"state": "on", "at": "2026-06-29T03:00:00+00:00"}},
-            id="last-seen-on",
-        ),
-        pytest.param("last_seen", "unavailable", {"last_seen": None}, id="last-seen-missing"),
-    ],
-)
-def test_history_seen_aggregates_filter_to_state(
-    monkeypatch: pytest.MonkeyPatch,
-    aggregate: str,
-    to_state: str,
-    expected_summary: dict[str, object | None],
-) -> None:
-    _stub_recorder(
-        monkeypatch,
-        {
-            "history": {
-                _LIVING_LIGHT: [
-                    _history_state_row("off", "2026-06-29T00:00:00+00:00"),
-                    _history_state_row("on", "2026-06-29T01:00:00+00:00"),
-                    _history_state_row("off", "2026-06-29T02:00:00+00:00"),
-                    _history_state_row("on", "2026-06-29T03:00:00+00:00"),
-                ]
-            },
-            "statistics": {},
-            "logbook": {},
-        },
-    )
-
-    result = _result(
-        eval_tools._run_history(
-            {
-                "entity_ids": [_LIVING_LIGHT],
-                "start": "2026-06-29T00:00:00+00:00",
-                "end": "2026-06-29T04:00:00+00:00",
-                "aggregate": aggregate,
-                "to_state": to_state,
-            },
-            _case(TOOL_GET_HISTORY),
-            _snapshot(),
-        )
-    )
-
-    assert result["summary"] == {_LIVING_LIGHT: expected_summary}
-
-
-def test_history_declarative_analytics_reuses_production_shape() -> None:
-    result = _result(
-        eval_tools._run_history(
-            {"entity_ids": [_LIVING_TEMP], "hours": 24, "aggregate": "state_counts", "group_by": ["domain"]},
-            _case(TOOL_GET_HISTORY),
-            _snapshot(),
-        )
-    )
+    result = await tool.run_query(snapshot, data, source)
 
     assert result == {
-        "window": {
-            "start": "2026-06-28T12:00:00+00:00",
-            "end": "2026-06-29T12:00:00+00:00",
-        },
-        "rows": [{"domain": "sensor", "state_counts": {"24.4": 1, "24.9": 1, "25.2": 1}}],
+        "window": {"start": "2026-06-28T12:00:00+00:00", "end": "2026-06-29T12:00:00+00:00"},
+        "mode": "state_counts",
+        "summary": {_LIVING_TEMP: {"state_counts": {"24.4": 1, "24.9": 1, "25.2": 1}}},
     }
 
 
-def test_history_declarative_analytics_errors_return_envelope() -> None:
-    result = _result(
-        eval_tools._run_history(
-            {"entity_ids": [_LIVING_TEMP], "hours": 24, "group_by": ["not_a_group"]},
-            _case(TOOL_GET_HISTORY),
-            _snapshot(),
-        )
+async def test_history_run_query_cursor_round_trip_uses_production_pagination() -> None:
+    timestamps = _ascending_timestamps(MAX_HISTORY_STATES + 5)
+    fixture = _fixture({"history": {_LIVING_TEMP: _history_rows(timestamps)}, "statistics": {}, "logbook": {}})
+    snapshot = _snapshot()
+    source = build_fixture_recorder_source(snapshot, fixture)
+    tool = GetHistoryTool("eval")
+    first_data = cast(
+        dict[str, object],
+        tool.parameters({"entity_ids": [_LIVING_TEMP], "start": timestamps[0], "end": timestamps[-1]}),
     )
 
-    assert result["status"] == "error"
-    error = cast(dict[str, object], result["error"])
-    assert error["key"] == "analytics_unknown_group_key"
+    first_result = await tool.run_query(snapshot, first_data, source)
+
+    first_rows = _history_result_rows(first_result, _LIVING_TEMP)
+    assert len(first_rows) == MAX_HISTORY_STATES
+    assert first_rows[0] == [timestamps[5], "5"]
+    cursor = cast(str, first_result["next_cursor"])
+    second_data = cast(dict[str, object], tool.parameters({"entity_ids": [_LIVING_TEMP], "cursor": cursor}))
+    second_result = await tool.run_query(snapshot, second_data, source)
+    assert _history_result_rows(second_result, _LIVING_TEMP) == [
+        [timestamp, str(index)] for index, timestamp in enumerate(timestamps[:5])
+    ]
+    assert "next_cursor" not in second_result
 
 
-async def test_execute_eval_states_only_hass_query_works() -> None:
-    outcome = await eval_tools._run_execute(
-        "result = await hass.query(\"select entity_id, state from states where entity_id = 'light.living'\")",
-        _case(TOOL_EXECUTE_HOME_CODE),
-        _snapshot(),
-        resolve_profile(DEFAULT_PROMPT_PROFILE),
-        eval_tools.RecordingInvoker(),
+async def test_logbook_source_injects_entity_id_and_production_paginates() -> None:
+    timestamps = _ascending_timestamps(MAX_LOGBOOK_ENTRIES + 3)
+    fixture = _fixture({"history": {}, "statistics": {}, "logbook": {_LIVING_LIGHT: _logbook_rows(timestamps)}})
+    snapshot = _snapshot()
+    source = build_fixture_recorder_source(snapshot, fixture)
+    tool = GetLogbookTool("eval")
+    data = cast(
+        dict[str, object],
+        tool.parameters({"entity_ids": [_LIVING_LIGHT], "start": timestamps[0], "end": timestamps[-1]}),
     )
 
-    result = _result(outcome)
+    result = await tool.run_query(snapshot, data, source)
+
+    entries = cast(list[dict[str, object]], result["entries"])
+    assert len(entries) == MAX_LOGBOOK_ENTRIES
+    assert {entry["entity_id"] for entry in entries} == {_LIVING_LIGHT}
+    assert entries[0]["when"] == timestamps[3]
+
+
+async def test_execute_home_code_runs_with_eval_runtime_context() -> None:
+    case = _case()
+    fixture = get_home("home_default")
+    snapshot = apply_scope(_snapshot(), EVAL_SCOPE, anchor_device_id=case.llm_context.device_id)
+    runtime = build_eval_runtime(
+        case, baseline_candidate(), resolve_profile(DEFAULT_PROMPT_PROFILE), snapshot, fixture
+    )
+    data = cast(
+        dict[str, object],
+        runtime.code_tool.parameters(
+            {
+                "code": "result = await hass.query(\"select entity_id, state from states where entity_id = 'light.living'\")"
+            }
+        ),
+    )
+
+    result = await runtime.code_tool.run_execute(
+        snapshot,
+        data,
+        llm.LLMContext("test", None, "en", None, None),
+        runtime.runtime_context_factory(),
+    )
+
     assert result["execution"] == {"status": "ok"}
     assert result["output"] == [{"entity_id": "light.living", "state": "on"}]
 
 
-def test_history_raw_cursor_round_trip_returns_next_older_rows(monkeypatch: pytest.MonkeyPatch) -> None:
-    timestamps = _ascending_timestamps(MAX_HISTORY_STATES + 205)
-    _stub_recorder(
-        monkeypatch,
-        {"history": {_LIVING_TEMP: _history_rows(timestamps)}, "statistics": {}, "logbook": {}},
-    )
-    first_result = _result(
-        eval_tools._run_history(
-            {"entity_ids": [_LIVING_TEMP], "start": timestamps[0], "end": timestamps[-1]},
-            _case(TOOL_GET_HISTORY),
-            _snapshot(),
-        )
-    )
-
-    first_rows = _history_result_rows(first_result, _LIVING_TEMP)
-    assert len(first_rows) == MAX_HISTORY_STATES
-    assert first_rows[0] == [timestamps[205], "205"]
-    assert first_rows[-1] == [timestamps[-1], "1204"]
-    cursor = cast(str, first_result["next_cursor"])
-
-    second_result = _result(
-        eval_tools._run_history(
-            {"entity_ids": [_LIVING_TEMP], "cursor": cursor},
-            _case(TOOL_GET_HISTORY),
-            _snapshot(),
-        )
-    )
-    second_rows = _history_result_rows(second_result, _LIVING_TEMP)
-    assert len(second_rows) == 205
-    assert second_rows[0] == [timestamps[0], "0"]
-    assert second_rows[-1] == [timestamps[204], "204"]
-    assert second_rows[-1][0] < first_rows[0][0]
-    assert "next_cursor" not in second_result
-
-
-def test_history_attributes_are_opt_in() -> None:
-    with_attributes = _result(
-        eval_tools._run_history(
-            {"entity_ids": [_LIVING_TEMP], "attributes": ["unit_of_measurement"]},
-            _case(TOOL_GET_HISTORY),
-            _snapshot(),
-        )
-    )
-    rows_with_attributes = _history_result_rows(with_attributes, _LIVING_TEMP)
-    assert rows_with_attributes == [["2026-06-29T12:00:00+00:00", "25.2", {"unit_of_measurement": "°C"}]]
-
-    without_attributes = _result(
-        eval_tools._run_history({"entity_ids": [_LIVING_TEMP]}, _case(TOOL_GET_HISTORY), _snapshot())
-    )
-    rows_without_attributes = _history_result_rows(without_attributes, _LIVING_TEMP)
-    assert rows_without_attributes == [["2026-06-29T12:00:00+00:00", "25.2"]]
-
-
-def test_history_relative_hours_window_uses_snapshot_created_at() -> None:
-    result = _result(
-        eval_tools._run_history({"entity_ids": [_LIVING_TEMP], "hours": 12}, _case(TOOL_GET_HISTORY), _snapshot())
-    )
-
-    assert result["window"] == {
-        "start": "2026-06-29T00:00:00+00:00",
-        "end": "2026-06-29T12:00:00+00:00",
-    }
-
-
-@pytest.mark.parametrize(
-    ("tool_args", "expected_key"),
-    [
-        pytest.param({"entity_ids": [_LIVING_TEMP], "hours": 999}, "time_window_too_large", id="too-large"),
-        pytest.param(
-            {
-                "entity_ids": [_LIVING_TEMP],
-                "start": "2026-06-29T12:00:01+00:00",
-                "end": "2026-06-29T12:00:00+00:00",
-            },
-            "invalid_tool_input",
-            id="start-after-end",
-        ),
-    ],
-)
-def test_history_window_errors_return_recoverable_envelopes(tool_args: dict[str, object], expected_key: str) -> None:
-    result = _result(eval_tools._run_history(tool_args, _case(TOOL_GET_HISTORY), _snapshot()))
-    error = cast(dict[str, object], result["error"])
-
-    assert result["status"] == "error"
-    assert error["key"] == expected_key
-
-
-def test_statistics_cursor_round_trip_preserves_period_and_returns_older_rows(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    timestamps = _ascending_timestamps(MAX_STATISTICS_ROWS + 205)
-    _stub_recorder(
-        monkeypatch,
-        {"history": {}, "statistics": {_LIVING_TEMP: _statistics_rows(timestamps)}, "logbook": {}},
-    )
-    first_result = _result(
-        eval_tools._run_statistics(
-            {
-                "statistic_ids": [_LIVING_TEMP],
-                "start": timestamps[0],
-                "end": timestamps[-1],
-                "period": "5minute",
-                "types": ["sum"],
-            },
-            _case(TOOL_GET_STATISTICS),
-            _snapshot(),
-        )
-    )
-
-    first_rows = _statistics_result_rows(first_result, _LIVING_TEMP)
-    assert first_result["period"] == "5minute"
-    assert len(first_rows) == MAX_STATISTICS_ROWS
-    assert first_rows[0] == [timestamps[205], {"sum": 205.0}]
-    assert first_rows[-1] == [timestamps[-1], {"sum": 1204.0}]
-    cursor = cast(str, first_result["next_cursor"])
-
-    second_result = _result(
-        eval_tools._run_statistics(
-            {"statistic_ids": [_LIVING_TEMP], "cursor": cursor},
-            _case(TOOL_GET_STATISTICS),
-            _snapshot(),
-        )
-    )
-    second_rows = _statistics_result_rows(second_result, _LIVING_TEMP)
-    assert second_result["period"] == "5minute"
-    assert len(second_rows) == 205
-    assert second_rows[0] == [timestamps[0], {"sum": 0.0}]
-    assert second_rows[-1] == [timestamps[204], {"sum": 204.0}]
-    assert second_rows[-1][0] < first_rows[0][0]
-    assert "next_cursor" not in second_result
-
-
-def test_logbook_cursor_round_trip_returns_next_older_entries(monkeypatch: pytest.MonkeyPatch) -> None:
-    timestamps = _ascending_timestamps(MAX_LOGBOOK_ENTRIES + 35)
-    _stub_recorder(
-        monkeypatch,
-        {"history": {}, "statistics": {}, "logbook": {_LIVING_LIGHT: _logbook_rows(timestamps)}},
-    )
-    first_result = _result(
-        eval_tools._run_logbook(
-            {"entity_ids": [_LIVING_LIGHT], "start": timestamps[0], "end": timestamps[-1]},
-            _case(TOOL_GET_LOGBOOK),
-            _snapshot(),
-        )
-    )
-
-    first_entries = _logbook_entries(first_result)
-    assert len(first_entries) == MAX_LOGBOOK_ENTRIES
-    assert first_entries[0]["when"] == timestamps[35]
-    assert first_entries[-1]["when"] == timestamps[-1]
-    assert {entry["entity_id"] for entry in first_entries} == {_LIVING_LIGHT}
-    cursor = cast(str, first_result["next_cursor"])
-
-    second_result = _result(
-        eval_tools._run_logbook(
-            {"entity_ids": [_LIVING_LIGHT], "cursor": cursor},
-            _case(TOOL_GET_LOGBOOK),
-            _snapshot(),
-        )
-    )
-    second_entries = _logbook_entries(second_result)
-    assert len(second_entries) == 35
-    assert second_entries[0]["when"] == timestamps[0]
-    assert second_entries[-1]["when"] == timestamps[34]
-    assert second_entries[-1]["when"] < first_entries[0]["when"]
-    assert {entry["entity_id"] for entry in second_entries} == {_LIVING_LIGHT}
-    assert "next_cursor" not in second_result
-
-
-def _case(tool_name: str) -> EvalCase:
+def _case() -> EvalCase:
     return EvalCase(
-        id=f"{tool_name}-unit",
+        id="production-core-unit",
         category="unit",
         home="home_default",
-        user_request="exercise recorder emulator",
+        user_request="exercise production core",
         actions_enabled=False,
         llm_context=CaseContext(),
-        expected=Expected(tool_name=tool_name),
-        par_turns=1,
+        expected=Expected(),
     )
 
 
 def _snapshot() -> HomeSnapshot:
-    # ``get_home`` returns a ``ModuleType`` whose ``snapshot()`` is dynamically typed; cast for mypy.
     return cast(HomeSnapshot, get_home("home_default").snapshot())
 
 
-def _result(outcome: ToolOutcome) -> dict[str, object]:
-    assert outcome.ok is True
-    assert outcome.error is None
-    assert outcome.result is not None
-    return outcome.result
+def _fixture(recorder_data: dict[str, object]) -> ModuleType:
+    module = ModuleType("fixture_home")
+
+    def recorder() -> dict[str, object]:
+        return recorder_data
+
+    module.__dict__["recorder"] = recorder
+    return module
 
 
 def _ascending_timestamps(count: int) -> list[str]:
@@ -365,25 +150,6 @@ def _history_rows(timestamps: list[str]) -> list[dict[str, object]]:
     ]
 
 
-def _history_state_row(state: str, timestamp: str) -> dict[str, object]:
-    return {"state": state, "attributes": {}, "last_changed": timestamp, "last_updated": timestamp}
-
-
-def _statistics_rows(timestamps: list[str]) -> list[dict[str, object]]:
-    return [
-        {
-            "start": timestamp,
-            "end": (datetime.fromisoformat(timestamp) + timedelta(minutes=1)).isoformat(),
-            "state": float(index),
-            "sum": float(index),
-            "min": float(index),
-            "max": float(index),
-            "mean": float(index),
-        }
-        for index, timestamp in enumerate(timestamps)
-    ]
-
-
 def _logbook_rows(timestamps: list[str]) -> list[dict[str, object]]:
     return [
         {"when": timestamp, "name": "Living Room Light", "message": f"changed state {index}"}
@@ -391,30 +157,6 @@ def _logbook_rows(timestamps: list[str]) -> list[dict[str, object]]:
     ]
 
 
-def _stub_recorder(monkeypatch: pytest.MonkeyPatch, recorder_data: dict[str, object]) -> None:
-    # ModuleType permits arbitrary attributes at runtime; populate via ``__dict__`` so mypy sees a typed mapping.
-    module = ModuleType("oversize_home")
-
-    def recorder() -> dict[str, object]:
-        return recorder_data
-
-    module.__dict__["recorder"] = recorder
-
-    def get_home_stub(name: str) -> ModuleType:
-        return module
-
-    monkeypatch.setattr(eval_tools, "get_home", get_home_stub)
-
-
 def _history_result_rows(result: dict[str, object], entity_id: str) -> list[list[object]]:
     entities = cast(dict[str, dict[str, object]], result["entities"])
     return cast(list[list[object]], entities[entity_id]["rows"])
-
-
-def _statistics_result_rows(result: dict[str, object], statistic_id: str) -> list[list[object]]:
-    statistics = cast(dict[str, dict[str, object]], result["statistics"])
-    return cast(list[list[object]], statistics[statistic_id]["rows"])
-
-
-def _logbook_entries(result: dict[str, object]) -> list[dict[str, object]]:
-    return cast(list[dict[str, object]], result["entries"])

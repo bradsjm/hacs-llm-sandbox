@@ -25,6 +25,7 @@ from typing import Any, cast
 from zoneinfo import ZoneInfo
 
 from homeassistant.core import SupportsResponse
+from homeassistant.util import dt as dt_util
 from homeassistant.util.json import JsonValueType
 
 from ..runtime import SandboxSettings
@@ -1075,6 +1076,7 @@ class SafeHass:
             snapshot = require_snapshot()
             analytics = aggregate is not None or group_by is not None or bucket is not None or limit is not None
             start, end = _clamp_window(
+                dt_util.utcnow(),
                 None,
                 None,
                 hours=hours,
@@ -1137,6 +1139,7 @@ class SafeHass:
                 # statistics-only may use the longer analytics lookback. One window, one scope.
                 max_hours = MAX_RECORDER_LOOKBACK_HOURS if needs_history else MAX_HISTORY_AGGREGATE_LOOKBACK_HOURS
                 start, end = _clamp_window(
+                    dt_util.utcnow(),
                     None,
                     None,
                     hours=hours,

@@ -18,7 +18,6 @@ from pydantic_evals.reporting.analyses import ReportAnalysis, ScalarResult, Tabl
 from llm_sandbox_evals import prompts
 from llm_sandbox_evals.config import EvalConfig
 from llm_sandbox_evals.harness import _select_cases, run_case
-from llm_sandbox_evals.models import get_adapter
 from llm_sandbox_evals.schema import CaseTrace, CheckResult, EvalCase, PromptCandidate
 from llm_sandbox_evals.scoring import mean_score
 
@@ -36,7 +35,6 @@ class MatrixCellRef:
     model_id: str
     home: str
     category: str
-    par_turns: int
 
 
 @dataclass(slots=True)
@@ -76,13 +74,16 @@ class CandidateMatrixReport(ReportEvaluator[MatrixCellRef, CaseTrace, MatrixCell
         return [
             TableResult(
                 title="Candidate ranking",
-                columns=["Candidate", "Mean", "MinModel", "Turns", "PromptChars", "SizeRatio", *categories],
+                columns=["Candidate", "Mean", "MinModel", "ToolCalls", "PromptChars", "SizeRatio", *categories],
                 rows=ranking_rows,
             ),
             TableResult(
                 title="Candidate x model means",
-                columns=["Candidate", "Model", "Mean", "Turns"],
-                rows=[[row.candidate_id, row.model_id, _round(row.mean), _round(row.mean_turns)] for row in pair_rows],
+                columns=["Candidate", "Model", "Mean", "ToolCalls"],
+                rows=[
+                    [row.candidate_id, row.model_id, _round(row.mean), _round(row.mean_tool_calls)]
+                    for row in pair_rows
+                ],
             ),
             ScalarResult(title="Overall mean score", value=_round(overall)),
         ]
@@ -93,7 +94,7 @@ class _PairRow:
     candidate_id: str
     model_id: str
     mean: float
-    mean_turns: float
+    mean_tool_calls: float
     category_means: dict[str, float]
     api_prompt_chars: int
     prompt_chars: int
@@ -115,7 +116,6 @@ def build_dataset(
                     model_id=model_id,
                     home=case.home,
                     category=case.category,
-                    par_turns=case.par_turns,
                 )
                 metadata: MatrixCellMeta = {
                     "case_id": ref.case_id,
@@ -123,7 +123,6 @@ def build_dataset(
                     "model_id": ref.model_id,
                     "home": ref.home,
                     "category": ref.category,
-                    "par_turns": ref.par_turns,
                 }
                 cases.append(
                     Case(
@@ -158,8 +157,7 @@ def make_matrix_task(
     async def task(cell: MatrixCellRef) -> CaseTrace:
         candidate = candidate_by_id[cell.candidate_id]
         case = case_by_id[cell.case_id]
-        adapter = get_adapter(cell.model_id, config.reasoning_effort, model_timeout=config.model_timeout)
-        return await run_case(candidate, cell.model_id, case, adapter, profile, config)
+        return await run_case(candidate, cell.model_id, case, config, profile=profile)
 
     return task
 
@@ -208,7 +206,7 @@ def matrix_summary_lines(report: EvaluationReport[MatrixCellRef, CaseTrace, Matr
                 mean = row[2]
                 turns = row[3]
                 if isinstance(mean, int | float) and isinstance(turns, int | float):
-                    lines.append(f"{row[0]}/{row[1]}: mean={mean:.3f} turns={turns:.3f}")
+                    lines.append(f"{row[0]}/{row[1]}: mean={mean:.3f} tool_calls={turns:.3f}")
     return lines
 
 
@@ -230,7 +228,7 @@ def _pair_rows(
                     candidate_id=candidate_id,
                     model_id=model_id,
                     mean=mean_score([_case_score(case) for case in cases]),
-                    mean_turns=mean_score([float(case.output.turns) for case in cases]),
+                    mean_tool_calls=mean_score([float(case.output.tool_call_count) for case in cases]),
                     category_means={
                         category: mean_score(
                             [_case_score(case) for case in cases if _metadata_str(case, "category") == category]
@@ -257,7 +255,7 @@ def _ranking_rows(
         candidate_rows = [row for row in pair_rows if row.candidate_id == candidate_id and row.model_id in model_ids]
         mean = mean_score([row.mean for row in candidate_rows])
         min_model = min((row.mean for row in candidate_rows), default=0.0)
-        mean_turns = mean_score([row.mean_turns for row in candidate_rows])
+        mean_tool_calls = mean_score([row.mean_tool_calls for row in candidate_rows])
         prompt_chars = candidate_rows[0].prompt_chars if candidate_rows else 0
         api_prompt_chars = candidate_rows[0].api_prompt_chars if candidate_rows else 0
         category_means = {
@@ -267,7 +265,7 @@ def _ranking_rows(
             candidate_id,
             _round(mean),
             _round(min_model),
-            _round(mean_turns),
+            _round(mean_tool_calls),
             prompt_chars,
             _round(prompt_chars / baseline_prompt_chars),
             *[_round(category_means[category]) for category in categories],

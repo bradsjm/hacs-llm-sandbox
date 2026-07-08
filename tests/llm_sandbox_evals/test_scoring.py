@@ -1,98 +1,88 @@
-from typing import cast
-
 import pytest
-from custom_components.llm_sandbox.const import TOOL_GET_HISTORY
-from custom_components.llm_sandbox.snapshot.models import HomeSnapshot
-from llm_sandbox_evals.homes import get_home
-from llm_sandbox_evals.schema import CaseContext, EvalCase, Expected, StepTrace, ToolCall
-from llm_sandbox_evals.scoring import check_case
+from llm_sandbox_evals.schema import CaseContext, EvalCase, Expected, ExpectedAction
+from llm_sandbox_evals.scoring import check_case, score_case
 
 
-@pytest.mark.parametrize(
-    ("tool_args", "expected_passed"),
-    [
-        pytest.param({"aggregate": "last_seen", "to_state": "on"}, True, id="matching-args"),
-        pytest.param({"aggregate": "last_seen", "to_state": "off"}, False, id="wrong-to-state"),
-        pytest.param({"aggregate": "last_seen"}, False, id="missing-to-state"),
-    ],
-)
-def test_required_tool_arg_values_check(tool_args: dict[str, object], expected_passed: bool) -> None:
+def test_outcome_scoring_passes_facts_actions_and_efficiency() -> None:
     checks = check_case(
-        _case(),
-        "",
-        (),
-        set(),
-        _snapshot(),
-        (StepTrace(tool_calls=(ToolCall("call-1", TOOL_GET_HISTORY, tool_args),), tool_results=({},)),),
-    )
-
-    passed_by_name = {check.name: check.passed for check in checks}
-    assert passed_by_name["required_tool_arg_values"] is expected_passed
-
-
-def test_required_tool_arg_values_check_fails_when_values_are_split_across_calls() -> None:
-    checks = check_case(
-        _case(),
-        "",
-        (),
-        set(),
-        _snapshot(),
-        (
-            StepTrace(
-                tool_calls=(
-                    ToolCall("call-1", TOOL_GET_HISTORY, {"aggregate": "last_seen"}),
-                    ToolCall("call-2", TOOL_GET_HISTORY, {"to_state": "on"}),
-                ),
-                tool_results=({}, {}),
-            ),
+        _case(
+            Expected(
+                answer_facts=("sensor.living_temp",),
+                actions=(ExpectedAction("light", "turn_off", ("light.living",)),),
+                max_tool_calls=4,
+                reference_tool_calls=1,
+            )
         ),
+        "The value came from sensor.living_temp.",
+        ({"domain": "light", "service": "turn_off", "target": {"entity_id": "light.living"}},),
+        2,
     )
 
     passed_by_name = {check.name: check.passed for check in checks}
-    assert passed_by_name["required_tool_arg_values"] is False
+    assert passed_by_name == {
+        "answer_facts_present": True,
+        "actions_match": True,
+        "tool_calls_within_max": True,
+        "tool_call_efficiency": False,
+    }
+    assert score_case(checks) == pytest.approx(0.875)
 
 
-def test_max_tool_calls_check_counts_all_observed_tool_calls() -> None:
+def test_required_gate_failure_forces_zero_score() -> None:
     checks = check_case(
-        _case(max_tool_calls=1),
-        "",
+        _case(Expected(answer_facts=("sensor.living_temp",), max_tool_calls=1, reference_tool_calls=1)),
+        "No matching fact here.",
         (),
-        set(),
-        _snapshot(),
-        (
-            StepTrace(
-                tool_calls=(ToolCall("call-1", TOOL_GET_HISTORY, {"aggregate": "last_seen", "to_state": "on"}),),
-                tool_results=({},),
-            ),
-            StepTrace(
-                tool_calls=(ToolCall("call-2", TOOL_GET_HISTORY, {"entity_ids": ["light.living"]}),),
-                tool_results=({},),
-            ),
-        ),
+        2,
     )
 
     passed_by_name = {check.name: check.passed for check in checks}
-    assert passed_by_name["required_tool_arg_values"] is True
+    assert passed_by_name["answer_facts_present"] is False
     assert passed_by_name["tool_calls_within_max"] is False
+    assert score_case(checks) == 0.0
 
 
-def _case(max_tool_calls: int | None = None) -> EvalCase:
+def test_empty_expected_actions_rejects_unexpected_recorded_action() -> None:
+    checks = check_case(
+        _case(Expected()),
+        "",
+        ({"domain": "light", "service": "turn_on", "target": {"entity_id": "light.living"}},),
+        1,
+    )
+
+    passed_by_name = {check.name: check.passed for check in checks}
+    assert passed_by_name["actions_match"] is False
+    assert score_case(checks) == 0.0
+
+
+def test_expected_action_rejects_extra_recorded_action() -> None:
+    checks = check_case(
+        _case(
+            Expected(
+                answer_facts=("done",),
+                actions=(ExpectedAction("light", "turn_on", ("light.living",)),),
+            )
+        ),
+        "done",
+        (
+            {"domain": "light", "service": "turn_on", "target": {"entity_id": "light.living"}},
+            {"domain": "lock", "service": "unlock", "target": {"entity_id": "lock.front_door"}},
+        ),
+        1,
+    )
+
+    passed_by_name = {check.name: check.passed for check in checks}
+    assert passed_by_name["actions_match"] is False
+    assert score_case(checks) == 0.0
+
+
+def _case(expected: Expected) -> EvalCase:
     return EvalCase(
         id="scoring-unit",
         category="unit",
         home="home_default",
-        user_request="When did light.living last turn on?",
+        user_request="score this outcome",
         actions_enabled=False,
         llm_context=CaseContext(),
-        expected=Expected(
-            tool_name=TOOL_GET_HISTORY,
-            execution_status="na",
-            required_tool_arg_values=(("aggregate", "last_seen"), ("to_state", "on")),
-            max_tool_calls=max_tool_calls,
-        ),
-        par_turns=1,
+        expected=expected,
     )
-
-
-def _snapshot() -> HomeSnapshot:
-    return cast(HomeSnapshot, get_home("home_default").snapshot())

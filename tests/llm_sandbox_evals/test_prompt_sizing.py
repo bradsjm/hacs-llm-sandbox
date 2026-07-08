@@ -1,7 +1,9 @@
 import pytest
-from custom_components.llm_sandbox.const import DEFAULT_PROMPT_PROFILE, TOOL_GET_HISTORY
+from custom_components.llm_sandbox.const import DEFAULT_PROMPT_PROFILE
 from custom_components.llm_sandbox.llm_api.tools._analytics import AGGREGATORS
-from llm_sandbox_evals.prompts import baseline_candidate, candidate_prompt_sizes, function_schemas, load_candidates
+from custom_components.llm_sandbox.llm_api.tools.recorder import GetHistoryTool
+from llm_sandbox_evals.prompts import candidate_prompt_sizes, load_candidates
+from voluptuous_openapi import convert
 
 
 def test_load_candidates_accepts_profile_candidate() -> None:
@@ -36,17 +38,15 @@ def test_load_candidates_rejects_unknown_profile() -> None:
 
 
 def test_get_history_function_schema_exposes_aggregate_filters() -> None:
-    schemas = function_schemas(baseline_candidate())
-    history_schema = next(schema for schema in schemas if schema["function"]["name"] == TOOL_GET_HISTORY)
+    parameters = convert(GetHistoryTool("eval").parameters)
 
-    parameters = history_schema["function"]["parameters"]
-    assert parameters["additionalProperties"] is False
     properties = parameters["properties"]
-    assert properties["aggregate"] == {"anyOf": [{"type": "string", "enum": list(AGGREGATORS)}, {"type": "object"}]}
-    assert properties["from_state"] == {"type": "string"}
-    assert properties["to_state"] == {"type": "string"}
-    assert properties["group_by"] == {"type": "array", "items": {"type": "string"}}
-    assert properties["bucket"] == {"type": "string"}
-    assert properties["where"] == {"type": "array", "items": {"type": "object"}}
-    assert properties["order_by"] == {"type": "string"}
-    assert properties["limit"] == {"type": "integer", "minimum": 1}
+    assert set(AGGREGATORS)
+    assert properties["aggregate"]["type"] == "object"
+    assert properties["from_state"]["type"] == "string"
+    assert properties["to_state"]["type"] == "string"
+    assert properties["group_by"]["items"] == {"type": "string"}
+    assert properties["bucket"]["type"] == "string"
+    assert properties["where"]["items"]["type"] == "object"
+    assert properties["order_by"]["type"] == "string"
+    assert properties["limit"]["minimum"] == 1

@@ -5,63 +5,14 @@ from custom_components.llm_sandbox.llm_api.prompts import resolve_profile
 from llm_sandbox_evals.cases import CASES
 from llm_sandbox_evals.config import EvalConfig
 from llm_sandbox_evals.harness import run_case
-from llm_sandbox_evals.models import ModelResponseError
 from llm_sandbox_evals.prompts import load_candidates
-from llm_sandbox_evals.schema import AgentStep, ToolCall
+from pydantic_ai.messages import ModelMessage, ModelResponse, ToolCallPart
+from pydantic_ai.models.function import AgentInfo, FunctionModel
+
+from llm_sandbox_evals import agent_runner
 
 
-class FailingAdapter:
-    def __init__(self, *, detail: str = "provider rejected model") -> None:
-        self.calls = 0
-        self.detail = detail
-
-    async def respond(
-        self,
-        model_id: str,
-        messages: list[dict[str, object]],
-        tools: list[dict[str, object]],
-    ) -> AgentStep:
-        _ = (model_id, messages, tools)
-        self.calls += 1
-        raise ModelResponseError("provider rejected model", detail=self.detail)
-
-
-class LoopingAdapter:
-    def __init__(self) -> None:
-        self.calls = 0
-
-    async def respond(
-        self,
-        model_id: str,
-        messages: list[dict[str, object]],
-        tools: list[dict[str, object]],
-    ) -> AgentStep:
-        _ = (model_id, messages, tools)
-        self.calls += 1
-        tool_call = ToolCall(
-            id=f"loop-{self.calls}",
-            tool_name="execute_home_code",
-            tool_args={"code": "result = 'ok'"},
-        )
-        return AgentStep(
-            tool_calls=(tool_call,),
-            text="",
-            assistant_message={
-                "role": "assistant",
-                "content": "",
-                "tool_calls": [
-                    {
-                        "id": tool_call.id,
-                        "type": "function",
-                        "function": {"name": tool_call.tool_name, "arguments": '{"code": "result = \'ok\'"}'},
-                    }
-                ],
-            },
-            raw=f"loop raw {self.calls}",
-        )
-
-
-async def test_run_case_records_model_error(tmp_path: Path) -> None:
+async def test_run_case_records_model_error(monkeypatch: object, tmp_path: Path) -> None:
     candidate = load_candidates(["baseline"], DEFAULT_PROMPT_PROFILE)[0]
     profile = resolve_profile(DEFAULT_PROMPT_PROFILE)
     config = EvalConfig(
@@ -73,17 +24,20 @@ async def test_run_case_records_model_error(tmp_path: Path) -> None:
         runs_dir=tmp_path,
     )
 
-    trace = await run_case(candidate, "bad-model", CASES[0], FailingAdapter(), profile, config)
+    def make_model(_model_id: str) -> FunctionModel:
+        return FunctionModel(_failing_model, model_name="bad-model")
+
+    monkeypatch.setattr(agent_runner, "make_model", make_model)  # type: ignore[attr-defined]
+    trace = await run_case(candidate, "bad-model", CASES[0], config, profile=profile)
 
     assert trace.score == 0.0
-    assert trace.raw_output == "provider rejected model"
+    assert trace.error is not None
     assert [(check.name, check.passed, check.required) for check in trace.checks] == [("model_error", False, True)]
 
 
-async def test_run_case_does_not_force_final_answer_after_max_turns(tmp_path: Path) -> None:
+async def test_run_case_does_not_force_final_answer_after_max_tool_calls(monkeypatch: object, tmp_path: Path) -> None:
     candidate = load_candidates(["baseline"], DEFAULT_PROMPT_PROFILE)[0]
     profile = resolve_profile(DEFAULT_PROMPT_PROFILE)
-    adapter = LoopingAdapter()
     config = EvalConfig(
         models=["looping-model"],
         candidates=[candidate.id],
@@ -91,16 +45,28 @@ async def test_run_case_does_not_force_final_answer_after_max_turns(tmp_path: Pa
         cases=None,
         homes=None,
         runs_dir=tmp_path,
-        max_turns=2,
+        max_tool_calls=2,
     )
 
-    trace = await run_case(candidate, "looping-model", CASES[0], adapter, profile, config)
+    def make_model(_model_id: str) -> FunctionModel:
+        return FunctionModel(_looping_model, model_name="looping-model")
 
-    assert adapter.calls == 2
-    assert trace.turns == 2
-    assert trace.final_answer == ""
-    assert trace.raw_output == "loop raw 2"
+    monkeypatch.setattr(agent_runner, "make_model", make_model)  # type: ignore[attr-defined]
+    trace = await run_case(candidate, "looping-model", CASES[0], config, profile=profile)
+
+    assert trace.output == ""
     assert trace.score == 0.0
-    assert ("max_turns_exceeded", False, True) in [
-        (check.name, check.passed, check.required) for check in trace.checks
+    assert trace.error is not None
+    assert [(check.name, check.passed, check.required) for check in trace.checks] == [
+        ("tool_calls_exceeded", False, True)
     ]
+
+
+async def _failing_model(_messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+    raise RuntimeError("provider rejected model")
+
+
+async def _looping_model(_messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+    return ModelResponse(
+        parts=[ToolCallPart(tool_name="execute_home_code", args={"code": "result = 'ok'"}, tool_call_id="loop")]
+    )

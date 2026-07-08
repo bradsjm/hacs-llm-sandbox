@@ -1,6 +1,6 @@
 # LLM Sandbox Evals
 
-Development-only eval harness for the `llm_sandbox` Home Assistant integration. It runs a bounded, multi-turn native tool-calling agent loop against **frozen Home Assistant fixtures**, scores final task outcomes plus turn efficiency, and ranks **prompt candidates** across a **matrix of language models** (the production model is unknown) through native `pydantic_evals` `Dataset` / `EvaluationReport` reporting.
+Development-only eval harness for the `llm_sandbox` Home Assistant integration. It runs a real `pydantic_ai.Agent` against **frozen Home Assistant fixtures**, executes the production `execute_home_code` / recorder tool cores, scores final outcomes plus tool-call efficiency, and ranks **prompt candidates** across a **matrix of language models** through native `pydantic_evals` `Dataset` / `EvaluationReport` reporting.
 
 This package is not part of the integration runtime. It never adds dependencies to `custom_components/` or `manifest.json`, and it never touches a live Home Assistant instance.
 
@@ -11,13 +11,13 @@ scripts/setup-evals                      # uv sync --group dev --group evals
 uv run --group dev --group evals python -m llm_sandbox_evals eval --models stub
 ```
 
-The `stub` adapter is deterministic and keyless — it validates the full pipeline (message render -> native tool call -> tool result -> terminal answer -> scoring -> native report) end to end. It prints the run directory and compact native analysis lines:
+The `stub` FunctionModel is deterministic and keyless — it validates the full pipeline (Pydantic AI agent -> production tool core -> terminal answer -> scoring -> native report) end to end. It prints the run directory and compact native analysis lines:
 
 ```
 eval_data/runs/20260630-164326-318981
 
 overall_mean: 0.858
-baseline/stub: mean=0.858 turns=1.000
+baseline/stub: mean=0.858 tool_calls=1.000
 ```
 
 Interactive runs also print the native `pydantic_evals` report summary on stderr. Every run writes a single `report.json` containing native analyses plus per-cell traces; re-render it with the `report` command.
@@ -38,7 +38,7 @@ Every candidate is evaluated against every model. The native `Candidate x model 
 
 ## Optimizing the prompt (DSPy COPRO)
 
-The `optimize` command uses [DSPy](https://dspy.ai/)'s COPRO instruction optimizer to rewrite the API instruction (`api_prompt`, seeded from the selected production prompt profile) and **keeps the real multi-turn harness as the metric**: COPRO proposes instruction variants, and each is scored by `run_case(...)` against one target model using native tool calls, fixture tool results, final-answer outcome checks, and turn-efficiency scoring. The winner is then optionally cross-evaluated against the model matrix.
+The `optimize` command uses [DSPy](https://dspy.ai/)'s COPRO instruction optimizer to rewrite the API instruction (`api_prompt`, seeded from the selected production prompt profile) and **keeps the real agent harness as the metric**: COPRO proposes instruction variants, and each is scored by `run_case(...)` against one target model using production tool calls, final-answer outcome checks, and tool-call efficiency scoring. The winner is then optionally cross-evaluated against the model matrix.
 
 `optimize` uses DSPy, whose `dspy.LM` path accepts litellm-style ids such as `openrouter/...`; `eval` uses Pydantic AI provider-prefixed ids such as `openrouter:...`.
 
@@ -57,7 +57,7 @@ Flags:
 - `--cases` — case ids/categories used as the optimization trainset (keep small to bound cost).
 - `--cross-eval-models` — models for the baseline-vs-optimized leaderboard.
 - `--prompt-profile PROFILE_ID` — selects one production prompt profile for the baseline candidate and runtime settings (default: `standard`). This is separate from `--candidates`, which selects eval prompt candidates.
-- `--target-reasoning` — reasoning effort for the target model during DSPy scoring and the baseline/optimized eval (e.g. `none` to disable a reasoning model that defaults to high).
+- `--target-reasoning` — reasoning effort stored for DSPy target-model configuration; the eval harness itself uses `--reasoning` / `config.reasoning_effort` when running `run_case(...)`.
 - `--proposer-reasoning` — reasoning effort for the proposer model during DSPy.
 - `--reasoning` — reasoning effort forwarded to the cross-eval harness models.
 
@@ -73,7 +73,7 @@ uv run --group dev --group evals python -m llm_sandbox_evals eval \
 ## Commands
 
 ```
-python -m llm_sandbox_evals eval [--models id,...] [--candidates id,...] [--prompt-profile ID] [--cases id,...|category,...] [--concurrency N] [--model-timeout SECONDS] [--reasoning LEVEL] [--logfire] [--runs-dir PATH]
+python -m llm_sandbox_evals eval [--models id,...] [--candidates id,...] [--prompt-profile ID] [--cases id,...|category,...] [--concurrency N] [--max-tool-calls N] [--model-timeout SECONDS] [--reasoning LEVEL] [--logfire] [--runs-dir PATH]
 python -m llm_sandbox_evals optimize --target-model ID [--proposer-model ID] [--prompt-profile ID] [--breadth N] [--depth N] [--cases ...] [--cross-eval-models ...] [--target-reasoning LEVEL] [--proposer-reasoning LEVEL] [--reasoning LEVEL] [--runs-dir PATH]
 python -m llm_sandbox_evals report <run_id> [--runs-dir PATH]
 ```
@@ -103,11 +103,11 @@ The integration's `scripts/check` is unaffected by this package. `optimize-evals
 
 ## How scoring works
 
-Each `(candidate, model, case)` runs until the assistant emits a terminal natural-language answer with no tool calls, or until `case.max_turns or config.max_turns` is reached and the harness records `max_turns_exceeded`. It then produces a score in `[0.0, 1.0]`:
+Each `(candidate, model, case)` runs until the Pydantic AI agent emits a terminal natural-language answer with no tool calls, or until `expected.max_tool_calls or config.max_tool_calls` is exceeded and the harness records `tool_calls_exceeded`. It then produces a score in `[0.0, 1.0]`:
 
-- **Required outcome gates** (any failure caps the case at `0.0`): expected tools were used, required multi-tool sequences were followed, recorder windows covered the requested period, intermediate tool evidence was present/absent, expected final-answer entity references are present/absent for read/report cases, expected actions were recorded, disabled-action cases did not execute actions, expected execution status was observed, and invisible targets were not referenced.
-- **Efficiency** applies only after required gates pass: `1.0` when tool-turns are at or below `par_turns`, otherwise `max(efficiency_floor, 1 - efficiency_k * (turns - par_turns))`.
-- Default efficiency settings are `efficiency_k=0.25`, `efficiency_floor=0.1`, `max_turns=5`.
+- **Required outcome gates** (any failure caps the case at `0.0`): required answer facts are present, excluded answer facts are absent, recorded actions match the expected side effects (or no actions were recorded when none are expected), and tool calls stay within the case cap.
+- **Efficiency** applies only after required gates pass: `min(1.0, reference_tool_calls / actual_tool_calls)` (with `actual=0` treated as `1.0`) when `reference_tool_calls` is set.
+- Default max tool calls is `8`; per-case `expected.max_tool_calls` can lower or raise the cap.
 
 ## Adding cases
 
@@ -128,15 +128,17 @@ cases:
       device_id: null
       language: en
     expected:
-      tool_name: execute_home_code
-      output_contains_entities:
+      answer_facts:
       - sensor.living_temp
-    par_turns: 1
+      answer_excludes: []
+      actions: []
+      max_tool_calls: 3
+      reference_tool_calls: 1
 ```
 
-Categories: `state_read`, `registry_read`, `recorder_read`, `action_allowed`, `action_blocked`, `complex`, `recovery`. The `expected.tool_name` must match a production tool constant (`execute_home_code`, `get_history`, `get_statistics`, `get_logbook`) and is enforced as the primary expected tool. Use `required_tool_names` and `required_tool_sequence` for multi-tool cases, `recorder_window` for bounded recorder coverage, `required_error_keys` and `required_result_paths` for recovery metadata, `max_tool_turns` / `max_successful_actions` for no-retry gates, and `evidence_contains_entities` / `evidence_excludes_entities` for tool-call/tool-result evidence. Final-answer entity checks are for read/report cases; action cases may finish with a simple acknowledgement and should be scored through recorded actions plus intermediate evidence. Set `par_turns` to the efficient tool-turn target for the case. Recorder cases can be solved with explicit ids or supported selectors (`entity_ids`/`statistic_ids`, `area_id`, `device_id`, `floor_id`, `label_id`, `domain`, bounded time window args) through native function calling.
+Categories: `state_read`, `registry_read`, `recorder_read`, `action_allowed`, `action_blocked`, `complex`, `recovery`. Expectations are outcome-only: `answer_facts`, `answer_excludes`, `actions`, `max_tool_calls`, and `reference_tool_calls`. Recorder cases can be solved with explicit ids or supported selectors (`entity_ids`/`statistic_ids`, `area_id`, `device_id`, `floor_id`, `label_id`, `domain`, bounded time window args) through native function calling.
 
-Recorder emulator results mirror production payload shapes: history returns `{"window": {...}, "entities": {"sensor.id": {"unit": "°C", "rows": [[t, state]]}}}`, statistics returns `{"window": {...}, "period": "hour", "statistics": {"sensor.id": {"fields": ["sum"], "rows": [[t, {"sum": value}]]}}}` with optional `types` selecting statistic fields, and logbook returns `{"window": {...}, "entries": [{"entity_id": "light.id", "when": t, "name": name, "message": message}]}`. Successful recorder results omit `status`; `next_cursor` appears only when more rows remain; recorder errors are `{"status":"error","error":{"key": str, "message": str, "fix"?: list[str]}}`.
+Recorder eval execution calls the production `GetHistoryTool` / `GetStatisticsTool` / `GetLogbookTool.run_query(...)` cores with a fixture-backed `RecorderSource`; result envelopes are the production envelopes, including cursor and recoverable-error shapes.
 
 ## Adding fixtures
 
@@ -152,12 +154,12 @@ Add a module under `homes/` exposing `snapshot() -> HomeSnapshot` and `recorder(
 
 `eval_data/` is gitignored. Each eval run writes a single artifact under `eval_data/runs/<run_id>/`:
 
-- `report.json` — native analyses from the `EvaluationReport`, run metadata, per-cell scores/checks, and full per-cell traces (prompt messages, raw model output, final answer, tool calls/results, recorded actions, and check results). It does not store API keys.
+- `report.json` — native analyses from the `EvaluationReport`, run metadata, per-cell scores/checks, and outcome traces (`output`, `tool_call_count`, recorded actions, checks, and error label/detail). It does not store API keys.
 
 DSPy optimization runs write `optimized_candidate.json` and `optimized_prompt.md`; if `--cross-eval-models` is set, the cross-eval run directory contains its own `report.json`.
 
 ## Scope
 
-**In:** deterministic outcome + efficiency scoring, multi-model matrix, native `pydantic_evals` `Dataset` / `EvaluationReport` integration, optional Logfire export via `--logfire`, native provider tool-calling, offline stub validation, real `execute_home_code` against frozen snapshots, fixture-backed recorder emulation, `report.json` artifacts, and DSPy COPRO instruction optimization (export-only; never auto-patches production `prompts.py`).
+**In:** deterministic outcome + tool-call efficiency scoring, multi-model matrix, native `pydantic_evals` `Dataset` / `EvaluationReport` integration, optional Logfire export via `--logfire`, Pydantic AI agent tool-calling, offline FunctionModel stub validation, production `execute_home_code` and recorder cores against frozen snapshots, `report.json` artifacts, and DSPy COPRO instruction optimization (export-only; never auto-patches production `prompts.py`).
 
 **Out of scope:** LLM-as-judge scoring, live Home Assistant or recorder DB, CI jobs that call paid models, mutable cross-turn fixture state, and auto-editing production `prompts.py`. GEPA/MIPROv2 (richer feedback-driven or joint demo+instruction search) are not yet wired; COPRO is the implemented optimizer.

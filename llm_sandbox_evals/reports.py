@@ -102,7 +102,7 @@ def render_report_summary(payload: ReportPayload) -> str:
         score_float = float(score) if isinstance(score, int | float) else 0.0
         lines.append(
             f"{cell.get('candidate_id')}/{cell.get('model_id')}/{cell.get('case_id')}: "
-            f"score={score_float:.3f} turns={cell.get('turns')}"
+            f"score={score_float:.3f} tool_calls={cell.get('tool_calls')}"
         )
     return "\n".join(lines) + "\n"
 
@@ -128,8 +128,7 @@ def _cell_json(report_case: ReportCase[MatrixCellRef, CaseTrace, MatrixCellMeta]
         "candidate_id": str(metadata["candidate_id"]),
         "model_id": str(metadata["model_id"]),
         "score": 0.0 if score is None else float(score.value),
-        "turns": trace.turns,
-        "par_turns": int(metadata["par_turns"]),
+        "tool_calls": trace.tool_call_count,
         "checks": [{"name": check.name, "passed": check.passed, "required": check.required} for check in trace.checks],
         "trace": _trace_json(trace),
     }
@@ -143,16 +142,11 @@ def _trace_json(trace: CaseTrace) -> dict[str, object]:
         "candidate_id": trace.candidate_id,
         "model_id": trace.model_id,
         "score": trace.score,
-        "turns": trace.turns,
-        "par_turns": trace.par_turns,
-        "final_answer": trace.final_answer,
-        "prompt": trace.prompt,
-        "raw_output": trace.raw_output,
-        "tool_call": trace.tool_call,
-        "tool_result": trace.tool_result,
-        "steps": [asdict(step) for step in trace.steps],
+        "output": trace.output,
+        "tool_call_count": trace.tool_call_count,
         "recorded_actions": list(trace.recorded_actions),
         "checks": [asdict(check) for check in trace.checks],
+        "error": trace.error,
     }
 
 

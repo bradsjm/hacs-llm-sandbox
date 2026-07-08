@@ -4,6 +4,7 @@ import asyncio
 import functools
 import time
 from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Literal, cast, final, override
 
@@ -37,7 +38,6 @@ from ...const import (
     TOOL_GET_LOGBOOK,
     TOOL_GET_STATISTICS,
 )
-from ...runtime import SandboxSettings
 from ...snapshot import build_recorder_snapshot
 from ...snapshot.models import HomeSnapshot
 from ...types import TranslationPlaceholders
@@ -117,6 +117,38 @@ _RECORDER_GUIDANCE: dict[str, tuple[str, list[str]]] = {
         ["Use bucket examples like {examples}."],
     ),
 }
+
+
+# Window anchor + async row fetchers. Production closures over a live hass
+# (via _production_recorder_source); eval closures over frozen fixtures.
+type HistoryRowStream = dict[str, list[HistoryRow]]
+type StatisticsRowStream = Mapping[str, list[dict[str, object]]]
+type LogbookEntryStream = list[dict[str, object]]
+
+type HistoryFetcher = Callable[[list[str], datetime, datetime], Awaitable[HistoryRowStream]]
+type StatisticsFetcher = Callable[[list[str], datetime, datetime, str, set[str]], Awaitable[StatisticsRowStream]]
+type LogbookFetcher = Callable[[list[str], datetime, datetime], Awaitable[LogbookEntryStream]]
+type BlockingRunner = Callable[[Callable[[], object]], Awaitable[object]]
+
+
+@dataclass(frozen=True, slots=True)
+class RecorderSource:
+    """Hass-free boundary carrying the window anchor and async row fetchers.
+
+    ``now`` is the window anchor (production = ``dt_util.utcnow()``; eval =
+    parsed ``snapshot.created_at``). Fetchers return the SAME row shapes the
+    recorder cores consume today. The pure cores read ``now`` and call the
+    fetchers without ever touching hass, the recorder instance, the executor,
+    or the event loop.
+    """
+
+    now: datetime
+    logbook_available: bool
+    # Production uses the HA executor; eval uses asyncio.to_thread.
+    run_in_executor: BlockingRunner
+    fetch_history: HistoryFetcher
+    fetch_statistics: StatisticsFetcher
+    fetch_logbook: LogbookFetcher
 
 
 def _candidate_ids(snapshot: HomeSnapshot, requested_entity_id: str) -> list[str] | None:
@@ -220,6 +252,8 @@ class _RecorderTool(llm.Tool):
         tool_input: llm.ToolInput,
         llm_context: llm.LLMContext,
     ) -> JsonObjectType:
+        # Schema validation FIRST: the eval path validates equivalently before
+        # calling run_query, so both surfaces see identical invalid_tool_input errors.
         try:
             data = cast(dict[str, object], self.parameters(self._normalize_args(tool_input.tool_args)))
         except Exception as err:
@@ -243,9 +277,24 @@ class _RecorderTool(llm.Tool):
             anchor_device_id=llm_context.device_id,
         )
         deadline = time.monotonic() + settings.execution_timeout_seconds
+        source = _production_recorder_source(hass, snapshot, deadline)
+        return await self.run_query(snapshot, data, source)
 
+    async def run_query(
+        self,
+        snapshot: HomeSnapshot,
+        data: dict[str, object],
+        source: RecorderSource,
+    ) -> JsonObjectType:
+        """Run the concrete recorder query and envelope recoverable failures.
+
+        Hass-free public entry: ``data`` is already schema-validated, ``source``
+        provides the window anchor and async row fetchers. Recoverable failures and
+        unexpected query errors are converted to LLM-visible envelopes here so the
+        eval path (which calls this directly) sees byte-identical output to live.
+        """
         try:
-            return await self._query(hass, snapshot, settings, deadline, data)
+            return await self._query(snapshot, data, source)
         except RecoverableToolError as err:
             return recorder_error_envelope(err.key, err.placeholders, snapshot)
         except Exception as err:  # noqa: BLE001 - recorder tools map unexpected query failures to envelopes
@@ -260,13 +309,11 @@ class _RecorderTool(llm.Tool):
 
     async def _query(
         self,
-        hass: HomeAssistant,
         snapshot: HomeSnapshot,
-        settings: SandboxSettings,
-        deadline: float,
         data: dict[str, object],
+        source: RecorderSource,
     ) -> JsonObjectType:
-        """Run the concrete recorder query."""
+        """Run the concrete recorder query body; raise RecoverableToolError on failure."""
         raise NotImplementedError
 
 
@@ -379,6 +426,7 @@ def resolve_entity_ids(snapshot: HomeSnapshot, data: dict[str, object], id_key: 
 
 
 def _clamp_window(
+    now: datetime,
     start_in: datetime | None,
     end_in: datetime | None,
     *,
@@ -392,7 +440,6 @@ def _clamp_window(
     size is applied against ``end``; otherwise the tool default window is used.
     The recorder lookback cap is always enforced.
     """
-    now = dt_util.utcnow()
     end = dt_util.as_utc(end_in or now)
     if start_in is not None:
         start = dt_util.as_utc(start_in)
@@ -410,6 +457,7 @@ def _clamp_window(
 def _resolve_window(
     data: dict[str, object],
     *,
+    now: datetime,
     default_hours: int,
     max_hours: int,
 ) -> tuple[datetime, datetime, Cursor]:
@@ -419,6 +467,7 @@ def _resolve_window(
         cursor = decode_cursor(cursor_in)
         return cursor.start, cursor.end, cursor
     start, end = _clamp_window(
+        now,
         cast(datetime | None, data.get("start")),
         cast(datetime | None, data.get("end")),
         hours=cast(float | None, data.get("hours")),
@@ -537,6 +586,61 @@ async def fetch_flat_statistics_rows(
                 }
             )
     return rows
+
+
+def _production_recorder_source(
+    hass: HomeAssistant,
+    snapshot: HomeSnapshot,
+    deadline: float,
+) -> RecorderSource:
+    """Build a RecorderSource backed by the live recorder and logbook."""
+
+    async def _fetch_history(entity_ids: list[str], start: datetime, end: datetime) -> dict[str, list[HistoryRow]]:
+        # Reuses the existing visibility-validating helper unchanged so the
+        # code.py facade seam and the tool path share one fetch implementation.
+        return await fetch_visible_history_rows(hass, snapshot, deadline, entity_ids, start, end)
+
+    async def _fetch_statistics(
+        statistic_ids: list[str], start: datetime, end: datetime, period: str, types: set[str]
+    ) -> Mapping[str, list[dict[str, object]]]:
+        return cast(
+            Mapping[str, list[dict[str, object]]],
+            await _run_query(
+                hass,
+                deadline,
+                functools.partial(
+                    statistics.statistics_during_period,
+                    hass=hass,
+                    start_time=start,
+                    end_time=end,
+                    statistic_ids=set(statistic_ids),
+                    period=cast(Literal["5minute", "day", "hour", "week", "month", "year"], period),
+                    units=None,
+                    types=cast(set[StatisticQueryType], types),
+                ),
+            ),
+        )
+
+    async def _fetch_logbook(entity_ids: list[str], start: datetime, end: datetime) -> list[dict[str, object]]:
+        event_types = async_determine_event_types(hass, entity_ids, None)
+        processor = EventProcessor(
+            hass, event_types, entity_ids, None, None, timestamp=False, include_entity_name=True
+        )
+        raw_entries = await _run_query(
+            hass, deadline, functools.partial(processor.get_events, start_day=start, end_day=end)
+        )
+        # Plain-dict conversion lives here so the core (and eval fixtures) always
+        # see JSON-mutable dicts.
+        return [dict(entry) for entry in raw_entries]
+
+    return RecorderSource(
+        now=dt_util.utcnow(),
+        logbook_available=logbook_available(hass),
+        run_in_executor=lambda fn: hass.async_add_executor_job(fn),
+        fetch_history=_fetch_history,
+        fetch_statistics=_fetch_statistics,
+        fetch_logbook=_fetch_logbook,
+    )
 
 
 def _paginate_streams(
@@ -785,11 +889,9 @@ class GetHistoryTool(_RecorderTool):
     @override
     async def _query(
         self,
-        hass: HomeAssistant,
         snapshot: HomeSnapshot,
-        settings: SandboxSettings,
-        deadline: float,
         data: dict[str, object],
+        source: RecorderSource,
     ) -> JsonObjectType:
         entity_ids = resolve_entity_ids(snapshot, data, "entity_ids")
         requested_attributes = cast(list[str] | None, data.get("attributes"))
@@ -800,23 +902,17 @@ class GetHistoryTool(_RecorderTool):
         if isinstance(aggregate, str) and not any(
             key in data for key in ("group_by", "bucket", "where", "order_by", "limit")
         ):
-            return await _aggregate_history(hass, deadline, entity_ids, data, aggregate)
+            return await _aggregate_history(source, entity_ids, data, aggregate)
         if analytics_requested:
-            return await _declarative_history(hass, snapshot, deadline, entity_ids, data)
+            return await _declarative_history(snapshot, source, entity_ids, data)
 
         start, end, cursor = _resolve_window(
             data,
+            now=source.now,
             default_hours=DEFAULT_HISTORY_WINDOW_HOURS,
             max_hours=MAX_RECORDER_LOOKBACK_HOURS,
         )
-        result = await fetch_visible_history_rows(
-            hass,
-            snapshot,
-            deadline,
-            entity_ids,
-            start,
-            end,
-        )
+        result = await source.fetch_history(entity_ids, start, end)
         budget = max(1, MAX_HISTORY_STATES // len(entity_ids))
         stream_rows: dict[str, list[list[object]]] = {}
         stream_units: dict[str, str] = {}
@@ -843,8 +939,7 @@ class GetHistoryTool(_RecorderTool):
 
 
 async def _aggregate_history(
-    hass: HomeAssistant,
-    deadline: float,
+    source: RecorderSource,
     entity_ids: list[str],
     data: dict[str, object],
     aggregate: AggregateMode,
@@ -856,6 +951,7 @@ async def _aggregate_history(
         raise RecoverableToolError("invalid_tool_input", {"error": "aggregate cannot be combined with cursor"})
 
     start, end = _clamp_window(
+        source.now,
         cast(datetime | None, data.get("start")),
         cast(datetime | None, data.get("end")),
         hours=cast(float | None, data.get("hours")),
@@ -867,26 +963,17 @@ async def _aggregate_history(
         to_state=cast(str | None, data.get("to_state")),
     )
 
-    def _fetch_and_aggregate() -> dict[str, dict[str, object]]:
-        result = history.get_significant_states(
-            hass=hass,
-            start_time=start,
-            end_time=end,
-            entity_ids=entity_ids,
-            filters=None,
-            include_start_time_state=True,
-            significant_changes_only=True,
-            minimal_response=False,
-            no_attributes=False,
-            compressed_state_format=False,
-        )
+    raw = await source.fetch_history(entity_ids, start, end)
+
+    def _summarize() -> dict[str, object]:
         aggregator = AGGREGATORS[aggregate]
         return {
-            entity_id: aggregator(cast(list[HistoryRow], list(result.get(entity_id, ()))), start, end, filters)
+            entity_id: aggregator(cast(list[HistoryRow], list(raw.get(entity_id, ()))), start, end, filters)
             for entity_id in entity_ids
         }
 
-    summary = await _run_query(hass, deadline, _fetch_and_aggregate)
+    # Keep CPU aggregation off the event loop; recorder row fetch remains deadline-bound inside the fetcher.
+    summary = await source.run_in_executor(_summarize)
     payload: dict[str, object] = {
         "window": {"start": start.isoformat(), "end": end.isoformat()},
         "mode": aggregate,
@@ -899,9 +986,8 @@ async def _aggregate_history(
 
 
 async def _declarative_history(
-    hass: HomeAssistant,
     snapshot: HomeSnapshot,
-    deadline: float,
+    source: RecorderSource,
     entity_ids: list[str],
     data: dict[str, object],
 ) -> JsonObjectType:
@@ -911,16 +997,22 @@ async def _declarative_history(
     if data.get("cursor") is not None:
         raise RecoverableToolError("invalid_tool_input", {"error": "analytics cannot be combined with cursor"})
     start, end = _clamp_window(
+        source.now,
         cast(datetime | None, data.get("start")),
         cast(datetime | None, data.get("end")),
         hours=cast(float | None, data.get("hours")),
         default_hours=DEFAULT_HISTORY_WINDOW_HOURS,
         max_hours=MAX_HISTORY_AGGREGATE_LOOKBACK_HOURS,
     )
-    raw = await fetch_visible_history_rows(hass, snapshot, deadline, entity_ids, start, end)
-    flat = flat_history_rows(raw, snapshot)
+    raw = await source.fetch_history(entity_ids, start, end)
     spec = analytics_spec_from_data(data)
-    rows = run_analytics(cast(list[HistoryRow], flat), spec, (start, end), snapshot)
+
+    def _analyze() -> list[dict[str, object]]:
+        flat = flat_history_rows(raw, snapshot)
+        return run_analytics(cast(list[HistoryRow], flat), spec, (start, end), snapshot)
+
+    # Keep CPU analytics off the event loop; recorder row fetch remains deadline-bound inside the fetcher.
+    rows = await source.run_in_executor(_analyze)
     return cast(
         JsonObjectType,
         json_safe({"window": {"start": start.isoformat(), "end": end.isoformat()}, "rows": rows}),
@@ -973,15 +1065,14 @@ class GetStatisticsTool(_RecorderTool):
     @override
     async def _query(
         self,
-        hass: HomeAssistant,
         snapshot: HomeSnapshot,
-        settings: SandboxSettings,
-        deadline: float,
         data: dict[str, object],
+        source: RecorderSource,
     ) -> JsonObjectType:
         statistic_ids = resolve_entity_ids(snapshot, data, "statistic_ids")
         start, end, cursor = _resolve_window(
             data,
+            now=source.now,
             default_hours=DEFAULT_STATISTICS_WINDOW_HOURS,
             max_hours=MAX_STATISTICS_LOOKBACK_HOURS,
         )
@@ -1007,24 +1098,11 @@ class GetStatisticsTool(_RecorderTool):
             if requested_types is not None
             else set(_ALL_STAT_QUERY_TYPES)
         )
-        result = await _run_query(
-            hass,
-            deadline,
-            functools.partial(
-                statistics.statistics_during_period,
-                hass=hass,
-                start_time=start,
-                end_time=end,
-                statistic_ids=set(statistic_ids),
-                period=period,
-                units=None,
-                types=query_types,
-            ),
-        )
+        result = await source.fetch_statistics(statistic_ids, start, end, period, cast(set[str], query_types))
 
         budget = max(1, MAX_STATISTICS_ROWS // len(statistic_ids))
         stream_rows = {
-            statistic_id: [_statistic_row_to_dict(cast(dict[str, object], row), requested_types) for row in rows]
+            statistic_id: [_statistic_row_to_dict(row, requested_types) for row in rows]
             for statistic_id, rows in result.items()
         }
         pages, next_cutoffs = _paginate_streams(stream_rows, budget=budget, cutoffs=cursor.cutoffs)
@@ -1074,31 +1152,21 @@ class GetLogbookTool(_RecorderTool):
     @override
     async def _query(
         self,
-        hass: HomeAssistant,
         snapshot: HomeSnapshot,
-        settings: SandboxSettings,
-        deadline: float,
         data: dict[str, object],
+        source: RecorderSource,
     ) -> JsonObjectType:
         entity_ids = resolve_entity_ids(snapshot, data, "entity_ids")
         start, end, cursor = _resolve_window(
             data,
+            now=source.now,
             default_hours=DEFAULT_LOGBOOK_WINDOW_HOURS,
             max_hours=MAX_RECORDER_LOOKBACK_HOURS,
         )
-        if not logbook_available(hass):
+        if not source.logbook_available:
             raise RecoverableToolError("logbook_unavailable", {})
 
-        event_types = async_determine_event_types(hass, entity_ids, None)
-        processor = EventProcessor(
-            hass, event_types, entity_ids, None, None, timestamp=False, include_entity_name=True
-        )
-        raw_entries = await _run_query(
-            hass,
-            deadline,
-            functools.partial(processor.get_events, start_day=start, end_day=end),
-        )
-        entries = [dict(entry) for entry in raw_entries]
+        entries = await source.fetch_logbook(entity_ids, start, end)
         # A logbook page is one flat stream keyed by the sentinel cutoff.
         page_entries, next_cutoff = paginate_stream(
             entries,

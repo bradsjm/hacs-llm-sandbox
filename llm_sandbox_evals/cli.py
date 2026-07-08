@@ -145,10 +145,10 @@ def _add_eval_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPar
         help="max concurrent model calls per candidate/model (default: 5).",
     )
     eval_parser.add_argument(
-        "--max-turns",
+        "--max-tool-calls",
         type=int,
         metavar="N",
-        help="max tool-calling turns per case before forcing a final answer (default: 5).",
+        help="max tool calls per case before recording a limit failure (default: 8).",
     )
     eval_parser.add_argument(
         "--model-timeout",
@@ -303,10 +303,8 @@ def _run_eval(args: argparse.Namespace) -> int:
         homes=base_config.homes,
         runs_dir=Path(args.runs_dir) if args.runs_dir else base_config.runs_dir,
         concurrency=args.concurrency if args.concurrency else base_config.concurrency,
-        max_turns=args.max_turns if args.max_turns else base_config.max_turns,
+        max_tool_calls=args.max_tool_calls if args.max_tool_calls else base_config.max_tool_calls,
         model_timeout=args.model_timeout if args.model_timeout else base_config.model_timeout,
-        efficiency_k=base_config.efficiency_k,
-        efficiency_floor=base_config.efficiency_floor,
         reasoning_effort=args.reasoning,
     )
     selected_cases = _select_cases(config.cases, config.homes)
@@ -442,7 +440,7 @@ def _eval_banner(config: EvalConfig, case_count: int) -> str:
         f"  cases       : {cases_field}\n"
         f"  runs dir    : {config.runs_dir}\n"
         f"  concurrency : {config.concurrency}\n"
-        f"  max turns   : {config.max_turns}\n"
+        f"  max tool calls: {config.max_tool_calls}\n"
         f"  model timeout: {config.model_timeout:g}s\n"
         f"  reasoning   : {reasoning}\n\n"
         f"{_STUB_NOTE}\n"

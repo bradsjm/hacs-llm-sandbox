@@ -189,10 +189,6 @@
         "expected": {
           "$ref": "#/$defs/Expected"
         },
-        "par_turns": {
-          "title": "Par Turns",
-          "type": "integer"
-        },
         "action_domains": {
           "default": [],
           "items": {
@@ -201,18 +197,6 @@
           "title": "Action Domains",
           "type": "array",
           "uniqueItems": true
-        },
-        "max_turns": {
-          "anyOf": [
-            {
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Max Turns"
         }
       },
       "required": [
@@ -222,102 +206,28 @@
         "user_request",
         "actions_enabled",
         "llm_context",
-        "expected",
-        "par_turns"
+        "expected"
       ],
       "title": "EvalCase",
       "type": "object"
     },
     "Expected": {
-      "description": "Deterministic expectations used to score a case.",
+      "description": "Outcome-only expectations: what the final answer + actions must look like.",
       "properties": {
-        "tool_name": {
-          "title": "Tool Name",
-          "type": "string"
-        },
-        "required_tool_names": {
+        "answer_facts": {
           "default": [],
           "items": {
             "type": "string"
           },
-          "title": "Required Tool Names",
+          "title": "Answer Facts",
           "type": "array"
         },
-        "required_tool_sequence": {
+        "answer_excludes": {
           "default": [],
           "items": {
             "type": "string"
           },
-          "title": "Required Tool Sequence",
-          "type": "array"
-        },
-        "execution_status": {
-          "default": "ok",
-          "title": "Execution Status",
-          "type": "string"
-        },
-        "output_contains_entities": {
-          "default": [],
-          "items": {
-            "type": "string"
-          },
-          "title": "Output Contains Entities",
-          "type": "array"
-        },
-        "output_excludes_entities": {
-          "default": [],
-          "items": {
-            "type": "string"
-          },
-          "title": "Output Excludes Entities",
-          "type": "array"
-        },
-        "evidence_contains_entities": {
-          "default": [],
-          "items": {
-            "type": "string"
-          },
-          "title": "Evidence Contains Entities",
-          "type": "array"
-        },
-        "evidence_excludes_entities": {
-          "default": [],
-          "items": {
-            "type": "string"
-          },
-          "title": "Evidence Excludes Entities",
-          "type": "array"
-        },
-        "required_error_keys": {
-          "default": [],
-          "items": {
-            "type": "string"
-          },
-          "title": "Required Error Keys",
-          "type": "array"
-        },
-        "required_result_paths": {
-          "default": [],
-          "items": {
-            "type": "string"
-          },
-          "title": "Required Result Paths",
-          "type": "array"
-        },
-        "required_tool_arg_values": {
-          "default": [],
-          "items": {
-            "maxItems": 2,
-            "minItems": 2,
-            "prefixItems": [
-              {
-                "type": "string"
-              },
-              {}
-            ],
-            "type": "array"
-          },
-          "title": "Required Tool Arg Values",
+          "title": "Answer Excludes",
           "type": "array"
         },
         "actions": {
@@ -328,53 +238,12 @@
           "title": "Actions",
           "type": "array"
         },
-        "recorder_window": {
-          "anyOf": [
-            {
-              "maxItems": 2,
-              "minItems": 2,
-              "prefixItems": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "string"
-                }
-              ],
-              "type": "array"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Recorder Window"
-        },
-        "max_tool_turns": {
-          "anyOf": [
-            {
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Max Tool Turns"
-        },
-        "max_successful_actions": {
-          "anyOf": [
-            {
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Max Successful Actions"
-        },
         "max_tool_calls": {
+          "default": 8,
+          "title": "Max Tool Calls",
+          "type": "integer"
+        },
+        "reference_tool_calls": {
           "anyOf": [
             {
               "type": "integer"
@@ -384,12 +253,9 @@
             }
           ],
           "default": null,
-          "title": "Max Tool Calls"
+          "title": "Reference Tool Calls"
         }
       },
-      "required": [
-        "tool_name"
-      ],
       "title": "Expected",
       "type": "object"
     },

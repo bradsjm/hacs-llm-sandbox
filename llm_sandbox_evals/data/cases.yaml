@@ -13,26 +13,13 @@ cases:
       device_id: null
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: ok
-      output_contains_entities:
+      answer_facts:
       - sensor.living_temp
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_excludes: []
       actions: []
-      recorder_window: null
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 1
+      max_tool_calls: 3
+      reference_tool_calls: 1
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -48,26 +35,13 @@ cases:
       device_id: null
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: ok
-      output_contains_entities:
+      answer_facts:
       - light.kitchen
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_excludes: []
       actions: []
-      recorder_window: null
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 1
+      max_tool_calls: 3
+      reference_tool_calls: 1
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -83,26 +57,13 @@ cases:
       device_id: device_assist_living
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: ok
-      output_contains_entities:
+      answer_facts:
       - fan.living_fan
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_excludes: []
       actions: []
-      recorder_window: null
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 1
+      max_tool_calls: 3
+      reference_tool_calls: 1
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -118,28 +79,15 @@ cases:
       device_id: null
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: ok
-      output_contains_entities:
+      answer_facts:
       - light.bedroom
       - sensor.bedroom_humidity
       - climate.bedroom
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_excludes: []
       actions: []
-      recorder_window: null
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 1
+      max_tool_calls: 3
+      reference_tool_calls: 1
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -155,28 +103,15 @@ cases:
       device_id: null
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: ok
-      output_contains_entities:
+      answer_facts:
       - light.living
       - light.bedroom
       - light.office_desk
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_excludes: []
       actions: []
-      recorder_window: null
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 1
+      max_tool_calls: 3
+      reference_tool_calls: 1
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -193,26 +128,13 @@ cases:
       device_id: null
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: ok
-      output_contains_entities:
+      answer_facts:
       - climate.bedroom
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_excludes: []
       actions: []
-      recorder_window: null
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 1
+      max_tool_calls: 3
+      reference_tool_calls: 1
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -228,26 +150,13 @@ cases:
       device_id: null
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: ok
-      output_contains_entities: []
-      output_excludes_entities:
+      answer_facts: []
+      answer_excludes:
       - sensor.router_uptime
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
       actions: []
-      recorder_window: null
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 1
+      max_tool_calls: 3
+      reference_tool_calls: 1
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -263,28 +172,13 @@ cases:
       device_id: null
       language: en
     expected:
-      tool_name: get_history
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: na
-      output_contains_entities:
+      answer_facts:
       - sensor.living_temp
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_excludes: []
       actions: []
-      recorder_window:
-      - '2026-06-28T12:00:00+00:00'
-      - '2026-06-29T12:00:00+00:00'
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 3
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -301,28 +195,13 @@ cases:
       device_id: null
       language: en
     expected:
-      tool_name: get_statistics
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: na
-      output_contains_entities:
+      answer_facts:
       - sensor.bedroom_humidity
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_excludes: []
       actions: []
-      recorder_window:
-      - '2026-06-28T12:00:00+00:00'
-      - '2026-06-29T12:00:00+00:00'
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 3
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -338,28 +217,13 @@ cases:
       device_id: null
       language: en
     expected:
-      tool_name: get_logbook
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: na
-      output_contains_entities:
+      answer_facts:
       - light.living
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_excludes: []
       actions: []
-      recorder_window:
-      - '2026-06-29T00:00:00+00:00'
-      - '2026-06-29T12:00:00+00:00'
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 3
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -375,29 +239,16 @@ cases:
       device_id: device_assist_living
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: ok
-      output_contains_entities: []
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_facts: []
+      answer_excludes: []
       actions:
       - domain: light
         service: turn_off
         target_entity_ids:
         - light.living
-      recorder_window: null
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 4
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -413,29 +264,16 @@ cases:
       device_id: device_assist_living
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: ok
-      output_contains_entities: []
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_facts: []
+      answer_excludes: []
       actions:
       - domain: climate
         service: set_temperature
         target_entity_ids:
         - climate.bedroom
-      recorder_window: null
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 4
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -451,29 +289,16 @@ cases:
       device_id: device_assist_living
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: ok
-      output_contains_entities: []
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_facts: []
+      answer_excludes: []
       actions:
       - domain: fan
         service: set_percentage
         target_entity_ids:
         - fan.living_fan
-      recorder_window: null
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 4
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -489,25 +314,12 @@ cases:
       device_id: device_assist_living
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: na
-      output_contains_entities: []
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_facts: []
+      answer_excludes: []
       actions: []
-      recorder_window: null
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 1
+      max_tool_calls: 3
+      reference_tool_calls: 1
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -523,26 +335,13 @@ cases:
       device_id: device_assist_living
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: ok
-      output_contains_entities: []
-      output_excludes_entities:
+      answer_facts: []
+      answer_excludes:
       - switch.garage_opener
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
       actions: []
-      recorder_window: null
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 1
+      max_tool_calls: 3
+      reference_tool_calls: 1
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -558,25 +357,12 @@ cases:
       device_id: device_assist_living
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: na
-      output_contains_entities: []
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_facts: []
+      answer_excludes: []
       actions: []
-      recorder_window: null
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 1
+      max_tool_calls: 3
+      reference_tool_calls: 1
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -593,31 +379,18 @@ cases:
       device_id: device_assist_living
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: ok
-      output_contains_entities:
+      answer_facts:
       - sensor.living_temp
       - fan.living_fan
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_excludes: []
       actions:
       - domain: fan
         service: set_percentage
         target_entity_ids:
         - fan.living_fan
-      recorder_window: null
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 6
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -634,31 +407,18 @@ cases:
       device_id: device_assist_living
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: ok
-      output_contains_entities:
+      answer_facts:
       - sensor.bedroom_humidity
       - switch.dehumidifier
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_excludes: []
       actions:
       - domain: switch
         service: toggle
         target_entity_ids:
         - switch.dehumidifier
-      recorder_window: null
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 6
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -675,26 +435,13 @@ cases:
       device_id: device_assist_living
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: ok
-      output_contains_entities:
+      answer_facts:
       - sensor.bedroom_humidity
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_excludes: []
       actions: []
-      recorder_window: null
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 6
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -711,28 +458,15 @@ cases:
       device_id: device_assist_living
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: ok
-      output_contains_entities:
+      answer_facts:
       - light.living
-      output_excludes_entities:
+      answer_excludes:
       - light.bedroom
       - light.office_desk
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
       actions: []
-      recorder_window: null
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 6
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -749,32 +483,13 @@ cases:
       device_id: device_assist_living
       language: en
     expected:
-      tool_name: get_history
-      required_tool_names:
-      - execute_home_code
-      required_tool_sequence:
-      - execute_home_code
-      - get_history
-      execution_status: ok
-      output_contains_entities:
+      answer_facts:
       - sensor.living_temp
-      output_excludes_entities: []
-      evidence_contains_entities:
-      - sensor.living_temp
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_excludes: []
       actions: []
-      recorder_window:
-      - '2026-06-28T12:00:00+00:00'
-      - '2026-06-29T12:00:00+00:00'
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 3
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -791,35 +506,17 @@ cases:
       device_id: device_assist_living
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names:
-      - get_history
-      required_tool_sequence:
-      - get_history
-      - execute_home_code
-      execution_status: ok
-      output_contains_entities: []
-      output_excludes_entities: []
-      evidence_contains_entities:
+      answer_facts:
       - sensor.living_temp
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_excludes: []
       actions:
       - domain: fan
         service: set_percentage
         target_entity_ids:
         - fan.living_fan
-      recorder_window:
-      - '2026-06-28T12:00:00+00:00'
-      - '2026-06-29T12:00:00+00:00'
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 6
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -835,35 +532,17 @@ cases:
       device_id: device_assist_living
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names:
-      - get_logbook
-      required_tool_sequence:
-      - get_logbook
-      - execute_home_code
-      execution_status: ok
-      output_contains_entities: []
-      output_excludes_entities: []
-      evidence_contains_entities:
+      answer_facts:
       - light.living
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_excludes: []
       actions:
       - domain: light
         service: turn_off
         target_entity_ids:
         - light.living
-      recorder_window:
-      - '2026-06-29T00:00:00+00:00'
-      - '2026-06-29T12:00:00+00:00'
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 6
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -880,30 +559,13 @@ cases:
       device_id: device_assist_living
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names:
-      - get_logbook
-      required_tool_sequence: []
-      execution_status: ok
-      output_contains_entities:
+      answer_facts:
       - light.living
-      output_excludes_entities: []
-      evidence_contains_entities:
-      - light.living
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_excludes: []
       actions: []
-      recorder_window:
-      - '2026-06-29T00:00:00+00:00'
-      - '2026-06-29T12:00:00+00:00'
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 6
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -920,32 +582,14 @@ cases:
       device_id: null
       language: en
     expected:
-      tool_name: get_history
-      required_tool_names:
-      - get_statistics
-      required_tool_sequence: []
-      execution_status: na
-      output_contains_entities:
+      answer_facts:
       - sensor.living_temp
       - sensor.bedroom_humidity
-      output_excludes_entities: []
-      evidence_contains_entities:
-      - sensor.living_temp
-      - sensor.bedroom_humidity
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_excludes: []
       actions: []
-      recorder_window:
-      - '2026-06-28T12:00:00+00:00'
-      - '2026-06-29T12:00:00+00:00'
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 1
+      max_tool_calls: 3
+      reference_tool_calls: 1
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -961,32 +605,13 @@ cases:
       device_id: device_assist_living
       language: en
     expected:
-      tool_name: get_logbook
-      required_tool_names:
-      - execute_home_code
-      required_tool_sequence:
-      - execute_home_code
-      - get_logbook
-      execution_status: ok
-      output_contains_entities:
+      answer_facts:
       - light.living
-      output_excludes_entities: []
-      evidence_contains_entities:
-      - light.living
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_excludes: []
       actions: []
-      recorder_window:
-      - '2026-06-29T00:00:00+00:00'
-      - '2026-06-29T12:00:00+00:00'
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 3
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -1003,27 +628,13 @@ cases:
       device_id: device_assist_living
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: ok
-      output_contains_entities: []
-      output_excludes_entities:
+      answer_facts: []
+      answer_excludes:
       - switch.garage_opener
-      evidence_contains_entities: []
-      evidence_excludes_entities:
-      - switch.garage_opener
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
       actions: []
-      recorder_window: null
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 1
+      max_tool_calls: 3
+      reference_tool_calls: 1
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -1041,34 +652,13 @@ cases:
       device_id: device_assist_living
       language: en
     expected:
-      tool_name: get_history
-      required_tool_names:
-      - execute_home_code
-      required_tool_sequence:
-      - get_history
-      - execute_home_code
-      - get_history
-      execution_status: ok
-      output_contains_entities:
+      answer_facts:
       - sensor.living_temp
-      output_excludes_entities: []
-      evidence_contains_entities:
-      - sensor.living_temp
-      evidence_excludes_entities: []
-      required_error_keys:
-      - entity_not_visible
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_excludes: []
       actions: []
-      recorder_window:
-      - '2026-06-28T12:00:00+00:00'
-      - '2026-06-29T12:00:00+00:00'
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 3
+      max_tool_calls: 3
+      reference_tool_calls: 3
     action_domains: []
-    max_turns: 4
   metadata: null
   expected_output: null
   evaluators: []
@@ -1086,33 +676,13 @@ cases:
       device_id: device_assist_living
       language: en
     expected:
-      tool_name: get_history
-      required_tool_names: []
-      required_tool_sequence:
-      - get_history
-      - get_history
-      execution_status: na
-      output_contains_entities:
+      answer_facts:
       - sensor.living_temp
-      output_excludes_entities: []
-      evidence_contains_entities:
-      - sensor.living_temp
-      evidence_excludes_entities: []
-      required_error_keys:
-      - entity_not_visible
-      required_result_paths:
-      - error.fix
-      required_tool_arg_values: []
+      answer_excludes: []
       actions: []
-      recorder_window:
-      - '2026-06-28T12:00:00+00:00'
-      - '2026-06-29T12:00:00+00:00'
-      max_tool_turns: 2
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 5
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: 3
   metadata: null
   expected_output: null
   evaluators: []
@@ -1130,30 +700,13 @@ cases:
       device_id: device_assist_living
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names: []
-      required_tool_sequence:
-      - execute_home_code
-      - execute_home_code
-      execution_status: ok
-      output_contains_entities:
+      answer_facts:
       - light.kitchen
-      output_excludes_entities: []
-      evidence_contains_entities:
-      - light.kitchen
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths:
-      - note
-      required_tool_arg_values: []
+      answer_excludes: []
       actions: []
-      recorder_window: null
-      max_tool_turns: 2
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 5
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: 3
   metadata: null
   expected_output: null
   evaluators: []
@@ -1171,33 +724,16 @@ cases:
       device_id: device_assist_living
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names: []
-      required_tool_sequence:
-      - execute_home_code
-      - execute_home_code
-      execution_status: ok
-      output_contains_entities: []
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys:
-      - service_target_not_visible
-      required_result_paths:
-      - actions.error.fix
-      required_tool_arg_values: []
+      answer_facts: []
+      answer_excludes: []
       actions:
       - domain: light
         service: turn_off
         target_entity_ids:
         - light.living
-      recorder_window: null
-      max_tool_turns: 2
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 5
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: 3
   metadata: null
   expected_output: null
   evaluators: []
@@ -1216,33 +752,16 @@ cases:
       device_id: device_assist_living
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names: []
-      required_tool_sequence:
-      - execute_home_code
-      - execute_home_code
-      execution_status: ok
-      output_contains_entities: []
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys:
-      - service_not_found
-      required_result_paths:
-      - actions.error.fix
-      required_tool_arg_values: []
+      answer_facts: []
+      answer_excludes: []
       actions:
       - domain: light
         service: turn_on
         target_entity_ids:
         - light.living
-      recorder_window: null
-      max_tool_turns: 2
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 5
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: 3
   metadata: null
   expected_output: null
   evaluators: []
@@ -1260,30 +779,16 @@ cases:
       device_id: device_assist_living
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: ok
-      output_contains_entities: []
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths:
-      - actions.resolved_from
-      required_tool_arg_values: []
+      answer_facts: []
+      answer_excludes: []
       actions:
       - domain: fan
         service: set_percentage
         target_entity_ids:
         - fan.living_fan
-      recorder_window: null
-      max_tool_turns: 1
-      max_successful_actions: 1
-      max_tool_calls: null
-    par_turns: 1
+      max_tool_calls: 5
+      reference_tool_calls: 1
     action_domains: []
-    max_turns: 3
   metadata: null
   expected_output: null
   evaluators: []
@@ -1299,26 +804,13 @@ cases:
       device_id: null
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: ok
-      output_contains_entities:
+      answer_facts:
       - sensor.tempest_temperature
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_excludes: []
       actions: []
-      recorder_window: null
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 1
+      max_tool_calls: 3
+      reference_tool_calls: 1
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -1334,26 +826,13 @@ cases:
       device_id: null
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: ok
-      output_contains_entities:
+      answer_facts:
       - climate.thermostat
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_excludes: []
       actions: []
-      recorder_window: null
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 1
+      max_tool_calls: 3
+      reference_tool_calls: 1
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -1369,26 +848,13 @@ cases:
       device_id: null
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: ok
-      output_contains_entities:
+      answer_facts:
       - cover.garage_overhead_door
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_excludes: []
       actions: []
-      recorder_window: null
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 1
+      max_tool_calls: 3
+      reference_tool_calls: 1
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -1404,26 +870,13 @@ cases:
       device_id: null
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: ok
-      output_contains_entities:
+      answer_facts:
       - cover.office_blinds
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_excludes: []
       actions: []
-      recorder_window: null
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 1
+      max_tool_calls: 3
+      reference_tool_calls: 1
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -1439,26 +892,13 @@ cases:
       device_id: null
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: ok
-      output_contains_entities:
+      answer_facts:
       - cover.guest_room_blinds_cover
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_excludes: []
       actions: []
-      recorder_window: null
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 1
+      max_tool_calls: 3
+      reference_tool_calls: 1
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -1474,27 +914,14 @@ cases:
       device_id: null
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: ok
-      output_contains_entities:
+      answer_facts:
       - light.master_bedroom_lights_group
       - light.office_lights_group
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_excludes: []
       actions: []
-      recorder_window: null
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 1
+      max_tool_calls: 3
+      reference_tool_calls: 1
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -1510,28 +937,13 @@ cases:
       device_id: null
       language: en
     expected:
-      tool_name: get_history
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: na
-      output_contains_entities:
+      answer_facts:
       - sensor.tempest_temperature
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_excludes: []
       actions: []
-      recorder_window:
-      - '2026-06-28T12:00:00+00:00'
-      - '2026-06-29T12:00:00+00:00'
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 3
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -1547,28 +959,13 @@ cases:
       device_id: null
       language: en
     expected:
-      tool_name: get_statistics
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: na
-      output_contains_entities:
+      answer_facts:
       - sensor.tempest_humidity
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_excludes: []
       actions: []
-      recorder_window:
-      - '2026-06-28T12:00:00+00:00'
-      - '2026-06-29T12:00:00+00:00'
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 3
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -1584,28 +981,13 @@ cases:
       device_id: null
       language: en
     expected:
-      tool_name: get_logbook
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: na
-      output_contains_entities:
+      answer_facts:
       - light.living_room_lights_group
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_excludes: []
       actions: []
-      recorder_window:
-      - '2026-06-28T12:00:00+00:00'
-      - '2026-06-29T12:00:00+00:00'
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 3
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -1621,29 +1003,16 @@ cases:
       device_id: null
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: ok
-      output_contains_entities: []
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_facts: []
+      answer_excludes: []
       actions:
       - domain: light
         service: turn_on
         target_entity_ids:
         - light.deck_sconce
-      recorder_window: null
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 4
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -1659,29 +1028,16 @@ cases:
       device_id: null
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: ok
-      output_contains_entities: []
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_facts: []
+      answer_excludes: []
       actions:
       - domain: cover
         service: close_cover
         target_entity_ids:
         - cover.office_blinds
-      recorder_window: null
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 4
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -1697,29 +1053,16 @@ cases:
       device_id: null
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: ok
-      output_contains_entities: []
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_facts: []
+      answer_excludes: []
       actions:
       - domain: fan
         service: set_percentage
         target_entity_ids:
         - fan.living_room_fan_speed
-      recorder_window: null
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 4
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -1735,25 +1078,12 @@ cases:
       device_id: null
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: na
-      output_contains_entities: []
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_facts: []
+      answer_excludes: []
       actions: []
-      recorder_window: null
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 1
+      max_tool_calls: 3
+      reference_tool_calls: 1
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -1769,25 +1099,12 @@ cases:
       device_id: null
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: na
-      output_contains_entities: []
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_facts: []
+      answer_excludes: []
       actions: []
-      recorder_window: null
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 1
+      max_tool_calls: 3
+      reference_tool_calls: 1
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -1804,35 +1121,17 @@ cases:
       device_id: null
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names:
-      - get_history
-      required_tool_sequence:
-      - get_history
-      - execute_home_code
-      execution_status: ok
-      output_contains_entities: []
-      output_excludes_entities: []
-      evidence_contains_entities:
+      answer_facts:
       - sensor.tempest_temperature
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_excludes: []
       actions:
       - domain: cover
         service: close_cover
         target_entity_ids:
         - cover.office_blinds
-      recorder_window:
-      - '2026-06-28T12:00:00+00:00'
-      - '2026-06-29T12:00:00+00:00'
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 6
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -1849,30 +1148,17 @@ cases:
       device_id: null
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: ok
-      output_contains_entities:
+      answer_facts:
       - sensor.tempest_temperature
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_excludes: []
       actions:
       - domain: cover
         service: close_cover
         target_entity_ids:
         - cover.office_blinds
-      recorder_window: null
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 6
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -1888,27 +1174,14 @@ cases:
       device_id: null
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: ok
-      output_contains_entities:
+      answer_facts:
       - light.master_bedroom_lights_group
       - light.office_lights_group
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_excludes: []
       actions: []
-      recorder_window: null
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 6
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -1926,32 +1199,13 @@ cases:
       device_id: device_assist_living
       language: en
     expected:
-      tool_name: get_history
-      required_tool_names: []
-      required_tool_sequence:
-      - get_history
-      - get_history
-      execution_status: na
-      output_contains_entities:
+      answer_facts:
       - light.living
-      output_excludes_entities: []
-      evidence_contains_entities:
-      - light.living
-      evidence_excludes_entities: []
-      required_error_keys:
-      - selector_no_match
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_excludes: []
       actions: []
-      recorder_window:
-      - '2026-06-28T12:00:00+00:00'
-      - '2026-06-29T12:00:00+00:00'
-      max_tool_turns: 2
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 5
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: 3
   metadata: null
   expected_output: null
   evaluators: []
@@ -1969,32 +1223,13 @@ cases:
       device_id: device_assist_living
       language: en
     expected:
-      tool_name: get_history
-      required_tool_names: []
-      required_tool_sequence:
-      - get_history
-      - get_history
-      execution_status: na
-      output_contains_entities:
+      answer_facts:
       - sensor.living_temp
-      output_excludes_entities: []
-      evidence_contains_entities:
-      - sensor.living_temp
-      evidence_excludes_entities: []
-      required_error_keys:
-      - invalid_tool_input
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_excludes: []
       actions: []
-      recorder_window:
-      - '2026-06-28T12:00:00+00:00'
-      - '2026-06-29T12:00:00+00:00'
-      max_tool_turns: 2
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 5
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: 3
   metadata: null
   expected_output: null
   evaluators: []
@@ -2011,29 +1246,13 @@ cases:
       device_id: device_assist_living
       language: en
     expected:
-      tool_name: get_statistics
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: na
-      output_contains_entities:
+      answer_facts:
       - sensor.office_power
-      output_excludes_entities: []
-      evidence_contains_entities:
-      - sensor.office_power
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_excludes: []
       actions: []
-      recorder_window:
-      - '2026-06-28T12:00:00+00:00'
-      - '2026-06-29T12:00:00+00:00'
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 5
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -2051,26 +1270,13 @@ cases:
       device_id: device_assist_living
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: ok
-      output_contains_entities:
+      answer_facts:
       - light.living
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_excludes: []
       actions: []
-      recorder_window: null
-      max_tool_turns: 2
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 5
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: 3
   metadata: null
   expected_output: null
   evaluators: []
@@ -2087,30 +1293,13 @@ cases:
       device_id: null
       language: en
     expected:
-      tool_name: get_history
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: na
-      output_contains_entities:
+      answer_facts:
       - light.living
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths:
-      - summary
-      - mode
-      required_tool_arg_values: []
+      answer_excludes: []
       actions: []
-      recorder_window:
-      - '2026-06-28T12:00:00+00:00'
-      - '2026-06-29T12:00:00+00:00'
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 3
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -2127,29 +1316,13 @@ cases:
       device_id: null
       language: en
     expected:
-      tool_name: get_history
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: na
-      output_contains_entities:
+      answer_facts:
       - light.living
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths:
-      - summary
-      required_tool_arg_values: []
+      answer_excludes: []
       actions: []
-      recorder_window:
-      - '2026-06-28T12:00:00+00:00'
-      - '2026-06-29T12:00:00+00:00'
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 3
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -2166,34 +1339,13 @@ cases:
       device_id: null
       language: en
     expected:
-      tool_name: get_history
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: na
-      output_contains_entities:
+      answer_facts:
       - light.living
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths:
-      - summary
-      - mode
-      required_tool_arg_values:
-      - - aggregate
-        - last_seen
-      - - to_state
-        - 'on'
+      answer_excludes: []
       actions: []
-      recorder_window:
-      - '2026-06-28T12:00:00+00:00'
-      - '2026-06-29T12:00:00+00:00'
-      max_tool_turns: null
-      max_successful_actions: null
       max_tool_calls: 1
-    par_turns: 2
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -2210,30 +1362,13 @@ cases:
       device_id: null
       language: en
     expected:
-      tool_name: get_history
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: na
-      output_contains_entities:
+      answer_facts:
       - light.living
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths:
-      - summary
-      - mode
-      required_tool_arg_values: []
+      answer_excludes: []
       actions: []
-      recorder_window:
-      - '2026-06-28T12:00:00+00:00'
-      - '2026-06-29T12:00:00+00:00'
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 3
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -2250,29 +1385,13 @@ cases:
       device_id: null
       language: en
     expected:
-      tool_name: get_history
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: na
-      output_contains_entities:
+      answer_facts:
       - sensor.living_temp
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths:
-      - entities
-      required_tool_arg_values: []
+      answer_excludes: []
       actions: []
-      recorder_window:
-      - '2026-06-28T12:00:00+00:00'
-      - '2026-06-29T12:00:00+00:00'
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 3
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -2289,29 +1408,13 @@ cases:
       device_id: null
       language: en
     expected:
-      tool_name: get_statistics
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: na
-      output_contains_entities:
+      answer_facts:
       - sensor.bedroom_humidity
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths:
-      - period
-      required_tool_arg_values: []
+      answer_excludes: []
       actions: []
-      recorder_window:
-      - '2026-06-28T12:00:00+00:00'
-      - '2026-06-29T12:00:00+00:00'
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 3
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -2328,29 +1431,13 @@ cases:
       device_id: null
       language: en
     expected:
-      tool_name: get_statistics
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: na
-      output_contains_entities:
+      answer_facts:
       - sensor.bedroom_humidity
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths:
-      - statistics
-      required_tool_arg_values: []
+      answer_excludes: []
       actions: []
-      recorder_window:
-      - '2026-06-28T12:00:00+00:00'
-      - '2026-06-29T12:00:00+00:00'
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 3
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -2367,29 +1454,13 @@ cases:
       device_id: null
       language: en
     expected:
-      tool_name: get_history
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: na
-      output_contains_entities:
+      answer_facts:
       - light.living
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths:
-      - next_cursor
-      required_tool_arg_values: []
+      answer_excludes: []
       actions: []
-      recorder_window:
-      - '2026-06-28T12:00:00+00:00'
-      - '2026-06-29T12:00:00+00:00'
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 3
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -2406,28 +1477,13 @@ cases:
       device_id: null
       language: en
     expected:
-      tool_name: get_history
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: na
-      output_contains_entities: []
-      output_excludes_entities: []
-      evidence_contains_entities:
+      answer_facts:
       - light.master_bedroom_lights_group
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_excludes: []
       actions: []
-      recorder_window:
-      - '2026-06-28T12:00:00+00:00'
-      - '2026-06-29T12:00:00+00:00'
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 3
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -2444,28 +1500,13 @@ cases:
       device_id: null
       language: en
     expected:
-      tool_name: get_history
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: na
-      output_contains_entities:
+      answer_facts:
       - sensor.living_temp
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_excludes: []
       actions: []
-      recorder_window:
-      - '2026-06-28T06:00:00+00:00'
-      - '2026-06-29T06:00:00+00:00'
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 3
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -2481,29 +1522,13 @@ cases:
       device_id: null
       language: en
     expected:
-      tool_name: get_statistics
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: na
-      output_contains_entities:
+      answer_facts:
       - sensor.bedroom_humidity
-      output_excludes_entities: []
-      evidence_contains_entities:
-      - sensor.bedroom_humidity
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_excludes: []
       actions: []
-      recorder_window:
-      - '2026-06-28T12:00:00+00:00'
-      - '2026-06-29T12:00:00+00:00'
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 3
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -2519,27 +1544,14 @@ cases:
       device_id: null
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: ok
-      output_contains_entities: []
-      output_excludes_entities:
+      answer_facts: []
+      answer_excludes:
       - sensor.pool_temperature
       - sensor.pool_temp
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
       actions: []
-      recorder_window: null
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 3
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -2555,29 +1567,13 @@ cases:
       device_id: null
       language: en
     expected:
-      tool_name: get_logbook
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: na
-      output_contains_entities: []
-      output_excludes_entities: []
-      evidence_contains_entities:
+      answer_facts:
       - sensor.bedroom_humidity
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths:
-      - entries
-      required_tool_arg_values: []
+      answer_excludes: []
       actions: []
-      recorder_window:
-      - '2026-06-29T00:00:00+00:00'
-      - '2026-06-29T12:00:00+00:00'
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 3
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -2593,28 +1589,14 @@ cases:
       device_id: device_assist_living
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: ok
-      output_contains_entities:
+      answer_facts:
       - sensor.note
-      output_excludes_entities:
+      answer_excludes:
       - switch.garage_opener
-      evidence_contains_entities: []
-      evidence_excludes_entities:
-      - switch.garage_opener
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
       actions: []
-      recorder_window: null
-      max_tool_turns: null
-      max_successful_actions: 0
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 3
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -2630,26 +1612,13 @@ cases:
       device_id: device_assist_living
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: ok
-      output_contains_entities:
+      answer_facts:
       - light.living
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_excludes: []
       actions: []
-      recorder_window: null
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 6
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -2666,26 +1635,13 @@ cases:
       device_id: device_assist_living
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: ok
-      output_contains_entities:
+      answer_facts:
       - sensor.living_temp
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_excludes: []
       actions: []
-      recorder_window: null
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 6
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -2701,26 +1657,13 @@ cases:
       device_id: device_assist_living
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: ok
-      output_contains_entities:
+      answer_facts:
       - sensor.bedroom_humidity
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_excludes: []
       actions: []
-      recorder_window: null
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 6
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -2736,26 +1679,13 @@ cases:
       device_id: device_assist_living
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: ok
-      output_contains_entities:
+      answer_facts:
       - light.living
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_excludes: []
       actions: []
-      recorder_window: null
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 3
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -2772,26 +1702,13 @@ cases:
       device_id: null
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: ok
-      output_contains_entities:
+      answer_facts:
       - sensor.tempest_temperature
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_excludes: []
       actions: []
-      recorder_window: null
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 6
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -2807,26 +1724,13 @@ cases:
       device_id: device_assist_living
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: ok
-      output_contains_entities:
+      answer_facts:
       - climate.bedroom
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_excludes: []
       actions: []
-      recorder_window: null
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 6
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -2842,26 +1746,13 @@ cases:
       device_id: device_assist_living
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: ok
-      output_contains_entities:
+      answer_facts:
       - climate.bedroom
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_excludes: []
       actions: []
-      recorder_window: null
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 3
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -2877,29 +1768,16 @@ cases:
       device_id: device_assist_living
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: ok
-      output_contains_entities: []
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_facts: []
+      answer_excludes: []
       actions:
       - domain: light
         service: turn_off
         target_entity_ids:
         - light.living
-      recorder_window: null
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 4
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -2915,30 +1793,17 @@ cases:
       device_id: device_assist_living
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: ok
-      output_contains_entities: []
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_facts: []
+      answer_excludes: []
       actions:
       - domain: light
         service: turn_on
         target_entity_ids:
         - light.living
         - light.bedroom
-      recorder_window: null
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 4
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -2954,30 +1819,17 @@ cases:
       device_id: device_assist_living
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: ok
-      output_contains_entities: []
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_facts: []
+      answer_excludes: []
       actions:
       - domain: light
         service: turn_off
         target_entity_ids:
         - light.bedroom
         - light.office_desk
-      recorder_window: null
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 4
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -2993,17 +1845,8 @@ cases:
       device_id: device_assist_living
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: ok
-      output_contains_entities: []
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_facts: []
+      answer_excludes: []
       actions:
       - domain: light
         service: turn_off
@@ -3013,13 +1856,9 @@ cases:
         service: set_percentage
         target_entity_ids:
         - fan.living_fan
-      recorder_window: null
-      max_tool_turns: null
-      max_successful_actions: 2
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 4
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -3035,29 +1874,16 @@ cases:
       device_id: device_assist_living
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: ok
-      output_contains_entities: []
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_facts: []
+      answer_excludes: []
       actions:
       - domain: climate
         service: set_temperature
         target_entity_ids:
         - climate.bedroom
-      recorder_window: null
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 4
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -3073,28 +1899,15 @@ cases:
       device_id: device_assist_living
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: ok
-      output_contains_entities: []
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_facts: []
+      answer_excludes: []
       actions:
       - domain: notify
         service: send_message
         target_entity_ids: []
-      recorder_window: null
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 4
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -3110,25 +1923,12 @@ cases:
       device_id: null
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: ok
-      output_contains_entities: []
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_facts: []
+      answer_excludes: []
       actions: []
-      recorder_window: null
-      max_tool_turns: null
-      max_successful_actions: 0
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 3
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -3144,27 +1944,13 @@ cases:
       device_id: device_assist_living
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: ok
-      output_contains_entities: []
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys:
-      - action_domain_not_allowed
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_facts: []
+      answer_excludes: []
       actions: []
-      recorder_window: null
-      max_tool_turns: null
-      max_successful_actions: 0
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 3
+      reference_tool_calls: 2
     action_domains:
     - light
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -3180,29 +1966,16 @@ cases:
       device_id: device_assist_living
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: ok
-      output_contains_entities: []
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_facts: []
+      answer_excludes: []
       actions:
       - domain: switch
         service: toggle
         target_entity_ids:
         - switch.dehumidifier
-      recorder_window: null
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 4
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -3219,26 +1992,13 @@ cases:
       device_id: null
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: ok
-      output_contains_entities:
+      answer_facts:
       - light.area_1_1_ceiling
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_excludes: []
       actions: []
-      recorder_window: null
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 6
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -3255,26 +2015,13 @@ cases:
       device_id: null
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: ok
-      output_contains_entities:
+      answer_facts:
       - light.area_1_1_ceiling
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_excludes: []
       actions: []
-      recorder_window: null
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 3
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -3291,26 +2038,13 @@ cases:
       device_id: device_assist_living
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: ok
-      output_contains_entities:
+      answer_facts:
       - sensor.living_temp
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_excludes: []
       actions: []
-      recorder_window: null
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 6
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -3326,26 +2060,12 @@ cases:
       device_id: device_assist_living
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: ok
-      output_contains_entities: []
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths:
-      - output
-      required_tool_arg_values: []
+      answer_facts: []
+      answer_excludes: []
       actions: []
-      recorder_window: null
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 6
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -3361,26 +2081,13 @@ cases:
       device_id: device_router
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: ok
-      output_contains_entities:
+      answer_facts:
       - sensor.living_temp
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths: []
-      required_tool_arg_values: []
+      answer_excludes: []
       actions: []
-      recorder_window: null
-      max_tool_turns: null
-      max_successful_actions: null
-      max_tool_calls: null
-    par_turns: 2
+      max_tool_calls: 3
+      reference_tool_calls: 2
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -3389,37 +2096,20 @@ cases:
     id: sql_query_visible_entities_by_domain
     category: complex
     home: home_default
-    user_request: Use execute_home_code with await hass.query(...) to return SQL
-      rows for the light and sensor domains with columns domain, entity_count,
-      and example_entity.
+    user_request: Use execute_home_code with await hass.query(...) to return SQL rows
+      for the light and sensor domains with columns domain, entity_count, and example_entity.
     actions_enabled: false
     llm_context:
       platform: test
       device_id: null
       language: en
     expected:
-      tool_name: execute_home_code
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: ok
-      output_contains_entities: []
-      output_excludes_entities: []
-      evidence_contains_entities: []
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths:
-      - output.domain
-      - output.entity_count
-      - output.example_entity
-      required_tool_arg_values: []
+      answer_facts: []
+      answer_excludes: []
       actions: []
-      recorder_window: null
-      max_tool_turns: null
-      max_successful_actions: null
       max_tool_calls: 1
-    par_turns: 1
+      reference_tool_calls: 1
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []
@@ -3438,46 +2128,14 @@ cases:
       device_id: null
       language: en
     expected:
-      tool_name: get_history
-      required_tool_names: []
-      required_tool_sequence: []
-      execution_status: na
-      output_contains_entities: []
-      output_excludes_entities: []
-      evidence_contains_entities:
+      answer_facts:
       - sensor.living_temp
       - sensor.bedroom_humidity
-      evidence_excludes_entities: []
-      required_error_keys: []
-      required_result_paths:
-      - rows.bucket
-      - rows.domain
-      - rows.value_mean
-      required_tool_arg_values:
-      - - aggregate.value
-        - - mean
-      - - group_by
-        - - domain
-      - - bucket
-        - 12h
-      - - where
-        - - field: domain
-            op: eq
-            value: sensor
-      - - order_by
-        - -value_mean
-      - - limit
-        - 2
+      answer_excludes: []
       actions: []
-      recorder_window:
-      - '2026-06-28T12:00:00+00:00'
-      - '2026-06-29T12:00:00+00:00'
-      max_tool_turns: null
-      max_successful_actions: null
       max_tool_calls: 1
-    par_turns: 1
+      reference_tool_calls: 1
     action_domains: []
-    max_turns: null
   metadata: null
   expected_output: null
   evaluators: []

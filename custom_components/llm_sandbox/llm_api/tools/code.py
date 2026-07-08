@@ -17,6 +17,7 @@ from homeassistant.helpers import llm
 from homeassistant.util.json import JsonObjectType
 
 from ...const import TOOL_EXECUTE_HOME_CODE
+from ...runtime import SandboxRuntime
 from ...snapshot import build_snapshot
 from ...snapshot.models import HomeSnapshot
 from ...types import ProposedAction
@@ -60,9 +61,81 @@ class ExecuteHomeCodeTool(llm.Tool):
         tool_input: llm.ToolInput,
         llm_context: llm.LLMContext,
     ) -> JsonObjectType:
+        # Schema validation FIRST: eval validates equivalently before calling
+        # run_execute, so both surfaces see identical invalid_tool_input errors.
         try:
             data = cast(ToolArgs, self.parameters(tool_input.tool_args))
-            return await _execute(hass, self.entry_id, data, llm_context)
+        except Exception as err:
+            mapped = tool_error_from_exception(err)
+            if mapped is None:
+                raise
+            key, placeholders = mapped
+            return cast(JsonObjectType, setup_error_payload(key, placeholders))
+
+        setup_error = _require_loaded_entry_error(hass, self.entry_id)
+        if setup_error is not None:
+            key, placeholders = setup_error
+            return cast(JsonObjectType, setup_error_payload(key, placeholders))
+        sandbox_runtime = _require_sandbox_runtime(hass, self.entry_id)
+        settings = sandbox_runtime.settings
+        deadline = time.monotonic() + settings.execution_timeout_seconds
+
+        # Build a fresh Monty view on the event loop before execution.
+        snapshot = build_snapshot(
+            hass,
+            scope=settings.scope,
+            anchor_device_id=llm_context.device_id,
+        )
+        runtime = _production_runtime(hass, snapshot, llm_context, sandbox_runtime, deadline)
+        return await self.run_execute(snapshot, data, llm_context, runtime)
+
+    async def run_execute(
+        self,
+        snapshot: HomeSnapshot,
+        data: ToolArgs,
+        llm_context: llm.LLMContext,
+        runtime: RuntimeContext,
+    ) -> JsonObjectType:
+        """Run execute_home_code and envelope recoverable failures.
+
+        Hass-free public entry: ``data`` is already schema-validated, ``snapshot``
+        is already built, and ``runtime`` supplies host-only seams. Error mapping
+        lives here so eval calls see byte-identical output to live calls.
+        """
+        try:
+            # Build the LLM context view from the live request metadata.
+            real_context = llm_context.context if llm_context.context is not None else Context()
+            area_id, area_name, floor_id, floor_name = _snapshot_location(snapshot, llm_context.device_id)
+            safe_context = build_llm_context(
+                platform=llm_context.platform,
+                context_id=real_context.id,
+                parent_id=real_context.parent_id,
+                user_id=real_context.user_id,
+                language=llm_context.language,
+                assistant=llm_context.assistant,
+                device_id=llm_context.device_id,
+                area_id=area_id,
+                area_name=area_name,
+                floor_id=floor_id,
+                floor_name=floor_name,
+            )
+
+            result = await async_execute_home_code(
+                cast(str, data["code"]),
+                snapshot=snapshot,
+                llm_context=safe_context,
+                runtime=runtime,
+            )
+            if isinstance(result, dict):
+                execution = result.get("execution", {})
+                _LOGGER.debug(
+                    "execute_home_code: status=%s helper_calls=%s/%s actions=%d",
+                    execution.get("status") if isinstance(execution, dict) else "n/a",
+                    runtime.state.helper_calls,
+                    runtime.state.helper_call_limit,
+                    len(runtime.state.actions),
+                )
+            return cast(JsonObjectType, result)
         except Exception as err:
             mapped = tool_error_from_exception(err)
             if mapped is None:
@@ -71,45 +144,16 @@ class ExecuteHomeCodeTool(llm.Tool):
             return cast(JsonObjectType, setup_error_payload(key, placeholders))
 
 
-async def _execute(
+def _production_runtime(
     hass: HomeAssistant,
-    entry_id: str,
-    data: ToolArgs,
+    snapshot: HomeSnapshot,
     llm_context: llm.LLMContext,
-) -> JsonObjectType:
-    """Build a Monty view, construct facades, and run the executor."""
-    setup_error = _require_loaded_entry_error(hass, entry_id)
-    if setup_error is not None:
-        key, placeholders = setup_error
-        return cast(JsonObjectType, setup_error_payload(key, placeholders))
-    sandbox_runtime = _require_sandbox_runtime(hass, entry_id)
+    sandbox_runtime: SandboxRuntime,
+    deadline: float,
+) -> RuntimeContext:
+    """Build a RuntimeContext backed by live Home Assistant host seams."""
     settings = sandbox_runtime.settings
-    code = cast(str, data["code"])
-    deadline = time.monotonic() + settings.execution_timeout_seconds
-
-    # Build a fresh Monty view on the event loop before execution.
-    snapshot = build_snapshot(
-        hass,
-        scope=settings.scope,
-        anchor_device_id=llm_context.device_id,
-    )
-
-    # Build the LLM context view from the live request metadata.
     real_context = llm_context.context if llm_context.context is not None else Context()
-    area_id, area_name, floor_id, floor_name = _snapshot_location(snapshot, llm_context.device_id)
-    safe_context = build_llm_context(
-        platform=llm_context.platform,
-        context_id=real_context.id,
-        parent_id=real_context.parent_id,
-        user_id=real_context.user_id,
-        language=llm_context.language,
-        assistant=llm_context.assistant,
-        device_id=llm_context.device_id,
-        area_id=area_id,
-        area_name=area_name,
-        floor_id=floor_id,
-        floor_name=floor_name,
-    )
 
     async def _invoke(action: ProposedAction) -> object:
         return await hass.services.async_call(
@@ -147,7 +191,7 @@ async def _execute(
 
     # Hoist state so the fetcher closures can read the live-write flag.
     state = ExecutionState(helper_call_limit=settings.helper_call_budget)
-    runtime = RuntimeContext(
+    return RuntimeContext(
         state=state,
         settings=settings,
         invoke=_invoke,
@@ -157,23 +201,6 @@ async def _execute(
         deadline=deadline,
         memory=sandbox_runtime.memory_store.for_context(llm_context),
     )
-
-    result = await async_execute_home_code(
-        code,
-        snapshot=snapshot,
-        llm_context=safe_context,
-        runtime=runtime,
-    )
-    if isinstance(result, dict):
-        execution = result.get("execution", {})
-        _LOGGER.debug(
-            "execute_home_code: status=%s helper_calls=%s/%s actions=%d",
-            execution.get("status") if isinstance(execution, dict) else "n/a",
-            runtime.state.helper_calls,
-            runtime.state.helper_call_limit,
-            len(runtime.state.actions),
-        )
-    return cast(JsonObjectType, result)
 
 
 def _snapshot_location(

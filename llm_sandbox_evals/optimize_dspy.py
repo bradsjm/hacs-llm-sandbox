@@ -16,7 +16,6 @@ from custom_components.llm_sandbox.llm_api.prompts import PromptProfile, resolve
 from llm_sandbox_evals import experiment, prompts, reports
 from llm_sandbox_evals.config import EvalConfig
 from llm_sandbox_evals.harness import _select_cases, run_case
-from llm_sandbox_evals.models import get_adapter
 from llm_sandbox_evals.optimize_helpers import _to_pydantic_ai_model_id, size_penalized_utility
 from llm_sandbox_evals.schema import EvalCase, PromptCandidate
 
@@ -57,8 +56,7 @@ def run_optimize(config: EvalConfig) -> OptimizerResult:
         model=target,
         **_dspy_reasoning_kwargs(temperature=0.0, reasoning_effort=config.target_reasoning_effort),
     )
-    # Configure the global default LM as a defensive default; actual scoring runs through the real
-    # adapter in run_case (get_adapter(target_model)), not through dspy's configured LM.
+    # Configure the global default LM as a defensive default; actual scoring runs through run_case's Pydantic AI agent.
     dspy.configure(lm=target_lm)
     prompt_lm = dspy.LM(
         model=proposer,
@@ -100,9 +98,7 @@ def run_optimize(config: EvalConfig) -> OptimizerResult:
             cases=config.cases,
             homes=config.homes,
             runs_dir=config.runs_dir,
-            max_turns=config.max_turns,
-            efficiency_k=config.efficiency_k,
-            efficiency_floor=config.efficiency_floor,
+            max_tool_calls=config.max_tool_calls,
             reasoning_effort=config.target_reasoning_effort,
         )
     )
@@ -114,9 +110,7 @@ def run_optimize(config: EvalConfig) -> OptimizerResult:
             cases=config.cases,
             homes=config.homes,
             runs_dir=config.runs_dir,
-            max_turns=config.max_turns,
-            efficiency_k=config.efficiency_k,
-            efficiency_floor=config.efficiency_floor,
+            max_tool_calls=config.max_tool_calls,
             reasoning_effort=config.target_reasoning_effort,
         )
     )
@@ -129,9 +123,7 @@ def run_optimize(config: EvalConfig) -> OptimizerResult:
             cases=None,
             homes=config.homes,
             runs_dir=config.runs_dir,
-            max_turns=config.max_turns,
-            efficiency_k=config.efficiency_k,
-            efficiency_floor=config.efficiency_floor,
+            max_tool_calls=config.max_tool_calls,
             reasoning_effort=config.target_reasoning_effort,
         )
     )
@@ -146,9 +138,7 @@ def run_optimize(config: EvalConfig) -> OptimizerResult:
             cases=config.cases,
             homes=config.homes,
             runs_dir=config.runs_dir,
-            max_turns=config.max_turns,
-            efficiency_k=config.efficiency_k,
-            efficiency_floor=config.efficiency_floor,
+            max_tool_calls=config.max_tool_calls,
             reasoning_effort=config.reasoning_effort,
         )
         cross_report = asyncio.run(experiment.run_matrix(cross_config))
@@ -203,14 +193,14 @@ class _PromptInstructionStudent(dspy.Module):
         _ = context
         instruction = str(self.predictor.signature.instructions)
         candidate = replace(self.baseline, id="optimized", api_prompt=instruction)
+        scoring_config = replace(self.config, reasoning_effort=self.config.target_reasoning_effort)
         trace = asyncio.run(
             run_case(
                 candidate,
                 self.target_model,
                 case,
-                get_adapter(self.target_model, self.config.target_reasoning_effort),
-                self.profile,
-                self.config,
+                scoring_config,
+                profile=self.profile,
             )
         )
         ratio = len(instruction) / max(1, len(self.baseline.api_prompt))
