@@ -144,6 +144,28 @@ def _refine_none_deref(_kind: str, message: str, _code: str, _snapshot: HomeSnap
     )
 
 
+def _refine_hass_data(_kind: str, message: str, code: str, _snapshot: HomeSnapshot) -> RefineResult | None:
+    """Guide HA-internal ``hass.data`` lookups toward sandbox read surfaces."""
+    if "'hass' object has no attribute 'data'" not in message:
+        return None
+    for key in _hass_data_keys(code):
+        # Branch boundary: only provide a domain-specific redirect when the
+        # submitted key itself identifies the HA surface the model was seeking.
+        if (hint := _hass_data_hint(key)) is not None:
+            return (
+                "AttributeError",
+                f"hass.data is not available in the sandbox. {hint}",
+                None,
+            )
+    return (
+        "AttributeError",
+        "hass.data is not available in the sandbox. Use the exposed read surfaces instead: "
+        "states, registry facades (er/dr/ar/fr/lr/cr), repairs, persistent_notifications, "
+        "config_entries, or the get_history/get_statistics/get_logbook tools.",
+        None,
+    )
+
+
 def _refine_missing_attribute(_kind: str, message: str, _code: str, snapshot: HomeSnapshot) -> RefineResult | None:
     """Surface the known public attributes for safe facade/record objects."""
     if (attr_match := re.search(r"'(\w+)' object has no attribute '(\w+)'", message)) is None:
@@ -177,6 +199,7 @@ REFINERS: tuple[ErrorRefiner, ...] = (
     _refine_percent_format,
     _refine_collection_dict_method,
     _refine_none_deref,
+    _refine_hass_data,
     _refine_missing_attribute,
 )
 
@@ -210,6 +233,159 @@ def _scrub_class_name(message: str, class_name: str) -> str:
     if (friendly := _friendly_class_name(class_name)) is not None:
         return message.replace(f"'{class_name}'", f"'{friendly}'")
     return message
+
+
+def _hass_data_keys(code: str) -> tuple[str, ...]:
+    """Return literal or identifier keys used with ``hass.data`` in submitted code."""
+    try:
+        module = ast.parse(code)
+    except SyntaxError:
+        return ()
+    aliases = _hass_key_aliases(module)
+    keys: list[str] = []
+    for node in ast.walk(module):
+        if isinstance(node, ast.Subscript) and _is_hass_data_attribute(node.value):
+            if (key := _literal_or_name(node.slice)) is not None:
+                keys.append(aliases.get(key, key))
+        elif (
+            isinstance(node, ast.Call)
+            and _is_hass_data_get_call(node)
+            and node.args
+            and (key := _literal_or_name(node.args[0])) is not None
+        ):
+            keys.append(aliases.get(key, key))
+    return tuple(keys)
+
+
+def _hass_key_aliases(module: ast.Module) -> dict[str, str]:
+    """Resolve simple ``DOMAIN = 'x'; KEY = HassKey(DOMAIN)`` aliases."""
+    string_names: dict[str, str] = {}
+    for statement in module.body:
+        for target in _assignment_names(statement):
+            # State mutation point: remember literal constants before resolving HassKey aliases.
+            if (
+                (value := _assignment_value(statement)) is not None
+                and isinstance(value, ast.Constant)
+                and isinstance(value.value, str)
+            ):
+                string_names[target] = value.value
+
+    aliases: dict[str, str] = {}
+    for statement in module.body:
+        value = _assignment_value(statement)
+        if value is None or not isinstance(value, ast.Call) or not _is_hass_key_call(value) or not value.args:
+            continue
+        key = _literal_or_name(value.args[0])
+        if key is None:
+            continue
+        for target in _assignment_names(statement):
+            aliases[target] = string_names.get(key, key)
+    return aliases
+
+
+def _assignment_names(statement: ast.stmt) -> tuple[str, ...]:
+    """Return simple variable names assigned by ``statement``."""
+    if isinstance(statement, ast.Assign):
+        return tuple(target.id for target in statement.targets if isinstance(target, ast.Name))
+    if isinstance(statement, ast.AnnAssign) and isinstance(statement.target, ast.Name):
+        return (statement.target.id,)
+    return ()
+
+
+def _assignment_value(statement: ast.stmt) -> ast.expr | None:
+    """Return the assigned value expression for simple assignment statements."""
+    if isinstance(statement, ast.Assign | ast.AnnAssign):
+        return statement.value
+    return None
+
+
+def _is_hass_key_call(node: ast.AST) -> bool:
+    """Return whether ``node`` is a call to ``HassKey(...)``."""
+    if not isinstance(node, ast.Call):
+        return False
+    function = node.func
+    if isinstance(function, ast.Name):
+        return function.id == "HassKey"
+    if isinstance(function, ast.Attribute):
+        return function.attr == "HassKey"
+    if isinstance(function, ast.Subscript):
+        return _is_hass_key_call(ast.Call(func=function.value, args=[], keywords=[]))
+    return False
+
+
+def _is_hass_data_get_call(node: ast.Call) -> bool:
+    """Return whether ``node`` calls ``hass.data.get(...)``."""
+    function = node.func
+    return isinstance(function, ast.Attribute) and function.attr == "get" and _is_hass_data_attribute(function.value)
+
+
+def _is_hass_data_attribute(node: ast.AST) -> bool:
+    """Return whether ``node`` is the attribute expression ``hass.data``."""
+    return (
+        isinstance(node, ast.Attribute)
+        and node.attr == "data"
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "hass"
+    )
+
+
+def _literal_or_name(node: ast.AST) -> str | None:
+    """Return a string literal value or identifier name from a key expression."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.Name):
+        return node.id
+    return None
+
+
+def _hass_data_hint(key: str) -> str | None:
+    """Return a specific sandbox alternative when the hass.data key identifies one."""
+    normalized = key.lower()
+    if hint := _HASS_DATA_HINTS.get(normalized):
+        return hint
+    tokens = frozenset(token for token in re.split(r"[^a-z0-9]+", normalized) if token)
+    for expected_tokens, hint in _HASS_DATA_TOKEN_HINTS.items():
+        if expected_tokens <= tokens:
+            return hint
+    return None
+
+
+_HASS_DATA_GENERIC_HINT = (
+    "That integration-internal storage is not exposed; use the available facade or recorder tool for the task."
+)
+
+
+_HASS_DATA_HINTS: dict[str, str] = {
+    "persistent_notification": "Persistent notifications are read with "
+    "persistent_notifications.async_get_notifications().",
+    "persistent_notifications": "Persistent notifications are read with "
+    "persistent_notifications.async_get_notifications().",
+    "repair": "Repairs are read with repairs.async_active_issues() or repairs.async_issues().",
+    "repairs": "Repairs are read with repairs.async_active_issues() or repairs.async_issues().",
+    "issue_registry": "Repairs issues are read with repairs.async_active_issues() or repairs.async_issues().",
+    "entity_registry": "Entity registry data is read with the er or entity_registry facade.",
+    "device_registry": "Device registry data is read with the dr or device_registry facade.",
+    "area_registry": "Area registry data is read with the ar or area_registry facade.",
+    "floor_registry": "Floor registry data is read with the fr or floor_registry facade.",
+    "label_registry": "Label registry data is read with the lr or label_registry facade.",
+    "category_registry": "Category registry data is read with the cr or category_registry facade.",
+    "recorder": "Recorder history is read with get_history or get_statistics.",
+    "history": "History data is read with the get_history tool.",
+    "statistics": "Statistics data is read with the get_statistics tool.",
+    "logbook": "Logbook data is read with the get_logbook tool.",
+    "config_entries": "Config entries are read with config_entries.async_entries('<domain>').",
+    "automation": _HASS_DATA_GENERIC_HINT,
+    "script": _HASS_DATA_GENERIC_HINT,
+    "mqtt": _HASS_DATA_GENERIC_HINT,
+    "zha": _HASS_DATA_GENERIC_HINT,
+    "deconz": _HASS_DATA_GENERIC_HINT,
+    "esphome": _HASS_DATA_GENERIC_HINT,
+    "mobile_app": _HASS_DATA_GENERIC_HINT,
+}
+
+_HASS_DATA_TOKEN_HINTS: dict[frozenset[str], str] = {
+    frozenset(key.split("_")): hint for key, hint in _HASS_DATA_HINTS.items()
+}
 
 
 def _friendly_class_name(class_name: str) -> str | None:
