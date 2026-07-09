@@ -34,9 +34,7 @@ from .legacy_notes import (
     compute_legacy_note,
 )
 from .literal_resolution import substitute_remembered_literals
-from .normalization import await_normalization, result_binding
-from .normalization.builtin_normalization import normalize_builtins
-from .normalization.datetime_normalization import normalize_datetime_imports
+from .normalization import result_binding, rewrite
 from .sandbox_context import RuntimeContext, activate_runtime, clear_runtime
 
 MAX_MONTY_CODE_CHARS = 8000
@@ -51,10 +49,9 @@ _ACTION_SNAPSHOT_NOTE = (
 )
 MAX_PRINTED_LINES = 200
 
-# View classes registered with Monty for type-checking and dataclass binding.
-# Also reused by ``await_normalization`` to derive async/sync method names.
-# Every facade and record type the LLM can receive from a method call must be
-# registered so Monty knows how to type-check attribute access on it.
+# Facade and record classes registered with Monty for type-checking and
+# dataclass binding. The rewrite engine derives async/sync method names
+# from MONTY_DATACLASS_REGISTRY directly.
 DATACLASS_REGISTRY = MONTY_DATACLASS_REGISTRY
 
 
@@ -215,19 +212,16 @@ async def async_execute_home_code(
             translation_placeholders={"error": err.__class__.__name__},
         ) from err
 
-    # Forgiveness pipeline (Postel's law): each pass is independent and
-    # fails open. Order matters: datetime import normalization first resolves
-    # supported datetime/date imports to sandbox facades, then builtin
-    # normalization resolves safe reflection syntax, then await normalization,
-    # then last-expression promotion before append_result_expression checks
-    # explicit ``result``.
+    # Forgiveness pipeline (Postel's law): memory substitution runs first
+    # (snapshot-validated), then the unified shadow-safe AST rewrite engine
+    # (datetime → builtin → state sugar → await, one parse/one unparse,
+    # framework-level fail-open), then last-expression promotion before
+    # append_result_expression checks explicit ``result``.
     resolved_code, resolutions = substitute_remembered_literals(code, snapshot, runtime.memory)
-    datetime_code, datetime_labels = normalize_datetime_imports(resolved_code)
-    builtin_code, builtin_labels = normalize_builtins(datetime_code)
-    normalized_code, await_labels = await_normalization.normalize_awaits(builtin_code, DATACLASS_REGISTRY)
+    normalized_code, rewrite_labels = rewrite(resolved_code)
     promoted_code, promote_labels = result_binding.promote_last_expression_to_result(normalized_code)
     executable_code, append_labels = result_binding.append_result_expression(promoted_code)
-    runtime.state.normalizations = [*datetime_labels, *builtin_labels, *await_labels, *promote_labels, *append_labels]
+    runtime.state.normalizations = [*rewrite_labels, *promote_labels, *append_labels]
 
     # Build facade globals from the snapshot.
     facade_inputs = build_facades(snapshot)

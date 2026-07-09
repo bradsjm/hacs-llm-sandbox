@@ -639,7 +639,7 @@ async def test_async_services_for_target_resolves_selectors_without_runtime_cont
 async def test_services_facade_does_not_expose_snapshot_surface() -> None:
     """The Monty-visible services facade never stores the full snapshot."""
     from custom_components.llm_sandbox.llm_api.contracts import MONTY_TYPE_STUBS
-    from custom_components.llm_sandbox.llm_api.normalization.builtin_normalization import public_surface
+    from custom_components.llm_sandbox.llm_api.normalization.surfaces import public_surface
 
     harness = _service_harness()
     clear_runtime()

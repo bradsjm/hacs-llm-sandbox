@@ -47,7 +47,8 @@ def _refine_unresolved_reference(kind: str, message: str, code: str, snapshot: H
         return kind, clean_message, None
     name = name_match.group(1)
     if name in {"dir", "vars"}:
-        from ..normalization.builtin_normalization import GLOBAL_TYPE_MAP, public_surface
+        from ..facade_registry import GLOBAL_TYPE_MAP
+        from ..normalization.surfaces import public_surface
 
         attributes = tuple(_attributes_for_first_discovery_call(code, name, GLOBAL_TYPE_MAP, public_surface) or ())
         guidance = None
@@ -155,7 +156,7 @@ def _refine_missing_attribute(_kind: str, message: str, _code: str, snapshot: Ho
             'str.format() is not available in the sandbox; use an f-string (e.g. f"{x}") instead.',
             None,
         )
-    from ..normalization.builtin_normalization import surface_for_class_name
+    from ..normalization.surfaces import surface_for_class_name
 
     # Scrub internal class names and surface the known public attribute set.
     if (surface := surface_for_class_name(class_name)) is not None:
@@ -215,7 +216,7 @@ def _friendly_class_name(class_name: str) -> str | None:
     """Map an internal class name to the LLM-visible name it was accessed through."""
     if class_name in _RECORD_FRIENDLY_NAMES:
         return _RECORD_FRIENDLY_NAMES[class_name]
-    from ..normalization.builtin_normalization import GLOBAL_TYPE_MAP
+    from ..facade_registry import GLOBAL_TYPE_MAP
 
     # Facades: prefer the longest global alias (long names read clearer than er/dr).
     aliases = [name for name, cls in GLOBAL_TYPE_MAP.items() if cls.__name__ == class_name]
