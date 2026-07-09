@@ -146,7 +146,6 @@ def run_optimize(config: EvalConfig) -> OptimizerResult:
             cross_report,
             cross_config,
             run_id=datetime.now(UTC).strftime("%Y%m%d-%H%M%S-%f"),
-            created_at=datetime.now(UTC).isoformat(),
         )
 
     baseline_prompt_chars, baseline_authored = prompts.candidate_prompt_sizes(baseline)

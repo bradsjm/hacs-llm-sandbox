@@ -1,6 +1,5 @@
 from collections.abc import Sequence
 from pathlib import Path
-from typing import cast
 
 import pytest
 from custom_components.llm_sandbox.const import DEFAULT_PROMPT_PROFILE
@@ -30,30 +29,36 @@ async def test_run_matrix_stub_slice_writes_reloadable_report_json(tmp_path: Pat
         report,
         config,
         run_id="stub-slice",
-        created_at="2026-07-06T00:00:00+00:00",
     )
-    payload = reports.load_report_payload(run_dir)
+    reloaded = reports.load_report(run_dir)
 
     assert len(report.cases) == 1
-    assert payload.run_id == "stub-slice"
-    assert payload.candidate_ids == ["baseline"]
-    assert payload.model_ids == ["stub"]
-    assert payload.case_count == 1
-    assert payload.incomplete_count == 0
-    assert [(cell["candidate_id"], cell["model_id"], cell["case_id"]) for cell in payload.cells] == [
-        ("baseline", "stub", "state_living_temperature")
-    ]
-    assert cast(float, payload.cells[0]["score"]) == pytest.approx(1.0)
-    checks = cast(list[dict[str, object]], payload.cells[0]["checks"])
-    assert {"name", "passed", "required", "feedback"} <= checks[0].keys()
+    assert len(reloaded.cases) == 1
+    report_case = reloaded.cases[0]
+
+    assert isinstance(report_case.inputs, MatrixCellRef)
+    assert report_case.inputs == MatrixCellRef(
+        case_id="state_living_temperature",
+        candidate_id="baseline",
+        model_id="stub",
+        home="home_minimal",
+        category="state_read",
+    )
+    assert report_case.metadata == {
+        "case_id": "state_living_temperature",
+        "candidate_id": "baseline",
+        "model_id": "stub",
+        "home": "home_minimal",
+        "category": "state_read",
+    }
+    assert isinstance(report_case.output, CaseTrace)
+    assert report_case.output.score == pytest.approx(1.0)
+    assert report_case.scores["score"].value == pytest.approx(1.0)
+    assert _scalar(reloaded.analyses, "Overall mean score").value == pytest.approx(1.0)
+    assert _scalar(reloaded.analyses, "Incomplete cells").value == 0
     # The stub read the temperature entity, so one tool event with its return is persisted.
-    tool_events = cast(list[dict[str, object]], payload.cells[0]["trace"]["tool_events"])
-    assert len(tool_events) == 1
-    assert tool_events[0]["tool_name"] == "execute_home_code"
-    rendered = reports.render_report_summary(payload)
-    assert "stub-slice" in rendered
-    assert "baseline/stub/state_living_temperature" in rendered
-    assert "Incomplete:" in rendered
+    assert len(report_case.output.tool_events) == 1
+    assert report_case.output.tool_events[0].tool_name == "execute_home_code"
 
 
 async def test_sandbox_outcome_reports_score_required_gate_and_model_error_label(tmp_path: Path) -> None:

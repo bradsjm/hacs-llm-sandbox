@@ -222,7 +222,7 @@ async def run_matrix(
 
 
 def overall_mean(report: EvaluationReport[MatrixCellRef, CaseTrace, MatrixCellMeta]) -> float:
-    """Read the native scalar analysis, computing from complete cases only if absent.
+    """Read the native scalar analysis.
 
     Provider/infra failures (``model_error``) are excluded so an outage does not
     read as a candidate scoring near zero.
@@ -230,7 +230,7 @@ def overall_mean(report: EvaluationReport[MatrixCellRef, CaseTrace, MatrixCellMe
     for analysis in report.analyses:
         if isinstance(analysis, ScalarResult) and analysis.title == "Overall mean score":
             return float(analysis.value)
-    return mean_score([_case_score(case) for case in _complete_cases(report.cases)])
+    raise ValueError("report is missing the Overall mean score analysis")
 
 
 def matrix_summary_lines(report: EvaluationReport[MatrixCellRef, CaseTrace, MatrixCellMeta]) -> list[str]:

@@ -323,8 +323,7 @@ def _run_eval(args: argparse.Namespace) -> int:
 
     report = asyncio.run(experiment.run_matrix(config, logfire_enabled=args.logfire, on_complete=_progress_reporter))
     run_id = _derive_run_id()
-    created_at = datetime.now(UTC).isoformat()
-    run_dir = reports.write_report_json(report, config, run_id=run_id, created_at=created_at)
+    run_dir = reports.write_report_json(report, config, run_id=run_id)
     _say(_eval_footer(run_dir))
     report.print(
         console=Console(stderr=True),
@@ -355,8 +354,14 @@ def _run_report(args: argparse.Namespace) -> int:
         return 1
 
     _say("(llm sandbox evals) re-rendering the native report summary from report.json (no model calls).\n")
-    payload = reports.load_report_payload(report_json.parent)
-    sys.stdout.write(reports.render_report_summary(payload))
+    report = reports.load_report(report_json.parent)
+    report.print(
+        console=Console(stderr=True),
+        include_output=False,
+        include_expected_output=False,
+        include_durations=True,
+    )
+    sys.stdout.write("\n".join(experiment.matrix_summary_lines(report)) + "\n")
     return 0
 
 
