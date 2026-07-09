@@ -714,7 +714,7 @@ cases:
         period: null
         entry_values_by_entity: {}
         entry_values:
-        - label_evening
+        - Evening
         - 'on'
         min_results: 1
       blocked_outcome: null
@@ -775,8 +775,9 @@ cases:
     id: multi_history_then_living_fan
     category: complex
     home: home_default
-    user_request: If the living room temperature has been above 25 degrees at any
-      point in the last 24 hours, set the living room fan to 50 percent.
+    user_request: Check the living room temperature state history. If it has been
+      above 25 degrees at any point in the last 24 hours, set the living room fan
+      to 50 percent.
     actions_enabled: true
     llm_context:
       platform: test
@@ -1863,8 +1864,8 @@ cases:
     id: recorder_aggregate_count_transitions
     category: recorder_read
     home: home_default
-    user_request: How many times did the living room light change state over the last
-      24 hours?
+    user_request: From the living room light state history, how many times did it
+      change state over the last 24 hours?
     actions_enabled: false
     llm_context:
       platform: test
@@ -1903,7 +1904,8 @@ cases:
     id: recorder_aggregate_on_duration
     category: recorder_read
     home: home_default
-    user_request: How long was the living room light on over the last 24 hours?
+    user_request: From the living room light state history, how long was it on over
+      the last 24 hours?
     actions_enabled: false
     llm_context:
       platform: test
@@ -1942,7 +1944,8 @@ cases:
     id: recorder_aggregate_last_seen_to_state
     category: recorder_read
     home: home_default
-    user_request: When did the living room light last turn on over the last 24 hours?
+    user_request: From the living room light state history, when did it last turn
+      on over the last 24 hours?
     actions_enabled: false
     llm_context:
       platform: test
@@ -1981,8 +1984,8 @@ cases:
     id: recorder_aggregate_time_in_state
     category: recorder_read
     home: home_default
-    user_request: Summarize how long the living room light spent in each state over
-      the last 24 hours.
+    user_request: From the living room light state history, summarize how long it
+      spent in each state over the last 24 hours.
     actions_enabled: false
     llm_context:
       platform: test
@@ -2039,7 +2042,7 @@ cases:
       - °C
       provenance_values:
       - sensor.living_temp
-      - unit_of_measurement
+      - °C
       tool_result_checks:
       - tool_name: get_history
         entity_ids:
@@ -2106,8 +2109,8 @@ cases:
     id: recorder_statistics_types
     category: recorder_read
     home: home_default
-    user_request: Show me the minimum and maximum bedroom humidity over the last 24
-      hours.
+    user_request: Show me the hourly statistic minimum and maximum for bedroom humidity
+      over the last 24 hours.
     actions_enabled: false
     llm_context:
       platform: test
@@ -2546,7 +2549,7 @@ cases:
         period: null
         entry_values_by_entity: {}
         entry_values:
-        - '26.2'
+        - '26.25'
         min_results: 1
       blocked_outcome: null
       answer_excludes: []
@@ -2771,7 +2774,7 @@ cases:
     id: action_service_data_hvac
     category: action_allowed
     home: home_default
-    user_request: Set the bedroom thermostat to heat mode at 21 degrees.
+    user_request: Set the bedroom thermostat target temperature to 21 degrees.
     actions_enabled: true
     llm_context:
       platform: test
@@ -2791,7 +2794,6 @@ cases:
         - climate.bedroom
         service_data:
           temperature: 21
-          hvac_mode: heat
       guidance_candidate: null
       tool_call_par: null
       max_tool_calls: 10
@@ -2836,7 +2838,8 @@ cases:
     id: action_ambiguous_target
     category: action_blocked
     home: home_real
-    user_request: Set the fan to 50 percent.
+    user_request: Set the fan to 50 percent, but only if there is exactly one visible
+      fan; otherwise don't choose for me.
     actions_enabled: true
     llm_context:
       platform: test
@@ -3034,8 +3037,8 @@ cases:
     id: depth_active_repairs
     category: complex
     home: home_default
-    user_request: Are there any active repairs or issues right now? Include any referenced
-      entity IDs.
+    user_request: Are there any active Home Assistant repairs right now? Include
+      any referenced entity IDs from the repair details.
     actions_enabled: false
     llm_context:
       platform: test
@@ -3064,7 +3067,8 @@ cases:
     id: depth_notifications
     category: complex
     home: home_default
-    user_request: Are there any pending notifications?
+    user_request: Are there any pending Home Assistant notifications? Include their
+      titles or messages.
     actions_enabled: false
     llm_context:
       platform: test
@@ -3140,8 +3144,8 @@ cases:
     id: recorder_declarative_sensor_value_analytics
     category: recorder_read
     home: home_default
-    user_request: For the living room temperature and bedroom humidity over the last
-      24 hours, which readings were highest?
+    user_request: From the raw state history for living room temperature and bedroom
+      humidity over the last 24 hours, which readings were highest?
     actions_enabled: false
     llm_context:
       platform: test
