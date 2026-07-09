@@ -17,7 +17,7 @@ class EvalConfig:
     homes: list[str] | None
     runs_dir: Path
     concurrency: int = 5
-    max_tool_calls: int = 8
+    max_tool_calls: int = 10
     model_timeout: float = 75.0
     reasoning_effort: str | None = None
     temperature: float | None = None

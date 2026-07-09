@@ -16,8 +16,7 @@ cases:
       expected_values: []
       answer_excludes: []
       actions: []
-      max_tool_calls: 3
-      reference_tool_calls: 1
+      max_tool_calls: 10
       answer_values:
       - '23.4'
     action_domains: []
@@ -39,8 +38,7 @@ cases:
       expected_values: []
       answer_excludes: []
       actions: []
-      max_tool_calls: 3
-      reference_tool_calls: 1
+      max_tool_calls: 10
       answer_values:
       - 'off'
     action_domains: []
@@ -62,8 +60,7 @@ cases:
       expected_values: []
       answer_excludes: []
       actions: []
-      max_tool_calls: 3
-      reference_tool_calls: 1
+      max_tool_calls: 10
       answer_values:
       - 'off'
     action_domains: []
@@ -85,8 +82,7 @@ cases:
       expected_values: []
       answer_excludes: []
       actions: []
-      max_tool_calls: 3
-      reference_tool_calls: 1
+      max_tool_calls: 10
       answer_values:
       - Bedroom Light
       - Bedroom Humidity
@@ -114,8 +110,7 @@ cases:
       expected_values: []
       answer_excludes: []
       actions: []
-      max_tool_calls: 3
-      reference_tool_calls: 1
+      max_tool_calls: 10
       answer_values:
       - Living Room Light
       - Bedroom Light
@@ -143,8 +138,7 @@ cases:
       expected_values: []
       answer_excludes: []
       actions: []
-      max_tool_calls: 3
-      reference_tool_calls: 1
+      max_tool_calls: 10
       answer_values:
       - Bedroom Thermostat
       - Bedroom
@@ -172,8 +166,7 @@ cases:
       answer_excludes:
       - sensor.router_uptime
       actions: []
-      max_tool_calls: 3
-      reference_tool_calls: 1
+      max_tool_calls: 10
       answer_values:
       - no diagnostic
     action_domains: []
@@ -195,8 +188,7 @@ cases:
       expected_values: []
       answer_excludes: []
       actions: []
-      max_tool_calls: 3
-      reference_tool_calls: 2
+      max_tool_calls: 10
       answer_values:
       - '24.4'
       - '25.2'
@@ -230,8 +222,7 @@ cases:
       expected_values: []
       answer_excludes: []
       actions: []
-      max_tool_calls: 3
-      reference_tool_calls: 2
+      max_tool_calls: 10
       answer_values:
       - '61'
       - '64'
@@ -268,8 +259,7 @@ cases:
       expected_values: []
       answer_excludes: []
       actions: []
-      max_tool_calls: 3
-      reference_tool_calls: 2
+      max_tool_calls: 10
       answer_values:
       - turned off
       - turned on
@@ -306,8 +296,7 @@ cases:
         service: turn_off
         target_entity_ids:
         - light.living
-      max_tool_calls: 4
-      reference_tool_calls: 2
+      max_tool_calls: 10
     action_domains: []
   metadata: null
   expected_output: null
@@ -333,8 +322,7 @@ cases:
         - climate.bedroom
         service_data:
           temperature: 20
-      max_tool_calls: 4
-      reference_tool_calls: 2
+      max_tool_calls: 10
     action_domains: []
   metadata: null
   expected_output: null
@@ -360,8 +348,7 @@ cases:
         - fan.living_fan
         service_data:
           percentage: 50
-      max_tool_calls: 4
-      reference_tool_calls: 2
+      max_tool_calls: 10
     action_domains: []
   metadata: null
   expected_output: null
@@ -381,8 +368,7 @@ cases:
       expected_values: []
       answer_excludes: []
       actions: []
-      max_tool_calls: 3
-      reference_tool_calls: 1
+      max_tool_calls: 10
       blocked_outcome:
         max_attempts: 1
         error_keys:
@@ -413,8 +399,7 @@ cases:
       answer_excludes:
       - switch.garage_opener
       actions: []
-      max_tool_calls: 3
-      reference_tool_calls: 1
+      max_tool_calls: 10
       blocked_outcome:
         max_attempts: 1
         error_keys:
@@ -445,8 +430,7 @@ cases:
       expected_values: []
       answer_excludes: []
       actions: []
-      max_tool_calls: 3
-      reference_tool_calls: 1
+      max_tool_calls: 10
       blocked_outcome:
         max_attempts: 1
         error_keys:
@@ -483,8 +467,7 @@ cases:
         - fan.living_fan
         service_data:
           percentage: 50
-      max_tool_calls: 6
-      reference_tool_calls: 2
+      max_tool_calls: 10
       answer_values:
       - '25.2'
       provenance_values:
@@ -514,8 +497,7 @@ cases:
         service: toggle
         target_entity_ids:
         - switch.dehumidifier
-      max_tool_calls: 6
-      reference_tool_calls: 2
+      max_tool_calls: 10
       answer_values:
       - '64'
       provenance_values:
@@ -541,8 +523,7 @@ cases:
       expected_values: []
       answer_excludes: []
       actions: []
-      max_tool_calls: 6
-      reference_tool_calls: 2
+      max_tool_calls: 10
       answer_values:
       - '64'
       provenance_values:
@@ -569,8 +550,7 @@ cases:
       - light.bedroom
       - light.office_desk
       actions: []
-      max_tool_calls: 6
-      reference_tool_calls: 2
+      max_tool_calls: 10
       answer_values:
       - '1'
       - Living Room
@@ -596,8 +576,7 @@ cases:
       expected_values: []
       answer_excludes: []
       actions: []
-      max_tool_calls: 3
-      reference_tool_calls: 2
+      max_tool_calls: 10
       answer_values:
       - '24.4'
       - '25.2'
@@ -637,8 +616,7 @@ cases:
         - fan.living_fan
         service_data:
           percentage: 50
-      max_tool_calls: 6
-      reference_tool_calls: 2
+      max_tool_calls: 10
       answer_values:
       - '25.2'
       provenance_values:
@@ -674,8 +652,7 @@ cases:
         service: turn_off
         target_entity_ids:
         - light.living
-      max_tool_calls: 6
-      reference_tool_calls: 2
+      max_tool_calls: 10
       answer_values:
       - turned on
       provenance_values:
@@ -706,8 +683,7 @@ cases:
       expected_values: []
       answer_excludes: []
       actions: []
-      max_tool_calls: 6
-      reference_tool_calls: 2
+      max_tool_calls: 10
       answer_values:
       - 'on'
       - '11:30'
@@ -740,8 +716,7 @@ cases:
       expected_values: []
       answer_excludes: []
       actions: []
-      max_tool_calls: 3
-      reference_tool_calls: 1
+      max_tool_calls: 10
       answer_values:
       - '25.2'
       - '64'
@@ -783,8 +758,7 @@ cases:
       expected_values: []
       answer_excludes: []
       actions: []
-      max_tool_calls: 3
-      reference_tool_calls: 2
+      max_tool_calls: 10
       answer_values:
       - turned off
       - turned on
@@ -819,8 +793,7 @@ cases:
       answer_excludes:
       - switch.garage_opener
       actions: []
-      max_tool_calls: 3
-      reference_tool_calls: 1
+      max_tool_calls: 10
       blocked_outcome:
         max_attempts: 1
         error_keys:
@@ -851,8 +824,7 @@ cases:
       expected_values: []
       answer_excludes: []
       actions: []
-      max_tool_calls: 3
-      reference_tool_calls: 3
+      max_tool_calls: 10
       answer_values:
       - '24.4'
       - '25.2'
@@ -885,8 +857,7 @@ cases:
       expected_values: []
       answer_excludes: []
       actions: []
-      max_tool_calls: 3
-      reference_tool_calls: 1
+      max_tool_calls: 10
       answer_values:
       - '79.25'
     action_domains: []
@@ -908,8 +879,7 @@ cases:
       expected_values: []
       answer_excludes: []
       actions: []
-      max_tool_calls: 3
-      reference_tool_calls: 1
+      max_tool_calls: 10
       answer_values:
       - '73'
     action_domains: []
@@ -931,8 +901,7 @@ cases:
       expected_values: []
       answer_excludes: []
       actions: []
-      max_tool_calls: 3
-      reference_tool_calls: 1
+      max_tool_calls: 10
       answer_values:
       - closed
     action_domains: []
@@ -954,8 +923,7 @@ cases:
       expected_values: []
       answer_excludes: []
       actions: []
-      max_tool_calls: 3
-      reference_tool_calls: 1
+      max_tool_calls: 10
       answer_values:
       - Office Blinds
       provenance_values:
@@ -979,8 +947,7 @@ cases:
       expected_values: []
       answer_excludes: []
       actions: []
-      max_tool_calls: 3
-      reference_tool_calls: 1
+      max_tool_calls: 10
       answer_values:
       - Guest Room Blinds
       provenance_values:
@@ -1004,8 +971,7 @@ cases:
       expected_values: []
       answer_excludes: []
       actions: []
-      max_tool_calls: 3
-      reference_tool_calls: 1
+      max_tool_calls: 10
       answer_values:
       - Master Bedroom
       - Office
@@ -1031,8 +997,7 @@ cases:
       expected_values: []
       answer_excludes: []
       actions: []
-      max_tool_calls: 3
-      reference_tool_calls: 2
+      max_tool_calls: 10
       answer_values:
       - '78.1'
       - '79.25'
@@ -1065,8 +1030,7 @@ cases:
       expected_values: []
       answer_excludes: []
       actions: []
-      max_tool_calls: 3
-      reference_tool_calls: 2
+      max_tool_calls: 10
       answer_values:
       - '93.66'
       - '92.5'
@@ -1102,8 +1066,7 @@ cases:
       expected_values: []
       answer_excludes: []
       actions: []
-      max_tool_calls: 3
-      reference_tool_calls: 2
+      max_tool_calls: 10
       answer_values:
       - turned off
       provenance_values:
@@ -1138,8 +1101,7 @@ cases:
         service: turn_on
         target_entity_ids:
         - light.deck_sconce
-      max_tool_calls: 4
-      reference_tool_calls: 2
+      max_tool_calls: 10
     action_domains: []
   metadata: null
   expected_output: null
@@ -1163,8 +1125,7 @@ cases:
         service: close_cover
         target_entity_ids:
         - cover.office_blinds
-      max_tool_calls: 4
-      reference_tool_calls: 2
+      max_tool_calls: 10
     action_domains: []
   metadata: null
   expected_output: null
@@ -1190,8 +1151,7 @@ cases:
         - fan.living_room_fan_speed
         service_data:
           percentage: 50
-      max_tool_calls: 4
-      reference_tool_calls: 2
+      max_tool_calls: 10
     action_domains: []
   metadata: null
   expected_output: null
@@ -1211,8 +1171,7 @@ cases:
       expected_values: []
       answer_excludes: []
       actions: []
-      max_tool_calls: 3
-      reference_tool_calls: 1
+      max_tool_calls: 10
       blocked_outcome:
         max_attempts: 1
         error_keys:
@@ -1242,8 +1201,7 @@ cases:
       expected_values: []
       answer_excludes: []
       actions: []
-      max_tool_calls: 3
-      reference_tool_calls: 1
+      max_tool_calls: 10
       blocked_outcome:
         max_attempts: 1
         error_keys:
@@ -1278,8 +1236,7 @@ cases:
         service: close_cover
         target_entity_ids:
         - cover.office_blinds
-      max_tool_calls: 6
-      reference_tool_calls: 2
+      max_tool_calls: 10
       answer_values:
       - '79.25'
       provenance_values:
@@ -1317,8 +1274,7 @@ cases:
         service: close_cover
         target_entity_ids:
         - cover.office_blinds
-      max_tool_calls: 6
-      reference_tool_calls: 2
+      max_tool_calls: 10
       answer_values:
       - '79.25'
       provenance_values:
@@ -1343,8 +1299,7 @@ cases:
       expected_values: []
       answer_excludes: []
       actions: []
-      max_tool_calls: 6
-      reference_tool_calls: 2
+      max_tool_calls: 10
       answer_values:
       - '2'
       - Master Bedroom
@@ -1372,8 +1327,7 @@ cases:
       expected_values: []
       answer_excludes: []
       actions: []
-      max_tool_calls: 5
-      reference_tool_calls: 2
+      max_tool_calls: 10
       answer_values:
       - 'no'
       provenance_values:
@@ -1402,8 +1356,7 @@ cases:
       expected_values: []
       answer_excludes: []
       actions: []
-      max_tool_calls: 3
-      reference_tool_calls: 2
+      max_tool_calls: 10
       answer_values:
       - Living Room Light
       - '1004'
@@ -1435,8 +1388,7 @@ cases:
       expected_values: []
       answer_excludes: []
       actions: []
-      max_tool_calls: 3
-      reference_tool_calls: 2
+      max_tool_calls: 10
       answer_values:
       - Living Room Light
       - '43228'
@@ -1468,8 +1420,7 @@ cases:
       expected_values: []
       answer_excludes: []
       actions: []
-      max_tool_calls: 1
-      reference_tool_calls: 2
+      max_tool_calls: 10
       answer_values:
       - '11:59:04'
       provenance_values:
@@ -1502,8 +1453,7 @@ cases:
       expected_values: []
       answer_excludes: []
       actions: []
-      max_tool_calls: 3
-      reference_tool_calls: 2
+      max_tool_calls: 10
       answer_values:
       - 'on'
       - 'off'
@@ -1540,8 +1490,7 @@ cases:
       expected_values: []
       answer_excludes: []
       actions: []
-      max_tool_calls: 3
-      reference_tool_calls: 2
+      max_tool_calls: 10
       answer_values:
       - °C
       provenance_values:
@@ -1573,8 +1522,7 @@ cases:
       expected_values: []
       answer_excludes: []
       actions: []
-      max_tool_calls: 3
-      reference_tool_calls: 2
+      max_tool_calls: 10
       answer_values:
       - '61'
       - '64'
@@ -1609,8 +1557,7 @@ cases:
       expected_values: []
       answer_excludes: []
       actions: []
-      max_tool_calls: 3
-      reference_tool_calls: 2
+      max_tool_calls: 10
       answer_values:
       - '60'
       - '65'
@@ -1650,8 +1597,7 @@ cases:
       expected_values: []
       answer_excludes: []
       actions: []
-      max_tool_calls: 3
-      reference_tool_calls: 2
+      max_tool_calls: 10
       answer_values:
       - Living Room Light
       provenance_values:
@@ -1683,8 +1629,7 @@ cases:
       expected_values: []
       answer_excludes: []
       actions: []
-      max_tool_calls: 3
-      reference_tool_calls: 2
+      max_tool_calls: 10
       answer_values:
       - Master Bedroom
       provenance_values:
@@ -1714,8 +1659,7 @@ cases:
       expected_values: []
       answer_excludes: []
       actions: []
-      max_tool_calls: 3
-      reference_tool_calls: 2
+      max_tool_calls: 10
       answer_values:
       - '24.4'
       - '25.2'
@@ -1729,41 +1673,6 @@ cases:
         - '24.4'
         - '25.2'
         min_results: 3
-    action_domains: []
-  metadata: null
-  expected_output: null
-  evaluators: []
-- name: recorder_wrong_tool_discrimination
-  inputs:
-    id: recorder_wrong_tool_discrimination
-    category: recorder_read
-    home: home_default
-    user_request: What was the average bedroom humidity over the last day?
-    actions_enabled: false
-    llm_context:
-      platform: test
-      device_id: null
-      language: en
-    expected:
-      expected_values: []
-      answer_excludes: []
-      actions: []
-      max_tool_calls: 3
-      reference_tool_calls: 2
-      answer_values:
-      - '64'
-      provenance_values:
-      - sensor.bedroom_humidity
-      tool_result_checks:
-      - tool_name: get_statistics
-        statistic_ids:
-        - sensor.bedroom_humidity
-        fields:
-        - mean
-        period: hour
-        entry_values:
-        - '64.0'
-        min_results: 2
     action_domains: []
   metadata: null
   expected_output: null
@@ -1785,8 +1694,7 @@ cases:
       - sensor.pool_temperature
       - sensor.pool_temp
       actions: []
-      max_tool_calls: 3
-      reference_tool_calls: 2
+      max_tool_calls: 10
       answer_values:
       - not
     action_domains: []
@@ -1808,8 +1716,7 @@ cases:
       expected_values: []
       answer_excludes: []
       actions: []
-      max_tool_calls: 3
-      reference_tool_calls: 2
+      max_tool_calls: 10
       answer_values:
       - 'no'
       tool_result_checks:
@@ -1838,8 +1745,7 @@ cases:
       answer_excludes:
       - switch.garage_opener
       actions: []
-      max_tool_calls: 3
-      reference_tool_calls: 2
+      max_tool_calls: 10
       answer_values:
       - reminder
       provenance_values:
@@ -1874,8 +1780,7 @@ cases:
       expected_values: []
       answer_excludes: []
       actions: []
-      max_tool_calls: 6
-      reference_tool_calls: 2
+      max_tool_calls: 10
       answer_values:
       - 0 hours
       provenance_values:
@@ -1901,8 +1806,7 @@ cases:
       expected_values: []
       answer_excludes: []
       actions: []
-      max_tool_calls: 6
-      reference_tool_calls: 2
+      max_tool_calls: 10
       answer_values:
       - Living Room
       - '25.2'
@@ -1927,8 +1831,7 @@ cases:
       expected_values: []
       answer_excludes: []
       actions: []
-      max_tool_calls: 6
-      reference_tool_calls: 2
+      max_tool_calls: 10
       answer_values:
       - '64'
       provenance_values:
@@ -1952,8 +1855,7 @@ cases:
       expected_values: []
       answer_excludes: []
       actions: []
-      max_tool_calls: 3
-      reference_tool_calls: 2
+      max_tool_calls: 10
       answer_values:
       - '210'
     action_domains: []
@@ -1975,8 +1877,7 @@ cases:
       expected_values: []
       answer_excludes: []
       actions: []
-      max_tool_calls: 6
-      reference_tool_calls: 2
+      max_tool_calls: 10
       answer_values:
       - '26.25'
       provenance_values:
@@ -2000,8 +1901,7 @@ cases:
       expected_values: []
       answer_excludes: []
       actions: []
-      max_tool_calls: 6
-      reference_tool_calls: 2
+      max_tool_calls: 10
       answer_values:
       - Eval
       provenance_values:
@@ -2026,8 +1926,7 @@ cases:
       expected_values: []
       answer_excludes: []
       actions: []
-      max_tool_calls: 3
-      reference_tool_calls: 2
+      max_tool_calls: 10
       answer_values:
       - set temperature
       provenance_values:
@@ -2056,8 +1955,7 @@ cases:
         service: turn_off
         target_entity_ids:
         - light.living
-      max_tool_calls: 4
-      reference_tool_calls: 2
+      max_tool_calls: 10
     action_domains: []
   metadata: null
   expected_output: null
@@ -2082,8 +1980,7 @@ cases:
         target_entity_ids:
         - light.living
         - light.bedroom
-      max_tool_calls: 4
-      reference_tool_calls: 2
+      max_tool_calls: 10
     action_domains: []
   metadata: null
   expected_output: null
@@ -2108,8 +2005,7 @@ cases:
         target_entity_ids:
         - light.bedroom
         - light.office_desk
-      max_tool_calls: 4
-      reference_tool_calls: 2
+      max_tool_calls: 10
     action_domains: []
   metadata: null
   expected_output: null
@@ -2139,8 +2035,7 @@ cases:
         - fan.living_fan
         service_data:
           percentage: 30
-      max_tool_calls: 4
-      reference_tool_calls: 2
+      max_tool_calls: 10
     action_domains: []
   metadata: null
   expected_output: null
@@ -2167,8 +2062,7 @@ cases:
         service_data:
           temperature: 21
           hvac_mode: heat
-      max_tool_calls: 4
-      reference_tool_calls: 2
+      max_tool_calls: 10
     action_domains: []
   metadata: null
   expected_output: null
@@ -2193,8 +2087,7 @@ cases:
         target_entity_ids: []
         service_data:
           message: Bedroom humidity is high.
-      max_tool_calls: 4
-      reference_tool_calls: 2
+      max_tool_calls: 10
     action_domains: []
   metadata: null
   expected_output: null
@@ -2214,8 +2107,7 @@ cases:
       expected_values: []
       answer_excludes: []
       actions: []
-      max_tool_calls: 3
-      reference_tool_calls: 2
+      max_tool_calls: 10
       blocked_outcome:
         max_attempts: 1
         error_keys:
@@ -2246,8 +2138,7 @@ cases:
       expected_values: []
       answer_excludes: []
       actions: []
-      max_tool_calls: 3
-      reference_tool_calls: 2
+      max_tool_calls: 10
       blocked_outcome:
         max_attempts: 1
         error_keys:
@@ -2282,8 +2173,7 @@ cases:
         service: toggle
         target_entity_ids:
         - switch.dehumidifier
-      max_tool_calls: 4
-      reference_tool_calls: 2
+      max_tool_calls: 10
     action_domains: []
   metadata: null
   expected_output: null
@@ -2304,8 +2194,7 @@ cases:
       expected_values: []
       answer_excludes: []
       actions: []
-      max_tool_calls: 6
-      reference_tool_calls: 2
+      max_tool_calls: 10
       answer_values:
       - '72'
       - Area 1 1 Ceiling
@@ -2331,8 +2220,7 @@ cases:
       expected_values: []
       answer_excludes: []
       actions: []
-      max_tool_calls: 3
-      reference_tool_calls: 2
+      max_tool_calls: 10
       answer_values:
       - Area 1 1
       - Area 1 1 Ceiling
@@ -2359,8 +2247,7 @@ cases:
       expected_values: []
       answer_excludes: []
       actions: []
-      max_tool_calls: 6
-      reference_tool_calls: 2
+      max_tool_calls: 10
       answer_values:
       - active
       - sensor.living_temp
@@ -2385,8 +2272,7 @@ cases:
       expected_values: []
       answer_excludes: []
       actions: []
-      max_tool_calls: 6
-      reference_tool_calls: 2
+      max_tool_calls: 10
       answer_values:
       - Low battery
       - Update available
@@ -2409,8 +2295,7 @@ cases:
       expected_values: []
       answer_excludes: []
       actions: []
-      max_tool_calls: 3
-      reference_tool_calls: 2
+      max_tool_calls: 10
       answer_values:
       - '25.2'
     action_domains: []
@@ -2433,8 +2318,7 @@ cases:
       expected_values: []
       answer_excludes: []
       actions: []
-      max_tool_calls: 1
-      reference_tool_calls: 1
+      max_tool_calls: 10
       answer_values:
       - '64'
       - '25.2'

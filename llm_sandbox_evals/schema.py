@@ -59,12 +59,12 @@ class ToolResultCheck:
 
 @dataclass(frozen=True, slots=True)
 class BlockedOutcome:
-    """User-facing expectations for a deliberately blocked action attempt."""
+    """Structured expectations for a deliberately blocked action attempt."""
 
     max_attempts: int = 1
     error_keys: tuple[str, ...] = ()
     acknowledgement_values: tuple[str, ...] = ()
-    """Alternative inability/acknowledgement phrases; any one present passes."""
+    """Diagnostic-only prose hints retained for report context."""
     answer_excludes: tuple[str, ...] = ()
     success_claim_excludes: tuple[str, ...] = (
         "successfully",
@@ -90,11 +90,11 @@ class BlockedOutcome:
 class Expected:
     """Outcome-evidence expectations: salient facts, exclusions, and side effects.
 
-    ``expected_values`` is the legacy final-answer evidence bucket kept for case
-    migration. New cases should use ``answer_values`` for user-visible final
-    answer facts, ``provenance_values`` for hidden/tool-payload facts,
-    ``tool_result_checks`` for structured recorder evidence, and
-    ``blocked_outcome`` for deliberately blocked action UX.
+    ``answer_values`` are expected facts in structured tool/action evidence.
+    ``expected_values`` is a legacy migration bucket treated the same way.
+    Final-answer prose checks are diagnostic only; scoring should be grounded in
+    structured tool outputs, recorded actions, recorder checks, and blocked-action
+    side effects instead of parsing the model's prose.
     """
 
     expected_values: tuple[str, ...] = ()
@@ -105,8 +105,7 @@ class Expected:
     answer_excludes: tuple[str, ...] = ()
     actions: tuple[ExpectedAction, ...] = ()
     guidance_candidate: str | None = None
-    max_tool_calls: int = 8
-    reference_tool_calls: int | None = None
+    max_tool_calls: int = 10
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,8 +137,8 @@ class ToolEvent:
     """One paired tool call/return captured for an eval cell trace.
 
     ``output`` is the production tool return payload verbatim (a dict envelope
-    such as the ``execute_home_code`` result or a recorder result), used by the
-    any-source evidence audit and the ``execution_ok`` gate.
+    such as the ``execute_home_code`` result or a recorder result), used by
+    structured evidence checks and the final-tool success gate.
     """
 
     tool_name: str

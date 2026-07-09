@@ -1,6 +1,6 @@
 # LLM Sandbox Evals
 
-Development-only eval harness for the `llm_sandbox` Home Assistant integration. It runs a real `pydantic_ai.Agent` against **frozen Home Assistant fixtures**, executes the production `execute_home_code` / recorder tool cores, scores final outcomes plus tool-call efficiency, and ranks **prompt candidates** across a **matrix of language models** through native `pydantic_evals` `Dataset` / `EvaluationReport` reporting.
+Development-only eval harness for the `llm_sandbox` Home Assistant integration. It runs a real `pydantic_ai.Agent` against **frozen Home Assistant fixtures**, executes the production `execute_home_code` / recorder tool cores, scores structured final outcomes with a global tool-call cutoff, and ranks **prompt candidates** across a **matrix of language models** through native `pydantic_evals` `Dataset` / `EvaluationReport` reporting.
 
 This package is not part of the integration runtime. It never adds dependencies to `custom_components/` or `manifest.json`, and it never touches a live Home Assistant instance.
 
@@ -38,7 +38,7 @@ Every candidate is evaluated against every model. The native `Candidate x model 
 
 ## Optimizing the prompt (DSPy COPRO)
 
-The `optimize` command uses [DSPy](https://dspy.ai/)'s COPRO instruction optimizer to rewrite the API instruction (`api_prompt`, seeded from the selected production prompt profile) and **keeps the real agent harness as the metric**: COPRO proposes instruction variants, and each is scored by `run_case(...)` against one target model using production tool calls, final-answer outcome checks, and tool-call efficiency scoring. The winner is then optionally cross-evaluated against the model matrix.
+The `optimize` command uses [DSPy](https://dspy.ai/)'s COPRO instruction optimizer to rewrite the API instruction (`api_prompt`, seeded from the selected production prompt profile) and **keeps the real agent harness as the metric**: COPRO proposes instruction variants, and each is scored by `run_case(...)` against one target model using production tool calls and structured outcome checks. The winner is then optionally cross-evaluated against the model matrix.
 
 `optimize` uses DSPy, whose `dspy.LM` path accepts litellm-style ids such as `openrouter/...`; `eval` uses Pydantic AI provider-prefixed ids such as `openrouter:...`.
 
@@ -104,13 +104,13 @@ The integration's `scripts/check` is unaffected by this package. `optimize-evals
 
 ## How scoring works
 
-Each `(candidate, model, case)` runs until the Pydantic AI agent emits a terminal natural-language answer with no tool calls, or until `expected.max_tool_calls or config.max_tool_calls` is exceeded and the harness records `tool_calls_exceeded`. It then produces a score in `[0.0, 1.0]`:
+Each `(candidate, model, case)` runs until the Pydantic AI agent emits a terminal natural-language answer with no tool calls, or until the global `config.max_tool_calls` cutoff is exceeded and the harness records `tool_calls_exceeded`. It then produces a score in `[0.0, 1.0]`:
 
-- **Required outcome gates** (any failure caps the case at `0.0`): the case has a meaningful oracle; `answer_values` (plus legacy `expected_values`) appear in the final answer; `provenance_values` appear in tool payloads when specified; each `tool_result_check_*` finds a successful, relevant recorder result shape that is non-empty unless the expected outcome explicitly allows no data with `min_results: 0`; excluded answer facts are absent; tool execution succeeds; allowed actions match exact expected side effects, or blocked actions satisfy `blocked_outcome`; and tool calls stay within the case cap.
+- **Required outcome gates** (any failure caps the case at `0.0`): the case has a meaningful oracle; `answer_values` (plus legacy `expected_values`) appear in structured tool/action evidence; `provenance_values` appear in structured payloads when specified; each `tool_result_check_*` finds a successful, relevant recorder result shape that is non-empty unless the expected outcome explicitly allows no data with `min_results: 0`; the final tool call did not fail; allowed actions match exact expected side effects, or blocked actions satisfy `blocked_outcome`; and tool calls stay within the global cap.
 - **Allowed actions are exact side effects:** split calls may satisfy the exact expected target union for the same domain/service/service-data effect, but supersets, duplicate calls, unrelated side effects, and action errors fail.
-- **Blocked actions are UX checks:** they require graceful inability/acknowledgement, no success claim, no excessive retries, and no hidden detail leakage. Sandbox/tool enforcement belongs in unit or integration tests, not LLM evals.
-- **Efficiency** applies only after required gates pass: `min(1.0, reference_tool_calls / actual_tool_calls)` (with `actual=0` treated as `1.0`) when `reference_tool_calls` is set.
-- Default max tool calls is `8`; per-case `expected.max_tool_calls` can lower or raise the cap.
+- **Blocked actions are structured side-effect checks:** they require no successful disallowed action, bounded blocked attempts, and expected error keys when an action is attempted. Sandbox/tool enforcement belongs in unit or integration tests, not LLM evals.
+- **Answer text checks are diagnostic only:** `answer_evidence_present` and `answer_excludes_absent` are reported for analysis but do not determine the score.
+- **Tool-call counts are reported, not efficiency-scored:** every trace records `tool_call_count`; use many runs to establish empirical baselines before introducing count-based scoring. The default hard cutoff is `10`.
 
 ## Adding cases
 
@@ -137,20 +137,19 @@ cases:
       tool_result_checks: []
       answer_excludes: []
       actions: []
-      max_tool_calls: 3
-      reference_tool_calls: 1
+      max_tool_calls: 10
 ```
 
 Categories: `state_read`, `registry_read`, `recorder_read`, `action_allowed`, `action_blocked`, `complex`, `recovery`. New cases should use the current outcome fields:
 
-- `answer_values` — distinctive whole-word tokens that must appear in the final visible answer.
+- `answer_values` — distinctive whole-word tokens that must appear in structured tool/action evidence. Final-answer prose matching is diagnostic-only.
 - `provenance_values` — entity IDs, default IDs, selector-expansion facts, or other hidden/tool-payload evidence that should not be required in final prose.
 - `tool_result_checks` — structured recorder evidence for `get_history`, `get_statistics`, or `get_logbook`; recorder/history/statistics/logbook cases must include checks for successful, relevant result shapes that are non-empty unless the expected outcome explicitly allows no data with `min_results: 0`.
-- `blocked_outcome` — UX expectations for deliberately blocked actions: allowed error keys, acknowledgement values, answer exclusions, success-claim exclusions, and maximum attempts.
+- `blocked_outcome` — structured expectations for deliberately blocked actions: allowed error keys and maximum attempts.
 - `actions` — exact allowed side effects, with split calls allowed only when they satisfy the expected target union and no extra/duplicate/error side effects occur.
-- `answer_excludes`, `max_tool_calls`, and `reference_tool_calls` — final-answer exclusions, hard call cap, and optional efficiency reference.
+- `answer_excludes` and `max_tool_calls` — diagnostic final-answer exclusions and the hard call cap.
 
-`expected_values` is the legacy migration bucket for final-answer evidence; do not use it for new cases. Scoring also requires `execution_ok` and excludes provider/infra `model_error` cells from means while counting them as incomplete. Recorder evals may be solved by supported selectors through native function calling, but the prompt should only mention selectors when that is natural user phrasing.
+`expected_values` is the legacy migration bucket for structured evidence; do not use it for new cases. Scoring also requires `execution_ok` and excludes provider/infra `model_error` cells from means while counting them as incomplete. Recorder evals may be solved by supported selectors through native function calling, but the prompt should only mention selectors when that is natural user phrasing.
 
 Recorder eval execution calls the production `GetHistoryTool` / `GetStatisticsTool` / `GetLogbookTool.run_query(...)` cores with a fixture-backed `RecorderSource`; result envelopes are the production envelopes, including cursor and recoverable-error shapes.
 
@@ -174,6 +173,6 @@ DSPy optimization runs write `optimized_candidate.json` and `optimized_prompt.md
 
 ## Scope
 
-**In:** deterministic outcome + tool-call efficiency scoring, multi-model matrix, native `pydantic_evals` `Dataset` / `EvaluationReport` integration, optional Logfire export via `--logfire`, Pydantic AI agent tool-calling, offline FunctionModel stub validation, production `execute_home_code` and recorder cores against frozen snapshots, `report.json` artifacts, and DSPy COPRO instruction optimization (export-only; never auto-patches production `prompts.py`).
+**In:** deterministic structured-outcome scoring, tool-call count reporting, multi-model matrix, native `pydantic_evals` `Dataset` / `EvaluationReport` integration, optional Logfire export via `--logfire`, Pydantic AI agent tool-calling, offline FunctionModel stub validation, production `execute_home_code` and recorder cores against frozen snapshots, `report.json` artifacts, and DSPy COPRO instruction optimization (export-only; never auto-patches production `prompts.py`).
 
 **Out of scope:** LLM-as-judge scoring, live Home Assistant or recorder DB, CI jobs that call paid models, mutable cross-turn fixture state, and auto-editing production `prompts.py`. GEPA/MIPROv2 (richer feedback-driven or joint demo+instruction search) are not yet wired; COPRO is the implemented optimizer.

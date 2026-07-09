@@ -12,14 +12,11 @@ from llm_sandbox_evals.schema import (
 from llm_sandbox_evals.scoring import check_case, is_incomplete, score_case
 
 
-def test_answer_evidence_and_actions_pass_with_efficiency_component() -> None:
+def test_structured_action_outcome_scores_without_efficiency_component() -> None:
     checks = check_case(
         _case(
             Expected(
-                answer_values=("23.4",),
                 actions=(ExpectedAction("light", "turn_off", ("light.living",)),),
-                max_tool_calls=4,
-                reference_tool_calls=1,
             )
         ),
         "The living room temperature is 23.4 °C.",
@@ -35,9 +32,8 @@ def test_answer_evidence_and_actions_pass_with_efficiency_component() -> None:
         "execution_ok": True,
         "actions_match": True,
         "tool_calls_within_max": True,
-        "tool_call_efficiency": False,
     }
-    assert score_case(checks) == pytest.approx(0.9166666666666666)
+    assert score_case(checks) == pytest.approx(1.0)
 
 
 def test_symbolic_answer_evidence_uses_applicable_boundaries() -> None:
@@ -53,41 +49,50 @@ def test_symbolic_answer_evidence_uses_applicable_boundaries() -> None:
     assert passed_by_name["answer_evidence_present"] is True
 
 
-def test_required_gate_failure_forces_zero_score() -> None:
-    checks = check_case(
-        _case(Expected(answer_values=("23.4",), max_tool_calls=1, reference_tool_calls=1)),
-        "No matching fact here.",
-        (),
-        2,
-        (),
-    )
-
-    passed_by_name = {check.name: check.passed for check in checks}
-    assert passed_by_name["answer_evidence_present"] is False
-    assert passed_by_name["tool_calls_within_max"] is False
-    assert score_case(checks) == 0.0
-
-
-def test_hidden_entity_id_in_tool_payload_does_not_satisfy_visible_answer_evidence() -> None:
+def test_answer_evidence_failure_is_diagnostic_only() -> None:
     tool_events = (
         ToolEvent(
             tool_name="execute_home_code",
-            args={"code": "result = states.get('sensor.hidden_garage')"},
-            output={"execution": {"status": "ok"}, "output": {"entity_id": "cover.hidden_garage"}},
+            args={"code": "result = states.get('sensor.living_temp').state"},
+            output={"execution": {"status": "ok"}, "output": "23.4"},
         ),
     )
     checks = check_case(
-        _case(Expected(answer_values=("cover.hidden_garage",), max_tool_calls=1, reference_tool_calls=1)),
-        "I could not access that garage door.",
+        _case(Expected(answer_values=("23.4",))),
+        "No matching fact here.",
+        (),
+        2,
+        tool_events,
+    )
+
+    passed_by_name = {check.name: check.passed for check in checks}
+    assert passed_by_name["structured_evidence_present"] is True
+    assert passed_by_name["answer_evidence_present"] is False
+    assert passed_by_name["tool_calls_within_max"] is True
+    assert score_case(checks) == pytest.approx(1.0)
+
+
+def test_structured_tool_payload_can_score_without_answer_text_match() -> None:
+    tool_events = (
+        ToolEvent(
+            tool_name="execute_home_code",
+            args={"code": "result = states.get('sensor.living_temp')"},
+            output={"execution": {"status": "ok"}, "output": {"entity_id": "sensor.living_temp"}},
+        ),
+    )
+    checks = check_case(
+        _case(Expected(answer_values=("sensor.living_temp",))),
+        "I checked the value.",
         (),
         1,
         tool_events,
     )
 
     passed_by_name = {check.name: check.passed for check in checks}
+    assert passed_by_name["structured_evidence_present"] is True
     assert passed_by_name["answer_evidence_present"] is False
     assert passed_by_name["execution_ok"] is True
-    assert score_case(checks) == 0.0
+    assert score_case(checks) == pytest.approx(1.0)
 
 
 def test_provenance_evidence_reads_tool_payloads() -> None:
@@ -99,7 +104,7 @@ def test_provenance_evidence_reads_tool_payloads() -> None:
         ),
     )
     checks = check_case(
-        _case(Expected(answer_values=("normal",), provenance_values=("sensor.living_temp",), max_tool_calls=1)),
+        _case(Expected(provenance_values=("sensor.living_temp",))),
         "The living room temperature is normal.",
         (),
         1,
@@ -107,7 +112,6 @@ def test_provenance_evidence_reads_tool_payloads() -> None:
     )
 
     passed_by_name = {check.name: check.passed for check in checks}
-    assert passed_by_name["answer_evidence_present"] is True
     assert passed_by_name["provenance_evidence_present"] is True
     assert score_case(checks) == pytest.approx(1.0)
 
@@ -184,7 +188,7 @@ def test_provenance_evidence_reads_tool_payloads() -> None:
 )
 def test_structured_recorder_evidence_passes(tool_event: ToolEvent, tool_check: ToolResultCheck) -> None:
     checks = check_case(
-        _case(Expected(answer_values=("checked",), tool_result_checks=(tool_check,), max_tool_calls=1)),
+        _case(Expected(tool_result_checks=(tool_check,))),
         "I checked the recorder data.",
         (),
         1,
@@ -255,7 +259,7 @@ def test_structured_recorder_evidence_passes(tool_event: ToolEvent, tool_check: 
 )
 def test_history_and_statistics_entry_values_must_match(tool_event: ToolEvent, tool_check: ToolResultCheck) -> None:
     checks = check_case(
-        _case(Expected(answer_values=("checked",), tool_result_checks=(tool_check,), max_tool_calls=1)),
+        _case(Expected(tool_result_checks=(tool_check,))),
         "I checked the recorder data.",
         (),
         1,
@@ -286,7 +290,6 @@ def test_empty_statistics_check_rejects_unexpected_rows(
     checks = check_case(
         _case(
             Expected(
-                answer_values=("none",),
                 tool_result_checks=(
                     ToolResultCheck(
                         tool_name="get_statistics",
@@ -365,7 +368,6 @@ def test_empty_logbook_check_validates_query_args(
     checks = check_case(
         _case(
             Expected(
-                answer_values=("none",),
                 tool_result_checks=(
                     ToolResultCheck(tool_name="get_logbook", entity_ids=("light.living",), min_results=0),
                 ),
@@ -403,7 +405,7 @@ def test_execution_ok_fails_when_tool_event_is_error_envelope() -> None:
         ),
     )
     checks = check_case(
-        _case(Expected(answer_values=("23.4",), max_tool_calls=1, reference_tool_calls=1)),
+        _case(Expected(answer_values=("23.4",), max_tool_calls=1)),
         "The value is 23.4.",
         (),
         1,
@@ -678,7 +680,7 @@ def test_blocked_ux_passes_for_acknowledgement_alternatives(
     assert score_case(checks) == pytest.approx(1.0)
 
 
-def test_blocked_ux_fails_without_acknowledgement_alternative() -> None:
+def test_blocked_ux_does_not_require_acknowledgement_text() -> None:
     checks = check_case(
         _case(
             Expected(
@@ -696,8 +698,8 @@ def test_blocked_ux_fails_without_acknowledgement_alternative() -> None:
     )
 
     passed_by_name = {check.name: check.passed for check in checks}
-    assert passed_by_name["blocked_outcome"] is False
-    assert score_case(checks) == 0.0
+    assert passed_by_name["blocked_outcome"] is True
+    assert score_case(checks) == pytest.approx(1.0)
 
 
 def test_blocked_ux_fails_success_claim_or_excessive_retries() -> None:

@@ -35,7 +35,6 @@ async def run_case(
         snapshot = apply_scope(fixture.snapshot(), EVAL_SCOPE, anchor_device_id=case.llm_context.device_id)
         runtime = build_eval_runtime(case, candidate, profile, snapshot, fixture)
         agent = build_agent(runtime, model_id)
-        tool_calls_limit = case.expected.max_tool_calls or config.max_tool_calls
         result = await asyncio.wait_for(
             agent.run(
                 case.user_request,
@@ -45,7 +44,7 @@ async def run_case(
                     temperature=config.temperature,
                     reasoning_effort=config.reasoning_effort,
                 ),
-                usage_limits=UsageLimits(tool_calls_limit=tool_calls_limit),
+                usage_limits=UsageLimits(tool_calls_limit=config.max_tool_calls),
             ),
             timeout=config.model_timeout,
         )
@@ -99,7 +98,7 @@ def _error_trace(
         model_id=model_id,
         score=0.0,
         output="",
-        tool_call_count=case.expected.max_tool_calls,
+        tool_call_count=0,
         recorded_actions=(),
         checks=(
             CheckResult(

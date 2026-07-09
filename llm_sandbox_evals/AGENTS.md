@@ -2,7 +2,7 @@
 
 ## Project Identity
 
-`llm_sandbox_evals/` is a **development-only** package at repo root that evaluates the `llm_sandbox` LLM tools (`execute_home_code`, `get_history`, `get_statistics`, `get_logbook`). It runs a real `pydantic_ai.Agent` against **frozen** `HomeSnapshot` fixtures (hand-built in Python — no JSON deserializer exists), executes the production `run_execute` / `run_query` tool cores, scores final outcomes with tool-call efficiency, and ranks prompt candidates across a matrix of language models through native `pydantic_evals` `Dataset` / `EvaluationReport` reporting.
+`llm_sandbox_evals/` is a **development-only** package at repo root that evaluates the `llm_sandbox` LLM tools (`execute_home_code`, `get_history`, `get_statistics`, `get_logbook`). It runs a real `pydantic_ai.Agent` against **frozen** `HomeSnapshot` fixtures (hand-built in Python — no JSON deserializer exists), executes the production `run_execute` / `run_query` tool cores, scores structured final outcomes with a global tool-call cutoff, and ranks prompt candidates across a matrix of language models through native `pydantic_evals` `Dataset` / `EvaluationReport` reporting.
 
 It is **not** part of the integration runtime. See `README.md` for usage.
 
@@ -11,10 +11,10 @@ It is **not** part of the integration runtime. See `README.md` for usage.
 Eval cases are realistic human Home Assistant tasks. They are **not** tool-contract, sandbox-enforcement, malformed-input, or unit/integration-test cases.
 
 - Write `user_request` prompts the way a real person would ask Assist. Do not ask for entity IDs, tool names, raw service names, selectors, or implementation details unless that is natural user language for the scenario.
-- Use `expected.answer_values` for final user-visible facts. Entity IDs, default IDs, selector expansion facts, and other hidden evidence belong in `expected.provenance_values` or structured tool checks, not final prose requirements. `expected.expected_values` is legacy migration-only.
+- Do not make scoring depend on parsing model prose. `expected.answer_values` should name facts expected in structured tool/action evidence; `answer_evidence_present` is diagnostic-only for final prose. Use structured tool outputs, `expected.provenance_values`, `expected.tool_result_checks`, and `expected.actions` for scoring evidence. `expected.expected_values` is legacy migration-only.
 - Recorder/history/statistics/logbook cases must include `expected.tool_result_checks` that prove a successful, non-empty, relevant result shape for the production recorder tool output.
 - Allowed-action cases score exact side effects. Split service calls may satisfy the expected target union for the same domain/service/service-data effect, but supersets, duplicate calls, unrelated side effects, and action errors fail.
-- Blocked-action cases measure user experience: graceful inability or acknowledgement, no success claim, bounded retries, and no hidden detail leakage. Tool-enforcement behavior belongs in unit/integration tests, not LLM evals.
+- Blocked-action cases measure structured side effects: no successful disallowed action, bounded blocked attempts, and expected error keys when an action is attempted. Wording, acknowledgement phrasing, and prose leakage checks belong in targeted tests or diagnostics, not core LLM eval scoring.
 - Removed tool-contract, recovery, and malformed-input cases belong in unit/integration tests. Do not reintroduce them as LLM eval cases.
 
 ## Tool Purpose and Alignment
@@ -23,7 +23,7 @@ Eval cases are realistic human Home Assistant tasks. They are **not** tool-contr
 
 Treat the submitted code as short-lived task glue: interpret reasonable intent, accept common LLM coding patterns, and prefer "do what the user likely meant" over strict rejection when it is safe to do so.
 
-Design for success in one call, and recovery in no more than one follow-up call.
+Design for success in one call, and recovery in no more than one follow-up call. The eval harness uses a hard 10-tool-call cutoff only to prevent lengthy runs; lower per-case budgets and reference-call efficiency scores are not meaningful without empirical evidence.
 
 On success, return the useful result directly. On failure, return actionable feedback that tells the next LLM call exactly what went wrong, what names or APIs are available, and what concrete change is likely to work.
 
@@ -67,12 +67,12 @@ score    = scoring.score_case(checks)
 report = dataset.evaluate(task, name="matrix", max_concurrency=config.concurrency)
 ```
 
-The harness owns the snapshot lifecycle and builds a fresh scoped snapshot per case. Correct outcomes score required gates plus optional `reference_tool_calls / actual_tool_calls`; failed required outcome gates score `0.0`. The native `EvaluationReport` carries the per-cell scores, deterministic check labels, candidate ranking, candidate x model means, and overall mean. The real executor activates/clears its own runtime contextvars internally — the harness does **not** call `activate_runtime`/`clear_runtime`.
+The harness owns the snapshot lifecycle and builds a fresh scoped snapshot per case. Correct outcomes score required structured gates plus a global 10-tool-call cutoff; failed required outcome gates score `0.0`. The native `EvaluationReport` carries the per-cell scores, deterministic check labels, candidate ranking, candidate x model means, and overall mean. The real executor activates/clears its own runtime contextvars internally — the harness does **not** call `activate_runtime`/`clear_runtime`.
 
 ### Module map
 
 - `schema.py` — **stable shared contracts** (`PromptCandidate`, `EvalCase`, `Expected`, `ExpectedAction`, `CaseContext`, `CheckResult`, `ToolEvent`, `CaseTrace`). Do not rename fields without updating all consumers.
-- `config.py` — `EvalConfig` + `load_config()` (defaults: `models=["stub"]`, `candidates=["baseline"]`, `max_tool_calls=8`).
+- `config.py` — `EvalConfig` + `load_config()` (defaults: `models=["stub"]`, `candidates=["baseline"]`, `max_tool_calls=10`).
 - `data/cases.yaml` — native `pydantic_evals.Dataset` authoring file for the predefined suite (simple -> complex, all categories), with `data/cases_schema.json` generated by `Dataset.to_file()`.
 - `cases.py` — loads `data/cases.yaml` with `Dataset.from_file()` and exposes stable `CASES: list[EvalCase]`.
 - `homes/` — frozen fixture modules (`snapshot() -> HomeSnapshot`, `recorder() -> dict`) + `get_home(name)` registry.
@@ -80,7 +80,7 @@ The harness owns the snapshot lifecycle and builds a fresh scoped snapshot per c
 - `agent_runner.py` — Pydantic AI `Agent`/`Tool.from_schema` wiring, production schema conversion, real-model inference, reasoning settings, and the offline `FunctionModel` stub.
 - `runtime.py` — `EvalRuntime`, fixture-backed `RecorderSource`, runtime context factory, and SQL/history/statistics fixture seams for `execute_home_code`.
 - `tools.py` — `EVAL_SCOPE`, `apply_scope`, `RecordingInvoker`, and action normalization helpers only; no tool emulators.
-- `scoring.py` — `check_case(...)`, `score_case(...)`, `mean_score(...)`, `is_incomplete(...)`. Outcome-evidence gates (`meaningful_oracle`, `answer_evidence_present`, optional `provenance_evidence_present`, optional `tool_result_check_*`, `execution_ok`, exact `actions_match` or blocked-action `blocked_outcome`, `tool_calls_within_max`) + tool-call efficiency scoring; `model_error` cells are flagged incomplete and excluded from means.
+- `scoring.py` — `check_case(...)`, `score_case(...)`, `mean_score(...)`, `is_incomplete(...)`. Outcome-evidence gates (`meaningful_oracle`, optional diagnostic `answer_evidence_present`, optional `provenance_evidence_present`, optional `tool_result_check_*`, final-tool `execution_ok`, exact `actions_match` or structured blocked-action `blocked_outcome`, global `tool_calls_within_max`); `model_error` cells are flagged incomplete and excluded from means.
 - `harness.py` — `run_case(...) -> CaseTrace`; the bounded per-cell task body reused by native experiments and DSPy. Captures per-call `ToolEvent`s (tool name, args, return payload) from the agent conversation.
 - `experiment.py` — native `pydantic_evals` `Dataset` construction, deterministic `SandboxOutcome` evaluator, report-level candidate/model analyses, and `run_matrix(...) -> EvaluationReport`.
 - `reports.py` — `write_report_json(...)`, `load_report_payload(...)`, and `render_report_summary(...)` for the single saved `report.json` artifact.
@@ -97,7 +97,7 @@ The harness owns the snapshot lifecycle and builds a fresh scoped snapshot per c
 
 ## How To Extend
 
-- **Add a case:** append one native Dataset `Case` to `data/cases.yaml` with `name` matching `inputs.id`; do not hand-parse the file in code. Reference a real fixture `home`; keep `expected` outcome-evidence (`answer_values`, `provenance_values`, `tool_result_checks`, `blocked_outcome`, `answer_excludes`, `actions`, `max_tool_calls`, `reference_tool_calls`). Use realistic human `user_request` text and keep removed tool-contract/recovery/malformed-input coverage in unit/integration tests. `expected_values` is a legacy final-answer bucket kept only for migration.
+- **Add a case:** append one native Dataset `Case` to `data/cases.yaml` with `name` matching `inputs.id`; do not hand-parse the file in code. Reference a real fixture `home`; keep `expected` outcome-evidence (`answer_values`, `provenance_values`, `tool_result_checks`, `blocked_outcome`, `answer_excludes`, `actions`, `max_tool_calls`). Use realistic human `user_request` text and keep removed tool-contract/recovery/malformed-input coverage in unit/integration tests. `expected_values` is a legacy structured-evidence bucket kept only for migration.
 - **Add a fixture:** add `homes/<name>.py` with `snapshot()`/`recorder()` and `NAME`, then register in `homes/__init__.py`. Mirror `home_default.py`'s helpers (effective-area rule, sorted tuple `SnapshotIndexes`, nested `SafeContext`).
 - **Add a candidate:** add a `PromptCandidate` and expose via `prompts.load_candidates`. `baseline` is auto-built; unknown ids currently raise.
 - **Add a model:** no code needed — pass any Pydantic AI provider-prefixed id (`openai:...`, `anthropic:...`, `openrouter:...`) to `--models`.

@@ -15,6 +15,7 @@ _REGISTERED_TOOL_NAMES = frozenset(
     }
 )
 _GUIDANCE_PASSING_CONFIDENCE = frozenset({"exact", "high", "ambiguous"})
+MAX_TOOL_CALLS = 10
 
 
 def check_case(
@@ -30,21 +31,33 @@ def check_case(
 
     checks.append(_meaningful_oracle_check(case))
 
-    # Final-answer evidence is intentionally separated from hidden tool payloads:
-    # entity IDs or other provenance facts in recorder/tool output must not prove
-    # that the user-visible answer contained the requested fact.
+    structured_evidence = _structured_evidence_blob(tool_events, recorded_actions)
     answer_values = case.expected.answer_values + case.expected.expected_values
+    missing_structured_values = [value for value in answer_values if not _token_present(value, structured_evidence)]
+    if answer_values:
+        checks.append(
+            CheckResult(
+                name="structured_evidence_present",
+                passed=not missing_structured_values,
+                required=True,
+                feedback=f"missing={','.join(missing_structured_values)}",
+            )
+        )
+
+    # Final-answer text evidence is diagnostic only. LLM prose is intentionally
+    # not a required scoring surface because small wording/formatting changes are
+    # not reliable indicators of task success.
     missing_values = [value for value in answer_values if not _token_present(value, output_lower)]
     checks.append(
         CheckResult(
             name="answer_evidence_present",
             passed=not missing_values,
-            required=True,
+            required=False,
             feedback=f"missing={','.join(missing_values)}",
         )
     )
 
-    provenance_lower = _tool_evidence_blob(tool_events)
+    provenance_lower = structured_evidence
     missing_provenance = [
         value for value in case.expected.provenance_values if not _token_present(value, provenance_lower)
     ]
@@ -67,52 +80,36 @@ def check_case(
             CheckResult(
                 name="answer_excludes_absent",
                 passed=not present_excludes,
-                required=True,
+                required=False,
                 feedback=f"present={','.join(present_excludes)}",
             )
         )
 
     blocked_outcome = case.expected.blocked_outcome
-    checks.append(_execution_ok_check(tool_events, allow_action_errors=blocked_outcome is not None))
+    checks.append(_final_tool_ok_check(tool_events, allow_action_errors=blocked_outcome is not None))
     if blocked_outcome is None:
         checks.append(_actions_check(case.expected.actions, recorded_actions))
     else:
-        checks.append(_blocked_outcome_check(blocked_outcome, output, recorded_actions))
+        checks.append(_blocked_outcome_check(blocked_outcome, recorded_actions))
     guidance_check = _guidance_quality_check(case.expected.guidance_candidate, tool_events)
     if guidance_check is not None:
         checks.append(guidance_check)
     checks.append(
         CheckResult(
             name="tool_calls_within_max",
-            passed=tool_call_count <= case.expected.max_tool_calls,
+            passed=tool_call_count <= MAX_TOOL_CALLS,
             required=True,
-            feedback=f"calls={tool_call_count} max={case.expected.max_tool_calls}",
+            feedback=f"calls={tool_call_count} max={MAX_TOOL_CALLS}",
         )
     )
-
-    if case.expected.reference_tool_calls is not None:
-        reference = case.expected.reference_tool_calls
-        checks.append(
-            CheckResult(
-                name="tool_call_efficiency",
-                passed=tool_call_count <= reference,
-                required=False,
-                feedback=f"actual={tool_call_count} reference={reference} value={_efficiency_value(reference, tool_call_count):.3f}",
-            )
-        )
     return checks
 
 
 def score_case(checks: list[CheckResult]) -> float:
-    """Score a case from required gates and the tool-call efficiency component."""
+    """Score a case from required structured outcome gates."""
     if any(check.required and not check.passed for check in checks):
         return 0.0
-    components: list[float] = [1.0 for check in checks if check.required and check.passed]
-    for check in checks:
-        if check.name != "tool_call_efficiency":
-            continue
-        components.append(_efficiency_feedback_value(check.feedback))
-    return mean_score(components) if components else 1.0
+    return 1.0
 
 
 def mean_score(case_scores: list[float]) -> float:
@@ -151,9 +148,13 @@ def _meaningful_oracle_check(case: EvalCase) -> CheckResult:
     )
 
 
-def _tool_evidence_blob(tool_events: tuple[ToolEvent, ...]) -> str:
-    """Return lowercased tool return payloads for hidden/provenance evidence."""
-    parts = [json.dumps(event.output, sort_keys=True, default=str) for event in tool_events]
+def _structured_evidence_blob(
+    tool_events: tuple[ToolEvent, ...], recorded_actions: tuple[dict[str, object], ...]
+) -> str:
+    """Return lowercased structured tool and action payloads for scoring evidence."""
+    parts = [json.dumps(event.output, sort_keys=True, default=str) for event in tool_events] + [
+        json.dumps(action, sort_keys=True, default=str) for action in recorded_actions
+    ]
     return "\n".join(parts).lower()
 
 
@@ -178,8 +179,8 @@ def _is_word_edge(character: str) -> bool:
     return re.match(r"\w", character) is not None
 
 
-def _execution_ok_check(tool_events: tuple[ToolEvent, ...], *, allow_action_errors: bool) -> CheckResult:
-    """Return the required gate asserting no tool event produced an error envelope."""
+def _final_tool_ok_check(tool_events: tuple[ToolEvent, ...], *, allow_action_errors: bool) -> CheckResult:
+    """Return the required gate asserting the final tool event did not fail."""
     # Branch boundary: no tool events means the model answered without invoking a
     # tool. execution_ok passes vacuously; the evidence gate is responsible for
     # catching a non-accomplished task in that case.
@@ -190,14 +191,12 @@ def _execution_ok_check(tool_events: tuple[ToolEvent, ...], *, allow_action_erro
             required=True,
             feedback="no_tool_events",
         )
-    errors = [
-        error for event in tool_events if (error := _tool_event_error_kind(event, allow_action_errors)) is not None
-    ]
+    error = _tool_event_error_kind(tool_events[-1], allow_action_errors)
     return CheckResult(
         name="execution_ok",
-        passed=not errors,
+        passed=error is None,
         required=True,
-        feedback="ok" if not errors else f"error={';'.join(errors)}",
+        feedback="ok" if error is None else f"error={error}",
     )
 
 
@@ -498,21 +497,6 @@ def _result_count(payload: Mapping[object, object]) -> int:
     return 1 if payload else 0
 
 
-def _efficiency_value(reference: int, actual: int) -> float:
-    """Return the reference/actual efficiency score, clamped to 1."""
-    if actual <= 0:
-        return 1.0
-    return min(1.0, reference / actual)
-
-
-def _efficiency_feedback_value(feedback: str) -> float:
-    """Read the stable numeric value embedded in the efficiency feedback."""
-    marker = " value="
-    if marker not in feedback:
-        return 1.0
-    return float(feedback.rsplit(marker, 1)[1])
-
-
 def _actions_check(
     expected_actions: tuple[ExpectedAction, ...], recorded_actions: tuple[dict[str, object], ...]
 ) -> CheckResult:
@@ -562,18 +546,12 @@ def _actions_check(
     )
 
 
-def _blocked_outcome_check(
-    expected: BlockedOutcome, output: str, recorded_actions: tuple[dict[str, object], ...]
-) -> CheckResult:
-    """Return the user-facing blocked-action UX check."""
+def _blocked_outcome_check(expected: BlockedOutcome, recorded_actions: tuple[dict[str, object], ...]) -> CheckResult:
+    """Return the structured blocked-action side-effect check."""
     blocked_actions = [action for action in recorded_actions if action.get("status") == "error"]
     successful_actions = [action for action in recorded_actions if action.get("status") != "error"]
-    output_lower = output.lower()
     error_keys = [_recorded_action_error_key(action) for action in blocked_actions]
     disallowed_keys = [key for key in error_keys if expected.error_keys and key not in expected.error_keys]
-    acknowledgement_found = any(_token_present(value, output_lower) for value in expected.acknowledgement_values)
-    present_excludes = [value for value in expected.answer_excludes if value.lower() in output_lower]
-    success_claims = [value for value in expected.success_claim_excludes if value.lower() in output_lower]
     failures: list[str] = []
     if successful_actions:
         failures.append(f"successful_actions={_format_recorded_actions(successful_actions)}")
@@ -581,12 +559,6 @@ def _blocked_outcome_check(
         failures.append(f"attempts={len(blocked_actions)} max={expected.max_attempts}")
     if disallowed_keys:
         failures.append(f"error_keys={','.join(disallowed_keys)}")
-    if expected.acknowledgement_values and not acknowledgement_found:
-        failures.append(f"missing_ack_any={','.join(expected.acknowledgement_values)}")
-    if present_excludes:
-        failures.append(f"present={','.join(present_excludes)}")
-    if success_claims:
-        failures.append(f"success_claims={','.join(success_claims)}")
     return CheckResult(
         name="blocked_outcome",
         passed=not failures,

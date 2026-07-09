@@ -1,7 +1,7 @@
 {
   "$defs": {
     "BlockedOutcome": {
-      "description": "User-facing expectations for a deliberately blocked action attempt.",
+      "description": "Structured expectations for a deliberately blocked action attempt.",
       "properties": {
         "max_attempts": {
           "default": 1,
@@ -17,7 +17,6 @@
           "type": "array"
         },
         "acknowledgement_values": {
-          "description": "Alternative inability/acknowledgement phrases; any one present passes.",
           "default": [],
           "items": {
             "type": "string"
@@ -274,7 +273,7 @@
       "type": "object"
     },
     "Expected": {
-      "description": "Outcome-evidence expectations: salient facts, exclusions, and side effects.\n\n``expected_values`` is the legacy final-answer evidence bucket kept for case\nmigration. New cases should use ``answer_values`` for user-visible final\nanswer facts, ``provenance_values`` for hidden/tool-payload facts,\n``tool_result_checks`` for structured recorder evidence, and\n``blocked_outcome`` for deliberately blocked action UX.",
+      "description": "Outcome-evidence expectations: salient facts, exclusions, and side effects.\n\n``answer_values`` are expected facts in structured tool/action evidence.\n``expected_values`` is a legacy migration bucket treated the same way.\nFinal-answer prose checks are diagnostic only; scoring should be grounded in\nstructured tool outputs, recorded actions, recorder checks, and blocked-action\nside effects instead of parsing the model's prose.",
       "properties": {
         "expected_values": {
           "default": [],
@@ -348,21 +347,9 @@
           "title": "Guidance Candidate"
         },
         "max_tool_calls": {
-          "default": 8,
+          "default": 10,
           "title": "Max Tool Calls",
           "type": "integer"
-        },
-        "reference_tool_calls": {
-          "anyOf": [
-            {
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Reference Tool Calls"
         }
       },
       "title": "Expected",
