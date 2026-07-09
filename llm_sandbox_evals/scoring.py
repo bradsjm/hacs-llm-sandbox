@@ -4,7 +4,15 @@ import json
 import re
 from collections.abc import Iterable, Mapping, Sequence
 
-from llm_sandbox_evals.schema import BlockedOutcome, CheckResult, EvalCase, ExpectedAction, ToolEvent, ToolResultCheck
+from llm_sandbox_evals.schema import (
+    BlockedOutcome,
+    CheckResult,
+    EvalCase,
+    Expected,
+    ExpectedAction,
+    ToolEvent,
+    ToolResultCheck,
+)
 
 _REGISTERED_TOOL_NAMES = frozenset(
     {
@@ -16,6 +24,7 @@ _REGISTERED_TOOL_NAMES = frozenset(
 )
 _GUIDANCE_PASSING_CONFIDENCE = frozenset({"exact", "high", "ambiguous"})
 MAX_TOOL_CALLS = 10
+MIN_SUCCESS_EFFICIENCY_SCORE = 0.5
 
 
 def check_case(
@@ -92,14 +101,16 @@ def check_case(
             feedback=f"calls={tool_call_count} max={MAX_TOOL_CALLS}",
         )
     )
+    checks.append(_tool_call_efficiency_check(case.expected, tool_call_count))
     return checks
 
 
 def score_case(checks: list[CheckResult]) -> float:
-    """Score a case from required structured outcome gates."""
+    """Score a case from required outcome gates and successful-call efficiency."""
     if any(check.required and not check.passed for check in checks):
         return 0.0
-    return 1.0
+    efficiency = next((check.value for check in checks if check.name == "tool_call_efficiency"), None)
+    return 1.0 if efficiency is None else efficiency
 
 
 def mean_score(case_scores: list[float]) -> float:
@@ -134,6 +145,39 @@ def _meaningful_oracle_check(case: EvalCase) -> CheckResult:
         required=True,
         feedback="ok" if has_oracle else "missing_answer_provenance_tool_action_or_blocked_expectation",
     )
+
+
+def _tool_call_efficiency_check(expected: Expected, tool_call_count: int) -> CheckResult:
+    """Return the successful-outcome score from tool-call quantity."""
+    par = _tool_call_par(expected)
+    value = _tool_call_efficiency_value(tool_call_count, par)
+    return CheckResult(
+        name="tool_call_efficiency",
+        passed=tool_call_count <= par,
+        required=False,
+        feedback=f"calls={tool_call_count} par={par} max={MAX_TOOL_CALLS} score={value:.3f}",
+        value=value,
+    )
+
+
+def _tool_call_par(expected: Expected) -> int:
+    """Return explicit par or derive one from required structured work."""
+    if expected.tool_call_par is not None:
+        return max(1, min(MAX_TOOL_CALLS, expected.tool_call_par))
+    action_step = 1 if expected.actions or expected.blocked_outcome is not None else 0
+    return max(1, min(MAX_TOOL_CALLS, len(expected.tool_result_checks) + action_step))
+
+
+def _tool_call_efficiency_value(tool_call_count: int, par: int) -> float:
+    """Return 1.0 at par, decaying to a success floor at the runaway cap."""
+    if tool_call_count <= par:
+        return 1.0
+    if par >= MAX_TOOL_CALLS:
+        return MIN_SUCCESS_EFFICIENCY_SCORE
+    over_par = min(tool_call_count, MAX_TOOL_CALLS) - par
+    penalty_range = MAX_TOOL_CALLS - par
+    penalty_fraction = over_par / penalty_range
+    return 1.0 - penalty_fraction * (1.0 - MIN_SUCCESS_EFFICIENCY_SCORE)
 
 
 def _structured_evidence_blob(
@@ -556,7 +600,6 @@ def _actions_check(
             feedback=f"unexpected={len(recorded_actions)}",
         )
 
-    errored_actions = [action for action in recorded_actions if action.get("status") == "error"]
     expected_effects = _expected_effects(expected_actions)
     recorded_effects, duplicate_effects = _recorded_effects(recorded_actions)
     unmatched_expected = [effect for effect in expected_effects if effect not in recorded_effects]
@@ -566,16 +609,8 @@ def _actions_check(
         for effect, expected_targets in expected_effects.items()
         if effect in recorded_effects and expected_targets is not None and recorded_effects[effect] != expected_targets
     ]
-    passed = (
-        not errored_actions
-        and not duplicate_effects
-        and not unmatched_expected
-        and not unexpected_recorded
-        and not target_mismatches
-    )
+    passed = not duplicate_effects and not unmatched_expected and not unexpected_recorded and not target_mismatches
     feedback_parts: list[str] = []
-    if errored_actions:
-        feedback_parts.append(f"errors={_format_recorded_actions(errored_actions)}")
     if duplicate_effects:
         feedback_parts.append(f"duplicates={','.join(duplicate_effects)}")
     if unmatched_expected:

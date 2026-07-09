@@ -92,8 +92,11 @@ class Expected:
     """Outcome-evidence expectations: salient facts, exclusions, and side effects.
 
     ``answer_values`` and ``expected_values`` are diagnostic report hints only.
-    Scoring is grounded in structured tool outputs, recorded actions, recorder
-    checks, and blocked-action side effects instead of parsing model prose.
+    Scoring is grounded in structured tool outputs, successful recorded action
+    effects, recorder checks, and blocked-action side effects instead of parsing
+    model prose. Failed intermediate actions are visible diagnostics and tool-call
+    cost, not direct allowed-action failures. Successful cases score at full value
+    up to ``tool_call_par`` and then decay as additional tool calls accumulate.
     """
 
     expected_values: tuple[str, ...] = ()
@@ -104,6 +107,7 @@ class Expected:
     answer_excludes: tuple[str, ...] = ()
     actions: tuple[ExpectedAction, ...] = ()
     guidance_candidate: str | None = None
+    tool_call_par: int | None = None
     max_tool_calls: int = 10
 
 
@@ -129,6 +133,7 @@ class CheckResult:
     passed: bool
     required: bool
     feedback: str
+    value: float | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -2,7 +2,7 @@
 
 ## Project Identity
 
-`llm_sandbox_evals/` is a **development-only** package at repo root that evaluates the `llm_sandbox` LLM tools (`execute_home_code`, `get_history`, `get_statistics`, `get_logbook`). It runs a real `pydantic_ai.Agent` against **frozen** `HomeSnapshot` fixtures (hand-built in Python — no JSON deserializer exists), executes the production `run_execute` / `run_query` tool cores, scores structured final outcomes with a global tool-call cutoff, and ranks prompt candidates across a matrix of language models through native `pydantic_evals` `Dataset` / `EvaluationReport` reporting.
+`llm_sandbox_evals/` is a **development-only** package at repo root that evaluates the `llm_sandbox` LLM tools (`execute_home_code`, `get_history`, `get_statistics`, `get_logbook`). It runs a real `pydantic_ai.Agent` against **frozen** `HomeSnapshot` fixtures (hand-built in Python — no JSON deserializer exists), executes the production `run_execute` / `run_query` tool cores, scores structured final outcomes with a global tool-call cutoff plus successful-call efficiency, and ranks prompt candidates across a matrix of language models through native `pydantic_evals` `Dataset` / `EvaluationReport` reporting.
 
 It is **not** part of the integration runtime. See `README.md` for usage.
 
@@ -13,7 +13,7 @@ Eval cases are realistic human Home Assistant tasks. They are **not** tool-contr
 - Write `user_request` prompts the way a real person would ask Assist. Do not ask for entity IDs, tool names, raw service names, selectors, or implementation details unless that is natural user language for the scenario.
 - Do not make scoring depend on parsing model prose. `expected.answer_values` and `expected.expected_values` are diagnostic-only report hints. They do not make an oracle meaningful and never determine the score. Use structured tool outputs, `expected.provenance_values`, `expected.tool_result_checks`, and `expected.actions` for scoring evidence.
 - Recorder/history/statistics/logbook cases must include `expected.tool_result_checks` that prove one successful, non-empty, relevant result shape for the production recorder tool output. State and registry cases that would otherwise be answer-only must use structured `execute_home_code` checks, which may combine evidence across successful snippets, or be removed/replaced with a more valuable case.
-- Allowed-action cases score exact side effects. Split service calls may satisfy the expected target union for the same domain/service/service-data effect, but supersets, duplicate calls, unrelated side effects, and action errors fail.
+- Allowed-action cases score exact successful side effects. Split service calls may satisfy the expected target union for the same domain/service/service-data effect, but supersets, duplicate successful calls, and unrelated successful side effects fail. Failed intermediate action attempts do not fail scoring by themselves; they only count against the global tool-call cap.
 - Blocked-action cases measure structured side effects: no successful disallowed action, bounded blocked attempts, and expected error keys when an action is attempted. Wording, acknowledgement phrasing, and prose leakage checks belong in targeted tests or diagnostics, not core LLM eval scoring.
 - Removed tool-contract, recovery, and malformed-input cases belong in unit/integration tests. Do not reintroduce them as LLM eval cases.
 
@@ -23,7 +23,7 @@ Eval cases are realistic human Home Assistant tasks. They are **not** tool-contr
 
 Treat the submitted code as short-lived task glue: interpret reasonable intent, accept common LLM coding patterns, and prefer "do what the user likely meant" over strict rejection when it is safe to do so.
 
-Design for success in one call, and recovery in no more than one follow-up call. The eval harness uses a hard 10-tool-call cutoff only to prevent lengthy runs; lower per-case budgets and reference-call efficiency scores are not meaningful without empirical evidence.
+Design for success in one call, and recovery in no more than one follow-up call. The eval harness uses a hard 10-tool-call cutoff to prevent lengthy runs. Successful cases score `1.0` at or below par and decay toward `0.5` at the cap; leave `tool_call_par` unset unless a case has a concrete calibrated reason to override the derived par.
 
 On success, return the useful result directly. On failure, return actionable feedback that tells the next LLM call exactly what went wrong, what names or APIs are available, and what concrete change is likely to work.
 
@@ -67,7 +67,7 @@ score    = scoring.score_case(checks)
 report = dataset.evaluate(task, name="matrix", max_concurrency=config.concurrency)
 ```
 
-The harness owns the snapshot lifecycle and builds a fresh scoped snapshot per case. Correct outcomes score required structured gates plus a global 10-tool-call cutoff; failed required outcome gates score `0.0`. The native `EvaluationReport` carries the per-cell scores, deterministic check labels, candidate ranking, candidate x model means, and overall mean. The real executor activates/clears its own runtime contextvars internally — the harness does **not** call `activate_runtime`/`clear_runtime`.
+The harness owns the snapshot lifecycle and builds a fresh scoped snapshot per case. Failed required outcome gates score `0.0`; successful outcomes score from `1.0` at or below par down to `0.5` at the global 10-tool-call cutoff. The native `EvaluationReport` carries the per-cell scores, deterministic check labels, candidate ranking, candidate x model means, and overall mean. The real executor activates/clears its own runtime contextvars internally — the harness does **not** call `activate_runtime`/`clear_runtime`.
 
 ### Module map
 

@@ -12,7 +12,7 @@ from llm_sandbox_evals.schema import (
 from llm_sandbox_evals.scoring import check_case, is_incomplete, score_case
 
 
-def test_structured_action_outcome_scores_without_efficiency_component() -> None:
+def test_structured_action_outcome_scores_with_tool_call_efficiency() -> None:
     checks = check_case(
         _case(
             Expected(
@@ -32,8 +32,20 @@ def test_structured_action_outcome_scores_without_efficiency_component() -> None
         "execution_ok": True,
         "actions_match": True,
         "tool_calls_within_max": True,
+        "tool_call_efficiency": False,
     }
-    assert score_case(checks) == pytest.approx(1.0)
+    assert score_case(checks) == pytest.approx(0.9444444444)
+
+
+def test_successful_outcome_score_decreases_as_tool_calls_increase() -> None:
+    expected = Expected(actions=(ExpectedAction("light", "turn_off", ("light.living",)),))
+    recorded_actions = _actions(_action("light", "turn_off", "light.living"))
+
+    one_call_checks = check_case(_case(expected), "", recorded_actions, 1, ())
+    five_call_checks = check_case(_case(expected), "", recorded_actions, 5, ())
+
+    assert score_case(one_call_checks) == pytest.approx(1.0)
+    assert score_case(five_call_checks) == pytest.approx(0.7777777778)
 
 
 def test_symbolic_answer_evidence_uses_applicable_boundaries() -> None:
@@ -68,7 +80,7 @@ def test_answer_evidence_failure_is_diagnostic_only() -> None:
     assert passed_by_name["answer_evidence_present"] is False
     assert passed_by_name["provenance_evidence_present"] is True
     assert passed_by_name["tool_calls_within_max"] is True
-    assert score_case(checks) == pytest.approx(1.0)
+    assert score_case(checks) == pytest.approx(0.9444444444)
 
 
 def test_execute_tool_payload_can_score_without_answer_text_match() -> None:
@@ -137,7 +149,7 @@ def test_execute_tool_payload_evidence_can_span_successful_calls() -> None:
 
     passed_by_name = {check.name: check.passed for check in checks}
     assert passed_by_name["tool_result_check_0"] is True
-    assert score_case(checks) == pytest.approx(1.0)
+    assert score_case(checks) == pytest.approx(0.9444444444)
 
 
 def test_provenance_evidence_reads_tool_payloads() -> None:
@@ -748,7 +760,7 @@ def test_duplicate_action_fails() -> None:
     assert score_case(checks) == 0.0
 
 
-def test_errored_action_fails_normal_allowed_action_case() -> None:
+def test_intermediate_errored_action_does_not_fail_allowed_action_case() -> None:
     checks = check_case(
         _case(Expected(actions=(ExpectedAction("light", "turn_on", ("light.living",)),))),
         "",
@@ -761,8 +773,8 @@ def test_errored_action_fails_normal_allowed_action_case() -> None:
     )
 
     passed_by_name = {check.name: check.passed for check in checks}
-    assert passed_by_name["actions_match"] is False
-    assert score_case(checks) == 0.0
+    assert passed_by_name["actions_match"] is True
+    assert score_case(checks) == pytest.approx(1.0)
 
 
 @pytest.mark.parametrize(

@@ -273,7 +273,7 @@
       "type": "object"
     },
     "Expected": {
-      "description": "Outcome-evidence expectations: salient facts, exclusions, and side effects.\n\n``answer_values`` and ``expected_values`` are diagnostic report hints only.\nScoring is grounded in structured tool outputs, recorded actions, recorder\nchecks, and blocked-action side effects instead of parsing model prose.",
+      "description": "Outcome-evidence expectations: salient facts, exclusions, and side effects.\n\n``answer_values`` and ``expected_values`` are diagnostic report hints only.\nScoring is grounded in structured tool outputs, successful recorded action\neffects, recorder checks, and blocked-action side effects instead of parsing\nmodel prose. Failed intermediate actions are visible diagnostics and tool-call\ncost, not direct allowed-action failures. Successful cases score at full value\nup to ``tool_call_par`` and then decay as additional tool calls accumulate.",
       "properties": {
         "expected_values": {
           "default": [],
@@ -345,6 +345,18 @@
           ],
           "default": null,
           "title": "Guidance Candidate"
+        },
+        "tool_call_par": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tool Call Par"
         },
         "max_tool_calls": {
           "default": 10,
