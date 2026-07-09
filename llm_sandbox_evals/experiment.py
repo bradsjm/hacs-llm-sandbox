@@ -53,6 +53,7 @@ class SandboxOutcome(Evaluator[MatrixCellRef, CaseTrace, MatrixCellMeta]):
         """Return the score plus stable labels/assertions for one matrix cell."""
         trace = ctx.output
         required_passed = all(not (check.required and not check.passed) for check in trace.checks)
+        failure_kind = _failure_kind(trace.checks)
         return {
             "score": EvaluationReason(value=trace.score, reason=_summarize(trace.checks)),
             "required_gates_passed": EvaluationReason(
@@ -60,6 +61,9 @@ class SandboxOutcome(Evaluator[MatrixCellRef, CaseTrace, MatrixCellMeta]):
                 reason=_failed_names(trace.checks),
             ),
             "model_error": str(any(check.name == "model_error" for check in trace.checks)).lower(),
+            "outcome": "passed" if required_passed else "failed",
+            "failure_kind": failure_kind,
+            "error_type": _error_type(trace.error),
         }
 
 
@@ -349,3 +353,22 @@ def _summarize(checks: Sequence[CheckResult]) -> str:
 
 def _failed_names(checks: Sequence[CheckResult]) -> str:
     return ", ".join(check.name for check in checks if check.required and not check.passed)
+
+
+def _failure_kind(checks: Sequence[CheckResult]) -> str:
+    """Return a low-cardinality first failing required check label."""
+    for check in checks:
+        if check.required and not check.passed:
+            return check.name
+    return "none"
+
+
+def _error_type(error: str | None) -> str:
+    """Extract the exception class from ``check_name: Type: detail`` trace errors."""
+    if error is None:
+        return "none"
+    parts = error.split(":", 2)
+    if len(parts) < 2:
+        return "unknown"
+    candidate = parts[1].strip()
+    return candidate or "unknown"

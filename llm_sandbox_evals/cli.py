@@ -27,6 +27,7 @@ _STUB_NOTE = (
     "harness end to end, but low stub scores are expected and are not a quality\n"
     "signal. Pass real model ids (e.g. openai:gpt-4o-mini) to measure prompt quality."
 )
+_MAX_PROGRESS_ERROR_CHARS = 500
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -550,10 +551,19 @@ def _say(text: str) -> None:
 
 def _progress_reporter(index: int, total: int, name: str, trace: CaseTrace, elapsed: float) -> None:
     """Write one per-cell completion line to stderr; keep stdout machine-readable."""
-    # Branch boundary: error traces carry "check_name: feedback"; surface the stable reason key.
-    result = f"error ({trace.error.split(':', 1)[0]})" if trace.error is not None else f"{trace.score:.3f}"
+    # Branch boundary: error traces already carry "check_name: feedback"; keep it
+    # compact but do not hide provider/timeout details behind the reason key.
+    result = _compact_progress_error(trace.error) if trace.error is not None else f"{trace.score:.3f}"
     sys.stderr.write(f"({index}/{total}) {name}, result: {result}, time: {elapsed:.1f}s\n")
     sys.stderr.flush()
+
+
+def _compact_progress_error(error: str) -> str:
+    """Normalize an error for one-line concurrent progress output."""
+    compact = " ".join(error.split())
+    if len(compact) <= _MAX_PROGRESS_ERROR_CHARS:
+        return compact
+    return f"{compact[: _MAX_PROGRESS_ERROR_CHARS - 3]}..."
 
 
 def _derive_run_id() -> str:

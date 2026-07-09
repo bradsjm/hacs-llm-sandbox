@@ -153,9 +153,7 @@ def _meaningful_oracle_check(case: EvalCase) -> CheckResult:
 
 def _tool_evidence_blob(tool_events: tuple[ToolEvent, ...]) -> str:
     """Return lowercased tool return payloads for hidden/provenance evidence."""
-    parts: list[str] = []
-    for event in tool_events:
-        parts.append(json.dumps(event.output, sort_keys=True, default=str))
+    parts = [json.dumps(event.output, sort_keys=True, default=str) for event in tool_events]
     return "\n".join(parts).lower()
 
 
@@ -396,9 +394,11 @@ def _history_result_failures(expected: ToolResultCheck, output: Mapping[str, obj
         elif expected.min_results > 0 and result_count < expected.min_results:
             failures.append(f"empty_entity:{entity_id}")
         entity_blob = json.dumps(entity_payload, sort_keys=True, default=str).lower()
-        for value in expected.entry_values:
-            if not _token_present(value, entity_blob):
-                failures.append(f"missing_entry_value:{entity_id}:{value}")
+        failures.extend(
+            f"missing_entry_value:{entity_id}:{value}"
+            for value in expected.entry_values
+            if not _token_present(value, entity_blob)
+        )
     return failures
 
 
@@ -410,12 +410,14 @@ def _history_analytics_result_failures(expected: ToolResultCheck, rows: list[obj
     elif len(rows) < expected.min_results:
         failures.append("empty_rows")
     rows_blob = json.dumps(rows, sort_keys=True, default=str).lower()
-    for entity_id in expected.entity_ids:
-        if not _token_present(entity_id, rows_blob):
-            failures.append(f"missing_row_entity:{entity_id}")
-    for value in expected.entry_values:
-        if not _token_present(value, rows_blob):
-            failures.append(f"missing_entry_value:{value}")
+    failures.extend(
+        f"missing_row_entity:{entity_id}"
+        for entity_id in expected.entity_ids
+        if not _token_present(entity_id, rows_blob)
+    )
+    failures.extend(
+        f"missing_entry_value:{value}" for value in expected.entry_values if not _token_present(value, rows_blob)
+    )
     return failures
 
 
@@ -440,9 +442,11 @@ def _statistics_result_failures(expected: ToolResultCheck, output: Mapping[str, 
         elif expected.min_results > 0 and result_count < expected.min_results:
             failures.append(f"empty_statistic:{statistic_id}")
         statistic_blob = json.dumps(statistic_payload, sort_keys=True, default=str).lower()
-        for value in expected.entry_values:
-            if not _token_present(value, statistic_blob):
-                failures.append(f"missing_entry_value:{statistic_id}:{value}")
+        failures.extend(
+            f"missing_entry_value:{statistic_id}:{value}"
+            for value in expected.entry_values
+            if not _token_present(value, statistic_blob)
+        )
     return failures
 
 
@@ -458,9 +462,11 @@ def _logbook_result_failures(
     elif len(entries) < expected.min_results:
         failures.append("empty_entries")
     if expected.min_results > 0:
-        for entity_id in expected.entity_ids:
-            if not any(isinstance(entry, Mapping) and entry.get("entity_id") == entity_id for entry in entries):
-                failures.append(f"missing_entry_entity:{entity_id}")
+        failures.extend(
+            f"missing_entry_entity:{entity_id}"
+            for entity_id in expected.entity_ids
+            if not any(isinstance(entry, Mapping) and entry.get("entity_id") == entity_id for entry in entries)
+        )
     elif expected.entity_ids:
         # Branch boundary: empty logbook entries cannot prove entity scope. Require
         # directly verifiable queried entity IDs; selector-only empty queries do
@@ -469,13 +475,15 @@ def _logbook_result_failures(
             failures.append("unverified_query_scope")
             return failures
         requested_entity_ids = set(strings_from_value(args.get("entity_ids")))
-        for entity_id in expected.entity_ids:
-            if entity_id not in requested_entity_ids:
-                failures.append(f"missing_query_entity:{entity_id}")
+        failures.extend(
+            f"missing_query_entity:{entity_id}"
+            for entity_id in expected.entity_ids
+            if entity_id not in requested_entity_ids
+        )
     entries_blob = json.dumps(entries, sort_keys=True, default=str).lower()
-    for value in expected.entry_values:
-        if not _token_present(value, entries_blob):
-            failures.append(f"missing_entry_value:{value}")
+    failures.extend(
+        f"missing_entry_value:{value}" for value in expected.entry_values if not _token_present(value, entries_blob)
+    )
     return failures
 
 

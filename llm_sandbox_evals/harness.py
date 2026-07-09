@@ -69,11 +69,19 @@ async def run_case(
             tool_events=tool_events,
         )
     except UsageLimitExceeded as err:
-        return _error_trace(candidate, model_id, case, "tool_calls_exceeded", f"{type(err).__name__}: {err}")
-    except (TimeoutError, UnexpectedModelBehavior) as err:
-        return _error_trace(candidate, model_id, case, "model_error", f"{type(err).__name__}: {err}")
+        return _error_trace(candidate, model_id, case, "tool_calls_exceeded", _format_exception(err))
+    except TimeoutError as err:
+        return _error_trace(
+            candidate,
+            model_id,
+            case,
+            "model_error",
+            _format_exception(err, timeout=config.model_timeout),
+        )
+    except UnexpectedModelBehavior as err:
+        return _error_trace(candidate, model_id, case, "model_error", _format_exception(err))
     except Exception as err:  # noqa: BLE001 - provider/harness failures are isolated to the current matrix cell.
-        return _error_trace(candidate, model_id, case, "model_error", f"{type(err).__name__}: {err}")
+        return _error_trace(candidate, model_id, case, "model_error", _format_exception(err))
 
 
 def _error_trace(
@@ -104,6 +112,38 @@ def _error_trace(
         error=f"{check_name}: {feedback}",
         tool_events=(),
     )
+
+
+def _format_exception(err: BaseException, *, timeout: float | None = None) -> str:
+    """Format provider, timeout, and limit failures as compact one-line feedback."""
+    message = _exception_message(err)
+    if timeout is not None:
+        message = f"{message} after={timeout:g}s"
+    formatted = f"{type(err).__name__}: {message}"
+    cause_chain = _format_cause_chain(err)
+    if cause_chain:
+        formatted = f"{formatted} caused_by={cause_chain}"
+    return formatted
+
+
+def _format_cause_chain(err: BaseException) -> str:
+    """Return direct exception cause/context entries without tracebacks."""
+    seen = {id(err)}
+    chain: list[str] = []
+    current = err.__cause__ or err.__context__
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        chain.append(f"{type(current).__name__}: {_exception_message(current)}")
+        # Branch boundary: prefer explicit causes, then implicit contexts, matching
+        # Python exception chaining while keeping a single readable feedback line.
+        current = current.__cause__ or current.__context__
+    return " <- ".join(chain)
+
+
+def _exception_message(err: BaseException) -> str:
+    """Return a non-empty one-line exception message."""
+    message = " ".join(str(err).split())
+    return message or "timed out" if isinstance(err, TimeoutError) else message or "no detail"
 
 
 def _select_cases(case_filters: list[str] | None, home_filters: list[str] | None) -> list[EvalCase]:

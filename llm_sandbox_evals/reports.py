@@ -100,18 +100,21 @@ def render_report_summary(payload: ReportPayload) -> str:
             rows = analysis.get("rows", [])
             lines.append("\t".join(columns))
             if isinstance(rows, list):
-                for row in rows:
-                    if isinstance(row, list):
-                        lines.append("\t".join(str(value) for value in row))
+                lines.extend("\t".join(str(value) for value in row) for row in rows if isinstance(row, list))
         lines.append("")
     lines.append("Cells")
     lines.append("-----")
     for cell in payload.cells:
         score = cell.get("score", 0.0)
         score_float = float(score) if isinstance(score, int | float) else 0.0
+        trace = cell.get("trace")
+        error = trace.get("error") if isinstance(trace, dict) else None
+        # Branch boundary: persisted error details live inside trace.error; append
+        # them only for failed cells so successful summaries stay compact.
+        error_text = f" error={error}" if isinstance(error, str) and error else ""
         lines.append(
             f"{cell.get('candidate_id')}/{cell.get('model_id')}/{cell.get('case_id')}: "
-            f"score={score_float:.3f} tool_calls={cell.get('tool_calls')}"
+            f"score={score_float:.3f} tool_calls={cell.get('tool_calls')}{error_text}"
         )
     return "\n".join(lines) + "\n"
 

@@ -185,19 +185,19 @@ async def _eval_fetch_statistics(
     statistics = _recorder_section(_recorder_data(fixture), "statistics")
     rows: list[dict[str, object]] = []
     for statistic_id in statistic_ids:
-        for row in _windowed_rows(statistics.get(statistic_id, []), start, end, _statistics_timestamp):
-            rows.append(
-                {
-                    "statistic_id": statistic_id,
-                    "entity_id": statistic_id,
-                    "when": _statistics_timestamp(row).isoformat(),
-                    "mean": row.get("mean"),
-                    "min": row.get("min"),
-                    "max": row.get("max"),
-                    "state": row.get("state"),
-                    "sum": row.get("sum"),
-                }
-            )
+        rows.extend(
+            {
+                "statistic_id": statistic_id,
+                "entity_id": statistic_id,
+                "when": _statistics_timestamp(row).isoformat(),
+                "mean": row.get("mean"),
+                "min": row.get("min"),
+                "max": row.get("max"),
+                "state": row.get("state"),
+                "sum": row.get("sum"),
+            }
+            for row in _windowed_rows(statistics.get(statistic_id, []), start, end, _statistics_timestamp)
+        )
     return rows
 
 

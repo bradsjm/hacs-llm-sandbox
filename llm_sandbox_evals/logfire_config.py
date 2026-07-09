@@ -6,3 +6,4 @@ def configure_logfire() -> None:
     import logfire
 
     logfire.configure(send_to_logfire="if-token-present", service_name="llm-sandbox-evals")
+    logfire.instrument_pydantic_ai()
