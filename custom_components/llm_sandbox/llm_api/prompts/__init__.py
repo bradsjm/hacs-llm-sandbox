@@ -11,6 +11,7 @@ from .content import (
     compose_system_prompt,
     render_home_inventory,
     render_request_location,
+    render_tool_capabilities,
 )
 from .profiles import PROFILE_OPTIONS, PROFILE_REGISTRY, PromptProfile, resolve_profile
 
@@ -28,5 +29,6 @@ __all__ = [
     "compose_system_prompt",
     "render_home_inventory",
     "render_request_location",
+    "render_tool_capabilities",
     "resolve_profile",
 ]

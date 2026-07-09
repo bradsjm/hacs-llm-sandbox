@@ -49,6 +49,7 @@ class HelperErrorPayload(TypedDict):
     printed: NotRequired[list[str]]
     actions: NotRequired[list[ActionRecord]]
     notes: NotRequired[list[str]]
+    overflow: NotRequired[dict[str, object]]
 
 
 class CodeErrorPayload(TypedDict):
@@ -59,6 +60,7 @@ class CodeErrorPayload(TypedDict):
     printed: NotRequired[list[str]]
     actions: NotRequired[list[ActionRecord]]
     notes: NotRequired[list[str]]
+    overflow: NotRequired[dict[str, object]]
 
 
 class SetupErrorPayload(TypedDict):
@@ -296,6 +298,9 @@ _TOOL_ERROR_MESSAGES: dict[str, _ToolErrorMessageBuilder] = {
         f"Recorder query failed: {p.get('error')}." if p.get("error") else "Recorder query failed."
     ),
     "invalid_cursor": lambda _p: "Pagination cursor is invalid; restart pagination without cursor.",
+    "service_data_not_supported": lambda p: (
+        f"Remove or change field {p.get('field', 'unknown')} for {p.get('domain', 'the domain')}.{p.get('service', 'the service')}; the requested target does not support it."
+    ),
     "analytics_unknown_op": lambda p: (
         f"Analytics operation '{p.get('op', 'unknown')}' is unsupported. Valid operations: {p.get('valid', 'none listed')}."
     ),

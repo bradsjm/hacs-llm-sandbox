@@ -1,5 +1,6 @@
 """Typed runtime data for LLM Sandbox config entries."""
 
+import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import cast
@@ -44,6 +45,7 @@ OPTION_DEFAULTS: Mapping[str, object] = {
     CONF_HELPER_CALL_BUDGET: DEFAULT_HELPER_CALL_BUDGET,
     CONF_PROMPT_PROFILE: DEFAULT_PROMPT_PROFILE,
 }
+_ACTION_DOMAIN_RE = re.compile(r"^[a-z0-9_]+(?:\.[a-z0-9_]+)*$")
 
 
 def option_value(options: Mapping[str, object], key: str) -> object:
@@ -62,6 +64,11 @@ def normalize_action_domains(domains: Iterable[str]) -> list[str]:
         normalized.append(value)
         seen.add(value)
     return normalized
+
+
+def is_valid_action_domain(domain: str) -> bool:
+    """Return whether a normalized action domain has supported syntax."""
+    return _ACTION_DOMAIN_RE.fullmatch(domain) is not None
 
 
 @dataclass(frozen=True, slots=True)

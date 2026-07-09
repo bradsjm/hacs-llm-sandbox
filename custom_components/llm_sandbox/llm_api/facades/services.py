@@ -3,6 +3,7 @@
 # ruff: noqa: D105, ANN401
 
 import asyncio
+import json
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -14,15 +15,23 @@ from homeassistant.exceptions import ServiceNotSupported
 from homeassistant.util.json import JsonValueType
 
 from ...runtime import SandboxSettings
-from ...snapshot.models import HomeSnapshot, ServiceSchemaBrief
+from ...snapshot.models import HomeSnapshot, ServiceFieldFilter, ServiceSchemaBrief
 from ...types import ActionRecord, ProposedAction, TranslationPlaceholders
 from ..data.selectors import AGGREGATE_SELECTOR_KEYS, expand_aggregate_selectors
 from ..errors import HelperExecutionError, tool_error_message
-from ..executor_support import helper_response, json_safe
+from ..executor_support import helper_response, json_safe, overflow_metadata
 from ..guidance import Candidate, Confidence, FailureContext, Guidance, Intent, advise
 from ..resolution import _DISCOVERY_LIMIT, bounded_strings, resolve_target_entity
 from ..sandbox_context import require_runtime, require_snapshot
-from ..target_matching import raw_service_field_names, service_accepts_domain, services_for_entity
+from ..target_matching import (
+    entities_for_service,
+    field_filter_matches,
+    raw_service_field_names,
+    service_accepts_domain,
+    service_field_names,
+    service_targets_entity,
+    services_for_entity,
+)
 from .services_discovery import (
     ServiceDiscoveryFacts,
     _expand_target_entities,
@@ -34,6 +43,7 @@ from .services_discovery import (
 )
 
 _TARGET_SELECTOR_KEYS = frozenset(("entity_id", "device_id", "area_id", "label_id", "label", "floor_id"))
+_ACTION_RESPONSE_CHAR_LIMIT = 20_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,6 +120,12 @@ class SafeServiceRegistry:
             result["_meta"] = {
                 "omitted_entities": len(entity_ids) - _DISCOVERY_LIMIT,
                 "limit": _DISCOVERY_LIMIT,
+                "overflow": overflow_metadata(
+                    truncated=True,
+                    limit=_DISCOVERY_LIMIT,
+                    returned=len(entity_ids[:_DISCOVERY_LIMIT]),
+                    omitted=len(entity_ids) - _DISCOVERY_LIMIT,
+                ),
             }
         return result
 
@@ -176,40 +192,59 @@ class SafeServiceRegistry:
         snapshot: HomeSnapshot,
         domain: str,
         service: str,
+        service_data: Mapping[str, object] | None,
         resolved_target: dict[str, object] | None,
     ) -> _PolicyBlock | None:
-        """Conservative stable-fact pre-block for an exclusive domain mismatch.
+        """Conservative stable-fact pre-block for snapshot-known capability mismatches.
 
-        Pre-blocks only when the service declares exclusive target domains and none
-        of the resolved target entities match — a stable snapshot fact Home Assistant
-        would reject live anyway. Field/capability support (e.g. color temperature)
-        is never pre-blocked; it informs ranking and discovery, and HA decides live.
-        Returns ``None`` when the service has no target metadata or the mismatch is
-        not a definitive domain exclusion.
+        Pre-blocks only stable facts captured in the fresh snapshot: target filters
+        excluding every resolved entity, or supplied service-data fields whose
+        declared capability filter matches none of the resolved entities. Dynamic
+        schema details still belong to Home Assistant's live validator.
         """
         target_brief = snapshot.services_target.get(domain, {}).get(service)
-        if not isinstance(target_brief, Mapping):
+        resolved_ids = _resolved_entity_ids(resolved_target)
+        if not resolved_ids:
             return None
-        resolved_ids = resolved_target.get("entity_id") if isinstance(resolved_target, Mapping) else None
-        if not isinstance(resolved_ids, list) or not resolved_ids:
-            return None
-        excluded = sorted({eid.split(".", 1)[0] for eid in resolved_ids if isinstance(eid, str) and "." in eid})
-        if not excluded:
-            return None
-        # Block only when every resolved domain is definitively excluded. A brief
-        # that does not constrain domains returns None (not False) and skips blocking.
-        if any(service_accepts_domain(target_brief, entity_domain) is not False for entity_domain in excluded):
-            return None
-        guidance = advise(
-            snapshot,
-            FailureContext(intent=Intent.RESOLVE_SELECTOR, requested=service, domain=domain, service=service),
-        ).to_payload()
-        return _PolicyBlock(
-            "service_target_not_supported",
-            cast(TranslationPlaceholders, {"domain": domain, "service": service}),
-            message=_service_target_not_supported_message(domain, service, excluded, guidance),
-            guidance=guidance,
-        )
+        if isinstance(target_brief, Mapping):
+            unsupported = tuple(
+                entity_id
+                for entity_id in resolved_ids
+                if not service_targets_entity(
+                    target_brief,
+                    snapshot.states[entity_id],
+                    snapshot.entities.get(entity_id),
+                )
+            )
+            # Branch boundary: block only when all resolved entities are known not
+            # to match the service target; mixed sets defer to HA live validation.
+            if len(unsupported) == len(resolved_ids):
+                excluded = sorted({eid.split(".", 1)[0] for eid in unsupported if "." in eid})
+                if excluded and any(
+                    service_accepts_domain(target_brief, entity_domain) is not False for entity_domain in excluded
+                ):
+                    excluded = []
+                guidance = (
+                    _supported_entity_guidance(
+                        snapshot,
+                        f"{domain}.{service}",
+                        entities_for_service(snapshot, domain, service),
+                    ).to_payload()
+                    if excluded
+                    else _service_target_unsupported_guidance(snapshot, domain, service, resolved_target)
+                )
+                return _PolicyBlock(
+                    "service_target_not_supported",
+                    cast(TranslationPlaceholders, {"domain": domain, "service": service}),
+                    message=_service_target_not_supported_message(
+                        domain,
+                        service,
+                        excluded or list(unsupported),
+                        guidance,
+                    ),
+                    guidance=guidance,
+                )
+        return _service_data_capability_block(snapshot, domain, service, service_data, resolved_ids)
 
     async def async_call(
         self,
@@ -311,7 +346,15 @@ class SafeServiceRegistry:
             # Conservative stable-fact pre-block: a service whose declared target
             # excludes every resolved entity's domain is blocked with guidance
             # instead of forwarding a call Home Assistant would reject live.
-            if (cap_block := self._target_capability_block(snapshot, domain, service, resolved_target)) is not None:
+            if (
+                cap_block := self._target_capability_block(
+                    snapshot,
+                    domain,
+                    service,
+                    cleaned_service_data,
+                    resolved_target,
+                )
+            ) is not None:
                 _block(cap_block.key, cap_block.placeholders, message=cap_block.message, guidance=cap_block.guidance)
                 return None
 
@@ -371,7 +414,10 @@ class SafeServiceRegistry:
                 )
                 raise helper_err from err
             if return_response:
-                record["response"] = json_safe(result)
+                response, response_overflow = _bounded_action_response(json_safe(result))
+                record["response"] = response
+                if response_overflow is not None:
+                    record["overflow"] = {"response": response_overflow}
             return result
 
         return await helper_response(self._require_state(), "services.async_call", _call)
@@ -700,6 +746,49 @@ def _service_target_unsupported_guidance(
     return _supported_entity_guidance(snapshot, service_id, supported_entities).to_payload()
 
 
+def _service_data_capability_block(
+    snapshot: HomeSnapshot,
+    domain: str,
+    service: str,
+    service_data: Mapping[str, object] | None,
+    resolved_entity_ids: tuple[str, ...],
+) -> _PolicyBlock | None:
+    """Return a stable capability block for known unsupported service-data fields."""
+    if not service_data or not resolved_entity_ids:
+        return None
+    brief = snapshot.services_schema.get(domain, {}).get(service)
+    if not isinstance(brief, Mapping):
+        return None
+    for raw_field in raw_service_field_names(brief):
+        name = str(raw_field["name"])
+        if name not in service_data:
+            continue
+        field_filter = raw_field.get("filter")
+        if not isinstance(field_filter, Mapping):
+            continue
+        # Stable-fact branch: if the field filter matches no resolved entity,
+        # the requested field cannot apply to this target set.
+        if any(
+            field_filter_matches(
+                cast(ServiceFieldFilter, field_filter),
+                snapshot.states[entity_id],
+                snapshot.entities.get(entity_id),
+            )
+            for entity_id in resolved_entity_ids
+        ):
+            continue
+        supported_by_entity = {
+            entity_id: service_field_names(snapshot, domain, service, entity_id) or ()
+            for entity_id in resolved_entity_ids
+        }
+        return _PolicyBlock(
+            "service_data_not_supported",
+            cast(TranslationPlaceholders, {"domain": domain, "service": service, "field": name}),
+            message=_service_data_not_supported_message(domain, service, name, supported_by_entity),
+        )
+    return None
+
+
 def _resolved_entity_ids(resolved_target: Mapping[str, object] | None) -> tuple[str, ...]:
     """Return entity ids from a resolved service target."""
     raw_entity_ids = resolved_target.get("entity_id") if isinstance(resolved_target, Mapping) else None
@@ -759,6 +848,40 @@ def _supported_service_guidance(entity_id: str, service_ids: tuple[str, ...]) ->
         candidates=[],
         reason=f"No visible services are known to support `{entity_id}`.",
         next_step="Inspect the target entity capabilities before retrying.",
+    )
+
+
+def _service_data_not_supported_message(
+    domain: str,
+    service: str,
+    field: str,
+    supported_by_entity: Mapping[str, tuple[str, ...]],
+) -> str:
+    """Return a compact field-capability repair message."""
+    supported = sorted({field_name for fields in supported_by_entity.values() for field_name in fields})
+    suffix = f" Supported fields for this target include: {', '.join(supported)}." if supported else ""
+    return f"Field '{field}' is not supported by target entities for service '{domain}.{service}'.{suffix}"
+
+
+def _bounded_action_response(response: JsonValueType) -> tuple[JsonValueType, dict[str, object] | None]:
+    """Return a size-bounded action response plus overflow metadata when truncated."""
+    encoded = json.dumps(response, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    if len(encoded) <= _ACTION_RESPONSE_CHAR_LIMIT:
+        return response, None
+    return (
+        {
+            "truncated": True,
+            "summary": (
+                f"Action response serialized to {len(encoded)} characters, "
+                f"exceeding the {_ACTION_RESPONSE_CHAR_LIMIT} character budget."
+            ),
+        },
+        overflow_metadata(
+            truncated=True,
+            limit=_ACTION_RESPONSE_CHAR_LIMIT,
+            returned=_ACTION_RESPONSE_CHAR_LIMIT,
+            omitted=len(encoded) - _ACTION_RESPONSE_CHAR_LIMIT,
+        ),
     )
 
 

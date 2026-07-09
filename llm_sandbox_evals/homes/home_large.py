@@ -262,9 +262,9 @@ def snapshot() -> HomeSnapshot:
         indexes=_indexes(entities, devices, areas, floors),
         labels=labels,
         categories={},
-        issues=[],
-        notifications=[],
-        config_entries=[],
+        issues=(),
+        notifications=(),
+        config_entries=(),
         services_schema={},
     )
 

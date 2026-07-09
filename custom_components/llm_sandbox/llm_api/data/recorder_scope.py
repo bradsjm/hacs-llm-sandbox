@@ -119,8 +119,11 @@ def _clamp_window(
 
     Precedence: explicit ``start``/``end`` win; otherwise a relative ``hours``
     size is applied against ``end``; otherwise the tool default window is used.
-    The recorder lookback cap is always enforced.
+    ``hours`` with explicit ``start`` is rejected so callers do not silently lose
+    one window argument. The recorder lookback cap is always enforced.
     """
+    if start_in is not None and hours is not None:
+        raise RecoverableToolError("invalid_tool_input", {"error": "hours cannot be combined with start"})
     end = dt_util.as_utc(end_in or now)
     if start_in is not None:
         start = dt_util.as_utc(start_in)

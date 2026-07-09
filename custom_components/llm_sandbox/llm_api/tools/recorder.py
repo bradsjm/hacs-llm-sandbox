@@ -403,6 +403,7 @@ class GetHistoryTool(_RecorderTool):
             max_hours=MAX_RECORDER_LOOKBACK_HOURS,
             expected_kind="history",
             expected_scope_ids=tuple(sorted(entity_ids)),
+            cursor_conflicts=("attributes",),
         )
         result = await source.fetch_history(entity_ids, start, end)
         budget = max(1, MAX_HISTORY_STATES // len(entity_ids))
@@ -429,6 +430,8 @@ class GetHistoryTool(_RecorderTool):
             Cursor(kind="history", scope_ids=cursor.scope_ids, start=start, end=end, cutoffs=next_cutoffs)
             if next_cutoffs
             else None,
+            returned=sum(len(cast(list[object], entity["rows"])) for entity in entities.values()),
+            limit=budget * len(entity_ids),
         )
 
 
@@ -490,6 +493,7 @@ class GetStatisticsTool(_RecorderTool):
             max_hours=MAX_STATISTICS_LOOKBACK_HOURS,
             expected_kind="statistics",
             expected_scope_ids=tuple(sorted(statistic_ids)),
+            cursor_conflicts=("types",),
         )
         if data.get("cursor") is not None:
             # Cursor carries period and selected fields so pagination stays consistent.
@@ -548,6 +552,8 @@ class GetStatisticsTool(_RecorderTool):
             )
             if next_cutoffs
             else None,
+            returned=sum(len(cast(list[object], item["rows"])) for item in shaped_statistics.values()),
+            limit=budget * len(statistic_ids),
         )
 
 
@@ -620,4 +626,6 @@ class GetLogbookTool(_RecorderTool):
             )
             if next_cutoff is not None
             else None,
+            returned=len(page_entries),
+            limit=MAX_LOGBOOK_ENTRIES,
         )

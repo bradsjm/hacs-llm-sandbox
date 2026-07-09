@@ -19,6 +19,7 @@ from .executor_support import (
     helper_error_payload_for_state,
     json_safe,
     load_monty_factory,
+    overflow_metadata,
     refine_code_error,
     underlying_exception,
     validation_error,
@@ -48,6 +49,7 @@ _ACTION_SNAPSHOT_NOTE = (
     "Service action calls were accepted, but hass.states still reflects the frozen snapshot for this "
     "tool call; do not reread state to verify these actions or repeat them because the snapshot is unchanged."
 )
+MAX_PRINTED_LINES = 200
 
 # View classes registered with Monty for type-checking and dataclass binding.
 # Also reused by ``await_normalization`` to derive async/sync method names.
@@ -238,7 +240,17 @@ async def async_execute_home_code(
 
     def _capture_printed() -> None:
         """Persist captured print() lines before building any response payload."""
-        runtime.state.printed = [line for line in print_collector.output.splitlines() if line]
+        lines = [line for line in print_collector.output.splitlines() if line]
+        runtime.state.printed = lines[:MAX_PRINTED_LINES]
+        # State mutation point: print output is model-visible and can be large, so
+        # cap it with machine-readable overflow metadata instead of prose only.
+        if len(lines) > MAX_PRINTED_LINES:
+            runtime.state.overflow["printed"] = overflow_metadata(
+                truncated=True,
+                limit=MAX_PRINTED_LINES,
+                returned=len(runtime.state.printed),
+                omitted=len(lines) - MAX_PRINTED_LINES,
+            )
 
     try:
         activate_runtime(runtime, snapshot)
@@ -337,6 +349,8 @@ async def async_execute_home_code(
             payload["notes"] = [*action_notes, *runtime.state.notes]
     if runtime.state.notes:
         payload.setdefault("notes", list(runtime.state.notes))
+    if runtime.state.overflow:
+        payload["overflow"] = dict(runtime.state.overflow)
     return payload
 
 

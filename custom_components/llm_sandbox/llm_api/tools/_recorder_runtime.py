@@ -35,7 +35,7 @@ from ..data.history import (
 )
 from ..data.recorder_scope import _clamp_window, _validate_visibility
 from ..errors import RecoverableToolError
-from ..executor_support import json_safe
+from ..executor_support import json_safe, overflow_metadata
 from ._cursor import INVALID_CURSOR, Cursor, decode_cursor, encode_cursor, paginate_stream
 
 type StatisticValueType = Literal["mean", "min", "max", "state", "sum"]
@@ -96,13 +96,15 @@ def _resolve_window(
     max_hours: int,
     expected_kind: str,
     expected_scope_ids: tuple[str, ...],
+    cursor_conflicts: tuple[str, ...] = (),
 ) -> tuple[datetime, datetime, Cursor]:
     """Return the stable query window and decoded cursor for one recorder page."""
     if (cursor_in := data.get("cursor")) is not None:
-        if any(key in data for key in ("start", "end", "hours")):
+        conflicts = tuple(key for key in ("start", "end", "hours", *cursor_conflicts) if key in data)
+        if conflicts:
             raise RecoverableToolError(
                 "invalid_tool_input",
-                {"error": "cursor cannot be combined with start, end, or hours"},
+                {"error": f"cursor cannot be combined with {', '.join(conflicts)}"},
             )
         # Cursor window wins while paging so the continuation is stable.
         cursor = decode_cursor(cursor_in, expected_kind=expected_kind, expected_scope_ids=expected_scope_ids)
@@ -371,6 +373,9 @@ def _windowed_payload(
     end: datetime,
     body: Mapping[str, object],
     next_cursor: Cursor | None,
+    *,
+    returned: int = 0,
+    limit: int | None = None,
 ) -> JsonObjectType:
     """Return a JSON-safe recorder payload with a stable window envelope."""
     payload: dict[str, object] = {
@@ -378,7 +383,14 @@ def _windowed_payload(
         **body,
     }
     if next_cursor is not None:
-        payload["next_cursor"] = encode_cursor(next_cursor)
+        encoded_cursor = encode_cursor(next_cursor)
+        payload["next_cursor"] = encoded_cursor
+        payload["overflow"] = overflow_metadata(
+            truncated=True,
+            limit=limit,
+            returned=returned,
+            next_cursor=encoded_cursor,
+        )
     return cast(JsonObjectType, json_safe(payload))
 
 

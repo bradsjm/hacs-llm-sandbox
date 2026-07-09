@@ -6,8 +6,12 @@ from custom_components.llm_sandbox.llm_api.prompts import (
     PROFILE_OPTIONS,
     PromptProfile,
     build_execute_home_code_description,
+    render_tool_capabilities,
     resolve_profile,
 )
+from custom_components.llm_sandbox.llm_api.tools.code import ExecuteHomeCodeTool
+from custom_components.llm_sandbox.llm_api.tools.recorder import GetHistoryTool, GetLogbookTool, GetStatisticsTool
+from custom_components.llm_sandbox.llm_api.tools.vision import GetCameraImageTool
 
 
 def test_registry_has_expected_profiles() -> None:
@@ -48,10 +52,28 @@ def test_profile_describes_awaitable_facades(profile: PromptProfile) -> None:
     assert "sync" in profile.base_prompt.lower()
 
 
+def test_tool_capability_summary_matches_registered_tools() -> None:
+    """Generated overview names exactly the registered per-request tools."""
+    tools = [
+        ExecuteHomeCodeTool("entry-id"),
+        GetHistoryTool("entry-id"),
+        GetStatisticsTool("entry-id"),
+        GetLogbookTool("entry-id"),
+        GetCameraImageTool("entry-id"),
+    ]
+
+    summary = render_tool_capabilities(tools)
+
+    assert [line.split(":", 1)[0].removeprefix("- ") for line in summary.splitlines() if line.startswith("- ")] == [
+        tool.name for tool in tools
+    ] + ["get_logbook", "get_history", "get_statistics"]
+    assert "get_camera_image" in summary
+
+
 @pytest.mark.parametrize("profile", PROFILE_OPTIONS, ids=[profile.id for profile in PROFILE_OPTIONS])
-def test_profile_tool_overview_includes_camera_image(profile: PromptProfile) -> None:
-    """Profiles include the full registered tool overview."""
-    assert "get_camera_image" in profile.base_prompt
+def test_profiles_do_not_hard_code_tool_registry(profile: PromptProfile) -> None:
+    """Profiles leave per-request tool naming to the generated registry summary."""
+    assert "# LLM Sandbox tools" not in profile.base_prompt
 
 
 @pytest.mark.parametrize("profile", PROFILE_OPTIONS, ids=[profile.id for profile in PROFILE_OPTIONS])
@@ -91,3 +113,4 @@ def test_execute_home_code_description_includes_success_metadata() -> None:
     assert "notes" in description
     assert "actions" in description
     assert "resolutions" in description
+    assert "overflow" in description

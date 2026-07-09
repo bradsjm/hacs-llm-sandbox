@@ -18,6 +18,25 @@ from ..errors import (
 from .state import ExecutionState
 
 
+def overflow_metadata(
+    *,
+    truncated: bool,
+    returned: int,
+    limit: int | None = None,
+    omitted: int | None = None,
+    next_cursor: str | None = None,
+) -> dict[str, object]:
+    """Return the shared structured overflow/truncation metadata shape."""
+    metadata: dict[str, object] = {"truncated": truncated, "returned": returned}
+    if limit is not None:
+        metadata["limit"] = limit
+    if omitted is not None:
+        metadata["omitted"] = omitted
+    if next_cursor is not None:
+        metadata["next_cursor"] = next_cursor
+    return metadata
+
+
 def json_safe(value: object) -> JsonValueType:
     """Convert arbitrary values into JSON-safe structures."""
     if isinstance(value, float) and not math.isfinite(value):
@@ -55,6 +74,8 @@ def helper_error_payload_for_state(
     )
     if state.notes:
         payload["notes"] = list(state.notes)
+    if state.overflow:
+        payload["overflow"] = dict(state.overflow)
     return payload
 
 
@@ -76,6 +97,8 @@ def code_error_payload_for_state(
     )
     if state.notes:
         payload["notes"] = list(state.notes)
+    if state.overflow:
+        payload["overflow"] = dict(state.overflow)
     return payload
 
 

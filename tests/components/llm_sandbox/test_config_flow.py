@@ -262,3 +262,35 @@ async def test_options_flow_section_submission_flattens(
         CONF_ACTIONS_ENABLED: True,
         CONF_ACTION_DOMAINS: ["light", "custom.domain"],
     }
+
+
+async def test_options_flow_rejects_invalid_action_domain(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+) -> None:
+    """Options flow validates custom action-domain syntax before storing options."""
+    mock_config_entry.add_to_hass(hass)
+    init_result = await hass.config_entries.options.async_init(mock_config_entry.entry_id)
+    options = {
+        SECTION_PROMPT: {CONF_PROMPT_PROFILE: DEFAULT_PROMPT_PROFILE},
+        SECTION_EXECUTION_LIMITS: {
+            CONF_EXECUTION_TIMEOUT: 17,
+            CONF_HELPER_CALL_BUDGET: 48,
+        },
+        SECTION_VISIBILITY: {
+            CONF_RESTRICT_TO_ASSIST_EXPOSED: False,
+            CONF_EXCLUDE_HIDDEN: False,
+            CONF_EXCLUDE_CONFIG: False,
+            CONF_INCLUDE_ALL_DIAGNOSTICS: True,
+        },
+        SECTION_ACTIONS: {
+            CONF_ACTIONS_ENABLED: True,
+            CONF_ACTION_DOMAINS: ["light", "bad domain"],
+        },
+    }
+
+    result = await hass.config_entries.options.async_configure(init_result["flow_id"], user_input=options)
+
+    assert result["type"] == "form"
+    assert result["step_id"] == "init"
+    assert result["errors"] == {CONF_ACTION_DOMAINS: "invalid_action_domain"}

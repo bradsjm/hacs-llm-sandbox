@@ -298,9 +298,9 @@ def snapshot() -> HomeSnapshot:
         indexes=_indexes(entities, devices, areas, floors),
         labels=labels,
         categories=categories,
-        issues=issues,
-        notifications=notifications,
-        config_entries=config_entries,
+        issues=tuple(issues),
+        notifications=tuple(notifications),
+        config_entries=tuple(config_entries),
         services_schema={},
         services_target={
             "climate": {"set_temperature": _domain_target("climate")},

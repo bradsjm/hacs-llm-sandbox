@@ -1,5 +1,7 @@
 """Action sections and tool description builders for LLM-facing prompts."""
 
+from homeassistant.helpers import llm
+
 from ...snapshot.models import HomeSnapshot
 from ..data.home_db import render_query_schema_prompt
 
@@ -36,6 +38,8 @@ ACTIONS_ENABLED_PROMPT = (
     "earlier calls.\n"
     "- Action results are compact records with service, target, status, and "
     "resolved_from or error when relevant.\n"
+    "- Service calls are prevalidated against the fresh snapshot for target visibility, target capability, "
+    "service-data field capability, response mode, and configured action-domain policy before live dispatch.\n"
     "- An action with status:'error' under execution.status:'ok' is a recorded "
     "blocked or failed call, not a code crash; read top-level notes for the "
     "summary and any error.guidance for the next step.\n"
@@ -55,6 +59,7 @@ def compose_system_prompt(
     base_prompt: str,
     actions_enabled: bool,
     *,
+    tool_section: str | None = None,
     location_section: str | None = None,
     inventory_section: str | None = None,
 ) -> str:
@@ -63,7 +68,8 @@ def compose_system_prompt(
     # actions are enabled, the rejection notice otherwise. The static tool
     # descriptions stay action-neutral.
     section = ACTIONS_ENABLED_PROMPT if actions_enabled else ACTIONS_DISABLED_PROMPT
-    prompt = f"{base_prompt}\n\n{section}\n\n{ERROR_GUIDANCE_PROMPT}"
+    prompt_parts = [part for part in (tool_section, base_prompt, section, ERROR_GUIDANCE_PROMPT) if part]
+    prompt = "\n\n".join(prompt_parts)
     # Dynamic inventory comes before request-location scope so the location hint
     # stays the final, most specific request context.
     if inventory_section is not None:
@@ -71,6 +77,32 @@ def compose_system_prompt(
     if location_section is not None:
         prompt = f"{prompt}\n\n{location_section}"
     return prompt
+
+
+def render_tool_capabilities(tools: list[llm.Tool]) -> str:
+    """Render the prompt tool summary from the actual per-request tool objects."""
+    tool_names = {tool.name for tool in tools}
+    lines = ["# LLM Sandbox tools"]
+    for tool in tools:
+        description = tool.description or ""
+        first_sentence = description.split(". ", 1)[0].strip()
+        if first_sentence and not first_sentence.endswith("."):
+            first_sentence = f"{first_sentence}."
+        lines.append(f"- {tool.name}: {first_sentence}")
+    recorder_lines: list[str] = []
+    if "get_logbook" in tool_names:
+        recorder_lines.append('- get_logbook: "what happened with X", activity, events, or a human-readable timeline.')
+    if "get_history" in tool_names:
+        recorder_lines.append(
+            "- get_history: how an entity's state value changed over time, as raw rows or summaries."
+        )
+    if "get_statistics" in tool_names:
+        recorder_lines.append(
+            "- get_statistics: pre-aggregated statistics over a period, not current values or discovery."
+        )
+    if recorder_lines:
+        lines.extend(("", "## Choosing a recorder tool", *recorder_lines))
+    return "\n".join(lines)
 
 
 def render_home_inventory(
@@ -92,12 +124,12 @@ def render_home_inventory(
     # Availability caveats mirror the dynamic tool list for this request.
     if not recorder_available:
         lines.append(
-            "- Recorder is unavailable: get_history, get_statistics, and get_logbook are not offered this request. "
-            "Read current state with execute_home_code."
+            "- Recorder is unavailable: historical recorder tools are not offered this request. "
+            "Read current state with the available code tool."
         )
     else:
         if not logbook_available:
-            lines.append("- Logbook is unavailable: get_logbook is not offered this request.")
+            lines.append("- Logbook is unavailable: the activity/events timeline tool is not offered this request.")
         if not _has_statistics_candidate(snapshot):
             lines.append(
                 "- No visible entities expose long-term statistics (state_class); get_statistics will return empty."
@@ -187,8 +219,9 @@ def build_execute_home_code_description() -> str:
         "The query load can be narrowed with entity_ids or area_id/floor_id/device_id/label_id/domain. "
         "Service-call availability follows the API prompt. "
         "Success returns {execution:{status:'ok'}, output:<data>} and may include top-level printed, notes, "
-        "actions, and resolutions; printed appears only when print() emitted lines, actions records service-call "
-        "outcomes, notes carries snapshot/action/read guidance, and resolutions reports auto-applied entity ids. "
+        "actions, resolutions, and overflow; printed appears only when print() emitted lines, actions records service-call "
+        "outcomes, notes carries snapshot/action/read guidance, overflow reports truncation metadata, and resolutions "
+        "reports auto-applied entity ids. "
         "If output is empty because a literal entity id is missing, note names the missing id and structured "
         "guidance may describe visible replacements. Errors return {execution:{status:'code_error'|'helper_error'|"
         "'setup_error', kind?, message, guidance?}, output:null}."
@@ -208,7 +241,7 @@ def build_get_history_description() -> str:
         "rows of [t, state] plus unit when known; rows omit attributes by default — pass attributes "
         "(a list of attribute names, opt-in) to append a {name: value} element per row carrying only the "
         "requested attributes that exist (bounded count). The first page returns the newest rows; when more "
-        "remain, next_cursor appears — pass it back as cursor to the same tool with the same resolved scope "
+        "remain, next_cursor and overflow appear — pass next_cursor back as cursor to the same tool with the same resolved scope "
         "(omit start, end, and hours) to fetch the next older page. "
         "Pass aggregate=count_transitions|time_in_state|state_counts|first_seen|last_seen|on_duration "
         "to return {window, mode, summary} with no rows, cursor, or attributes; aggregate windows may be "
@@ -234,7 +267,7 @@ def build_get_statistics_description() -> str:
         "Success returns {window, period, statistics}, where statistics is keyed by statistic/entity id and each "
         "value has fields plus rows of [t, {field: value}]. Pass types (mean/min/max/state/sum) to select "
         "which statistic fields to include; omitted or null fields are left out. The first page returns the newest rows; when more remain, "
-        "next_cursor appears — pass it back as cursor to the same tool with the same resolved scope "
+        "next_cursor and overflow appear — pass next_cursor back as cursor to the same tool with the same resolved scope "
         "(omit start, end, and hours) to fetch the next older page. "
         "Errors return {status:'error', error:{key, message, guidance?}}."
     )
@@ -249,8 +282,8 @@ def build_get_logbook_description() -> str:
         "Scope with entity_ids or HA-native selectors (area_id/device_id/floor_id/label_id/domain); "
         "size the window with hours=<n> or ISO start/end. "
         "Success returns {window, entries}, where entries is a flat list of timeline records each carrying "
-        "its entity_id. The first page returns the newest entries; when more remain, next_cursor appears — "
-        "pass it back as cursor to the same tool with the same resolved scope "
+        "its entity_id. The first page returns the newest entries; when more remain, next_cursor and overflow appear — "
+        "pass next_cursor back as cursor to the same tool with the same resolved scope "
         "(omit start, end, and hours) to fetch the next older page. "
         "Errors return {status:'error', error:{key, message, guidance?}}."
     )

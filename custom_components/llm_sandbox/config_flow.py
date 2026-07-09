@@ -5,7 +5,7 @@ from typing import Any, cast, final, override
 
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlow
-from homeassistant.core import callback
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.data_entry_flow import section
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.selector import (
@@ -45,7 +45,7 @@ from .const import (
     SECTION_VISIBILITY,
 )
 from .llm_api.prompts import PROFILE_OPTIONS
-from .runtime import normalize_action_domains, option_value
+from .runtime import is_valid_action_domain, normalize_action_domains, option_value
 from .schema_helpers import flatten_section_data, section_schema_key
 
 type UserInput = dict[str, Any]
@@ -62,114 +62,21 @@ class LlmSandboxOptionsFlow(OptionsFlow):
                 user_input,
                 [SECTION_PROMPT, SECTION_VISIBILITY, SECTION_ACTIONS, SECTION_EXECUTION_LIMITS],
             )
-            data[CONF_ACTION_DOMAINS] = normalize_action_domains(cast(Iterable[str], data[CONF_ACTION_DOMAINS]))
+            action_domains = normalize_action_domains(cast(Iterable[str], data[CONF_ACTION_DOMAINS]))
+            # Branch boundary: custom selector values are allowed, but malformed
+            # domain strings must be rejected before they become runtime policy.
+            if any(not is_valid_action_domain(domain) for domain in action_domains):
+                return self.async_show_form(
+                    step_id="init",
+                    data_schema=_options_schema(self.config_entry, self.hass, selected_action_domains=action_domains),
+                    errors={CONF_ACTION_DOMAINS: "invalid_action_domain"},
+                )
+            data[CONF_ACTION_DOMAINS] = action_domains
             return self.async_create_entry(data=data)
 
-        options = self.config_entry.options
-        live_domains = sorted({eid.split(".", 1)[0] for eid in er.async_get(self.hass).entities})
-        live_domain_set = set(live_domains)
-        selected_action_domains = list(cast(Iterable[str], option_value(options, CONF_ACTION_DOMAINS)))
-        action_domain_options = [SelectOptionDict(value=d, label=d) for d in live_domains]
-        for domain in reversed(selected_action_domains):
-            # Preserve previously selected custom domains even when no entity currently exposes them.
-            if domain not in live_domain_set:
-                action_domain_options.insert(0, SelectOptionDict(value=domain, label=domain))
-
-        prompt_fields: VolDictType = {
-            vol.Required(
-                CONF_PROMPT_PROFILE,
-                default=option_value(options, CONF_PROMPT_PROFILE),
-            ): SelectSelector(
-                SelectSelectorConfig(
-                    options=[SelectOptionDict(value=p.id, label=p.label) for p in PROFILE_OPTIONS],
-                    multiple=False,
-                    mode=SelectSelectorMode.DROPDOWN,
-                    custom_value=False,
-                )
-            ),
-        }
-
-        visibility_fields: VolDictType = {
-            vol.Required(
-                CONF_RESTRICT_TO_ASSIST_EXPOSED,
-                default=option_value(options, CONF_RESTRICT_TO_ASSIST_EXPOSED),
-            ): BooleanSelector(),
-            vol.Required(
-                CONF_EXCLUDE_HIDDEN,
-                default=option_value(options, CONF_EXCLUDE_HIDDEN),
-            ): BooleanSelector(),
-            vol.Required(
-                CONF_EXCLUDE_CONFIG,
-                default=option_value(options, CONF_EXCLUDE_CONFIG),
-            ): BooleanSelector(),
-            vol.Required(
-                CONF_INCLUDE_ALL_DIAGNOSTICS,
-                default=option_value(options, CONF_INCLUDE_ALL_DIAGNOSTICS),
-            ): BooleanSelector(),
-        }
-        actions_fields: VolDictType = {
-            vol.Required(
-                CONF_ACTIONS_ENABLED,
-                default=option_value(options, CONF_ACTIONS_ENABLED),
-            ): BooleanSelector(),
-            vol.Required(
-                CONF_ACTION_DOMAINS,
-                default=selected_action_domains,
-            ): SelectSelector(
-                SelectSelectorConfig(
-                    options=action_domain_options,
-                    multiple=True,
-                    mode=SelectSelectorMode.LIST,
-                    custom_value=True,
-                )
-            ),
-        }
-        execution_limits_fields: VolDictType = {
-            vol.Required(
-                CONF_EXECUTION_TIMEOUT,
-                default=option_value(options, CONF_EXECUTION_TIMEOUT),
-            ): NumberSelector(
-                NumberSelectorConfig(
-                    min=MIN_EXECUTION_TIMEOUT_SECONDS,
-                    max=MAX_EXECUTION_TIMEOUT_SECONDS,
-                    mode=NumberSelectorMode.BOX,
-                    step=1,
-                    unit_of_measurement="s",
-                )
-            ),
-            vol.Required(
-                CONF_HELPER_CALL_BUDGET,
-                default=option_value(options, CONF_HELPER_CALL_BUDGET),
-            ): NumberSelector(
-                NumberSelectorConfig(
-                    min=MIN_HELPER_CALL_BUDGET,
-                    max=MAX_HELPER_CALL_BUDGET,
-                    mode=NumberSelectorMode.BOX,
-                    step=1,
-                )
-            ),
-        }
-        schema = {
-            section_schema_key(SECTION_PROMPT, prompt_fields): section(
-                vol.Schema(prompt_fields),
-                {"collapsed": True},
-            ),
-            section_schema_key(SECTION_VISIBILITY, visibility_fields): section(
-                vol.Schema(visibility_fields),
-                {"collapsed": True},
-            ),
-            section_schema_key(SECTION_ACTIONS, actions_fields): section(
-                vol.Schema(actions_fields),
-                {"collapsed": True},
-            ),
-            section_schema_key(SECTION_EXECUTION_LIMITS, execution_limits_fields): section(
-                vol.Schema(execution_limits_fields),
-                {"collapsed": True},
-            ),
-        }
         return self.async_show_form(
             step_id="init",
-            data_schema=vol.Schema(schema),
+            data_schema=_options_schema(self.config_entry, self.hass),
         )
 
 
@@ -207,6 +114,119 @@ class LlmSandboxConfigFlow(ConfigFlow, domain=DOMAIN):
             step_id="user",
             data_schema=_user_schema(),
         )
+
+
+def _options_schema(
+    config_entry: ConfigEntry,
+    hass: HomeAssistant,
+    *,
+    selected_action_domains: list[str] | None = None,
+) -> vol.Schema:
+    """Return the options flow schema, preserving custom action domains."""
+    options = config_entry.options
+    live_domains = sorted({eid.split(".", 1)[0] for eid in er.async_get(hass).entities})
+    live_domain_set = set(live_domains)
+    if selected_action_domains is None:
+        selected_action_domains = list(cast(Iterable[str], option_value(options, CONF_ACTION_DOMAINS)))
+    action_domain_options = [SelectOptionDict(value=d, label=d) for d in live_domains]
+    for domain in reversed(selected_action_domains):
+        # Preserve previously selected custom domains even when no entity currently exposes them.
+        if domain not in live_domain_set:
+            action_domain_options.insert(0, SelectOptionDict(value=domain, label=domain))
+
+    prompt_fields: VolDictType = {
+        vol.Required(
+            CONF_PROMPT_PROFILE,
+            default=option_value(options, CONF_PROMPT_PROFILE),
+        ): SelectSelector(
+            SelectSelectorConfig(
+                options=[SelectOptionDict(value=p.id, label=p.label) for p in PROFILE_OPTIONS],
+                multiple=False,
+                mode=SelectSelectorMode.DROPDOWN,
+                custom_value=False,
+            )
+        ),
+    }
+
+    visibility_fields: VolDictType = {
+        vol.Required(
+            CONF_RESTRICT_TO_ASSIST_EXPOSED,
+            default=option_value(options, CONF_RESTRICT_TO_ASSIST_EXPOSED),
+        ): BooleanSelector(),
+        vol.Required(
+            CONF_EXCLUDE_HIDDEN,
+            default=option_value(options, CONF_EXCLUDE_HIDDEN),
+        ): BooleanSelector(),
+        vol.Required(
+            CONF_EXCLUDE_CONFIG,
+            default=option_value(options, CONF_EXCLUDE_CONFIG),
+        ): BooleanSelector(),
+        vol.Required(
+            CONF_INCLUDE_ALL_DIAGNOSTICS,
+            default=option_value(options, CONF_INCLUDE_ALL_DIAGNOSTICS),
+        ): BooleanSelector(),
+    }
+    actions_fields: VolDictType = {
+        vol.Required(
+            CONF_ACTIONS_ENABLED,
+            default=option_value(options, CONF_ACTIONS_ENABLED),
+        ): BooleanSelector(),
+        vol.Required(
+            CONF_ACTION_DOMAINS,
+            default=selected_action_domains,
+        ): SelectSelector(
+            SelectSelectorConfig(
+                options=action_domain_options,
+                multiple=True,
+                mode=SelectSelectorMode.LIST,
+                custom_value=True,
+            )
+        ),
+    }
+    execution_limits_fields: VolDictType = {
+        vol.Required(
+            CONF_EXECUTION_TIMEOUT,
+            default=option_value(options, CONF_EXECUTION_TIMEOUT),
+        ): NumberSelector(
+            NumberSelectorConfig(
+                min=MIN_EXECUTION_TIMEOUT_SECONDS,
+                max=MAX_EXECUTION_TIMEOUT_SECONDS,
+                mode=NumberSelectorMode.BOX,
+                step=1,
+                unit_of_measurement="s",
+            )
+        ),
+        vol.Required(
+            CONF_HELPER_CALL_BUDGET,
+            default=option_value(options, CONF_HELPER_CALL_BUDGET),
+        ): NumberSelector(
+            NumberSelectorConfig(
+                min=MIN_HELPER_CALL_BUDGET,
+                max=MAX_HELPER_CALL_BUDGET,
+                mode=NumberSelectorMode.BOX,
+                step=1,
+            )
+        ),
+    }
+    schema = {
+        section_schema_key(SECTION_PROMPT, prompt_fields): section(
+            vol.Schema(prompt_fields),
+            {"collapsed": True},
+        ),
+        section_schema_key(SECTION_VISIBILITY, visibility_fields): section(
+            vol.Schema(visibility_fields),
+            {"collapsed": True},
+        ),
+        section_schema_key(SECTION_ACTIONS, actions_fields): section(
+            vol.Schema(actions_fields),
+            {"collapsed": True},
+        ),
+        section_schema_key(SECTION_EXECUTION_LIMITS, execution_limits_fields): section(
+            vol.Schema(execution_limits_fields),
+            {"collapsed": True},
+        ),
+    }
+    return vol.Schema(schema)
 
 
 def _user_schema() -> vol.Schema:

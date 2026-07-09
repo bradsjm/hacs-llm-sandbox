@@ -23,7 +23,7 @@ from ..data.history import HistoryRow, analytics_spec_from_data, run_analytics
 from ..data.home_db import MAX_HISTORY_LOAD_ROWS, HomeDatabase, QueryResult, ensure_sql_allowed
 from ..data.recorder_scope import _clamp_window, resolve_entity_ids
 from ..errors import HelperExecutionError, RecoverableToolError
-from ..executor_support import helper_response
+from ..executor_support import helper_response, overflow_metadata
 from ..guidance import FailureContext, Intent, advise
 from ..sandbox_context import require_runtime, require_snapshot
 from .services import SafeServiceRegistry
@@ -224,7 +224,24 @@ class SafeHass:
             if not analytics:
                 if len(rows) > MAX_HISTORY_STATES:
                     runtime.state.notes.append(f"history result capped at {MAX_HISTORY_STATES} rows")
-                    rows = rows[:MAX_HISTORY_STATES]
+                    capped_rows = rows[:MAX_HISTORY_STATES]
+                    return {
+                        "rows": [
+                            {
+                                "entity_id": row["entity_id"],
+                                "when": row["when"],
+                                "state": row["state"],
+                                "value": row["value"],
+                            }
+                            for row in capped_rows
+                        ],
+                        "overflow": overflow_metadata(
+                            truncated=True,
+                            limit=MAX_HISTORY_STATES,
+                            returned=len(capped_rows),
+                            omitted=len(rows) - len(capped_rows),
+                        ),
+                    }
                 return [
                     {"entity_id": row["entity_id"], "when": row["when"], "state": row["state"], "value": row["value"]}
                     for row in rows
@@ -337,6 +354,14 @@ class SafeHass:
             )
             if result.truncated:
                 runtime.state.notes.append("query result truncated")
+                return {
+                    "rows": result.rows,
+                    "overflow": overflow_metadata(
+                        truncated=True,
+                        limit=None,
+                        returned=len(result.rows),
+                    ),
+                }
             return result.rows
 
         return await helper_response(require_runtime(None).state, "query", _call)

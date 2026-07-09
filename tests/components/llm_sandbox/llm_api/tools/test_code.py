@@ -420,8 +420,14 @@ async def test_hass_history_raw_caps_rows_and_adds_note() -> None:
     finally:
         clear_runtime()
 
-    assert isinstance(result, list)
-    assert len(result) == MAX_HISTORY_STATES
+    assert isinstance(result, dict)
+    assert len(result["rows"]) == MAX_HISTORY_STATES
+    assert result["overflow"] == {
+        "truncated": True,
+        "limit": MAX_HISTORY_STATES,
+        "returned": MAX_HISTORY_STATES,
+        "omitted": 1,
+    }
     assert runtime.state.notes == [f"history result capped at {MAX_HISTORY_STATES} rows"]
 
 

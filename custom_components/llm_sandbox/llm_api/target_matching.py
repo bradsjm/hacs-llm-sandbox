@@ -93,7 +93,7 @@ def _filter_matches(
     bitfield includes any of the filter's feature constants.
     """
     domains = target_filter.get("domain")
-    if isinstance(domains, list) and domains and state.domain not in domains:
+    if isinstance(domains, list | tuple) and domains and state.domain not in domains:
         return False
 
     integration = target_filter.get("integration")
@@ -101,13 +101,13 @@ def _filter_matches(
         return False
 
     device_classes = target_filter.get("device_class")
-    if isinstance(device_classes, list) and device_classes:
+    if isinstance(device_classes, list | tuple) and device_classes:
         device_class = _entity_device_class(state, entry)
         if device_class is None or device_class not in device_classes:
             return False
 
     features = target_filter.get("supported_features")
-    if isinstance(features, list) and features:
+    if isinstance(features, list | tuple) and features:
         supported = _entity_supported_features(state, entry)
         # ``feature & entity_features == feature`` checks the entity has every bit.
         if not any(isinstance(feature, int) and feature & supported == feature for feature in features):
@@ -128,7 +128,7 @@ def service_targets_entity(
     ``True`` when ``filters`` is empty.
     """
     filters = brief.get("entity")
-    if not isinstance(filters, list) or not filters:
+    if not isinstance(filters, list | tuple) or not filters:
         return True
     return any(_filter_matches(target_filter, state, entry) for target_filter in filters)
 
@@ -141,12 +141,12 @@ def service_accepts_domain(brief: ServiceTargetBrief, domain: str) -> bool | Non
     target does not constrain domains (no stable mismatch to block on).
     """
     filters = brief.get("entity")
-    if not isinstance(filters, list) or not filters:
+    if not isinstance(filters, list | tuple) or not filters:
         return None
     constrains_domain = False
     for target_filter in filters:
         domains = target_filter.get("domain")
-        if isinstance(domains, list) and domains:
+        if isinstance(domains, list | tuple) and domains:
             constrains_domain = True
             if domain in domains:
                 return True
@@ -165,7 +165,7 @@ def field_filter_matches(
     intersects the filter's allowed values.
     """
     features = field_filter.get("supported_features")
-    if isinstance(features, list) and features:
+    if isinstance(features, list | tuple) and features:
         supported = _entity_supported_features(state, entry)
         if not any(isinstance(feature, int) and feature & supported == feature for feature in features):
             return False
@@ -257,7 +257,7 @@ def service_field_names(
 def raw_service_field_names(brief: Mapping[str, object]) -> tuple[dict[str, object], ...]:
     """Return named service-field dicts from a captured schema brief."""
     raw_fields = brief.get("fields")
-    if not isinstance(raw_fields, list):
+    if not isinstance(raw_fields, list | tuple):
         return ()
     return tuple(
         raw_field for raw_field in raw_fields if isinstance(raw_field, dict) and isinstance(raw_field.get("name"), str)

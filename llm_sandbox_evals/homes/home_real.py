@@ -135,9 +135,9 @@ def snapshot() -> HomeSnapshot:
         indexes=_indexes(entities, devices, areas, floors),
         labels={},
         categories={},
-        issues=[],
-        notifications=[],
-        config_entries=[],
+        issues=(),
+        notifications=(),
+        config_entries=(),
         services_schema={},
         services_target=_services_target(services),
     )

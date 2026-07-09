@@ -4,6 +4,7 @@
       "already_configured": "Assist Sandbox is already configured for this assistant scope."
     },
     "error": {
+      "invalid_action_domain": "Action domains may contain lowercase letters, numbers, underscores, and dots between segments.",
       "name_required": "Name is required."
     },
     "step": {
@@ -22,6 +23,9 @@
     }
   },
   "options": {
+    "error": {
+      "invalid_action_domain": "Action domains may contain lowercase letters, numbers, underscores, and dots between segments."
+    },
     "step": {
       "init": {
         "title": "Assist Sandbox options",
@@ -104,6 +108,9 @@
     },
     "service_data_invalid": {
       "message": "Service data for {domain}.{service} is invalid: {reason}."
+    },
+    "service_data_not_supported": {
+      "message": "Service data field {field} is not supported by {domain}.{service} for the requested target."
     },
     "service_response_requires_blocking": {
       "message": "Service responses require {blocking}."

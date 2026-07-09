@@ -9,10 +9,10 @@ ISO strings (Monty has limited datetime support). Enums are stored as their
 as JSON-safe tuples of tuples.
 
 Field types use plain ``dict``/``tuple`` rather than ``MappingProxyType``
-because the Monty VM cannot convert ``mappingproxy`` objects. Read-only
-guarantees come from ``@dataclass(frozen=True)`` (no field reassignment)
-and Monty's own immutable type system (Monty makes its own copy of every
-input value, so Python-side mutability is irrelevant from the sandbox).
+because the Monty VM cannot convert ``mappingproxy`` objects. Build-time
+sanitizers recursively copy mappings and freeze sequence containers to tuples;
+``@dataclass(frozen=True)`` prevents record field reassignment. Monty still
+makes its own immutable copy of every input value before sandbox execution.
 """
 
 from collections.abc import Mapping
@@ -26,9 +26,12 @@ from homeassistant.util.json import JsonValueType
 # ``description`` (str | None), and the optional ``filter`` carrying HA's
 # field-level capability filter (``supported_features`` bit constants and/or
 # ``attribute`` value-intersection rules such as ``supported_color_modes``).
-type ServiceFieldFilter = dict[str, list[int] | dict[str, list[int | str]]]
-type ServiceFieldBrief = dict[str, str | bool | None | list[int] | ServiceFieldFilter]
-type ServiceSchemaBrief = dict[str, list[ServiceFieldBrief] | bool]
+type ServiceFieldFilter = dict[
+    str,
+    tuple[int, ...] | list[int] | dict[str, tuple[int | str, ...] | list[int | str]],
+]
+type ServiceFieldBrief = dict[str, str | bool | None | tuple[int, ...] | list[int] | ServiceFieldFilter]
+type ServiceSchemaBrief = dict[str, tuple[ServiceFieldBrief, ...] | list[ServiceFieldBrief] | bool]
 
 # Per-service target metadata, mirroring HA's automation target matching
 # (``websocket_api/automation.py``). ``entity`` holds one filter dict per
@@ -36,8 +39,8 @@ type ServiceSchemaBrief = dict[str, list[ServiceFieldBrief] | bool]
 # ``integration``, and ``supported_features``. ``primary_entities_only``
 # gates non-primary entity categories. Services without a declared target
 # are absent from this mapping, which the matcher treats as "accepts any".
-type ServiceTargetFilter = dict[str, list[str | int] | str | None]
-type ServiceTargetBrief = dict[str, list[ServiceTargetFilter] | bool]
+type ServiceTargetFilter = dict[str, tuple[str | int, ...] | list[str | int] | str | None]
+type ServiceTargetBrief = dict[str, tuple[ServiceTargetFilter, ...] | list[ServiceTargetFilter] | bool]
 
 
 class _JsonSafeRecord:
@@ -351,8 +354,8 @@ class HomeSnapshot:
     indexes: SnapshotIndexes
     labels: dict[str, SafeLabelEntry]
     categories: dict[str, dict[str, SafeCategoryEntry]]
-    issues: list[SafeIssueEntry]
-    notifications: list[SafeNotificationEntry]
-    config_entries: list[SafeConfigEntry]
+    issues: tuple[SafeIssueEntry, ...]
+    notifications: tuple[SafeNotificationEntry, ...]
+    config_entries: tuple[SafeConfigEntry, ...]
     services_schema: Mapping[str, Mapping[str, ServiceSchemaBrief]] = field(default_factory=dict)
     services_target: Mapping[str, Mapping[str, ServiceTargetBrief]] = field(default_factory=dict)

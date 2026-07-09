@@ -61,6 +61,9 @@ class ExecutionState:
     # Captured print() output, one entry per call. Independent of the helper
     # call budget: print() routes through Monty's print_callback, not helper_response.
     printed: list[str] = field(default_factory=list)
+    # Structured truncation metadata for large executor-owned surfaces. Individual
+    # helpers can add surface-specific records while preserving existing payloads.
+    overflow: dict[str, object] = field(default_factory=dict)
     # Service action outcomes recorded by the services facade. Actions execute
     # sequentially, and prior successful entries remain when a later call fails.
     actions: list[ActionRecord] = field(default_factory=list)

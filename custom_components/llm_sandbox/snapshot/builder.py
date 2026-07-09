@@ -172,14 +172,14 @@ def _build_snapshot(
             scope_name: {cid: _safe_category(scope_name, cat) for cid, cat in entries.items()}
             for scope_name, entries in category_registry.categories.items()
         }
-        issues = [_safe_issue(issue) for issue in issue_registry.issues.values()]
+        issues = tuple(_safe_issue(issue) for issue in issue_registry.issues.values())
         notification_store = hass.data.get(PERSISTENT_NOTIFICATION_DOMAIN)
         notifications = (
-            [_safe_notification(notification) for notification in notification_store.values()]
+            tuple(_safe_notification(notification) for notification in notification_store.values())
             if isinstance(notification_store, dict)
-            else []
+            else ()
         )
-        config_entries = [_safe_config_entry(entry) for entry in hass.config_entries.async_entries()]
+        config_entries = tuple(_safe_config_entry(entry) for entry in hass.config_entries.async_entries())
         service_catalog, service_response, services_schema, services_target = _safe_services(hass)
     else:
         service_catalog = {}
@@ -187,9 +187,9 @@ def _build_snapshot(
         services_schema = {}
         services_target = {}
         categories = {}
-        issues = []
-        notifications = []
-        config_entries = []
+        issues = ()
+        notifications = ()
+        config_entries = ()
 
     return HomeSnapshot(
         created_at=dt_util.utcnow().isoformat(),
@@ -756,7 +756,7 @@ def _json_normalize(value: object) -> object:
     if isinstance(value, Mapping):
         return _json_normalized_dict(cast(Mapping[str, object], value))
     if isinstance(value, list | tuple | set):
-        return [_json_normalize(item) for item in value]
+        return tuple(_json_normalize(item) for item in value)
     return str(value)
 
 

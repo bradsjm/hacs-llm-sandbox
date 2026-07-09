@@ -1,6 +1,6 @@
 """Shared helper and runtime support for the Monty executor."""
 
-from .output import code_error_payload_for_state, helper_error_payload_for_state, json_safe
+from .output import code_error_payload_for_state, helper_error_payload_for_state, json_safe, overflow_metadata
 from .refinement import (
     REFINERS,
     error_key,
@@ -24,6 +24,7 @@ __all__ = [
     "helper_response",
     "json_safe",
     "load_monty_factory",
+    "overflow_metadata",
     "refine_code_error",
     "underlying_exception",
     "validation_error",

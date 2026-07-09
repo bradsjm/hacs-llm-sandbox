@@ -521,7 +521,8 @@ async def test_history_paginates_large_result(
     result = await _call_history(hass, recorder_entry, {"entity_ids": ["light.bedroom"], "start": start})
 
     assert "next_cursor" in result
-    assert "truncated" not in result
+    assert result["overflow"]["truncated"] is True
+    assert result["overflow"]["next_cursor"] == result["next_cursor"]
     assert _row_states(result["entities"]["light.bedroom"]["rows"]) == ["3", "4", "5"]
 
 
@@ -823,6 +824,18 @@ async def test_tampered_cursor_window_returns_invalid_cursor(
             {"entity_ids": ["light.bedroom"], "cursor": "not-a-valid-cursor", "end": dt_util.utcnow().isoformat()},
             id="logbook-end",
         ),
+        pytest.param(
+            GetStatisticsTool,
+            TOOL_GET_STATISTICS,
+            {"statistic_ids": ["light.bedroom"], "cursor": "not-a-valid-cursor", "types": ["sum"]},
+            id="statistics-types",
+        ),
+        pytest.param(
+            GetHistoryTool,
+            TOOL_GET_HISTORY,
+            {"entity_ids": ["light.bedroom"], "cursor": "not-a-valid-cursor", "attributes": ["brightness"]},
+            id="history-attributes",
+        ),
     ],
 )
 async def test_cursor_cannot_be_combined_with_window_args(
@@ -838,6 +851,46 @@ async def test_cursor_cannot_be_combined_with_window_args(
     assert result["status"] == "error"
     assert result["error"]["key"] == "invalid_tool_input"
     assert result["error"]["message"]
+
+
+async def test_history_rejects_hours_with_explicit_start(
+    hass: HomeAssistant,
+    recorder_entry: MockConfigEntry,
+) -> None:
+    """Window resolution rejects hours with start instead of ignoring hours."""
+    hass.states.async_set("light.bedroom", "on", {"friendly_name": "Bedroom Light"})
+    await _sync_recorder(hass)
+
+    result = await _call_history(
+        hass,
+        recorder_entry,
+        {"entity_ids": ["light.bedroom"], "start": dt_util.utcnow().isoformat(), "hours": 1},
+    )
+
+    assert result["status"] == "error"
+    assert result["error"]["key"] == "invalid_tool_input"
+
+
+async def test_history_accepts_hours_with_explicit_end(
+    hass: HomeAssistant,
+    recorder_entry: MockConfigEntry,
+) -> None:
+    """A relative hours window may still anchor against an explicit end."""
+    hass.states.async_set("light.bedroom", "on", {"friendly_name": "Bedroom Light"})
+    await _sync_recorder(hass)
+
+    result = await _call_history(
+        hass,
+        recorder_entry,
+        {"entity_ids": ["light.bedroom"], "end": dt_util.utcnow().isoformat(), "hours": 2},
+    )
+
+    assert "status" not in result
+    start = dt_util.parse_datetime(cast(str, result["window"]["start"]))
+    end = dt_util.parse_datetime(cast(str, result["window"]["end"]))
+    assert start is not None
+    assert end is not None
+    assert timedelta(hours=2) - timedelta(seconds=5) <= end - start <= timedelta(hours=2) + timedelta(seconds=5)
 
 
 @pytest.mark.parametrize(

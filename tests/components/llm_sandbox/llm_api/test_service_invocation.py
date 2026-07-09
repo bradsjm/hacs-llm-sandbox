@@ -52,20 +52,32 @@ from homeassistant.core import Context, SupportsResponse
 from homeassistant.exceptions import ServiceNotSupported
 
 LIGHT_TURN_ON_BRIEF: ServiceSchemaBrief = {
-    "fields": [
+    "fields": (
         {
             "name": "brightness_pct",
             "required": False,
             "type_hint": "integer",
             "description": None,
-        }
-    ],
+        },
+    ),
     "dynamic": False,
 }
-LIGHT_GET_STATE_BRIEF: ServiceSchemaBrief = {"fields": [], "dynamic": False}
-SWITCH_TURN_ON_BRIEF: ServiceSchemaBrief = {"fields": [], "dynamic": False}
-TEST_OPTIONAL_BRIEF: ServiceSchemaBrief = {"fields": [], "dynamic": False}
-TEST_REQUIRED_BRIEF: ServiceSchemaBrief = {"fields": [], "dynamic": False}
+LIGHT_COLOR_BRIEF: ServiceSchemaBrief = {
+    "fields": (
+        {
+            "name": "color_temp_kelvin",
+            "required": False,
+            "type_hint": "integer",
+            "description": None,
+            "filter": {"attribute": {"supported_color_modes": ("color_temp",)}},
+        },
+    ),
+    "dynamic": False,
+}
+LIGHT_GET_STATE_BRIEF: ServiceSchemaBrief = {"fields": (), "dynamic": False}
+SWITCH_TURN_ON_BRIEF: ServiceSchemaBrief = {"fields": (), "dynamic": False}
+TEST_OPTIONAL_BRIEF: ServiceSchemaBrief = {"fields": (), "dynamic": False}
+TEST_REQUIRED_BRIEF: ServiceSchemaBrief = {"fields": (), "dynamic": False}
 
 
 @dataclass(slots=True)
@@ -266,6 +278,22 @@ async def test_response_mode_policy(
         assert harness.runtime.state.actions[0]["response"] == service_response
     else:
         assert cast(dict[str, object], harness.runtime.state.actions[0]["error"])["key"] == expected_error_key
+
+
+async def test_action_response_overflow_metadata_caps_recorded_response() -> None:
+    """Large action responses are summarized with structured overflow metadata."""
+    response = {"payload": "x" * 25_000}
+    harness = _service_harness(invoker=RecordingInvoker(responses=[response]))
+
+    result = await _ok_call(harness, "test_response", "optional")
+
+    assert result == response
+    action = harness.runtime.state.actions[0]
+    assert action["status"] == "ok"
+    assert action["response"] != response
+    assert cast(dict[str, object], action["response"])["truncated"] is True
+    overflow = cast(dict[str, object], action["overflow"])
+    assert cast(dict[str, object], overflow["response"])["truncated"] is True
 
 
 async def test_service_not_found_records_blocked_action_and_returns_none() -> None:
@@ -567,7 +595,11 @@ async def test_async_services_for_target_marks_omitted_entities() -> None:
 
     result = harness.services.async_services_for_target({"area_id": "area-overflow"})
 
-    assert result["_meta"] == {"omitted_entities": 1, "limit": _DISCOVERY_LIMIT}
+    assert result["_meta"] == {
+        "omitted_entities": 1,
+        "limit": _DISCOVERY_LIMIT,
+        "overflow": {"truncated": True, "returned": _DISCOVERY_LIMIT, "limit": _DISCOVERY_LIMIT, "omitted": 1},
+    }
     assert len([entity_id for entity_id in result if entity_id != "_meta"]) == _DISCOVERY_LIMIT
     per_entity = cast(Mapping[str, Mapping[str, object]], result[entity_ids[0]])
     assert per_entity["light"]["turn_on"] == {
@@ -657,7 +689,7 @@ async def test_live_service_not_supported_guidance_lists_entities_supporting_ser
 
 
 async def test_live_service_not_supported_guidance_lists_single_entity_supported_services() -> None:
-    """Single-target live support failures suggest services supported by that entity."""
+    """Single-target snapshot target blocks suggest services supported by that entity."""
     snapshot = replace(
         _snapshot(),
         states={"light.plain": _state("light.plain", "on", "Plain Light")},
@@ -673,16 +705,15 @@ async def test_live_service_not_supported_guidance_lists_single_entity_supported
             }
         },
     )
-    harness = _service_harness(
-        snapshot=snapshot,
-        invoker=RecordingInvoker(errors=[ServiceNotSupported("light", "turn_on", "light.plain")]),
-    )
+    harness = _service_harness(snapshot=snapshot)
 
-    payload = await _helper_error_for(harness, "light", "turn_on", target={"entity_id": "light.plain"})
+    result = await _ok_call(harness, "light", "turn_on", target={"entity_id": "light.plain"})
 
-    error = cast(Mapping[str, object], _first_action(payload)["error"])
+    assert result is None
+    error = cast(Mapping[str, object], harness.runtime.state.actions[0]["error"])
     assert error["key"] == "service_target_not_supported"
     assert _guidance_candidate_ids(error["guidance"]) == {"light.toggle"}
+    assert harness.invoker.calls == []
 
 
 async def test_cross_domain_target_is_blocked_with_service_supported_fix() -> None:
@@ -701,6 +732,44 @@ async def test_cross_domain_target_is_blocked_with_service_supported_fix() -> No
     error = cast(dict[str, object], harness.runtime.state.actions[0]["error"])
     # The fix names the visible entity the service does target (light.bedroom), not the switch.
     assert "light.bedroom" in _guidance_candidate_ids(error["guidance"])
+    assert harness.invoker.calls == []
+
+
+async def test_service_target_filter_block_happens_before_live_invoke() -> None:
+    """Snapshot-known target filters block unsupported targets without live dispatch."""
+    snapshot = replace(
+        _snapshot(),
+        states={"light.plain": _state("light.plain", "on", "Plain Light")},
+        services_target={"light": {"turn_on": {"entity": [{"domain": ["light"], "supported_features": [4]}]}}},
+    )
+    harness = _service_harness(snapshot=snapshot)
+
+    result = await _ok_call(harness, "light", "turn_on", target={"entity_id": "light.plain"})
+
+    assert result is None
+    assert _action_keys_via_state(harness) == ["service_target_not_supported"]
+    assert harness.invoker.calls == []
+
+
+async def test_service_data_capability_block_happens_before_live_invoke() -> None:
+    """Snapshot-known field capability filters block unsupported service data."""
+    snapshot = replace(
+        _snapshot(),
+        services_schema={"light": {"turn_on": LIGHT_COLOR_BRIEF}},
+        services_target={"light": {"turn_on": {"entity": [{"domain": ["light"]}]}}},
+    )
+    harness = _service_harness(snapshot=snapshot)
+
+    result = await _ok_call(
+        harness,
+        "light",
+        "turn_on",
+        service_data={"color_temp_kelvin": 3000},
+        target={"entity_id": "light.bedroom"},
+    )
+
+    assert result is None
+    assert _action_keys_via_state(harness) == ["service_data_not_supported"]
     assert harness.invoker.calls == []
 
 

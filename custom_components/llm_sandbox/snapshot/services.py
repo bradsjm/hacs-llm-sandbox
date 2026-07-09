@@ -66,7 +66,7 @@ def _service_schema_brief(
 ) -> ServiceSchemaBrief:
     """Build a JSON-safe brief for one service schema."""
     if schema is None:
-        return {"fields": [], "dynamic": False}
+        return {"fields": (), "dynamic": False}
 
     raw_schema = (
         schema.schema
@@ -76,7 +76,7 @@ def _service_schema_brief(
         else None
     )
     if not isinstance(raw_schema, dict):
-        return {"fields": [], "dynamic": True}
+        return {"fields": (), "dynamic": True}
 
     description_fields = _service_description_fields(description)
     fields: list[ServiceFieldBrief] = []
@@ -107,7 +107,7 @@ def _service_schema_brief(
     if len(fields) > SERVICE_SCHEMA_FIELD_LIMIT:
         dynamic = True
         fields = fields[:SERVICE_SCHEMA_FIELD_LIMIT]
-    return {"fields": fields, "dynamic": dynamic}
+    return {"fields": tuple(fields), "dynamic": dynamic}
 
 
 def _service_description_fields(description: object) -> dict[str, dict[str, object]]:
@@ -134,16 +134,16 @@ def _service_field_filter(field_description: Mapping[str, object]) -> ServiceFie
     field_filter: ServiceFieldFilter = {}
     raw_features = raw_filter.get("supported_features")
     if isinstance(raw_features, list):
-        features = [value for value in raw_features if isinstance(value, int)]
+        features = tuple(value for value in raw_features if isinstance(value, int))
         if features:
             field_filter["supported_features"] = features
     raw_attribute = raw_filter.get("attribute")
     if isinstance(raw_attribute, Mapping):
-        attribute: dict[str, list[int | str]] = {}
+        attribute: dict[str, tuple[int | str, ...] | list[int | str]] = {}
         for attr_name, allowed in raw_attribute.items():
             if not isinstance(allowed, list):
                 continue
-            values = [value for value in allowed if isinstance(value, int | str)]
+            values = tuple(value for value in allowed if isinstance(value, int | str))
             if values:
                 attribute[str(attr_name)] = values
         if attribute:
@@ -180,15 +180,17 @@ def _service_target_brief(
             continue
         filters.append(
             {
-                "domain": [str(value) for value in raw_filter.get("domain", []) if isinstance(value, str)],
-                "device_class": [str(value) for value in raw_filter.get("device_class", []) if isinstance(value, str)],
+                "domain": tuple(str(value) for value in raw_filter.get("domain", []) if isinstance(value, str)),
+                "device_class": tuple(
+                    str(value) for value in raw_filter.get("device_class", []) if isinstance(value, str)
+                ),
                 "integration": value if isinstance(value := raw_filter.get("integration"), str) else None,
-                "supported_features": [
+                "supported_features": tuple(
                     value for value in raw_filter.get("supported_features", []) if isinstance(value, int)
-                ],
+                ),
             }
         )
-    return {"entity": filters}
+    return {"entity": tuple(filters)}
 
 
 def _service_field_name_and_required(key: object) -> tuple[str | None, bool]:

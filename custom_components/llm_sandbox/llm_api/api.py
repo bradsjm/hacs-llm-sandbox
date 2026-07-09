@@ -12,7 +12,13 @@ from homeassistant.helpers import llm
 from ..const import DEFAULT_PROMPT_PROFILE, DOMAIN
 from ..runtime import SandboxConfigEntry
 from ..snapshot import build_snapshot
-from .prompts import compose_system_prompt, render_home_inventory, render_request_location, resolve_profile
+from .prompts import (
+    compose_system_prompt,
+    render_home_inventory,
+    render_request_location,
+    render_tool_capabilities,
+    resolve_profile,
+)
 from .tools.code import ExecuteHomeCodeTool
 from .tools.recorder import GetHistoryTool, GetLogbookTool, GetStatisticsTool, logbook_available, recorder_available
 from .tools.vision import GetCameraImageTool
@@ -46,6 +52,7 @@ class LlmSandboxAPI(llm.API):
         inventory_section: str | None = None
         recorder_ok = recorder_available(self._hass)
         logbook_ok = logbook_available(self._hass)
+        tools = _build_tools(self.entry_id, recorder_ok=recorder_ok, logbook_ok=logbook_ok)
         # Missing, wrong-domain, unloaded, or uninitialized entries get a conservative prompt.
         if (
             entry is not None
@@ -78,10 +85,11 @@ class LlmSandboxAPI(llm.API):
                 llm_context,
                 base_prompt,
                 actions_enabled,
+                tool_section=render_tool_capabilities(tools),
                 inventory_section=inventory_section,
             ),
             llm_context=llm_context,
-            tools=_build_tools(self.entry_id, recorder_ok=recorder_ok, logbook_ok=logbook_ok),
+            tools=tools,
         )
 
 
@@ -91,6 +99,7 @@ def _build_api_prompt(
     base_prompt: str,
     actions_enabled: bool,
     *,
+    tool_section: str | None = None,
     inventory_section: str | None = None,
 ) -> str:
     """Return the base API prompt plus concise dynamic request context."""
@@ -98,6 +107,7 @@ def _build_api_prompt(
     return compose_system_prompt(
         base_prompt,
         actions_enabled,
+        tool_section=tool_section,
         location_section=location_prompt,
         inventory_section=inventory_section,
     )

@@ -152,7 +152,7 @@ def _services_for_entity(facts: ServiceDiscoveryFacts, entity_id: str) -> tuple[
 def _service_targets_entity(brief: ServiceTargetBrief, entity: _ServiceEntityFacts) -> bool:
     """Whether a service target accepts an entity using bounded facts only."""
     filters = brief.get("entity")
-    if not isinstance(filters, list) or not filters:
+    if not isinstance(filters, list | tuple) or not filters:
         return True
     return any(_service_target_filter_matches(target_filter, entity) for target_filter in filters)
 
@@ -160,17 +160,17 @@ def _service_targets_entity(brief: ServiceTargetBrief, entity: _ServiceEntityFac
 def _service_target_filter_matches(target_filter: Mapping[str, object], entity: _ServiceEntityFacts) -> bool:
     """Mirror HA service target filtering without retaining state/registry records."""
     domains = target_filter.get("domain")
-    if isinstance(domains, list) and domains and entity.domain not in domains:
+    if isinstance(domains, list | tuple) and domains and entity.domain not in domains:
         return False
     integration = target_filter.get("integration")
     if isinstance(integration, str) and integration and entity.integration != integration:
         return False
     device_classes = target_filter.get("device_class")
-    if isinstance(device_classes, list) and device_classes and entity.device_class not in device_classes:
+    if isinstance(device_classes, list | tuple) and device_classes and entity.device_class not in device_classes:
         return False
     features = target_filter.get("supported_features")
     return not (
-        isinstance(features, list)
+        isinstance(features, list | tuple)
         and features
         and not any(
             isinstance(feature, int) and feature & entity.supported_features == feature for feature in features

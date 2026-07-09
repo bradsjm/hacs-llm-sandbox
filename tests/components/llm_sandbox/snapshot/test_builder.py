@@ -162,12 +162,12 @@ async def test_snapshot_state_attributes_are_json_normalized_deep_copies(hass: H
     nested = cast(dict[str, object], attributes["nested"])
     assert isinstance(attributes, dict)
     assert isinstance(nested, dict)
-    assert isinstance(nested["numbers"], list)
-    assert nested["numbers"] == [1, 2]
-    assert isinstance(nested["options"], list)
-    assert nested["options"] == ["auto", "eco"]
-    assert isinstance(nested["labels"], list)
-    assert set(cast(list[str], nested["labels"])) == {"warm", "cool"}
+    assert isinstance(nested["numbers"], tuple)
+    assert nested["numbers"] == (1, 2)
+    assert isinstance(nested["options"], tuple)
+    assert nested["options"] == ("auto", "eco")
+    assert isinstance(nested["labels"], tuple)
+    assert set(cast(tuple[str, ...], nested["labels"])) == {"warm", "cool"}
     assert attributes["seen_at"] == "2026-01-02T03:04:05+00:00"
 
 
@@ -189,12 +189,12 @@ async def test_snapshot_entity_capabilities_are_json_normalized_deep_copies(hass
 
     capabilities = snapshot.entities["light.capable"].capabilities
     assert isinstance(capabilities, dict)
-    assert isinstance(capabilities["modes"], list)
-    assert capabilities["modes"] == ["auto"]
-    assert isinstance(capabilities["range"], list)
-    assert capabilities["range"] == [1, 2]
-    assert isinstance(capabilities["flags"], list)
-    assert set(cast(list[str], capabilities["flags"])) == {"fast", "quiet"}
+    assert isinstance(capabilities["modes"], tuple)
+    assert capabilities["modes"] == ("auto",)
+    assert isinstance(capabilities["range"], tuple)
+    assert capabilities["range"] == (1, 2)
+    assert isinstance(capabilities["flags"], tuple)
+    assert set(cast(tuple[str, ...], capabilities["flags"])) == {"fast", "quiet"}
 
 
 async def test_snapshot_issue_placeholders_are_json_normalized_deep_copies(hass: HomeAssistant) -> None:
@@ -225,12 +225,12 @@ async def test_snapshot_issue_placeholders_are_json_normalized_deep_copies(hass:
     assert isinstance(safe_placeholders, dict)
     details = cast(dict[str, object], safe_placeholders["details"])
     assert isinstance(details, dict)
-    assert isinstance(details["ids"], list)
-    assert details["ids"] == ["one"]
-    assert isinstance(details["aliases"], list)
-    assert details["aliases"] == ["main"]
-    assert isinstance(details["tags"], list)
-    assert set(cast(list[str], details["tags"])) == {"urgent"}
+    assert isinstance(details["ids"], tuple)
+    assert details["ids"] == ("one",)
+    assert isinstance(details["aliases"], tuple)
+    assert details["aliases"] == ("main",)
+    assert isinstance(details["tags"], tuple)
+    assert set(cast(tuple[str, ...], details["tags"])) == {"urgent"}
 
 
 async def test_snapshot_effective_area_index_uses_entity_override_then_device(hass: HomeAssistant) -> None:
@@ -327,10 +327,10 @@ async def test_snapshot_service_schema_brief(hass: HomeAssistant) -> None:
     brief = snapshot.services_schema["schema_test"]["do_thing"]
     assert isinstance(brief["dynamic"], bool)
     assert brief["dynamic"] is False
-    assert brief["fields"] == [
+    assert brief["fields"] == (
         {"name": "count", "required": True, "type_hint": "integer", "description": None},
         {"name": "label", "required": False, "type_hint": "string", "description": None},
-    ]
+    )
     assert all(isinstance(field["name"], str) for field in brief["fields"])
     assert all(isinstance(field["required"], bool) for field in brief["fields"])
 
@@ -359,10 +359,10 @@ async def test_snapshot_captures_service_target_and_field_capability_filters(has
     snapshot = build_snapshot(hass)
 
     assert snapshot.services_target["cover"]["stop_cover"] == {
-        "entity": [{"domain": ["cover"], "device_class": [], "integration": None, "supported_features": [4]}]
+        "entity": ({"domain": ("cover",), "device_class": (), "integration": None, "supported_features": (4,)},)
     }
     fields = {field["name"]: field for field in snapshot.services_schema["cover"]["stop_cover"]["fields"]}
-    assert fields["color_temp_kelvin"]["filter"] == {"attribute": {"supported_color_modes": ["color_temp"]}}
+    assert fields["color_temp_kelvin"]["filter"] == {"attribute": {"supported_color_modes": ("color_temp",)}}
 
 
 async def test_snapshot_device_label_index(hass: HomeAssistant) -> None:
@@ -635,9 +635,9 @@ async def test_build_recorder_snapshot_keeps_selector_surface_without_admin_meta
     assert snapshot.services_schema == {}
     assert snapshot.services_target == {}
     assert snapshot.categories == {}
-    assert snapshot.issues == []
-    assert snapshot.notifications == []
-    assert snapshot.config_entries == []
+    assert snapshot.issues == ()
+    assert snapshot.notifications == ()
+    assert snapshot.config_entries == ()
 
 
 async def test_build_vision_snapshot_keeps_visible_states_only(hass: HomeAssistant) -> None:
@@ -657,9 +657,9 @@ async def test_build_vision_snapshot_keeps_visible_states_only(hass: HomeAssista
     assert snapshot.floors == {}
     assert snapshot.labels == {}
     assert snapshot.categories == {}
-    assert snapshot.issues == []
-    assert snapshot.notifications == []
-    assert snapshot.config_entries == []
+    assert snapshot.issues == ()
+    assert snapshot.notifications == ()
+    assert snapshot.config_entries == ()
     assert snapshot.services == {}
     assert snapshot.services_supports_response == {}
     assert snapshot.services_schema == {}
