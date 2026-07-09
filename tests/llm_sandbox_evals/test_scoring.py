@@ -105,6 +105,41 @@ def test_execute_tool_payload_can_score_without_answer_text_match() -> None:
     assert score_case(checks) == pytest.approx(1.0)
 
 
+def test_execute_tool_payload_evidence_can_span_successful_calls() -> None:
+    checks = check_case(
+        _case(
+            Expected(
+                tool_result_checks=(
+                    ToolResultCheck(
+                        tool_name="execute_home_code",
+                        entity_ids=("light.living",),
+                        entry_values=("label_evening", "on"),
+                    ),
+                ),
+            )
+        ),
+        "One evening light is on.",
+        (),
+        2,
+        (
+            ToolEvent(
+                tool_name="execute_home_code",
+                args={"code": "result = label_registry.async_get_label_by_name('evening')"},
+                output={"execution": {"status": "ok"}, "output": {"label_id": "label_evening"}},
+            ),
+            ToolEvent(
+                tool_name="execute_home_code",
+                args={"code": "result = hass.states.get('light.living')"},
+                output={"execution": {"status": "ok"}, "output": {"entity_id": "light.living", "state": "on"}},
+            ),
+        ),
+    )
+
+    passed_by_name = {check.name: check.passed for check in checks}
+    assert passed_by_name["tool_result_check_0"] is True
+    assert score_case(checks) == pytest.approx(1.0)
+
+
 def test_provenance_evidence_reads_tool_payloads() -> None:
     tool_events = (
         ToolEvent(

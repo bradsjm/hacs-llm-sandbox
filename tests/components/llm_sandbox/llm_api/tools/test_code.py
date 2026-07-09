@@ -746,6 +746,8 @@ result = ret
     assert "service_data" not in action
     assert "response" not in action
     assert "error" not in action
+    assert "frozen snapshot" in result["notes"][0]
+    assert "do not reread state" in result["notes"][0]
     assert events == ["turn_on"]
 
 

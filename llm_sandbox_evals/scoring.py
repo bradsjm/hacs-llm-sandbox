@@ -329,6 +329,18 @@ def _tool_result_check(expected: ToolResultCheck, tool_events: tuple[ToolEvent, 
         if event.tool_name == expected.tool_name and _tool_event_error_kind(event) is None
     ]
     failures: list[str] = []
+    if expected.tool_name == "execute_home_code" and matching_events:
+        # Branch boundary: execute_home_code is often used as short discovery
+        # glue, so one user outcome can be evidenced across multiple successful
+        # snippets. Recorder tool checks remain per-call shape checks below.
+        failures = _execute_result_failures(expected, _combined_execute_output(matching_events))
+        if not failures:
+            return CheckResult(
+                name=f"tool_result_check_{index}",
+                passed=True,
+                required=True,
+                feedback=f"tool={expected.tool_name}",
+            )
     for event in matching_events:
         failures = _tool_result_failures(expected, event.output, event.args)
         if not failures:
@@ -361,6 +373,11 @@ def _tool_result_failures(
     if expected.tool_name == "get_logbook":
         return _logbook_result_failures(expected, output, args)
     return ["unsupported_tool"]
+
+
+def _combined_execute_output(events: Sequence[ToolEvent]) -> dict[str, object]:
+    """Return one searchable payload made from successful execute_home_code calls."""
+    return {"execution": {"status": "ok"}, "output": [event.output for event in events]}
 
 
 def _execute_result_failures(expected: ToolResultCheck, output: Mapping[str, object]) -> list[str]:

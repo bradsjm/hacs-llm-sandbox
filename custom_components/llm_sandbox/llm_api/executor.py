@@ -44,6 +44,10 @@ MONTY_MAX_MEMORY_BYTES = 64 * 1024 * 1024
 MONTY_GC_INTERVAL = 1000
 MONTY_MAX_RECURSION_DEPTH = 1000
 _REFERENCE_TYPE_ERRORS = ("unresolved-reference", "used-when-not-defined")
+_ACTION_SNAPSHOT_NOTE = (
+    "Service action calls were accepted, but hass.states still reflects the frozen snapshot for this "
+    "tool call; do not reread state to verify these actions or repeat them because the snapshot is unchanged."
+)
 
 # View classes registered with Monty for type-checking and dataclass binding.
 # Also reused by ``await_normalization`` to derive async/sync method names.
@@ -180,6 +184,13 @@ def _failed_action_summary(actions: Sequence[object]) -> str | None:
     )
 
 
+def _successful_action_summary(actions: Sequence[object]) -> str | None:
+    """Return snapshot-staleness guidance when any service call was accepted."""
+    if any(isinstance(action, dict) and action.get("status") == "ok" for action in actions):
+        return _ACTION_SNAPSHOT_NOTE
+    return None
+
+
 async def async_execute_home_code(
     code: str,
     *,
@@ -312,11 +323,18 @@ async def async_execute_home_code(
     if runtime.state.actions:
         actions = json_safe(runtime.state.actions)
         payload["actions"] = actions
+        action_notes: list[str] = []
         # Policy blocks are action outcomes, not code failures, so execution.status remains ok.
         if isinstance(actions, list) and (summary := _failed_action_summary(actions)) is not None:
             execution_payload["action_status"] = "error"
             execution_payload["action_failures"] = _failed_action_keys(actions)
-            payload["notes"] = [summary, *runtime.state.notes]
+            action_notes.append(summary)
+        if isinstance(actions, list) and (summary := _successful_action_summary(actions)) is not None:
+            action_notes.append(summary)
+        if action_notes:
+            # State mutation point: action notes are model-facing recovery guidance;
+            # runtime notes are preserved after these action-specific facts.
+            payload["notes"] = [*action_notes, *runtime.state.notes]
     if runtime.state.notes:
         payload.setdefault("notes", list(runtime.state.notes))
     return payload

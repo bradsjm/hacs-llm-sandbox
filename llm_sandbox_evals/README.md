@@ -150,7 +150,7 @@ Categories: `state_read`, `registry_read`, `recorder_read`, `action_allowed`, `a
 
 - `answer_values` — diagnostic-only expected final-answer facts for report analysis. They do not make an oracle meaningful and never determine the score.
 - `provenance_values` — entity IDs, default IDs, selector-expansion facts, or other hidden/tool-payload evidence that should not be required in final prose.
-- `tool_result_checks` — structured evidence for `execute_home_code`, `get_history`, `get_statistics`, or `get_logbook`; recorder/history/statistics/logbook cases must include checks for successful, relevant result shapes that are non-empty unless the expected outcome explicitly allows no data with `min_results: 0`. Use `entry_values_by_entity` when a multi-entity result needs different expected values per entity.
+- `tool_result_checks` — structured evidence for `execute_home_code`, `get_history`, `get_statistics`, or `get_logbook`; `execute_home_code` checks may combine evidence across successful snippets, while recorder/history/statistics/logbook checks prove one successful, relevant result shape that is non-empty unless the expected outcome explicitly allows no data with `min_results: 0`. Use `entry_values_by_entity` when a multi-entity result needs different expected values per entity.
 - `blocked_outcome` — structured expectations for deliberately blocked actions: allowed error keys and maximum attempts.
 - `actions` — exact allowed side effects, with split calls allowed only when they satisfy the expected target union and no extra/duplicate/error side effects occur.
 - `answer_excludes` and `max_tool_calls` — diagnostic final-answer exclusions and the hard call cap.

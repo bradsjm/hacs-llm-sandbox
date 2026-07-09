@@ -57,6 +57,8 @@ Service-call outcomes (`SafeServiceRegistry.async_call` in `facades/services.py`
 
 Successful action records are compact: `{service:"domain.service", target, status:"ok", resolved_from?}`. The domain is folded into `service`; the full request echo, `blocking`, `return_response`, `service_data`, and null response/error fields were removed so actions carry only decision-relevant fields.
 
+If a success payload contains any `actions[].status == "ok"`, the executor adds a top-level `notes` entry explaining that service calls were accepted but later `hass.states` reads still reflect the frozen snapshot for this tool call. Rationale: LLMs otherwise reread stale state and repeat successful toggles or try alternate services.
+
 If a success payload contains any `actions[].status == "error"`, the executor also adds a top-level `notes` entry summarizing blocked/failed actions while keeping `execution.status == "ok"`; the action error and its `error.guidance` remain the detailed recovery surface.
 
 `resolution.py` is now the exact/unique auto-resolve primitive, not the recovery-ranker. `resolve_target_entity` remains the trusted service-target resolver and is reused internally by the `guidance/` engine; `candidates_for_domain`, `rank_candidates_for_service`, and `available_hint` were removed. Structured recovery ranking, bounding, confidence policy, and wording live in `guidance/advise()`. Optional conversation memory is explicit and advisory: it can bias ordering or break ambiguity ties only for entity ids still present in the fresh snapshot candidate set, and memory writes are gated by guidance confidence. It never touches live Home Assistant.
