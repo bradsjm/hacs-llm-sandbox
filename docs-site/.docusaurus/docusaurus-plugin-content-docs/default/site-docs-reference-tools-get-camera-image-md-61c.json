@@ -1,0 +1,28 @@
+{
+  "id": "reference/tools/get-camera-image",
+  "title": "get_camera_image",
+  "description": "Reference for camera and image entity capture.",
+  "source": "@site/docs/reference/tools/get-camera-image.md",
+  "sourceDirName": "reference/tools",
+  "slug": "/reference/tools/get-camera-image",
+  "permalink": "/hacs-llm-sandbox/reference/tools/get-camera-image",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/reference/tools/get-camera-image.md",
+  "tags": [],
+  "version": "current",
+  "lastUpdatedAt": null,
+  "frontMatter": {
+    "title": "get_camera_image",
+    "description": "Reference for camera and image entity capture."
+  },
+  "sidebar": "docsSidebar",
+  "previous": {
+    "title": "get_logbook",
+    "permalink": "/hacs-llm-sandbox/reference/tools/get-logbook"
+  },
+  "next": {
+    "title": "Monty Globals",
+    "permalink": "/hacs-llm-sandbox/reference/monty-globals"
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "id": "concepts/recorder-and-sql",
+  "title": "Recorder And SQL",
+  "description": "Recorder-backed tools and the read-only in-memory SQL surface.",
+  "source": "@site/docs/concepts/recorder-and-sql.md",
+  "sourceDirName": "concepts",
+  "slug": "/concepts/recorder-and-sql",
+  "permalink": "/hacs-llm-sandbox/concepts/recorder-and-sql",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/concepts/recorder-and-sql.md",
+  "tags": [],
+  "version": "current",
+  "lastUpdatedAt": null,
+  "frontMatter": {
+    "title": "Recorder And SQL",
+    "description": "Recorder-backed tools and the read-only in-memory SQL surface."
+  },
+  "sidebar": "docsSidebar",
+  "previous": {
+    "title": "Sandbox Boundaries",
+    "permalink": "/hacs-llm-sandbox/concepts/sandbox-boundaries"
+  },
+  "next": {
+    "title": "Action Safety",
+    "permalink": "/hacs-llm-sandbox/concepts/action-safety"
+  }
+}

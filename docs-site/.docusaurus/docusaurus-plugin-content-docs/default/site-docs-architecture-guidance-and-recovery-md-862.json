@@ -1,0 +1,28 @@
+{
+  "id": "architecture/guidance-and-recovery",
+  "title": "Guidance And Recovery",
+  "description": "How errors and ambiguous entity references become actionable model feedback.",
+  "source": "@site/docs/architecture/guidance-and-recovery.md",
+  "sourceDirName": "architecture",
+  "slug": "/architecture/guidance-and-recovery",
+  "permalink": "/hacs-llm-sandbox/architecture/guidance-and-recovery",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/architecture/guidance-and-recovery.md",
+  "tags": [],
+  "version": "current",
+  "lastUpdatedAt": null,
+  "frontMatter": {
+    "title": "Guidance And Recovery",
+    "description": "How errors and ambiguous entity references become actionable model feedback."
+  },
+  "sidebar": "docsSidebar",
+  "previous": {
+    "title": "Service Call Gating",
+    "permalink": "/hacs-llm-sandbox/architecture/service-call-gating"
+  },
+  "next": {
+    "title": "Configuration Options",
+    "permalink": "/hacs-llm-sandbox/reference/configuration-options"
+  }
+}

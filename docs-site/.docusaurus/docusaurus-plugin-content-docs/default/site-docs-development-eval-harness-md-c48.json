@@ -1,0 +1,28 @@
+{
+  "id": "development/eval-harness",
+  "title": "Eval Harness",
+  "description": "Development-only evaluation package for tool behavior.",
+  "source": "@site/docs/development/eval-harness.md",
+  "sourceDirName": "development",
+  "slug": "/development/eval-harness",
+  "permalink": "/hacs-llm-sandbox/development/eval-harness",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/development/eval-harness.md",
+  "tags": [],
+  "version": "current",
+  "lastUpdatedAt": null,
+  "frontMatter": {
+    "title": "Eval Harness",
+    "description": "Development-only evaluation package for tool behavior."
+  },
+  "sidebar": "docsSidebar",
+  "previous": {
+    "title": "Validation",
+    "permalink": "/hacs-llm-sandbox/development/validation"
+  },
+  "next": {
+    "title": "Contributing",
+    "permalink": "/hacs-llm-sandbox/development/contributing"
+  }
+}

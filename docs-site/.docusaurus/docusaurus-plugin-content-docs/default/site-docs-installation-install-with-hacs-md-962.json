@@ -1,0 +1,28 @@
+{
+  "id": "installation/install-with-hacs",
+  "title": "Install With HACS",
+  "description": "Install Assist Agent Sandbox as a custom HACS integration.",
+  "source": "@site/docs/installation/install-with-hacs.md",
+  "sourceDirName": "installation",
+  "slug": "/installation/install-with-hacs",
+  "permalink": "/hacs-llm-sandbox/installation/install-with-hacs",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/installation/install-with-hacs.md",
+  "tags": [],
+  "version": "current",
+  "lastUpdatedAt": null,
+  "frontMatter": {
+    "title": "Install With HACS",
+    "description": "Install Assist Agent Sandbox as a custom HACS integration."
+  },
+  "sidebar": "docsSidebar",
+  "previous": {
+    "title": "Prerequisites",
+    "permalink": "/hacs-llm-sandbox/installation/prerequisites"
+  },
+  "next": {
+    "title": "Enable In Assist",
+    "permalink": "/hacs-llm-sandbox/installation/enable-in-assist"
+  }
+}

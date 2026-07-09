@@ -1,0 +1,27 @@
+{
+  "id": "intro",
+  "title": "Introduction",
+  "description": "What Assist Agent Sandbox does, who it is for, and where to start.",
+  "source": "@site/docs/intro.md",
+  "sourceDirName": ".",
+  "slug": "/",
+  "permalink": "/hacs-llm-sandbox/",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/intro.md",
+  "tags": [],
+  "version": "current",
+  "lastUpdatedAt": null,
+  "sidebarPosition": 1,
+  "frontMatter": {
+    "title": "Introduction",
+    "description": "What Assist Agent Sandbox does, who it is for, and where to start.",
+    "slug": "/",
+    "sidebar_position": 1
+  },
+  "sidebar": "docsSidebar",
+  "next": {
+    "title": "Prerequisites",
+    "permalink": "/hacs-llm-sandbox/installation/prerequisites"
+  }
+}

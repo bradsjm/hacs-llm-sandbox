@@ -1,0 +1,28 @@
+{
+  "id": "reference/tools/get-statistics",
+  "title": "get_statistics",
+  "description": "Reference for bounded long-term statistics queries.",
+  "source": "@site/docs/reference/tools/get-statistics.md",
+  "sourceDirName": "reference/tools",
+  "slug": "/reference/tools/get-statistics",
+  "permalink": "/hacs-llm-sandbox/reference/tools/get-statistics",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/reference/tools/get-statistics.md",
+  "tags": [],
+  "version": "current",
+  "lastUpdatedAt": null,
+  "frontMatter": {
+    "title": "get_statistics",
+    "description": "Reference for bounded long-term statistics queries."
+  },
+  "sidebar": "docsSidebar",
+  "previous": {
+    "title": "get_history",
+    "permalink": "/hacs-llm-sandbox/reference/tools/get-history"
+  },
+  "next": {
+    "title": "get_logbook",
+    "permalink": "/hacs-llm-sandbox/reference/tools/get-logbook"
+  }
+}

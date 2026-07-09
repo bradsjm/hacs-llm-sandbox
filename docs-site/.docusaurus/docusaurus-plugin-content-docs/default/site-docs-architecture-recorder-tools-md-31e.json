@@ -1,0 +1,28 @@
+{
+  "id": "architecture/recorder-tools",
+  "title": "Recorder Tools",
+  "description": "Runtime design for history, statistics, logbook, and SQL queries.",
+  "source": "@site/docs/architecture/recorder-tools.md",
+  "sourceDirName": "architecture",
+  "slug": "/architecture/recorder-tools",
+  "permalink": "/hacs-llm-sandbox/architecture/recorder-tools",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/architecture/recorder-tools.md",
+  "tags": [],
+  "version": "current",
+  "lastUpdatedAt": null,
+  "frontMatter": {
+    "title": "Recorder Tools",
+    "description": "Runtime design for history, statistics, logbook, and SQL queries."
+  },
+  "sidebar": "docsSidebar",
+  "previous": {
+    "title": "Facade Surface",
+    "permalink": "/hacs-llm-sandbox/architecture/facade-surface"
+  },
+  "next": {
+    "title": "Vision Tool",
+    "permalink": "/hacs-llm-sandbox/architecture/vision-tool"
+  }
+}

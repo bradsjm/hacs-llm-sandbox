@@ -1,0 +1,28 @@
+{
+  "id": "development/contributing",
+  "title": "Contributing",
+  "description": "Contribution expectations for code, tests, docs, and safety boundaries.",
+  "source": "@site/docs/development/contributing.md",
+  "sourceDirName": "development",
+  "slug": "/development/contributing",
+  "permalink": "/hacs-llm-sandbox/development/contributing",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/development/contributing.md",
+  "tags": [],
+  "version": "current",
+  "lastUpdatedAt": null,
+  "frontMatter": {
+    "title": "Contributing",
+    "description": "Contribution expectations for code, tests, docs, and safety boundaries."
+  },
+  "sidebar": "docsSidebar",
+  "previous": {
+    "title": "Eval Harness",
+    "permalink": "/hacs-llm-sandbox/development/eval-harness"
+  },
+  "next": {
+    "title": "Release Notes",
+    "permalink": "/hacs-llm-sandbox/release-notes"
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "id": "usage/quickstart",
+  "title": "Quickstart",
+  "description": "First prompts to confirm the integration is working.",
+  "source": "@site/docs/usage/quickstart.md",
+  "sourceDirName": "usage",
+  "slug": "/usage/quickstart",
+  "permalink": "/hacs-llm-sandbox/usage/quickstart",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/usage/quickstart.md",
+  "tags": [],
+  "version": "current",
+  "lastUpdatedAt": null,
+  "frontMatter": {
+    "title": "Quickstart",
+    "description": "First prompts to confirm the integration is working."
+  },
+  "sidebar": "docsSidebar",
+  "previous": {
+    "title": "Prompt Profiles",
+    "permalink": "/hacs-llm-sandbox/configuration/prompt-profiles"
+  },
+  "next": {
+    "title": "State And Registry Questions",
+    "permalink": "/hacs-llm-sandbox/usage/state-and-registry-questions"
+  }
+}

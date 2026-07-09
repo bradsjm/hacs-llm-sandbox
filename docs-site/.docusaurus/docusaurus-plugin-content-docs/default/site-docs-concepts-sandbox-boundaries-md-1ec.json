@@ -1,0 +1,28 @@
+{
+  "id": "concepts/sandbox-boundaries",
+  "title": "Sandbox Boundaries",
+  "description": "What code inside Monty can access and what stays outside.",
+  "source": "@site/docs/concepts/sandbox-boundaries.md",
+  "sourceDirName": "concepts",
+  "slug": "/concepts/sandbox-boundaries",
+  "permalink": "/hacs-llm-sandbox/concepts/sandbox-boundaries",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/concepts/sandbox-boundaries.md",
+  "tags": [],
+  "version": "current",
+  "lastUpdatedAt": null,
+  "frontMatter": {
+    "title": "Sandbox Boundaries",
+    "description": "What code inside Monty can access and what stays outside."
+  },
+  "sidebar": "docsSidebar",
+  "previous": {
+    "title": "Snapshots And Visibility",
+    "permalink": "/hacs-llm-sandbox/concepts/snapshots-and-visibility"
+  },
+  "next": {
+    "title": "Recorder And SQL",
+    "permalink": "/hacs-llm-sandbox/concepts/recorder-and-sql"
+  }
+}

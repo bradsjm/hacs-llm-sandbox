@@ -1,0 +1,28 @@
+{
+  "id": "installation/prerequisites",
+  "title": "Prerequisites",
+  "description": "Required Home Assistant, HACS, model, recorder, logbook, and camera capabilities.",
+  "source": "@site/docs/installation/prerequisites.md",
+  "sourceDirName": "installation",
+  "slug": "/installation/prerequisites",
+  "permalink": "/hacs-llm-sandbox/installation/prerequisites",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/installation/prerequisites.md",
+  "tags": [],
+  "version": "current",
+  "lastUpdatedAt": null,
+  "frontMatter": {
+    "title": "Prerequisites",
+    "description": "Required Home Assistant, HACS, model, recorder, logbook, and camera capabilities."
+  },
+  "sidebar": "docsSidebar",
+  "previous": {
+    "title": "Introduction",
+    "permalink": "/hacs-llm-sandbox/"
+  },
+  "next": {
+    "title": "Install With HACS",
+    "permalink": "/hacs-llm-sandbox/installation/install-with-hacs"
+  }
+}

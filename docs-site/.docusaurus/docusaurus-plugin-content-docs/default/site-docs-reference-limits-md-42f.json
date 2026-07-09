@@ -1,0 +1,28 @@
+{
+  "id": "reference/limits",
+  "title": "Limits",
+  "description": "Runtime, recorder, SQL, service-call, and image limits.",
+  "source": "@site/docs/reference/limits.md",
+  "sourceDirName": "reference",
+  "slug": "/reference/limits",
+  "permalink": "/hacs-llm-sandbox/reference/limits",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/reference/limits.md",
+  "tags": [],
+  "version": "current",
+  "lastUpdatedAt": null,
+  "frontMatter": {
+    "title": "Limits",
+    "description": "Runtime, recorder, SQL, service-call, and image limits."
+  },
+  "sidebar": "docsSidebar",
+  "previous": {
+    "title": "SQL Schema",
+    "permalink": "/hacs-llm-sandbox/reference/sql-schema"
+  },
+  "next": {
+    "title": "Error Keys",
+    "permalink": "/hacs-llm-sandbox/reference/error-keys"
+  }
+}

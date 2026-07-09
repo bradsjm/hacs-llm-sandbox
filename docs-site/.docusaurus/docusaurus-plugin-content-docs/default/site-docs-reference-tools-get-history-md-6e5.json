@@ -1,0 +1,28 @@
+{
+  "id": "reference/tools/get-history",
+  "title": "get_history",
+  "description": "Reference for bounded recorder state-history queries.",
+  "source": "@site/docs/reference/tools/get-history.md",
+  "sourceDirName": "reference/tools",
+  "slug": "/reference/tools/get-history",
+  "permalink": "/hacs-llm-sandbox/reference/tools/get-history",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/reference/tools/get-history.md",
+  "tags": [],
+  "version": "current",
+  "lastUpdatedAt": null,
+  "frontMatter": {
+    "title": "get_history",
+    "description": "Reference for bounded recorder state-history queries."
+  },
+  "sidebar": "docsSidebar",
+  "previous": {
+    "title": "execute_home_code",
+    "permalink": "/hacs-llm-sandbox/reference/tools/execute-home-code"
+  },
+  "next": {
+    "title": "get_statistics",
+    "permalink": "/hacs-llm-sandbox/reference/tools/get-statistics"
+  }
+}

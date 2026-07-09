@@ -1,0 +1,219 @@
+{
+  "/hacs-llm-sandbox/-852": {
+    "__comp": "5e95c892",
+    "__context": {
+      "plugin": "aba21aa0"
+    }
+  },
+  "/hacs-llm-sandbox/-ae7": {
+    "__comp": "a7bd4aaa",
+    "__props": "a9d49d59"
+  },
+  "/hacs-llm-sandbox/-004": {
+    "__comp": "a94703ab"
+  },
+  "/hacs-llm-sandbox/architecture/facade-surface-40b": {
+    "__comp": "17896441",
+    "content": "2432d8ae"
+  },
+  "/hacs-llm-sandbox/architecture/guidance-and-recovery-c69": {
+    "__comp": "17896441",
+    "content": "8625620d"
+  },
+  "/hacs-llm-sandbox/architecture/integration-lifecycle-1ac": {
+    "__comp": "17896441",
+    "content": "455d7bbf"
+  },
+  "/hacs-llm-sandbox/architecture/llm-api-registration-4e9": {
+    "__comp": "17896441",
+    "content": "dae79454"
+  },
+  "/hacs-llm-sandbox/architecture/monty-execution-a08": {
+    "__comp": "17896441",
+    "content": "05e5831f"
+  },
+  "/hacs-llm-sandbox/architecture/overview-32e": {
+    "__comp": "17896441",
+    "content": "0b1ac180"
+  },
+  "/hacs-llm-sandbox/architecture/recorder-tools-84d": {
+    "__comp": "17896441",
+    "content": "31ee89e3"
+  },
+  "/hacs-llm-sandbox/architecture/service-call-gating-d93": {
+    "__comp": "17896441",
+    "content": "b85ae1d0"
+  },
+  "/hacs-llm-sandbox/architecture/snapshot-pipeline-66d": {
+    "__comp": "17896441",
+    "content": "3526f8af"
+  },
+  "/hacs-llm-sandbox/architecture/vision-tool-ff8": {
+    "__comp": "17896441",
+    "content": "b44ef0a4"
+  },
+  "/hacs-llm-sandbox/concepts/action-safety-dc4": {
+    "__comp": "17896441",
+    "content": "8438005d"
+  },
+  "/hacs-llm-sandbox/concepts/assist-tool-calling-ee4": {
+    "__comp": "17896441",
+    "content": "3838a70f"
+  },
+  "/hacs-llm-sandbox/concepts/model-quality-and-cost-c2f": {
+    "__comp": "17896441",
+    "content": "c0b3f405"
+  },
+  "/hacs-llm-sandbox/concepts/recorder-and-sql-f86": {
+    "__comp": "17896441",
+    "content": "1943476d"
+  },
+  "/hacs-llm-sandbox/concepts/sandbox-boundaries-306": {
+    "__comp": "17896441",
+    "content": "1ec4ae1c"
+  },
+  "/hacs-llm-sandbox/concepts/snapshots-and-visibility-4fd": {
+    "__comp": "17896441",
+    "content": "49931c2b"
+  },
+  "/hacs-llm-sandbox/configuration/actions-cb2": {
+    "__comp": "17896441",
+    "content": "72fa94c8"
+  },
+  "/hacs-llm-sandbox/configuration/execution-limits-5d4": {
+    "__comp": "17896441",
+    "content": "97428e09"
+  },
+  "/hacs-llm-sandbox/configuration/overview-9d8": {
+    "__comp": "17896441",
+    "content": "0f425520"
+  },
+  "/hacs-llm-sandbox/configuration/prompt-profiles-97f": {
+    "__comp": "17896441",
+    "content": "618045b5"
+  },
+  "/hacs-llm-sandbox/configuration/visibility-881": {
+    "__comp": "17896441",
+    "content": "e58c98b6"
+  },
+  "/hacs-llm-sandbox/development/contributing-ccc": {
+    "__comp": "17896441",
+    "content": "9463d0c6"
+  },
+  "/hacs-llm-sandbox/development/eval-harness-7ef": {
+    "__comp": "17896441",
+    "content": "c48d32e0"
+  },
+  "/hacs-llm-sandbox/development/local-setup-c2b": {
+    "__comp": "17896441",
+    "content": "d4832529"
+  },
+  "/hacs-llm-sandbox/development/validation-b06": {
+    "__comp": "17896441",
+    "content": "7b0ffe92"
+  },
+  "/hacs-llm-sandbox/installation/enable-in-assist-0fe": {
+    "__comp": "17896441",
+    "content": "37e243a2"
+  },
+  "/hacs-llm-sandbox/installation/install-with-hacs-1ae": {
+    "__comp": "17896441",
+    "content": "96298cd4"
+  },
+  "/hacs-llm-sandbox/installation/prerequisites-2a3": {
+    "__comp": "17896441",
+    "content": "1f833153"
+  },
+  "/hacs-llm-sandbox/operations/choosing-a-model-de0": {
+    "__comp": "17896441",
+    "content": "79f94a56"
+  },
+  "/hacs-llm-sandbox/operations/performance-and-token-cost-b72": {
+    "__comp": "17896441",
+    "content": "c4151917"
+  },
+  "/hacs-llm-sandbox/operations/privacy-and-security-bb2": {
+    "__comp": "17896441",
+    "content": "ddc3e85a"
+  },
+  "/hacs-llm-sandbox/reference/configuration-options-e00": {
+    "__comp": "17896441",
+    "content": "1d74117d"
+  },
+  "/hacs-llm-sandbox/reference/error-keys-f49": {
+    "__comp": "17896441",
+    "content": "52cb5a0c"
+  },
+  "/hacs-llm-sandbox/reference/limits-e98": {
+    "__comp": "17896441",
+    "content": "42f88e99"
+  },
+  "/hacs-llm-sandbox/reference/monty-globals-7e8": {
+    "__comp": "17896441",
+    "content": "4e79db9b"
+  },
+  "/hacs-llm-sandbox/reference/sql-schema-495": {
+    "__comp": "17896441",
+    "content": "d8d164cf"
+  },
+  "/hacs-llm-sandbox/reference/tools/execute-home-code-4e8": {
+    "__comp": "17896441",
+    "content": "01034e48"
+  },
+  "/hacs-llm-sandbox/reference/tools/get-camera-image-2eb": {
+    "__comp": "17896441",
+    "content": "61cd334f"
+  },
+  "/hacs-llm-sandbox/reference/tools/get-history-740": {
+    "__comp": "17896441",
+    "content": "6e53bc48"
+  },
+  "/hacs-llm-sandbox/reference/tools/get-logbook-e5c": {
+    "__comp": "17896441",
+    "content": "eeda5ee9"
+  },
+  "/hacs-llm-sandbox/reference/tools/get-statistics-9aa": {
+    "__comp": "17896441",
+    "content": "bc06bd96"
+  },
+  "/hacs-llm-sandbox/release-notes-b57": {
+    "__comp": "17896441",
+    "content": "a555a233"
+  },
+  "/hacs-llm-sandbox/troubleshooting-653": {
+    "__comp": "17896441",
+    "content": "9d9f8394"
+  },
+  "/hacs-llm-sandbox/upgrades-c4d": {
+    "__comp": "17896441",
+    "content": "f9ac868d"
+  },
+  "/hacs-llm-sandbox/usage/camera-images-03d": {
+    "__comp": "17896441",
+    "content": "cc56e993"
+  },
+  "/hacs-llm-sandbox/usage/example-prompts-941": {
+    "__comp": "17896441",
+    "content": "5240cecd"
+  },
+  "/hacs-llm-sandbox/usage/history-statistics-logbook-b0e": {
+    "__comp": "17896441",
+    "content": "41d188d1"
+  },
+  "/hacs-llm-sandbox/usage/quickstart-8b7": {
+    "__comp": "17896441",
+    "content": "dd757474"
+  },
+  "/hacs-llm-sandbox/usage/service-actions-744": {
+    "__comp": "17896441",
+    "content": "a3299f38"
+  },
+  "/hacs-llm-sandbox/usage/state-and-registry-questions-f5d": {
+    "__comp": "17896441",
+    "content": "8ae0c34e"
+  },
+  "/hacs-llm-sandbox/-243": {
+    "__comp": "17896441",
+    "content": "0e384e19"
+  }
+}

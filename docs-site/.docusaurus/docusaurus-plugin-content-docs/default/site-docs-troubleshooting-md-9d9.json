@@ -1,0 +1,28 @@
+{
+  "id": "troubleshooting",
+  "title": "Troubleshooting",
+  "description": "Common setup, tool availability, recorder, camera, and action issues.",
+  "source": "@site/docs/troubleshooting.md",
+  "sourceDirName": ".",
+  "slug": "/troubleshooting",
+  "permalink": "/hacs-llm-sandbox/troubleshooting",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/troubleshooting.md",
+  "tags": [],
+  "version": "current",
+  "lastUpdatedAt": null,
+  "frontMatter": {
+    "title": "Troubleshooting",
+    "description": "Common setup, tool availability, recorder, camera, and action issues."
+  },
+  "sidebar": "docsSidebar",
+  "previous": {
+    "title": "Choosing A Model",
+    "permalink": "/hacs-llm-sandbox/operations/choosing-a-model"
+  },
+  "next": {
+    "title": "Upgrades",
+    "permalink": "/hacs-llm-sandbox/upgrades"
+  }
+}

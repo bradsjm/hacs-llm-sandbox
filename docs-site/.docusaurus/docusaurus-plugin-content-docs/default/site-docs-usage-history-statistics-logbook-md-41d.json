@@ -1,0 +1,28 @@
+{
+  "id": "usage/history-statistics-logbook",
+  "title": "History, Statistics, And Logbook",
+  "description": "Ask questions over recorder-backed state history, long-term statistics, and activity timeline entries.",
+  "source": "@site/docs/usage/history-statistics-logbook.md",
+  "sourceDirName": "usage",
+  "slug": "/usage/history-statistics-logbook",
+  "permalink": "/hacs-llm-sandbox/usage/history-statistics-logbook",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/usage/history-statistics-logbook.md",
+  "tags": [],
+  "version": "current",
+  "lastUpdatedAt": null,
+  "frontMatter": {
+    "title": "History, Statistics, And Logbook",
+    "description": "Ask questions over recorder-backed state history, long-term statistics, and activity timeline entries."
+  },
+  "sidebar": "docsSidebar",
+  "previous": {
+    "title": "State And Registry Questions",
+    "permalink": "/hacs-llm-sandbox/usage/state-and-registry-questions"
+  },
+  "next": {
+    "title": "Camera Images",
+    "permalink": "/hacs-llm-sandbox/usage/camera-images"
+  }
+}

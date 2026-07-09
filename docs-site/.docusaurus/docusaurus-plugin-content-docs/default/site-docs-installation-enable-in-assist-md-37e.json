@@ -1,0 +1,28 @@
+{
+  "id": "installation/enable-in-assist",
+  "title": "Enable In Assist",
+  "description": "The required conversation-agent step after installation.",
+  "source": "@site/docs/installation/enable-in-assist.md",
+  "sourceDirName": "installation",
+  "slug": "/installation/enable-in-assist",
+  "permalink": "/hacs-llm-sandbox/installation/enable-in-assist",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/installation/enable-in-assist.md",
+  "tags": [],
+  "version": "current",
+  "lastUpdatedAt": null,
+  "frontMatter": {
+    "title": "Enable In Assist",
+    "description": "The required conversation-agent step after installation."
+  },
+  "sidebar": "docsSidebar",
+  "previous": {
+    "title": "Install With HACS",
+    "permalink": "/hacs-llm-sandbox/installation/install-with-hacs"
+  },
+  "next": {
+    "title": "Configuration Overview",
+    "permalink": "/hacs-llm-sandbox/configuration/overview"
+  }
+}

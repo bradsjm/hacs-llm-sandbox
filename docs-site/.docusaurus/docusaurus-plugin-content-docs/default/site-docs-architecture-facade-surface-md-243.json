@@ -1,0 +1,28 @@
+{
+  "id": "architecture/facade-surface",
+  "title": "Facade Surface",
+  "description": "The Home Assistant-like API exposed inside Monty.",
+  "source": "@site/docs/architecture/facade-surface.md",
+  "sourceDirName": "architecture",
+  "slug": "/architecture/facade-surface",
+  "permalink": "/hacs-llm-sandbox/architecture/facade-surface",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/architecture/facade-surface.md",
+  "tags": [],
+  "version": "current",
+  "lastUpdatedAt": null,
+  "frontMatter": {
+    "title": "Facade Surface",
+    "description": "The Home Assistant-like API exposed inside Monty."
+  },
+  "sidebar": "docsSidebar",
+  "previous": {
+    "title": "Monty Execution",
+    "permalink": "/hacs-llm-sandbox/architecture/monty-execution"
+  },
+  "next": {
+    "title": "Recorder Tools",
+    "permalink": "/hacs-llm-sandbox/architecture/recorder-tools"
+  }
+}

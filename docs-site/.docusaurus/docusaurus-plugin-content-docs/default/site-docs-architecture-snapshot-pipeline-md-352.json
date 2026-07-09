@@ -1,0 +1,28 @@
+{
+  "id": "architecture/snapshot-pipeline",
+  "title": "Snapshot Pipeline",
+  "description": "How live Home Assistant data becomes frozen JSON-compatible records.",
+  "source": "@site/docs/architecture/snapshot-pipeline.md",
+  "sourceDirName": "architecture",
+  "slug": "/architecture/snapshot-pipeline",
+  "permalink": "/hacs-llm-sandbox/architecture/snapshot-pipeline",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/architecture/snapshot-pipeline.md",
+  "tags": [],
+  "version": "current",
+  "lastUpdatedAt": null,
+  "frontMatter": {
+    "title": "Snapshot Pipeline",
+    "description": "How live Home Assistant data becomes frozen JSON-compatible records."
+  },
+  "sidebar": "docsSidebar",
+  "previous": {
+    "title": "LLM API Registration",
+    "permalink": "/hacs-llm-sandbox/architecture/llm-api-registration"
+  },
+  "next": {
+    "title": "Monty Execution",
+    "permalink": "/hacs-llm-sandbox/architecture/monty-execution"
+  }
+}

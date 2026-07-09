@@ -1,0 +1,28 @@
+{
+  "id": "reference/monty-globals",
+  "title": "Monty Globals",
+  "description": "Main globals and APIs visible to execute_home_code.",
+  "source": "@site/docs/reference/monty-globals.md",
+  "sourceDirName": "reference",
+  "slug": "/reference/monty-globals",
+  "permalink": "/hacs-llm-sandbox/reference/monty-globals",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/reference/monty-globals.md",
+  "tags": [],
+  "version": "current",
+  "lastUpdatedAt": null,
+  "frontMatter": {
+    "title": "Monty Globals",
+    "description": "Main globals and APIs visible to execute_home_code."
+  },
+  "sidebar": "docsSidebar",
+  "previous": {
+    "title": "get_camera_image",
+    "permalink": "/hacs-llm-sandbox/reference/tools/get-camera-image"
+  },
+  "next": {
+    "title": "SQL Schema",
+    "permalink": "/hacs-llm-sandbox/reference/sql-schema"
+  }
+}

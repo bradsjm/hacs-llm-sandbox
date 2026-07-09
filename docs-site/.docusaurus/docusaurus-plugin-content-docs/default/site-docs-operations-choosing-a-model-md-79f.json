@@ -1,0 +1,28 @@
+{
+  "id": "operations/choosing-a-model",
+  "title": "Choosing A Model",
+  "description": "Capabilities to look for in a conversation model.",
+  "source": "@site/docs/operations/choosing-a-model.md",
+  "sourceDirName": "operations",
+  "slug": "/operations/choosing-a-model",
+  "permalink": "/hacs-llm-sandbox/operations/choosing-a-model",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/operations/choosing-a-model.md",
+  "tags": [],
+  "version": "current",
+  "lastUpdatedAt": null,
+  "frontMatter": {
+    "title": "Choosing A Model",
+    "description": "Capabilities to look for in a conversation model."
+  },
+  "sidebar": "docsSidebar",
+  "previous": {
+    "title": "Performance And Token Cost",
+    "permalink": "/hacs-llm-sandbox/operations/performance-and-token-cost"
+  },
+  "next": {
+    "title": "Troubleshooting",
+    "permalink": "/hacs-llm-sandbox/troubleshooting"
+  }
+}

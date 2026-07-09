@@ -1,0 +1,28 @@
+{
+  "id": "reference/sql-schema",
+  "title": "SQL Schema",
+  "description": "Tables and compatibility views exposed by hass.query.",
+  "source": "@site/docs/reference/sql-schema.md",
+  "sourceDirName": "reference",
+  "slug": "/reference/sql-schema",
+  "permalink": "/hacs-llm-sandbox/reference/sql-schema",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/reference/sql-schema.md",
+  "tags": [],
+  "version": "current",
+  "lastUpdatedAt": null,
+  "frontMatter": {
+    "title": "SQL Schema",
+    "description": "Tables and compatibility views exposed by hass.query."
+  },
+  "sidebar": "docsSidebar",
+  "previous": {
+    "title": "Monty Globals",
+    "permalink": "/hacs-llm-sandbox/reference/monty-globals"
+  },
+  "next": {
+    "title": "Limits",
+    "permalink": "/hacs-llm-sandbox/reference/limits"
+  }
+}

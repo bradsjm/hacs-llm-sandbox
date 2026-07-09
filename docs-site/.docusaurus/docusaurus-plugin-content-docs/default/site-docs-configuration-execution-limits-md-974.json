@@ -1,0 +1,28 @@
+{
+  "id": "configuration/execution-limits",
+  "title": "Execution Limits",
+  "description": "Runtime limits for code execution and service calls.",
+  "source": "@site/docs/configuration/execution-limits.md",
+  "sourceDirName": "configuration",
+  "slug": "/configuration/execution-limits",
+  "permalink": "/hacs-llm-sandbox/configuration/execution-limits",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/configuration/execution-limits.md",
+  "tags": [],
+  "version": "current",
+  "lastUpdatedAt": null,
+  "frontMatter": {
+    "title": "Execution Limits",
+    "description": "Runtime limits for code execution and service calls."
+  },
+  "sidebar": "docsSidebar",
+  "previous": {
+    "title": "Actions",
+    "permalink": "/hacs-llm-sandbox/configuration/actions"
+  },
+  "next": {
+    "title": "Prompt Profiles",
+    "permalink": "/hacs-llm-sandbox/configuration/prompt-profiles"
+  }
+}

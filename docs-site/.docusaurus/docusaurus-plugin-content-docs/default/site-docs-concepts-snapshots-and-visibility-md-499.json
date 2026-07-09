@@ -1,0 +1,28 @@
+{
+  "id": "concepts/snapshots-and-visibility",
+  "title": "Snapshots And Visibility",
+  "description": "Fresh snapshots are the data source for every tool call.",
+  "source": "@site/docs/concepts/snapshots-and-visibility.md",
+  "sourceDirName": "concepts",
+  "slug": "/concepts/snapshots-and-visibility",
+  "permalink": "/hacs-llm-sandbox/concepts/snapshots-and-visibility",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/concepts/snapshots-and-visibility.md",
+  "tags": [],
+  "version": "current",
+  "lastUpdatedAt": null,
+  "frontMatter": {
+    "title": "Snapshots And Visibility",
+    "description": "Fresh snapshots are the data source for every tool call."
+  },
+  "sidebar": "docsSidebar",
+  "previous": {
+    "title": "Assist Tool Calling",
+    "permalink": "/hacs-llm-sandbox/concepts/assist-tool-calling"
+  },
+  "next": {
+    "title": "Sandbox Boundaries",
+    "permalink": "/hacs-llm-sandbox/concepts/sandbox-boundaries"
+  }
+}

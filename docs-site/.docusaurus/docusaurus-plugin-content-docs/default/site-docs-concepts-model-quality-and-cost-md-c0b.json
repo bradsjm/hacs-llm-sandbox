@@ -1,0 +1,28 @@
+{
+  "id": "concepts/model-quality-and-cost",
+  "title": "Model Quality And Cost",
+  "description": "Why model choice affects reliability, latency, and token usage.",
+  "source": "@site/docs/concepts/model-quality-and-cost.md",
+  "sourceDirName": "concepts",
+  "slug": "/concepts/model-quality-and-cost",
+  "permalink": "/hacs-llm-sandbox/concepts/model-quality-and-cost",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/concepts/model-quality-and-cost.md",
+  "tags": [],
+  "version": "current",
+  "lastUpdatedAt": null,
+  "frontMatter": {
+    "title": "Model Quality And Cost",
+    "description": "Why model choice affects reliability, latency, and token usage."
+  },
+  "sidebar": "docsSidebar",
+  "previous": {
+    "title": "Action Safety",
+    "permalink": "/hacs-llm-sandbox/concepts/action-safety"
+  },
+  "next": {
+    "title": "Architecture Overview",
+    "permalink": "/hacs-llm-sandbox/architecture/overview"
+  }
+}

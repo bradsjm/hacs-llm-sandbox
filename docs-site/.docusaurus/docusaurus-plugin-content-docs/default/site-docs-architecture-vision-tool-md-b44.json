@@ -1,0 +1,28 @@
+{
+  "id": "architecture/vision-tool",
+  "title": "Vision Tool",
+  "description": "How camera and image entity capture works.",
+  "source": "@site/docs/architecture/vision-tool.md",
+  "sourceDirName": "architecture",
+  "slug": "/architecture/vision-tool",
+  "permalink": "/hacs-llm-sandbox/architecture/vision-tool",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/architecture/vision-tool.md",
+  "tags": [],
+  "version": "current",
+  "lastUpdatedAt": null,
+  "frontMatter": {
+    "title": "Vision Tool",
+    "description": "How camera and image entity capture works."
+  },
+  "sidebar": "docsSidebar",
+  "previous": {
+    "title": "Recorder Tools",
+    "permalink": "/hacs-llm-sandbox/architecture/recorder-tools"
+  },
+  "next": {
+    "title": "Service Call Gating",
+    "permalink": "/hacs-llm-sandbox/architecture/service-call-gating"
+  }
+}

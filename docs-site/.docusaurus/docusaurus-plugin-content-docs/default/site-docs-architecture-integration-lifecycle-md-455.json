@@ -1,0 +1,28 @@
+{
+  "id": "architecture/integration-lifecycle",
+  "title": "Integration Lifecycle",
+  "description": "Setup, runtime data, update handling, and unload behavior.",
+  "source": "@site/docs/architecture/integration-lifecycle.md",
+  "sourceDirName": "architecture",
+  "slug": "/architecture/integration-lifecycle",
+  "permalink": "/hacs-llm-sandbox/architecture/integration-lifecycle",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/architecture/integration-lifecycle.md",
+  "tags": [],
+  "version": "current",
+  "lastUpdatedAt": null,
+  "frontMatter": {
+    "title": "Integration Lifecycle",
+    "description": "Setup, runtime data, update handling, and unload behavior."
+  },
+  "sidebar": "docsSidebar",
+  "previous": {
+    "title": "Architecture Overview",
+    "permalink": "/hacs-llm-sandbox/architecture/overview"
+  },
+  "next": {
+    "title": "LLM API Registration",
+    "permalink": "/hacs-llm-sandbox/architecture/llm-api-registration"
+  }
+}

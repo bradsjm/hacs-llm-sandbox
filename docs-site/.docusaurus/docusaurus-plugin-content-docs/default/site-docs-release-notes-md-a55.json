@@ -1,0 +1,24 @@
+{
+  "id": "release-notes",
+  "title": "Release Notes",
+  "description": "Where to find release history and what the current preview means.",
+  "source": "@site/docs/release-notes.md",
+  "sourceDirName": ".",
+  "slug": "/release-notes",
+  "permalink": "/hacs-llm-sandbox/release-notes",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/release-notes.md",
+  "tags": [],
+  "version": "current",
+  "lastUpdatedAt": null,
+  "frontMatter": {
+    "title": "Release Notes",
+    "description": "Where to find release history and what the current preview means."
+  },
+  "sidebar": "docsSidebar",
+  "previous": {
+    "title": "Contributing",
+    "permalink": "/hacs-llm-sandbox/development/contributing"
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "id": "operations/privacy-and-security",
+  "title": "Privacy And Security",
+  "description": "What data can reach the model and which boundaries protect Home Assistant.",
+  "source": "@site/docs/operations/privacy-and-security.md",
+  "sourceDirName": "operations",
+  "slug": "/operations/privacy-and-security",
+  "permalink": "/hacs-llm-sandbox/operations/privacy-and-security",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/operations/privacy-and-security.md",
+  "tags": [],
+  "version": "current",
+  "lastUpdatedAt": null,
+  "frontMatter": {
+    "title": "Privacy And Security",
+    "description": "What data can reach the model and which boundaries protect Home Assistant."
+  },
+  "sidebar": "docsSidebar",
+  "previous": {
+    "title": "Error Keys",
+    "permalink": "/hacs-llm-sandbox/reference/error-keys"
+  },
+  "next": {
+    "title": "Performance And Token Cost",
+    "permalink": "/hacs-llm-sandbox/operations/performance-and-token-cost"
+  }
+}

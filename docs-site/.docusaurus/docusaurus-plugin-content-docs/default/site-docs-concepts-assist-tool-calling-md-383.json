@@ -1,0 +1,28 @@
+{
+  "id": "concepts/assist-tool-calling",
+  "title": "Assist Tool Calling",
+  "description": "How the integration plugs tools into Home Assistant Assist.",
+  "source": "@site/docs/concepts/assist-tool-calling.md",
+  "sourceDirName": "concepts",
+  "slug": "/concepts/assist-tool-calling",
+  "permalink": "/hacs-llm-sandbox/concepts/assist-tool-calling",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/concepts/assist-tool-calling.md",
+  "tags": [],
+  "version": "current",
+  "lastUpdatedAt": null,
+  "frontMatter": {
+    "title": "Assist Tool Calling",
+    "description": "How the integration plugs tools into Home Assistant Assist."
+  },
+  "sidebar": "docsSidebar",
+  "previous": {
+    "title": "Example Prompts",
+    "permalink": "/hacs-llm-sandbox/usage/example-prompts"
+  },
+  "next": {
+    "title": "Snapshots And Visibility",
+    "permalink": "/hacs-llm-sandbox/concepts/snapshots-and-visibility"
+  }
+}

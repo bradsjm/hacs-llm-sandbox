@@ -1,0 +1,28 @@
+{
+  "id": "configuration/actions",
+  "title": "Actions",
+  "description": "Configure whether the assistant may call Home Assistant services.",
+  "source": "@site/docs/configuration/actions.md",
+  "sourceDirName": "configuration",
+  "slug": "/configuration/actions",
+  "permalink": "/hacs-llm-sandbox/configuration/actions",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/configuration/actions.md",
+  "tags": [],
+  "version": "current",
+  "lastUpdatedAt": null,
+  "frontMatter": {
+    "title": "Actions",
+    "description": "Configure whether the assistant may call Home Assistant services."
+  },
+  "sidebar": "docsSidebar",
+  "previous": {
+    "title": "Visibility",
+    "permalink": "/hacs-llm-sandbox/configuration/visibility"
+  },
+  "next": {
+    "title": "Execution Limits",
+    "permalink": "/hacs-llm-sandbox/configuration/execution-limits"
+  }
+}

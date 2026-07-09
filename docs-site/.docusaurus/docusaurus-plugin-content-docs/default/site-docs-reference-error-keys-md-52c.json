@@ -1,0 +1,28 @@
+{
+  "id": "reference/error-keys",
+  "title": "Error Keys",
+  "description": "Stable error categories exposed by tools and execution payloads.",
+  "source": "@site/docs/reference/error-keys.md",
+  "sourceDirName": "reference",
+  "slug": "/reference/error-keys",
+  "permalink": "/hacs-llm-sandbox/reference/error-keys",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/reference/error-keys.md",
+  "tags": [],
+  "version": "current",
+  "lastUpdatedAt": null,
+  "frontMatter": {
+    "title": "Error Keys",
+    "description": "Stable error categories exposed by tools and execution payloads."
+  },
+  "sidebar": "docsSidebar",
+  "previous": {
+    "title": "Limits",
+    "permalink": "/hacs-llm-sandbox/reference/limits"
+  },
+  "next": {
+    "title": "Privacy And Security",
+    "permalink": "/hacs-llm-sandbox/operations/privacy-and-security"
+  }
+}

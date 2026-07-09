@@ -1,0 +1,28 @@
+{
+  "id": "usage/example-prompts",
+  "title": "Example Prompts",
+  "description": "Practical prompts that match the tool set.",
+  "source": "@site/docs/usage/example-prompts.md",
+  "sourceDirName": "usage",
+  "slug": "/usage/example-prompts",
+  "permalink": "/hacs-llm-sandbox/usage/example-prompts",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/usage/example-prompts.md",
+  "tags": [],
+  "version": "current",
+  "lastUpdatedAt": null,
+  "frontMatter": {
+    "title": "Example Prompts",
+    "description": "Practical prompts that match the tool set."
+  },
+  "sidebar": "docsSidebar",
+  "previous": {
+    "title": "Service Actions",
+    "permalink": "/hacs-llm-sandbox/usage/service-actions"
+  },
+  "next": {
+    "title": "Assist Tool Calling",
+    "permalink": "/hacs-llm-sandbox/concepts/assist-tool-calling"
+  }
+}

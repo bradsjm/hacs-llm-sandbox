@@ -1,0 +1,28 @@
+{
+  "id": "configuration/prompt-profiles",
+  "title": "Prompt Profiles",
+  "description": "Choose the base prompt profile used by the LLM API.",
+  "source": "@site/docs/configuration/prompt-profiles.md",
+  "sourceDirName": "configuration",
+  "slug": "/configuration/prompt-profiles",
+  "permalink": "/hacs-llm-sandbox/configuration/prompt-profiles",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/configuration/prompt-profiles.md",
+  "tags": [],
+  "version": "current",
+  "lastUpdatedAt": null,
+  "frontMatter": {
+    "title": "Prompt Profiles",
+    "description": "Choose the base prompt profile used by the LLM API."
+  },
+  "sidebar": "docsSidebar",
+  "previous": {
+    "title": "Execution Limits",
+    "permalink": "/hacs-llm-sandbox/configuration/execution-limits"
+  },
+  "next": {
+    "title": "Quickstart",
+    "permalink": "/hacs-llm-sandbox/usage/quickstart"
+  }
+}

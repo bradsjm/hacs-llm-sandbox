@@ -1,0 +1,28 @@
+{
+  "id": "architecture/llm-api-registration",
+  "title": "LLM API Registration",
+  "description": "How the integration exposes tools to Home Assistant conversation agents.",
+  "source": "@site/docs/architecture/llm-api-registration.md",
+  "sourceDirName": "architecture",
+  "slug": "/architecture/llm-api-registration",
+  "permalink": "/hacs-llm-sandbox/architecture/llm-api-registration",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/architecture/llm-api-registration.md",
+  "tags": [],
+  "version": "current",
+  "lastUpdatedAt": null,
+  "frontMatter": {
+    "title": "LLM API Registration",
+    "description": "How the integration exposes tools to Home Assistant conversation agents."
+  },
+  "sidebar": "docsSidebar",
+  "previous": {
+    "title": "Integration Lifecycle",
+    "permalink": "/hacs-llm-sandbox/architecture/integration-lifecycle"
+  },
+  "next": {
+    "title": "Snapshot Pipeline",
+    "permalink": "/hacs-llm-sandbox/architecture/snapshot-pipeline"
+  }
+}

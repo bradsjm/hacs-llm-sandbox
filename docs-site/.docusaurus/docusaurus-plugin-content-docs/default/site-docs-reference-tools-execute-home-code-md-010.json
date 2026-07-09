@@ -1,0 +1,28 @@
+{
+  "id": "reference/tools/execute-home-code",
+  "title": "execute_home_code",
+  "description": "Reference for bounded Python/Monty execution over Home Assistant snapshot facades.",
+  "source": "@site/docs/reference/tools/execute-home-code.md",
+  "sourceDirName": "reference/tools",
+  "slug": "/reference/tools/execute-home-code",
+  "permalink": "/hacs-llm-sandbox/reference/tools/execute-home-code",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/reference/tools/execute-home-code.md",
+  "tags": [],
+  "version": "current",
+  "lastUpdatedAt": null,
+  "frontMatter": {
+    "title": "execute_home_code",
+    "description": "Reference for bounded Python/Monty execution over Home Assistant snapshot facades."
+  },
+  "sidebar": "docsSidebar",
+  "previous": {
+    "title": "Configuration Options",
+    "permalink": "/hacs-llm-sandbox/reference/configuration-options"
+  },
+  "next": {
+    "title": "get_history",
+    "permalink": "/hacs-llm-sandbox/reference/tools/get-history"
+  }
+}

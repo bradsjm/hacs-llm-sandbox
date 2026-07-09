@@ -1,0 +1,28 @@
+{
+  "id": "configuration/overview",
+  "title": "Configuration Overview",
+  "description": "The configuration sections exposed by the integration options flow.",
+  "source": "@site/docs/configuration/overview.md",
+  "sourceDirName": "configuration",
+  "slug": "/configuration/overview",
+  "permalink": "/hacs-llm-sandbox/configuration/overview",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/configuration/overview.md",
+  "tags": [],
+  "version": "current",
+  "lastUpdatedAt": null,
+  "frontMatter": {
+    "title": "Configuration Overview",
+    "description": "The configuration sections exposed by the integration options flow."
+  },
+  "sidebar": "docsSidebar",
+  "previous": {
+    "title": "Enable In Assist",
+    "permalink": "/hacs-llm-sandbox/installation/enable-in-assist"
+  },
+  "next": {
+    "title": "Visibility",
+    "permalink": "/hacs-llm-sandbox/configuration/visibility"
+  }
+}

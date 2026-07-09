@@ -1,0 +1,283 @@
+{
+  "docusaurus-plugin-content-docs": {
+    "default": {
+      "path": "/hacs-llm-sandbox/",
+      "versions": [
+        {
+          "name": "current",
+          "label": "Next",
+          "isLast": true,
+          "path": "/hacs-llm-sandbox/",
+          "mainDocId": "intro",
+          "docs": [
+            {
+              "id": "architecture/facade-surface",
+              "path": "/hacs-llm-sandbox/architecture/facade-surface",
+              "sidebar": "docsSidebar"
+            },
+            {
+              "id": "architecture/guidance-and-recovery",
+              "path": "/hacs-llm-sandbox/architecture/guidance-and-recovery",
+              "sidebar": "docsSidebar"
+            },
+            {
+              "id": "architecture/integration-lifecycle",
+              "path": "/hacs-llm-sandbox/architecture/integration-lifecycle",
+              "sidebar": "docsSidebar"
+            },
+            {
+              "id": "architecture/llm-api-registration",
+              "path": "/hacs-llm-sandbox/architecture/llm-api-registration",
+              "sidebar": "docsSidebar"
+            },
+            {
+              "id": "architecture/monty-execution",
+              "path": "/hacs-llm-sandbox/architecture/monty-execution",
+              "sidebar": "docsSidebar"
+            },
+            {
+              "id": "architecture/overview",
+              "path": "/hacs-llm-sandbox/architecture/overview",
+              "sidebar": "docsSidebar"
+            },
+            {
+              "id": "architecture/recorder-tools",
+              "path": "/hacs-llm-sandbox/architecture/recorder-tools",
+              "sidebar": "docsSidebar"
+            },
+            {
+              "id": "architecture/service-call-gating",
+              "path": "/hacs-llm-sandbox/architecture/service-call-gating",
+              "sidebar": "docsSidebar"
+            },
+            {
+              "id": "architecture/snapshot-pipeline",
+              "path": "/hacs-llm-sandbox/architecture/snapshot-pipeline",
+              "sidebar": "docsSidebar"
+            },
+            {
+              "id": "architecture/vision-tool",
+              "path": "/hacs-llm-sandbox/architecture/vision-tool",
+              "sidebar": "docsSidebar"
+            },
+            {
+              "id": "concepts/action-safety",
+              "path": "/hacs-llm-sandbox/concepts/action-safety",
+              "sidebar": "docsSidebar"
+            },
+            {
+              "id": "concepts/assist-tool-calling",
+              "path": "/hacs-llm-sandbox/concepts/assist-tool-calling",
+              "sidebar": "docsSidebar"
+            },
+            {
+              "id": "concepts/model-quality-and-cost",
+              "path": "/hacs-llm-sandbox/concepts/model-quality-and-cost",
+              "sidebar": "docsSidebar"
+            },
+            {
+              "id": "concepts/recorder-and-sql",
+              "path": "/hacs-llm-sandbox/concepts/recorder-and-sql",
+              "sidebar": "docsSidebar"
+            },
+            {
+              "id": "concepts/sandbox-boundaries",
+              "path": "/hacs-llm-sandbox/concepts/sandbox-boundaries",
+              "sidebar": "docsSidebar"
+            },
+            {
+              "id": "concepts/snapshots-and-visibility",
+              "path": "/hacs-llm-sandbox/concepts/snapshots-and-visibility",
+              "sidebar": "docsSidebar"
+            },
+            {
+              "id": "configuration/actions",
+              "path": "/hacs-llm-sandbox/configuration/actions",
+              "sidebar": "docsSidebar"
+            },
+            {
+              "id": "configuration/execution-limits",
+              "path": "/hacs-llm-sandbox/configuration/execution-limits",
+              "sidebar": "docsSidebar"
+            },
+            {
+              "id": "configuration/overview",
+              "path": "/hacs-llm-sandbox/configuration/overview",
+              "sidebar": "docsSidebar"
+            },
+            {
+              "id": "configuration/prompt-profiles",
+              "path": "/hacs-llm-sandbox/configuration/prompt-profiles",
+              "sidebar": "docsSidebar"
+            },
+            {
+              "id": "configuration/visibility",
+              "path": "/hacs-llm-sandbox/configuration/visibility",
+              "sidebar": "docsSidebar"
+            },
+            {
+              "id": "development/contributing",
+              "path": "/hacs-llm-sandbox/development/contributing",
+              "sidebar": "docsSidebar"
+            },
+            {
+              "id": "development/eval-harness",
+              "path": "/hacs-llm-sandbox/development/eval-harness",
+              "sidebar": "docsSidebar"
+            },
+            {
+              "id": "development/local-setup",
+              "path": "/hacs-llm-sandbox/development/local-setup",
+              "sidebar": "docsSidebar"
+            },
+            {
+              "id": "development/validation",
+              "path": "/hacs-llm-sandbox/development/validation",
+              "sidebar": "docsSidebar"
+            },
+            {
+              "id": "installation/enable-in-assist",
+              "path": "/hacs-llm-sandbox/installation/enable-in-assist",
+              "sidebar": "docsSidebar"
+            },
+            {
+              "id": "installation/install-with-hacs",
+              "path": "/hacs-llm-sandbox/installation/install-with-hacs",
+              "sidebar": "docsSidebar"
+            },
+            {
+              "id": "installation/prerequisites",
+              "path": "/hacs-llm-sandbox/installation/prerequisites",
+              "sidebar": "docsSidebar"
+            },
+            {
+              "id": "intro",
+              "path": "/hacs-llm-sandbox/",
+              "sidebar": "docsSidebar"
+            },
+            {
+              "id": "operations/choosing-a-model",
+              "path": "/hacs-llm-sandbox/operations/choosing-a-model",
+              "sidebar": "docsSidebar"
+            },
+            {
+              "id": "operations/performance-and-token-cost",
+              "path": "/hacs-llm-sandbox/operations/performance-and-token-cost",
+              "sidebar": "docsSidebar"
+            },
+            {
+              "id": "operations/privacy-and-security",
+              "path": "/hacs-llm-sandbox/operations/privacy-and-security",
+              "sidebar": "docsSidebar"
+            },
+            {
+              "id": "reference/configuration-options",
+              "path": "/hacs-llm-sandbox/reference/configuration-options",
+              "sidebar": "docsSidebar"
+            },
+            {
+              "id": "reference/error-keys",
+              "path": "/hacs-llm-sandbox/reference/error-keys",
+              "sidebar": "docsSidebar"
+            },
+            {
+              "id": "reference/limits",
+              "path": "/hacs-llm-sandbox/reference/limits",
+              "sidebar": "docsSidebar"
+            },
+            {
+              "id": "reference/monty-globals",
+              "path": "/hacs-llm-sandbox/reference/monty-globals",
+              "sidebar": "docsSidebar"
+            },
+            {
+              "id": "reference/sql-schema",
+              "path": "/hacs-llm-sandbox/reference/sql-schema",
+              "sidebar": "docsSidebar"
+            },
+            {
+              "id": "reference/tools/execute-home-code",
+              "path": "/hacs-llm-sandbox/reference/tools/execute-home-code",
+              "sidebar": "docsSidebar"
+            },
+            {
+              "id": "reference/tools/get-camera-image",
+              "path": "/hacs-llm-sandbox/reference/tools/get-camera-image",
+              "sidebar": "docsSidebar"
+            },
+            {
+              "id": "reference/tools/get-history",
+              "path": "/hacs-llm-sandbox/reference/tools/get-history",
+              "sidebar": "docsSidebar"
+            },
+            {
+              "id": "reference/tools/get-logbook",
+              "path": "/hacs-llm-sandbox/reference/tools/get-logbook",
+              "sidebar": "docsSidebar"
+            },
+            {
+              "id": "reference/tools/get-statistics",
+              "path": "/hacs-llm-sandbox/reference/tools/get-statistics",
+              "sidebar": "docsSidebar"
+            },
+            {
+              "id": "release-notes",
+              "path": "/hacs-llm-sandbox/release-notes",
+              "sidebar": "docsSidebar"
+            },
+            {
+              "id": "troubleshooting",
+              "path": "/hacs-llm-sandbox/troubleshooting",
+              "sidebar": "docsSidebar"
+            },
+            {
+              "id": "upgrades",
+              "path": "/hacs-llm-sandbox/upgrades",
+              "sidebar": "docsSidebar"
+            },
+            {
+              "id": "usage/camera-images",
+              "path": "/hacs-llm-sandbox/usage/camera-images",
+              "sidebar": "docsSidebar"
+            },
+            {
+              "id": "usage/example-prompts",
+              "path": "/hacs-llm-sandbox/usage/example-prompts",
+              "sidebar": "docsSidebar"
+            },
+            {
+              "id": "usage/history-statistics-logbook",
+              "path": "/hacs-llm-sandbox/usage/history-statistics-logbook",
+              "sidebar": "docsSidebar"
+            },
+            {
+              "id": "usage/quickstart",
+              "path": "/hacs-llm-sandbox/usage/quickstart",
+              "sidebar": "docsSidebar"
+            },
+            {
+              "id": "usage/service-actions",
+              "path": "/hacs-llm-sandbox/usage/service-actions",
+              "sidebar": "docsSidebar"
+            },
+            {
+              "id": "usage/state-and-registry-questions",
+              "path": "/hacs-llm-sandbox/usage/state-and-registry-questions",
+              "sidebar": "docsSidebar"
+            }
+          ],
+          "draftIds": [],
+          "sidebars": {
+            "docsSidebar": {
+              "link": {
+                "path": "/hacs-llm-sandbox/",
+                "label": "intro"
+              }
+            }
+          }
+        }
+      ],
+      "breadcrumbs": true
+    }
+  }
+}

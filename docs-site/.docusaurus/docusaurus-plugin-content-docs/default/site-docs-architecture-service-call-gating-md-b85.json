@@ -1,0 +1,28 @@
+{
+  "id": "architecture/service-call-gating",
+  "title": "Service Call Gating",
+  "description": "Policy checks applied before any live service action is dispatched.",
+  "source": "@site/docs/architecture/service-call-gating.md",
+  "sourceDirName": "architecture",
+  "slug": "/architecture/service-call-gating",
+  "permalink": "/hacs-llm-sandbox/architecture/service-call-gating",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/architecture/service-call-gating.md",
+  "tags": [],
+  "version": "current",
+  "lastUpdatedAt": null,
+  "frontMatter": {
+    "title": "Service Call Gating",
+    "description": "Policy checks applied before any live service action is dispatched."
+  },
+  "sidebar": "docsSidebar",
+  "previous": {
+    "title": "Vision Tool",
+    "permalink": "/hacs-llm-sandbox/architecture/vision-tool"
+  },
+  "next": {
+    "title": "Guidance And Recovery",
+    "permalink": "/hacs-llm-sandbox/architecture/guidance-and-recovery"
+  }
+}

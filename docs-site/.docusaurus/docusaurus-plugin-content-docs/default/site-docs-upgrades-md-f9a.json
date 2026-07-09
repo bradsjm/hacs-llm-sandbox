@@ -1,0 +1,28 @@
+{
+  "id": "upgrades",
+  "title": "Upgrades",
+  "description": "How to approach updates while the integration is early preview software.",
+  "source": "@site/docs/upgrades.md",
+  "sourceDirName": ".",
+  "slug": "/upgrades",
+  "permalink": "/hacs-llm-sandbox/upgrades",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/upgrades.md",
+  "tags": [],
+  "version": "current",
+  "lastUpdatedAt": null,
+  "frontMatter": {
+    "title": "Upgrades",
+    "description": "How to approach updates while the integration is early preview software."
+  },
+  "sidebar": "docsSidebar",
+  "previous": {
+    "title": "Troubleshooting",
+    "permalink": "/hacs-llm-sandbox/troubleshooting"
+  },
+  "next": {
+    "title": "Local Setup",
+    "permalink": "/hacs-llm-sandbox/development/local-setup"
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "id": "operations/performance-and-token-cost",
+  "title": "Performance And Token Cost",
+  "description": "Factors that influence latency, model context size, and cost.",
+  "source": "@site/docs/operations/performance-and-token-cost.md",
+  "sourceDirName": "operations",
+  "slug": "/operations/performance-and-token-cost",
+  "permalink": "/hacs-llm-sandbox/operations/performance-and-token-cost",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/operations/performance-and-token-cost.md",
+  "tags": [],
+  "version": "current",
+  "lastUpdatedAt": null,
+  "frontMatter": {
+    "title": "Performance And Token Cost",
+    "description": "Factors that influence latency, model context size, and cost."
+  },
+  "sidebar": "docsSidebar",
+  "previous": {
+    "title": "Privacy And Security",
+    "permalink": "/hacs-llm-sandbox/operations/privacy-and-security"
+  },
+  "next": {
+    "title": "Choosing A Model",
+    "permalink": "/hacs-llm-sandbox/operations/choosing-a-model"
+  }
+}

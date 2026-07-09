@@ -1,0 +1,28 @@
+{
+  "id": "development/local-setup",
+  "title": "Local Setup",
+  "description": "Set up the repository for contribution and local Home Assistant testing.",
+  "source": "@site/docs/development/local-setup.md",
+  "sourceDirName": "development",
+  "slug": "/development/local-setup",
+  "permalink": "/hacs-llm-sandbox/development/local-setup",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/development/local-setup.md",
+  "tags": [],
+  "version": "current",
+  "lastUpdatedAt": null,
+  "frontMatter": {
+    "title": "Local Setup",
+    "description": "Set up the repository for contribution and local Home Assistant testing."
+  },
+  "sidebar": "docsSidebar",
+  "previous": {
+    "title": "Upgrades",
+    "permalink": "/hacs-llm-sandbox/upgrades"
+  },
+  "next": {
+    "title": "Validation",
+    "permalink": "/hacs-llm-sandbox/development/validation"
+  }
+}

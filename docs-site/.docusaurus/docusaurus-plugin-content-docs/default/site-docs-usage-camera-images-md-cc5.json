@@ -1,0 +1,28 @@
+{
+  "id": "usage/camera-images",
+  "title": "Camera Images",
+  "description": "Use visible camera and image entities with a multimodal model.",
+  "source": "@site/docs/usage/camera-images.md",
+  "sourceDirName": "usage",
+  "slug": "/usage/camera-images",
+  "permalink": "/hacs-llm-sandbox/usage/camera-images",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/usage/camera-images.md",
+  "tags": [],
+  "version": "current",
+  "lastUpdatedAt": null,
+  "frontMatter": {
+    "title": "Camera Images",
+    "description": "Use visible camera and image entities with a multimodal model."
+  },
+  "sidebar": "docsSidebar",
+  "previous": {
+    "title": "History, Statistics, And Logbook",
+    "permalink": "/hacs-llm-sandbox/usage/history-statistics-logbook"
+  },
+  "next": {
+    "title": "Service Actions",
+    "permalink": "/hacs-llm-sandbox/usage/service-actions"
+  }
+}

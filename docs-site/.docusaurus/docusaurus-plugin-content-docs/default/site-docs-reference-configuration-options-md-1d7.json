@@ -1,0 +1,28 @@
+{
+  "id": "reference/configuration-options",
+  "title": "Configuration Options",
+  "description": "Current options, defaults, and ranges.",
+  "source": "@site/docs/reference/configuration-options.md",
+  "sourceDirName": "reference",
+  "slug": "/reference/configuration-options",
+  "permalink": "/hacs-llm-sandbox/reference/configuration-options",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/reference/configuration-options.md",
+  "tags": [],
+  "version": "current",
+  "lastUpdatedAt": null,
+  "frontMatter": {
+    "title": "Configuration Options",
+    "description": "Current options, defaults, and ranges."
+  },
+  "sidebar": "docsSidebar",
+  "previous": {
+    "title": "Guidance And Recovery",
+    "permalink": "/hacs-llm-sandbox/architecture/guidance-and-recovery"
+  },
+  "next": {
+    "title": "execute_home_code",
+    "permalink": "/hacs-llm-sandbox/reference/tools/execute-home-code"
+  }
+}

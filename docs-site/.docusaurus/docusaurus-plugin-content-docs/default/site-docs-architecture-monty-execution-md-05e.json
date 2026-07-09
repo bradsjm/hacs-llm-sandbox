@@ -1,0 +1,28 @@
+{
+  "id": "architecture/monty-execution",
+  "title": "Monty Execution",
+  "description": "How execute_home_code normalizes and runs model-written Python.",
+  "source": "@site/docs/architecture/monty-execution.md",
+  "sourceDirName": "architecture",
+  "slug": "/architecture/monty-execution",
+  "permalink": "/hacs-llm-sandbox/architecture/monty-execution",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/architecture/monty-execution.md",
+  "tags": [],
+  "version": "current",
+  "lastUpdatedAt": null,
+  "frontMatter": {
+    "title": "Monty Execution",
+    "description": "How execute_home_code normalizes and runs model-written Python."
+  },
+  "sidebar": "docsSidebar",
+  "previous": {
+    "title": "Snapshot Pipeline",
+    "permalink": "/hacs-llm-sandbox/architecture/snapshot-pipeline"
+  },
+  "next": {
+    "title": "Facade Surface",
+    "permalink": "/hacs-llm-sandbox/architecture/facade-surface"
+  }
+}

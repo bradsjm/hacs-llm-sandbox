@@ -1,0 +1,28 @@
+{
+  "id": "usage/state-and-registry-questions",
+  "title": "State And Registry Questions",
+  "description": "Ask Assist questions over current state and Home Assistant registries.",
+  "source": "@site/docs/usage/state-and-registry-questions.md",
+  "sourceDirName": "usage",
+  "slug": "/usage/state-and-registry-questions",
+  "permalink": "/hacs-llm-sandbox/usage/state-and-registry-questions",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/usage/state-and-registry-questions.md",
+  "tags": [],
+  "version": "current",
+  "lastUpdatedAt": null,
+  "frontMatter": {
+    "title": "State And Registry Questions",
+    "description": "Ask Assist questions over current state and Home Assistant registries."
+  },
+  "sidebar": "docsSidebar",
+  "previous": {
+    "title": "Quickstart",
+    "permalink": "/hacs-llm-sandbox/usage/quickstart"
+  },
+  "next": {
+    "title": "History, Statistics, And Logbook",
+    "permalink": "/hacs-llm-sandbox/usage/history-statistics-logbook"
+  }
+}

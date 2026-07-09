@@ -1,0 +1,28 @@
+{
+  "id": "reference/tools/get-logbook",
+  "title": "get_logbook",
+  "description": "Reference for bounded Home Assistant logbook activity queries.",
+  "source": "@site/docs/reference/tools/get-logbook.md",
+  "sourceDirName": "reference/tools",
+  "slug": "/reference/tools/get-logbook",
+  "permalink": "/hacs-llm-sandbox/reference/tools/get-logbook",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/reference/tools/get-logbook.md",
+  "tags": [],
+  "version": "current",
+  "lastUpdatedAt": null,
+  "frontMatter": {
+    "title": "get_logbook",
+    "description": "Reference for bounded Home Assistant logbook activity queries."
+  },
+  "sidebar": "docsSidebar",
+  "previous": {
+    "title": "get_statistics",
+    "permalink": "/hacs-llm-sandbox/reference/tools/get-statistics"
+  },
+  "next": {
+    "title": "get_camera_image",
+    "permalink": "/hacs-llm-sandbox/reference/tools/get-camera-image"
+  }
+}

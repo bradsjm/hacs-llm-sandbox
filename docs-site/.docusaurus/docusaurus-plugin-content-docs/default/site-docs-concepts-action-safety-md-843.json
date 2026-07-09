@@ -1,0 +1,28 @@
+{
+  "id": "concepts/action-safety",
+  "title": "Action Safety",
+  "description": "Why service calls are opt-in and how they are constrained.",
+  "source": "@site/docs/concepts/action-safety.md",
+  "sourceDirName": "concepts",
+  "slug": "/concepts/action-safety",
+  "permalink": "/hacs-llm-sandbox/concepts/action-safety",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/concepts/action-safety.md",
+  "tags": [],
+  "version": "current",
+  "lastUpdatedAt": null,
+  "frontMatter": {
+    "title": "Action Safety",
+    "description": "Why service calls are opt-in and how they are constrained."
+  },
+  "sidebar": "docsSidebar",
+  "previous": {
+    "title": "Recorder And SQL",
+    "permalink": "/hacs-llm-sandbox/concepts/recorder-and-sql"
+  },
+  "next": {
+    "title": "Model Quality And Cost",
+    "permalink": "/hacs-llm-sandbox/concepts/model-quality-and-cost"
+  }
+}

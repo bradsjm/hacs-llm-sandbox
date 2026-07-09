@@ -1,0 +1,28 @@
+{
+  "id": "usage/service-actions",
+  "title": "Service Actions",
+  "description": "Let Assist control devices only when action gates are enabled.",
+  "source": "@site/docs/usage/service-actions.md",
+  "sourceDirName": "usage",
+  "slug": "/usage/service-actions",
+  "permalink": "/hacs-llm-sandbox/usage/service-actions",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/usage/service-actions.md",
+  "tags": [],
+  "version": "current",
+  "lastUpdatedAt": null,
+  "frontMatter": {
+    "title": "Service Actions",
+    "description": "Let Assist control devices only when action gates are enabled."
+  },
+  "sidebar": "docsSidebar",
+  "previous": {
+    "title": "Camera Images",
+    "permalink": "/hacs-llm-sandbox/usage/camera-images"
+  },
+  "next": {
+    "title": "Example Prompts",
+    "permalink": "/hacs-llm-sandbox/usage/example-prompts"
+  }
+}

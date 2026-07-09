@@ -1,0 +1,32 @@
+# Assist Agent Sandbox
+
+> Documentation for a Home Assistant custom integration that exposes Assist LLM tools for bounded Python reasoning, recorder queries, logbook lookup, camera frames, and gated service actions.
+
+## Start here
+
+- [Introduction](/hacs-llm-sandbox/): What the integration does and where to begin.
+- [Prerequisites](/hacs-llm-sandbox/installation/prerequisites): Required Home Assistant, HACS, recorder, logbook, camera, and model capabilities.
+- [Install with HACS](/hacs-llm-sandbox/installation/install-with-hacs): Installation workflow for a custom HACS integration.
+- [Enable in Assist](/hacs-llm-sandbox/installation/enable-in-assist): Required tool-set enablement in the conversation agent.
+
+## Concepts
+
+- [Snapshots and visibility](/hacs-llm-sandbox/concepts/snapshots-and-visibility): How fresh filtered snapshots feed every tool call.
+- [Sandbox boundaries](/hacs-llm-sandbox/concepts/sandbox-boundaries): What Monty can and cannot access.
+- [Action safety](/hacs-llm-sandbox/concepts/action-safety): How service calls remain disabled by default and policy-gated when enabled.
+- [Recorder and SQL](/hacs-llm-sandbox/concepts/recorder-and-sql): Recorder-backed tools and read-only in-memory SQL.
+
+## Reference
+
+- [execute_home_code](/hacs-llm-sandbox/reference/tools/execute-home-code): Bounded Monty Python execution over snapshot facades.
+- [get_history](/hacs-llm-sandbox/reference/tools/get-history): State history queries.
+- [get_statistics](/hacs-llm-sandbox/reference/tools/get-statistics): Long-term statistics queries.
+- [get_logbook](/hacs-llm-sandbox/reference/tools/get-logbook): Activity timeline lookup.
+- [get_camera_image](/hacs-llm-sandbox/reference/tools/get-camera-image): Camera and image entity capture.
+- [Limits](/hacs-llm-sandbox/reference/limits): Current runtime, recorder, SQL, action, and image bounds.
+
+## Development
+
+- [Local setup](/hacs-llm-sandbox/development/local-setup): Contributor setup commands.
+- [Validation](/hacs-llm-sandbox/development/validation): Repository checks and docs build commands.
+- [Eval harness](/hacs-llm-sandbox/development/eval-harness): Dev-only evaluation package overview.

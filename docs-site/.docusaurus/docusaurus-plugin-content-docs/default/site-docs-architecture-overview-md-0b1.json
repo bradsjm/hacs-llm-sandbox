@@ -1,0 +1,28 @@
+{
+  "id": "architecture/overview",
+  "title": "Architecture Overview",
+  "description": "Main runtime components and how a tool call flows through the integration.",
+  "source": "@site/docs/architecture/overview.md",
+  "sourceDirName": "architecture",
+  "slug": "/architecture/overview",
+  "permalink": "/hacs-llm-sandbox/architecture/overview",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/architecture/overview.md",
+  "tags": [],
+  "version": "current",
+  "lastUpdatedAt": null,
+  "frontMatter": {
+    "title": "Architecture Overview",
+    "description": "Main runtime components and how a tool call flows through the integration."
+  },
+  "sidebar": "docsSidebar",
+  "previous": {
+    "title": "Model Quality And Cost",
+    "permalink": "/hacs-llm-sandbox/concepts/model-quality-and-cost"
+  },
+  "next": {
+    "title": "Integration Lifecycle",
+    "permalink": "/hacs-llm-sandbox/architecture/integration-lifecycle"
+  }
+}
