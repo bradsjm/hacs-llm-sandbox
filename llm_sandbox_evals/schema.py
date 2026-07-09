@@ -167,3 +167,4 @@ class CaseTrace:
     # Trailing field with default so existing constructors stay valid when they
     # omit tool events (e.g. synthetic traces in tests / error traces).
     tool_events: tuple[ToolEvent, ...] = ()
+    conversation_id: str | None = None

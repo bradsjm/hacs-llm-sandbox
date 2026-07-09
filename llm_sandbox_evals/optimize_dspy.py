@@ -82,7 +82,7 @@ def run_optimize(config: EvalConfig) -> OptimizerResult:
     optimized_instruction = str(compiled.predictor.signature.instructions)
     optimized_candidate = replace(baseline, id="optimized", api_prompt=optimized_instruction)
 
-    run_id = datetime.now(UTC).strftime("%Y%m%d-%H%M%S-%f")
+    run_id = _derive_run_id()
     created_at = datetime.now(UTC).isoformat()
     run_dir = config.runs_dir / run_id
     run_dir.mkdir(parents=True, exist_ok=False)
@@ -131,6 +131,7 @@ def run_optimize(config: EvalConfig) -> OptimizerResult:
     cross_eval_run_dir: Path | None = None
     # Branch boundary: cross-evaluation is optional because it can multiply paid model calls.
     if config.cross_eval_models:
+        cross_eval_run_id = _derive_run_id()
         cross_config = EvalConfig(
             models=[_to_pydantic_ai_model_id(model) for model in config.cross_eval_models],
             candidates=["baseline", f"optimized:{candidate_path}"],
@@ -141,11 +142,11 @@ def run_optimize(config: EvalConfig) -> OptimizerResult:
             max_tool_calls=config.max_tool_calls,
             reasoning_effort=config.reasoning_effort,
         )
-        cross_report = asyncio.run(experiment.run_matrix(cross_config))
+        cross_report = asyncio.run(experiment.run_matrix(cross_config, run_id=cross_eval_run_id))
         cross_eval_run_dir = reports.write_report_json(
             cross_report,
             cross_config,
-            run_id=datetime.now(UTC).strftime("%Y%m%d-%H%M%S-%f"),
+            run_id=cross_eval_run_id,
         )
 
     baseline_prompt_chars, baseline_authored = prompts.candidate_prompt_sizes(baseline)
@@ -247,8 +248,14 @@ def save_candidate(candidate: PromptCandidate, path: Path) -> None:
 
 def _candidate_mean(config: EvalConfig) -> float:
     """Run one candidate/model matrix and return its mean, isolating evaluation failures."""
+    run_id = _derive_run_id()
     try:
-        report = asyncio.run(experiment.run_matrix(config))
+        report = asyncio.run(experiment.run_matrix(config, run_id=run_id))
     except Exception:  # noqa: BLE001 - summary scoring should not hide an exported optimizer artifact.
         return 0.0
     return experiment.overall_mean(report)
+
+
+def _derive_run_id() -> str:
+    """Return a filesystem-friendly run id."""
+    return datetime.now(UTC).strftime("%Y%m%d-%H%M%S-%f")

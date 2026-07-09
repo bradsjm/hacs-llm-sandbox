@@ -2,6 +2,7 @@
 
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from time import perf_counter
 
 from custom_components.llm_sandbox.llm_api.prompts import PromptProfile, resolve_profile
@@ -117,6 +118,7 @@ def build_dataset(
     config: EvalConfig,
     candidates: Sequence[PromptCandidate],
     selected_cases: Sequence[EvalCase],
+    run_id: str,
 ) -> Dataset[MatrixCellRef, CaseTrace, MatrixCellMeta]:
     """Build one native dataset containing every candidate/model/case matrix cell."""
     cases: list[Case[MatrixCellRef, CaseTrace, MatrixCellMeta]] = []
@@ -131,6 +133,7 @@ def build_dataset(
                     category=case.category,
                 )
                 metadata: MatrixCellMeta = {
+                    "run_id": run_id,
                     "case_id": ref.case_id,
                     "candidate_id": ref.candidate_id,
                     "model_id": ref.model_id,
@@ -192,10 +195,14 @@ def make_matrix_task(
 async def run_matrix(
     config: EvalConfig,
     *,
+    run_id: str | None = None,
     logfire_enabled: bool = False,
     on_complete: ProgressCallback | None = None,
 ) -> EvaluationReport[MatrixCellRef, CaseTrace, MatrixCellMeta]:
     """Run the full matrix through one native pydantic-evals experiment."""
+    # Branch boundary: direct callers may omit a run id, but each cell still gets one for Logfire/report joins.
+    if run_id is None:
+        run_id = datetime.now(UTC).strftime("%Y%m%d-%H%M%S-%f")
     if logfire_enabled:
         from llm_sandbox_evals.logfire_config import configure_logfire
 
@@ -203,7 +210,7 @@ async def run_matrix(
     profile = resolve_profile(config.prompt_profile)
     candidates = prompts.load_candidates(config.candidates, config.prompt_profile)
     selected_cases = _select_cases(config.cases, config.homes)
-    dataset = build_dataset(config, candidates, selected_cases)
+    dataset = build_dataset(config, candidates, selected_cases, run_id)
     task = make_matrix_task(
         config,
         profile,

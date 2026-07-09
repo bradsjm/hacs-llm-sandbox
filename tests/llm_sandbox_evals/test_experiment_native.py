@@ -24,7 +24,7 @@ from llm_sandbox_evals import agent_runner, reports
 async def test_run_matrix_stub_slice_writes_reloadable_report_json(tmp_path: Path) -> None:
     config = _config(tmp_path, cases=["state_living_temperature"])
 
-    report = await run_matrix(config)
+    report = await run_matrix(config, run_id="stub-slice")
     run_dir = reports.write_report_json(
         report,
         config,
@@ -45,6 +45,7 @@ async def test_run_matrix_stub_slice_writes_reloadable_report_json(tmp_path: Pat
         category="state_read",
     )
     assert report_case.metadata == {
+        "run_id": "stub-slice",
         "case_id": "state_living_temperature",
         "candidate_id": "baseline",
         "model_id": "stub",
@@ -63,7 +64,7 @@ async def test_run_matrix_stub_slice_writes_reloadable_report_json(tmp_path: Pat
 
 async def test_sandbox_outcome_reports_score_required_gate_and_model_error_label(tmp_path: Path) -> None:
     config = _config(tmp_path, cases=None)
-    dataset = build_dataset(config, [_candidate("candidate-a")], [_case("case-a", "state_read")])
+    dataset = build_dataset(config, [_candidate("candidate-a")], [_case("case-a", "state_read")], "test-run")
 
     async def task(cell: MatrixCellRef) -> CaseTrace:
         return _trace(
@@ -90,7 +91,7 @@ async def test_candidate_matrix_report_aggregates_candidate_model_and_category_m
     config = _config(tmp_path, models=["model-a", "model-b"], cases=None)
     candidates = [_candidate("baseline", api_prompt="baseline prompt"), _candidate("compact", api_prompt="short")]
     selected_cases = [_case("case-state", "state_read"), _case("case-recorder", "recorder_read")]
-    dataset = build_dataset(config, candidates, selected_cases)
+    dataset = build_dataset(config, candidates, selected_cases, "test-run")
     outcomes = {
         ("baseline", "model-a", "case-state"): (0.8, 1),
         ("baseline", "model-a", "case-recorder"): (0.6, 3),

@@ -5,6 +5,7 @@ import json
 from collections.abc import Sequence
 
 from custom_components.llm_sandbox.llm_api.prompts import PromptProfile
+from pydantic_ai import capture_run_messages
 from pydantic_ai.exceptions import UnexpectedModelBehavior, UsageLimitExceeded
 from pydantic_ai.messages import ModelRequest, ModelResponse, ToolCallPart, ToolReturnPart
 from pydantic_ai.usage import UsageLimits
@@ -30,29 +31,36 @@ async def run_case(
     profile: PromptProfile,
 ) -> CaseTrace:
     """Run one matrix cell through the production-core Pydantic AI agent."""
+    # Branch boundary: setup failures occur before a model run exists, so they
+    # retain the prior empty diagnostic evidence while model-run failures recover captured messages.
+    captured: Sequence[object] = ()
+    proposed_actions: Sequence[dict[str, object]] = ()
     try:
         fixture = get_home(case.home)
         snapshot = apply_scope(fixture.snapshot(), EVAL_SCOPE, anchor_device_id=case.llm_context.device_id)
         runtime = build_eval_runtime(case, candidate, profile, snapshot, fixture)
+        proposed_actions = runtime.invoker.calls
         agent = build_agent(runtime, model_id)
-        result = await asyncio.wait_for(
-            agent.run(
-                case.user_request,
-                deps=runtime,
-                model_settings=build_model_settings(
-                    model_id,
-                    temperature=config.temperature,
-                    reasoning_effort=config.reasoning_effort,
+        with capture_run_messages() as captured:
+            result = await asyncio.wait_for(
+                agent.run(
+                    case.user_request,
+                    deps=runtime,
+                    model_settings=build_model_settings(
+                        model_id,
+                        temperature=config.temperature,
+                        reasoning_effort=config.reasoning_effort,
+                    ),
+                    usage_limits=UsageLimits(tool_calls_limit=config.max_tool_calls),
                 ),
-                usage_limits=UsageLimits(tool_calls_limit=config.max_tool_calls),
-            ),
-            timeout=config.model_timeout,
-        )
+                timeout=config.model_timeout,
+            )
         output = result.output
         messages = result.all_messages()
         tool_call_count = _tool_call_count(messages)
         tool_events = _tool_events(messages)
         recorded_actions = _recorded_actions_from_tool_events(tool_events, runtime.invoker.calls)
+        conversation_id = _conversation_id(messages)
         checks = check_case(case, output, recorded_actions, tool_call_count, tool_events)
         return CaseTrace(
             case_id=case.id,
@@ -66,21 +74,60 @@ async def run_case(
             checks=tuple(checks),
             error=None,
             tool_events=tool_events,
+            conversation_id=conversation_id,
         )
     except UsageLimitExceeded as err:
-        return _error_trace(candidate, model_id, case, "tool_calls_exceeded", _format_exception(err))
+        tool_events = _tool_events(captured)
+        return _error_trace(
+            candidate,
+            model_id,
+            case,
+            "tool_calls_exceeded",
+            _format_exception(err),
+            tool_call_count=_tool_call_count(captured),
+            tool_events=tool_events,
+            recorded_actions=_recorded_actions_from_tool_events(tool_events, proposed_actions),
+            conversation_id=_conversation_id(captured),
+        )
     except TimeoutError as err:
+        tool_events = _tool_events(captured)
         return _error_trace(
             candidate,
             model_id,
             case,
             "model_error",
             _format_exception(err, timeout=config.model_timeout),
+            tool_call_count=_tool_call_count(captured),
+            tool_events=tool_events,
+            recorded_actions=_recorded_actions_from_tool_events(tool_events, proposed_actions),
+            conversation_id=_conversation_id(captured),
         )
     except UnexpectedModelBehavior as err:
-        return _error_trace(candidate, model_id, case, "model_error", _format_exception(err))
+        tool_events = _tool_events(captured)
+        return _error_trace(
+            candidate,
+            model_id,
+            case,
+            "model_error",
+            _format_exception(err),
+            tool_call_count=_tool_call_count(captured),
+            tool_events=tool_events,
+            recorded_actions=_recorded_actions_from_tool_events(tool_events, proposed_actions),
+            conversation_id=_conversation_id(captured),
+        )
     except Exception as err:  # noqa: BLE001 - provider/harness failures are isolated to the current matrix cell.
-        return _error_trace(candidate, model_id, case, "model_error", _format_exception(err))
+        tool_events = _tool_events(captured)
+        return _error_trace(
+            candidate,
+            model_id,
+            case,
+            "model_error",
+            _format_exception(err),
+            tool_call_count=_tool_call_count(captured),
+            tool_events=tool_events,
+            recorded_actions=_recorded_actions_from_tool_events(tool_events, proposed_actions),
+            conversation_id=_conversation_id(captured),
+        )
 
 
 def _error_trace(
@@ -89,6 +136,11 @@ def _error_trace(
     case: EvalCase,
     check_name: str,
     feedback: str,
+    *,
+    tool_call_count: int = 0,
+    tool_events: tuple[ToolEvent, ...] = (),
+    recorded_actions: tuple[dict[str, object], ...] = (),
+    conversation_id: str | None = None,
 ) -> CaseTrace:
     """Return a zero-score trace for an infrastructure, provider, or limit failure."""
     return CaseTrace(
@@ -98,8 +150,8 @@ def _error_trace(
         model_id=model_id,
         score=0.0,
         output="",
-        tool_call_count=0,
-        recorded_actions=(),
+        tool_call_count=tool_call_count,
+        recorded_actions=recorded_actions,
         checks=(
             CheckResult(
                 name=check_name,
@@ -109,7 +161,8 @@ def _error_trace(
             ),
         ),
         error=f"{check_name}: {feedback}",
-        tool_events=(),
+        tool_events=tool_events,
+        conversation_id=conversation_id,
     )
 
 
@@ -201,6 +254,15 @@ def _tool_events(messages: Sequence[object]) -> tuple[ToolEvent, ...]:
             )
         )
     return tuple(events)
+
+
+def _conversation_id(messages: Sequence[object]) -> str | None:
+    """Return the first conversation id recorded on captured Pydantic AI messages."""
+    for message in messages:
+        conversation_id = getattr(message, "conversation_id", None)
+        if conversation_id is not None:
+            return str(conversation_id)
+    return None
 
 
 def _recorded_actions_from_tool_events(

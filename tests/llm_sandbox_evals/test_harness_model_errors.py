@@ -57,6 +57,9 @@ async def test_run_case_does_not_force_final_answer_after_max_tool_calls(monkeyp
     assert trace.output == ""
     assert trace.score == 0.0
     assert trace.error is not None
+    assert trace.tool_call_count == 3
+    assert len(trace.tool_events) == 3
+    assert trace.tool_events[-1].output == {}
     assert [(check.name, check.passed, check.required) for check in trace.checks] == [
         ("tool_calls_exceeded", False, True)
     ]
@@ -68,5 +71,11 @@ async def _failing_model(_messages: list[ModelMessage], _info: AgentInfo) -> Mod
 
 async def _looping_model(_messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
     return ModelResponse(
-        parts=[ToolCallPart(tool_name="execute_home_code", args={"code": "result = 'ok'"}, tool_call_id="loop")]
+        parts=[
+            ToolCallPart(
+                tool_name="execute_home_code",
+                args={"code": "result = 'ok'"},
+                tool_call_id=f"loop-{len(_messages)}",
+            )
+        ]
     )
