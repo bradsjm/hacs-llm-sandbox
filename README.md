@@ -18,7 +18,7 @@ It does all of this inside a [**minimal, secure Python interpreter written in Ru
 
 This is an early **0.1.0** release. Treat it as an experimental preview.
 
-I wrote this to see how effective it would be to give a language model a python sandbox inside home assistant to increase the assist capabilities without needing hundreds of tools given that most language models have some knowledge already of the internals of Home Assistant to varying degrees.
+I wrote this to see how effective it would be to give a language model a python sandbox inside home assistant to increase the assist capabilities without needing hundreds of tools given that most language models have some knowledge already of the internals of Home Assistant to varying degrees. With a sufficiently capable model the results have been encouraging as proven out using the evals included. I am currently using this with my [local voice assistant](https://www.home-assistant.io/voice_control/).
 
 This is **not designed as a general purpose tool**, for that there are some great MCP servers to allow coding harnesses (claude, codex etc.) access to Home Assistant including [ha-mcp](https://github.com/homeassistant-ai/ha-mcp) and [opencode add-on](https://github.com/magnusoverli/opencode).
 
@@ -114,7 +114,7 @@ The safety model rests on two ideas: a **frozen snapshot** and an **isolated san
 
 4. **A forgiveness layer fixes common mistakes.** The assistant's code passes through a normalization step that silently repairs harmless variations — a missing `await`, an imported `datetime`, a forgotten `result =` — so the assistant succeeds on the first try instead of burning retries (and tokens) on trivial errors. When the tool has already offered or applied entity-id guidance in the same conversation, it can also prefer that still-visible entity in later resolution and transparently report remembered literal rewrites in `resolutions`.
 
-### Read-only (in-memory)SQL queries
+### Read-only (in-memory) SQL queries
 
 - `execute_home_code` can call `await hass.query(sql, hours=N)` to run read-only SQLite over a fresh per-run in-memory database, **not Home Assistant's live recorder database.**
 - It exposes visible `states` plus bounded recorder `history` and `statistics`; `states.attributes` is JSON text queryable with SQLite JSON functions such as `json_extract()`.

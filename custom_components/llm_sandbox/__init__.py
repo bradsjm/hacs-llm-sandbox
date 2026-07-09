@@ -1,21 +1,9 @@
 """LLM Sandbox integration lifecycle."""
 
-from collections.abc import Mapping
-
 from homeassistant.core import HomeAssistant
 
 from .llm_api.api import async_register_llm_api
 from .runtime import SandboxConfigEntry, SandboxRuntime, settings_from_entry
-
-
-async def async_setup(hass: HomeAssistant, _config: Mapping[str, object]) -> bool:
-    """Set up LLM Sandbox.
-
-    No domain services are registered. The integration exposes its tools through
-    one LLM API registered per config entry.
-    """
-    _ = hass
-    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: SandboxConfigEntry) -> bool:

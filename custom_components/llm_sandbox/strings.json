@@ -99,6 +99,9 @@
     "service_call_failed": {
       "message": "Service call to {domain}.{service} failed: {reason}."
     },
+    "service_data_invalid": {
+      "message": "Service data for {domain}.{service} is invalid: {reason}."
+    },
     "service_response_requires_blocking": {
       "message": "Service responses require {blocking}."
     },

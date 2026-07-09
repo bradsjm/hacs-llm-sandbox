@@ -1,11 +1,12 @@
 {
   "domain": "llm_sandbox",
   "name": "Assist Agent Sandbox",
+  "after_dependencies": ["logbook", "recorder"],
   "codeowners": ["@bradsjm"],
   "config_flow": true,
   "documentation": "https://github.com/bradsjm/hacs-llm-sandbox",
   "integration_type": "service",
-  "iot_class": "local_push",
+  "iot_class": "calculated",
   "issue_tracker": "https://github.com/bradsjm/hacs-llm-sandbox/issues",
   "requirements": ["pydantic-monty==0.0.18", "pillow==12.2.0"],
   "version": "0.1.0"
