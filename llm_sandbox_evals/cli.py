@@ -442,7 +442,7 @@ def _eval_banner(config: EvalConfig, case_count: int) -> str:
         "For every (prompt candidate x language model x test case), this harness:\n"
         "  1. renders native tool-calling messages and function schemas,\n"
         "  2. lets the model use available tools over one or more bounded turns, and\n"
-        "  3. scores the final outcome plus turn efficiency in 0.0-1.0.\n\n"
+        "  3. scores the structured final outcome with a global tool-call cutoff.\n\n"
         "Candidates rank by mean score; native pydantic-evals analyses include\n"
         "candidate ranking and candidate x model means. A higher mean is better.\n\n"
         "Config:\n"

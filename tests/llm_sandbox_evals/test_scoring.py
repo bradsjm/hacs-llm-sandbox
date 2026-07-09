@@ -50,38 +50,48 @@ def test_symbolic_answer_evidence_uses_applicable_boundaries() -> None:
 
 
 def test_answer_evidence_failure_is_diagnostic_only() -> None:
-    tool_events = (
-        ToolEvent(
-            tool_name="execute_home_code",
-            args={"code": "result = states.get('sensor.living_temp').state"},
-            output={"execution": {"status": "ok"}, "output": "23.4"},
-        ),
-    )
     checks = check_case(
-        _case(Expected(answer_values=("23.4",))),
+        _case(Expected(answer_values=("23.4",), provenance_values=("sensor.living_temp",))),
         "No matching fact here.",
         (),
         2,
-        tool_events,
+        (
+            ToolEvent(
+                tool_name="execute_home_code",
+                args={"code": "result = states.get('sensor.living_temp').state"},
+                output={"execution": {"status": "ok"}, "output": {"entity_id": "sensor.living_temp", "state": "23.4"}},
+            ),
+        ),
     )
 
     passed_by_name = {check.name: check.passed for check in checks}
-    assert passed_by_name["structured_evidence_present"] is True
     assert passed_by_name["answer_evidence_present"] is False
+    assert passed_by_name["provenance_evidence_present"] is True
     assert passed_by_name["tool_calls_within_max"] is True
     assert score_case(checks) == pytest.approx(1.0)
 
 
-def test_structured_tool_payload_can_score_without_answer_text_match() -> None:
+def test_execute_tool_payload_can_score_without_answer_text_match() -> None:
     tool_events = (
         ToolEvent(
             tool_name="execute_home_code",
             args={"code": "result = states.get('sensor.living_temp')"},
-            output={"execution": {"status": "ok"}, "output": {"entity_id": "sensor.living_temp"}},
+            output={"execution": {"status": "ok"}, "output": {"entity_id": "sensor.living_temp", "state": "23.4"}},
         ),
     )
     checks = check_case(
-        _case(Expected(answer_values=("sensor.living_temp",))),
+        _case(
+            Expected(
+                answer_values=("sensor.living_temp",),
+                tool_result_checks=(
+                    ToolResultCheck(
+                        tool_name="execute_home_code",
+                        entity_ids=("sensor.living_temp",),
+                        entry_values=("23.4",),
+                    ),
+                ),
+            )
+        ),
         "I checked the value.",
         (),
         1,
@@ -89,7 +99,7 @@ def test_structured_tool_payload_can_score_without_answer_text_match() -> None:
     )
 
     passed_by_name = {check.name: check.passed for check in checks}
-    assert passed_by_name["structured_evidence_present"] is True
+    assert passed_by_name["tool_result_check_0"] is True
     assert passed_by_name["answer_evidence_present"] is False
     assert passed_by_name["execution_ok"] is True
     assert score_case(checks) == pytest.approx(1.0)
@@ -149,6 +159,22 @@ def test_provenance_evidence_reads_tool_payloads() -> None:
         ),
         pytest.param(
             ToolEvent(
+                tool_name="get_history",
+                args={"entity_ids": ["light.living"], "aggregate": {"mode": "time_in_state"}},
+                output={
+                    "window": {"start": "2026-06-28T12:00:00+00:00", "end": "2026-06-29T12:00:00+00:00"},
+                    "rows": [{"time_in_state": {"off": 43172.0, "on": 43228.0}, "unit": "seconds"}],
+                },
+            ),
+            ToolResultCheck(
+                tool_name="get_history",
+                entity_ids=("light.living",),
+                entry_values=("43228",),
+            ),
+            id="history-analytics-entity-provenance-from-args",
+        ),
+        pytest.param(
+            ToolEvent(
                 tool_name="get_statistics",
                 args={"statistic_ids": ["sensor.bedroom_humidity"], "period": "hour"},
                 output={
@@ -184,6 +210,26 @@ def test_provenance_evidence_reads_tool_payloads() -> None:
             ToolResultCheck(tool_name="get_logbook", entity_ids=("light.living",), entry_values=("turned on",)),
             id="logbook-entry-facts",
         ),
+        pytest.param(
+            ToolEvent(
+                tool_name="execute_home_code",
+                args={"code": "result = hass.states.get('sensor.living_temp')"},
+                output={
+                    "execution": {"status": "ok"},
+                    "output": {
+                        "entity_id": "sensor.living_temp",
+                        "state": "23.4",
+                        "attributes": {"unit_of_measurement": "°C"},
+                    },
+                },
+            ),
+            ToolResultCheck(
+                tool_name="execute_home_code",
+                entity_ids=("sensor.living_temp",),
+                entry_values=("23.4", "°C"),
+            ),
+            id="execute-home-code-structured-output",
+        ),
     ],
 )
 def test_structured_recorder_evidence_passes(tool_event: ToolEvent, tool_check: ToolResultCheck) -> None:
@@ -193,6 +239,46 @@ def test_structured_recorder_evidence_passes(tool_event: ToolEvent, tool_check: 
         (),
         1,
         (tool_event,),
+    )
+
+    passed_by_name = {check.name: check.passed for check in checks}
+    assert passed_by_name["tool_result_check_0"] is True
+    assert score_case(checks) == pytest.approx(1.0)
+
+
+def test_history_per_entity_entry_values_do_not_cross_match() -> None:
+    checks = check_case(
+        _case(
+            Expected(
+                tool_result_checks=(
+                    ToolResultCheck(
+                        tool_name="get_history",
+                        entity_ids=("sensor.living_temp", "sensor.bedroom_humidity"),
+                        entry_values_by_entity={
+                            "sensor.living_temp": ("25.2",),
+                            "sensor.bedroom_humidity": ("64",),
+                        },
+                        min_results=1,
+                    ),
+                )
+            )
+        ),
+        "I checked both sensors.",
+        (),
+        1,
+        (
+            ToolEvent(
+                tool_name="get_history",
+                args={"entity_ids": ["sensor.living_temp", "sensor.bedroom_humidity"]},
+                output={
+                    "window": {"start": "2026-06-28T12:00:00+00:00", "end": "2026-06-29T12:00:00+00:00"},
+                    "entities": {
+                        "sensor.living_temp": {"rows": [["2026-06-29T12:00:00+00:00", "25.2"]]},
+                        "sensor.bedroom_humidity": {"rows": [["2026-06-29T12:00:00+00:00", "64"]]},
+                    },
+                },
+            ),
+        ),
     )
 
     passed_by_name = {check.name: check.passed for check in checks}
@@ -405,7 +491,14 @@ def test_execution_ok_fails_when_tool_event_is_error_envelope() -> None:
         ),
     )
     checks = check_case(
-        _case(Expected(answer_values=("23.4",), max_tool_calls=1)),
+        _case(
+            Expected(
+                tool_result_checks=(
+                    ToolResultCheck(tool_name="execute_home_code", entity_ids=("sensor.living_temp",)),
+                ),
+                max_tool_calls=1,
+            )
+        ),
         "The value is 23.4.",
         (),
         1,
@@ -420,11 +513,17 @@ def test_execution_ok_fails_when_tool_event_is_error_envelope() -> None:
 
 def test_empty_expected_actions_rejects_unexpected_recorded_action() -> None:
     checks = check_case(
-        _case(Expected(answer_values=("ok",))),
+        _case(Expected(provenance_values=("sensor.living_temp",))),
         "ok",
         _actions(_action("light", "turn_on", "light.living")),
         1,
-        (),
+        (
+            ToolEvent(
+                tool_name="execute_home_code",
+                args={"code": "result = hass.states.get('sensor.living_temp')"},
+                output={"execution": {"status": "ok"}, "output": {"entity_id": "sensor.living_temp"}},
+            ),
+        ),
     )
 
     passed_by_name = {check.name: check.passed for check in checks}

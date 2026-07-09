@@ -31,18 +31,7 @@ def check_case(
 
     checks.append(_meaningful_oracle_check(case))
 
-    structured_evidence = _structured_evidence_blob(tool_events, recorded_actions)
     answer_values = case.expected.answer_values + case.expected.expected_values
-    missing_structured_values = [value for value in answer_values if not _token_present(value, structured_evidence)]
-    if answer_values:
-        checks.append(
-            CheckResult(
-                name="structured_evidence_present",
-                passed=not missing_structured_values,
-                required=True,
-                feedback=f"missing={','.join(missing_structured_values)}",
-            )
-        )
 
     # Final-answer text evidence is diagnostic only. LLM prose is intentionally
     # not a required scoring surface because small wording/formatting changes are
@@ -57,6 +46,7 @@ def check_case(
         )
     )
 
+    structured_evidence = _structured_evidence_blob(tool_events, recorded_actions)
     provenance_lower = structured_evidence
     missing_provenance = [
         value for value in case.expected.provenance_values if not _token_present(value, provenance_lower)
@@ -133,9 +123,7 @@ def _meaningful_oracle_check(case: EvalCase) -> CheckResult:
     """Return the required lint gate preventing empty/weak case oracles."""
     expected = case.expected
     has_oracle = bool(
-        expected.expected_values
-        or expected.answer_values
-        or expected.provenance_values
+        expected.provenance_values
         or expected.tool_result_checks
         or expected.actions
         or expected.blocked_outcome is not None
@@ -152,8 +140,8 @@ def _structured_evidence_blob(
     tool_events: tuple[ToolEvent, ...], recorded_actions: tuple[dict[str, object], ...]
 ) -> str:
     """Return lowercased structured tool and action payloads for scoring evidence."""
-    parts = [json.dumps(event.output, sort_keys=True, default=str) for event in tool_events] + [
-        json.dumps(action, sort_keys=True, default=str) for action in recorded_actions
+    parts = [json.dumps(event.output, ensure_ascii=False, sort_keys=True, default=str) for event in tool_events] + [
+        json.dumps(action, ensure_ascii=False, sort_keys=True, default=str) for action in recorded_actions
     ]
     return "\n".join(parts).lower()
 
@@ -364,8 +352,10 @@ def _tool_result_failures(
     expected: ToolResultCheck, output: Mapping[str, object], args: Mapping[str, object]
 ) -> list[str]:
     """Return structured recorder-result mismatches for one output payload."""
+    if expected.tool_name == "execute_home_code":
+        return _execute_result_failures(expected, output)
     if expected.tool_name == "get_history":
-        return _history_result_failures(expected, output)
+        return _history_result_failures(expected, output, args)
     if expected.tool_name == "get_statistics":
         return _statistics_result_failures(expected, output)
     if expected.tool_name == "get_logbook":
@@ -373,10 +363,34 @@ def _tool_result_failures(
     return ["unsupported_tool"]
 
 
-def _history_result_failures(expected: ToolResultCheck, output: Mapping[str, object]) -> list[str]:
+def _execute_result_failures(expected: ToolResultCheck, output: Mapping[str, object]) -> list[str]:
+    """Return structured mismatches for one successful execute_home_code payload."""
+    failures: list[str] = []
+    result = output.get("output")
+    printed = output.get("printed")
+    has_result = result is not None or (isinstance(printed, list) and bool(printed))
+    if expected.min_results == 0 and has_result:
+        failures.append("unexpected_results")
+    elif expected.min_results > 0 and not has_result:
+        failures.append("empty_output")
+    output_blob = json.dumps(output, ensure_ascii=False, sort_keys=True, default=str).lower()
+    failures.extend(
+        f"missing_entry_entity:{entity_id}"
+        for entity_id in expected.entity_ids
+        if not _token_present(entity_id, output_blob)
+    )
+    failures.extend(
+        f"missing_entry_value:{value}" for value in expected.entry_values if not _token_present(value, output_blob)
+    )
+    return failures
+
+
+def _history_result_failures(
+    expected: ToolResultCheck, output: Mapping[str, object], args: Mapping[str, object]
+) -> list[str]:
     rows = output.get("rows")
     if isinstance(rows, list):
-        return _history_analytics_result_failures(expected, rows)
+        return _history_analytics_result_failures(expected, rows, args)
 
     failures: list[str] = []
     entities = output.get("entities")
@@ -392,31 +406,45 @@ def _history_result_failures(expected: ToolResultCheck, output: Mapping[str, obj
             failures.append(f"unexpected_results:{entity_id}")
         elif expected.min_results > 0 and result_count < expected.min_results:
             failures.append(f"empty_entity:{entity_id}")
-        entity_blob = json.dumps(entity_payload, sort_keys=True, default=str).lower()
+        entity_blob = json.dumps(entity_payload, ensure_ascii=False, sort_keys=True, default=str).lower()
+        entry_values = (*expected.entry_values, *expected.entry_values_by_entity.get(entity_id, ()))
         failures.extend(
             f"missing_entry_value:{entity_id}:{value}"
-            for value in expected.entry_values
+            for value in entry_values
             if not _token_present(value, entity_blob)
         )
     return failures
 
 
-def _history_analytics_result_failures(expected: ToolResultCheck, rows: list[object]) -> list[str]:
+def _history_analytics_result_failures(
+    expected: ToolResultCheck, rows: list[object], args: Mapping[str, object]
+) -> list[str]:
     """Return mismatches for declarative history analytics top-level rows."""
     failures: list[str] = []
     if expected.min_results == 0 and rows:
         failures.append("unexpected_results")
     elif len(rows) < expected.min_results:
         failures.append("empty_rows")
-    rows_blob = json.dumps(rows, sort_keys=True, default=str).lower()
+    rows_blob = json.dumps(rows, ensure_ascii=False, sort_keys=True, default=str).lower()
+    requested_entity_ids = set(strings_from_value(args.get("entity_ids")))
     failures.extend(
         f"missing_row_entity:{entity_id}"
         for entity_id in expected.entity_ids
-        if not _token_present(entity_id, rows_blob)
+        if entity_id not in requested_entity_ids and not _token_present(entity_id, rows_blob)
     )
-    failures.extend(
-        f"missing_entry_value:{value}" for value in expected.entry_values if not _token_present(value, rows_blob)
-    )
+    if expected.entry_values_by_entity:
+        for entity_id, entry_values in expected.entry_values_by_entity.items():
+            entity_rows = [row for row in rows if isinstance(row, Mapping) and row.get("entity_id") == entity_id]
+            entity_blob = json.dumps(entity_rows or rows, ensure_ascii=False, sort_keys=True, default=str).lower()
+            failures.extend(
+                f"missing_entry_value:{entity_id}:{value}"
+                for value in entry_values
+                if not _token_present(value, entity_blob)
+            )
+    else:
+        failures.extend(
+            f"missing_entry_value:{value}" for value in expected.entry_values if not _token_present(value, rows_blob)
+        )
     return failures
 
 
@@ -440,10 +468,11 @@ def _statistics_result_failures(expected: ToolResultCheck, output: Mapping[str, 
             failures.append(f"unexpected_results:{statistic_id}")
         elif expected.min_results > 0 and result_count < expected.min_results:
             failures.append(f"empty_statistic:{statistic_id}")
-        statistic_blob = json.dumps(statistic_payload, sort_keys=True, default=str).lower()
+        statistic_blob = json.dumps(statistic_payload, ensure_ascii=False, sort_keys=True, default=str).lower()
+        entry_values = (*expected.entry_values, *expected.entry_values_by_entity.get(statistic_id, ()))
         failures.extend(
             f"missing_entry_value:{statistic_id}:{value}"
-            for value in expected.entry_values
+            for value in entry_values
             if not _token_present(value, statistic_blob)
         )
     return failures

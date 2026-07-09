@@ -5,7 +5,7 @@ tool-runner, scoring, and orchestration layers. Later waves consume them; do
 not rename fields without updating all consumers.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,6 +53,7 @@ class ToolResultCheck:
     statistic_ids: tuple[str, ...] = ()
     fields: tuple[str, ...] = ()
     period: str | None = None
+    entry_values_by_entity: dict[str, tuple[str, ...]] = field(default_factory=dict)
     entry_values: tuple[str, ...] = ()
     min_results: int = 1
 
@@ -90,11 +91,9 @@ class BlockedOutcome:
 class Expected:
     """Outcome-evidence expectations: salient facts, exclusions, and side effects.
 
-    ``answer_values`` are expected facts in structured tool/action evidence.
-    ``expected_values`` is a legacy migration bucket treated the same way.
-    Final-answer prose checks are diagnostic only; scoring should be grounded in
-    structured tool outputs, recorded actions, recorder checks, and blocked-action
-    side effects instead of parsing the model's prose.
+    ``answer_values`` and ``expected_values`` are diagnostic report hints only.
+    Scoring is grounded in structured tool outputs, recorded actions, recorder
+    checks, and blocked-action side effects instead of parsing model prose.
     """
 
     expected_values: tuple[str, ...] = ()

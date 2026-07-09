@@ -66,6 +66,14 @@ def test_dataset_does_not_use_legacy_expected_values() -> None:
     assert legacy_case_ids == []
 
 
+def test_dataset_does_not_use_answer_only_oracles() -> None:
+    answer_only_case_ids = [
+        case.id for case in CASES if case.expected.answer_values and not _has_structured_oracle(case)
+    ]
+
+    assert answer_only_case_ids == []
+
+
 def test_dataset_answer_values_do_not_require_raw_entity_ids_unless_requested() -> None:
     violating_case_ids = [
         case.id
@@ -96,11 +104,13 @@ def _case_by_id(cases: Sequence[EvalCase], case_id: str) -> EvalCase:
 
 
 def _has_meaningful_oracle(case: EvalCase) -> bool:
+    return _has_structured_oracle(case)
+
+
+def _has_structured_oracle(case: EvalCase) -> bool:
     expected = case.expected
     return bool(
-        expected.expected_values
-        or expected.answer_values
-        or expected.provenance_values
+        expected.provenance_values
         or expected.tool_result_checks
         or expected.actions
         or expected.blocked_outcome is not None

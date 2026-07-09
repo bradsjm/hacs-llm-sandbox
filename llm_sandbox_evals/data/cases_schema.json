@@ -273,7 +273,7 @@
       "type": "object"
     },
     "Expected": {
-      "description": "Outcome-evidence expectations: salient facts, exclusions, and side effects.\n\n``answer_values`` are expected facts in structured tool/action evidence.\n``expected_values`` is a legacy migration bucket treated the same way.\nFinal-answer prose checks are diagnostic only; scoring should be grounded in\nstructured tool outputs, recorded actions, recorder checks, and blocked-action\nside effects instead of parsing the model's prose.",
+      "description": "Outcome-evidence expectations: salient facts, exclusions, and side effects.\n\n``answer_values`` and ``expected_values`` are diagnostic report hints only.\nScoring is grounded in structured tool outputs, recorded actions, recorder\nchecks, and blocked-action side effects instead of parsing model prose.",
       "properties": {
         "expected_values": {
           "default": [],
@@ -1240,6 +1240,16 @@
           ],
           "default": null,
           "title": "Period"
+        },
+        "entry_values_by_entity": {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "title": "Entry Values By Entity",
+          "type": "object"
         },
         "entry_values": {
           "default": [],

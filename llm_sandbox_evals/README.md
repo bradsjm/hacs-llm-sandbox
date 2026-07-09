@@ -106,7 +106,7 @@ The integration's `scripts/check` is unaffected by this package. `optimize-evals
 
 Each `(candidate, model, case)` runs until the Pydantic AI agent emits a terminal natural-language answer with no tool calls, or until the global `config.max_tool_calls` cutoff is exceeded and the harness records `tool_calls_exceeded`. It then produces a score in `[0.0, 1.0]`:
 
-- **Required outcome gates** (any failure caps the case at `0.0`): the case has a meaningful oracle; `answer_values` (plus legacy `expected_values`) appear in structured tool/action evidence; `provenance_values` appear in structured payloads when specified; each `tool_result_check_*` finds a successful, relevant recorder result shape that is non-empty unless the expected outcome explicitly allows no data with `min_results: 0`; the final tool call did not fail; allowed actions match exact expected side effects, or blocked actions satisfy `blocked_outcome`; and tool calls stay within the global cap.
+- **Required outcome gates** (any failure caps the case at `0.0`): the case has a meaningful structured oracle; `provenance_values` appear in structured payloads when specified; each `tool_result_check_*` finds a successful, relevant tool result shape that is non-empty unless the expected outcome explicitly allows no data with `min_results: 0`; the final tool call did not fail; allowed actions match exact expected side effects, or blocked actions satisfy `blocked_outcome`; and tool calls stay within the global cap.
 - **Allowed actions are exact side effects:** split calls may satisfy the exact expected target union for the same domain/service/service-data effect, but supersets, duplicate calls, unrelated side effects, and action errors fail.
 - **Blocked actions are structured side-effect checks:** they require no successful disallowed action, bounded blocked attempts, and expected error keys when an action is attempted. Sandbox/tool enforcement belongs in unit or integration tests, not LLM evals.
 - **Answer text checks are diagnostic only:** `answer_evidence_present` and `answer_excludes_absent` are reported for analysis but do not determine the score.
@@ -133,8 +133,14 @@ cases:
     expected:
       answer_values:
       - '25.2'
-      provenance_values: []
-      tool_result_checks: []
+      provenance_values:
+      - sensor.living_temp
+      tool_result_checks:
+      - tool_name: execute_home_code
+        entity_ids:
+        - sensor.living_temp
+        entry_values:
+        - '25.2'
       answer_excludes: []
       actions: []
       max_tool_calls: 10
@@ -142,14 +148,14 @@ cases:
 
 Categories: `state_read`, `registry_read`, `recorder_read`, `action_allowed`, `action_blocked`, `complex`, `recovery`. New cases should use the current outcome fields:
 
-- `answer_values` — distinctive whole-word tokens that must appear in structured tool/action evidence. Final-answer prose matching is diagnostic-only.
+- `answer_values` — diagnostic-only expected final-answer facts for report analysis. They do not make an oracle meaningful and never determine the score.
 - `provenance_values` — entity IDs, default IDs, selector-expansion facts, or other hidden/tool-payload evidence that should not be required in final prose.
-- `tool_result_checks` — structured recorder evidence for `get_history`, `get_statistics`, or `get_logbook`; recorder/history/statistics/logbook cases must include checks for successful, relevant result shapes that are non-empty unless the expected outcome explicitly allows no data with `min_results: 0`.
+- `tool_result_checks` — structured evidence for `execute_home_code`, `get_history`, `get_statistics`, or `get_logbook`; recorder/history/statistics/logbook cases must include checks for successful, relevant result shapes that are non-empty unless the expected outcome explicitly allows no data with `min_results: 0`. Use `entry_values_by_entity` when a multi-entity result needs different expected values per entity.
 - `blocked_outcome` — structured expectations for deliberately blocked actions: allowed error keys and maximum attempts.
 - `actions` — exact allowed side effects, with split calls allowed only when they satisfy the expected target union and no extra/duplicate/error side effects occur.
 - `answer_excludes` and `max_tool_calls` — diagnostic final-answer exclusions and the hard call cap.
 
-`expected_values` is the legacy migration bucket for structured evidence; do not use it for new cases. Scoring also requires `execution_ok` and excludes provider/infra `model_error` cells from means while counting them as incomplete. Recorder evals may be solved by supported selectors through native function calling, but the prompt should only mention selectors when that is natural user phrasing.
+`expected_values` is a legacy diagnostic bucket; do not use it for new cases. Scoring also requires `execution_ok` and excludes provider/infra `model_error` cells from means while counting them as incomplete. Recorder evals may be solved by supported selectors through native function calling, but the prompt should only mention selectors when that is natural user phrasing.
 
 Recorder eval execution calls the production `GetHistoryTool` / `GetStatisticsTool` / `GetLogbookTool.run_query(...)` cores with a fixture-backed `RecorderSource`; result envelopes are the production envelopes, including cursor and recoverable-error shapes.
 
