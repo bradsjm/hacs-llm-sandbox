@@ -20,7 +20,7 @@ overall_mean: 0.858
 baseline/stub: mean=0.858 tool_calls=1.000
 ```
 
-Interactive runs also print the native `pydantic_evals` report summary on stderr. Every run writes a single `report.json` containing native analyses plus per-cell traces; re-render it with the `report` command.
+Interactive runs also print the native `pydantic_evals` report summary on stderr. Every run writes `report.json` containing native analyses plus per-cell traces and auto-emits `report.html` for browser-based visual navigation; regenerate the HTML with `report <run_id> --html`.
 
 ## Running real models
 
@@ -76,12 +76,12 @@ uv run --group dev --group evals python -m llm_sandbox_evals eval \
 ```
 python -m llm_sandbox_evals eval [--models id,...] [--candidates id,...] [--prompt-profile ID] [--cases id,...|category,...] [--concurrency N] [--max-tool-calls N] [--model-timeout SECONDS] [--reasoning LEVEL] [--logfire] [--runs-dir PATH]
 python -m llm_sandbox_evals optimize --target-model ID [--proposer-model ID] [--prompt-profile ID] [--breadth N] [--depth N] [--length-penalty COEFF] [--cases ...] [--cross-eval-models ...] [--target-reasoning LEVEL] [--proposer-reasoning LEVEL] [--reasoning LEVEL] [--runs-dir PATH]
-python -m llm_sandbox_evals report <run_id> [--runs-dir PATH]
+python -m llm_sandbox_evals report <run_id> [--html] [--runs-dir PATH]
 ```
 
-- `eval` builds a native `pydantic_evals.Dataset`, runs the matrix, prints the native `EvaluationReport` summary, and writes artifacts under `eval_data/runs/<run_id>/`.
+- `eval` builds a native `pydantic_evals.Dataset`, runs the matrix, prints the native `EvaluationReport` summary, and writes `report.json` plus interactive `report.html` artifacts under `eval_data/runs/<run_id>/`.
 - `optimize` runs DSPy COPRO against one target model and cross-evaluates the winner (see *Optimizing the prompt* above).
-- `report <run_id>` re-renders saved native analyses and cell scores from `report.json` and makes no model calls.
+- `report <run_id>` re-renders saved native analyses and cell scores from `report.json` and makes no model calls; add `--html` to regenerate `report.html` only.
 - `--cases` accepts case ids **or** category names (`state_read`, `registry_read`, `recorder_read`, `action_allowed`, `action_blocked`, `complex`, `recovery`).
 - `--candidates` accepts `baseline`, `profile:<id>` production profiles, and `optimized:<path>` (a saved `optimized_candidate.json`).
 - `--prompt-profile PROFILE_ID` selects one production base prompt profile for the whole run (default: `standard`); it is not comma-separated and is separate from `--candidates`.
@@ -173,11 +173,12 @@ Add a module under `homes/` exposing `snapshot() -> HomeSnapshot` and `recorder(
 
 ## Artifacts
 
-`eval_data/` is gitignored. Each eval run writes a single artifact under `eval_data/runs/<run_id>/`:
+`eval_data/` is gitignored. Each eval run writes these artifacts under `eval_data/runs/<run_id>/`:
 
 - `report.json` — native analyses from the `EvaluationReport`, run metadata, per-cell scores/checks, and outcome traces (`output`, `tool_call_count`, recorded actions, checks, and error label/detail). It does not store API keys.
+- `report.html` — interactive self-contained dashboard for visual navigation of the candidate × model × case matrix. Open it in a browser; `eval` writes it automatically, and `python -m llm_sandbox_evals report <run_id> --html` regenerates it from `report.json` without model calls.
 
-DSPy optimization runs write `optimized_candidate.json` and `optimized_prompt.md`; if `--cross-eval-models` is set, the cross-eval run directory contains its own `report.json`.
+DSPy optimization runs write `optimized_candidate.json` and `optimized_prompt.md`; if `--cross-eval-models` is set, the cross-eval run directory contains its own `report.json` and `report.html`.
 
 ## Scope
 

@@ -17,7 +17,7 @@ from custom_components.llm_sandbox.llm_api.prompts import resolve_profile
 from dotenv import load_dotenv
 from rich.console import Console
 
-from llm_sandbox_evals import experiment, reports
+from llm_sandbox_evals import experiment, html_report, reports
 from llm_sandbox_evals.config import EvalConfig, load_config
 from llm_sandbox_evals.harness import _select_cases
 from llm_sandbox_evals.schema import CaseTrace
@@ -201,6 +201,11 @@ def _add_report_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentP
         metavar="PATH",
         help="directory containing run artifacts (default: eval_data/runs).",
     )
+    report_parser.add_argument(
+        "--html",
+        action="store_true",
+        help="regenerate report.html from the saved report.json (no model calls)",
+    )
 
 
 def _add_optimize_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -324,6 +329,7 @@ def _run_eval(args: argparse.Namespace) -> int:
     report = asyncio.run(experiment.run_matrix(config, logfire_enabled=args.logfire, on_complete=_progress_reporter))
     run_id = _derive_run_id()
     run_dir = reports.write_report_json(report, config, run_id=run_id)
+    report_html = html_report.write_html(run_dir)
     _say(_eval_footer(run_dir))
     report.print(
         console=Console(stderr=True),
@@ -334,6 +340,7 @@ def _run_eval(args: argparse.Namespace) -> int:
 
     # stdout stays machine-readable: the run directory and compact native analysis facts.
     sys.stdout.write(f"run_dir: {run_dir}\n")
+    sys.stdout.write(f"report_html: {report_html}\n")
     sys.stdout.write("\n".join(experiment.matrix_summary_lines(report)) + "\n")
     return 0
 
@@ -352,6 +359,11 @@ def _run_report(args: argparse.Namespace) -> int:
     if not report_json.exists():
         sys.stderr.write(f"error: run not found: {report_json}\n")
         return 1
+
+    if args.html:
+        report_html = html_report.write_html(report_json.parent)
+        sys.stdout.write(f"report_html: {report_html}\n")
+        return 0
 
     _say("(llm sandbox evals) re-rendering the native report summary from report.json (no model calls).\n")
     report = reports.load_report(report_json.parent)
@@ -470,8 +482,11 @@ def _eval_footer(run_dir: Path) -> str:
     return (
         f"\nWrote artifacts to {run_dir}:\n"
         "  report.json       native analyses + per-cell traces (no API keys)\n\n"
+        "  report.html       interactive dashboard for visual navigation\n\n"
         "Re-render the saved summary later (no model calls):\n"
         f"  python -m llm_sandbox_evals report {run_dir.name}\n\n"
+        "Regenerate the interactive HTML report later (no model calls):\n"
+        f"  python -m llm_sandbox_evals report {run_dir.name} --html\n\n"
         "Native pydantic-evals report:\n"
     )
 

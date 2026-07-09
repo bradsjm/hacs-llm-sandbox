@@ -84,6 +84,7 @@ The harness owns the snapshot lifecycle and builds a fresh scoped snapshot per c
 - `harness.py` — `run_case(...) -> CaseTrace`; the bounded per-cell task body reused by native experiments and DSPy. Captures per-call `ToolEvent`s (tool name, args, return payload) from the agent conversation.
 - `experiment.py` — native `pydantic_evals` `Dataset` construction, deterministic `SandboxOutcome` evaluator, report-level candidate/model analyses, and `run_matrix(...) -> EvaluationReport`.
 - `reports.py` — `write_report_json(...)` and `load_report(...)` for the single saved native `report.json` artifact.
+- `html_report.py` — `render_html(...)` / `write_html(...)` for the interactive self-contained `report.html` dashboard.
 - `logfire_config.py` — optional Pydantic Logfire configuration used only when `eval --logfire` is passed.
 - `optimize_dspy.py` — DSPy COPRO prompt optimizer that exports optimized `PromptCandidate` artifacts and reuses the real harness metric path.
 - `cli.py` / `__main__.py` — `eval`, `report`, and `optimize` subcommands.

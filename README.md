@@ -14,6 +14,8 @@ It does all of this inside a [**minimal, secure Python interpreter written in Ru
 
 > This is an early **0.1.0** release. Treat it as a preview.
 
+Full user and developer documentation is published with GitHub Pages from the source in [`docs-site/`](docs-site/). To preview it locally, run `pnpm install`, `pnpm build`, and `pnpm serve` from `docs-site/`.
+
 ---
 
 ## What it gives Assist
@@ -120,9 +122,14 @@ The safety model rests on two ideas: a **frozen snapshot** and an **isolated san
 
 This is a community integration. To contribute, set up a dev environment, or report issues, see [CONTRIBUTING.md](CONTRIBUTING.md) and the [issue tracker](https://github.com/bradsjm/hacs-llm-sandbox/issues).
 
+Documentation source lives under [`docs-site/docs/`](docs-site/docs/). Build it with `pnpm build` from `docs-site/` before changing docs navigation, Docusaurus config, or source-grounded behavior pages.
+
+Eval runs for the dev-only `llm_sandbox_evals` package write `report.json` and an interactive `report.html` under `eval_data/runs/<run_id>/`; open `report.html` in a browser to navigate the candidate × model × case matrix. `eval` emits it automatically, and `python -m llm_sandbox_evals report <run_id> --html` regenerates it from the saved `report.json` without model calls.
+
 ## Support
 
-- [Documentation & source](https://github.com/bradsjm/hacs-llm-sandbox)
+- [Documentation](https://bradsjm.github.io/hacs-llm-sandbox/)
+- [Source](https://github.com/bradsjm/hacs-llm-sandbox)
 - [Report an issue](https://github.com/bradsjm/hacs-llm-sandbox/issues)
 - [Changelog](CHANGELOG.md)
 - Licensed under the [LICENSE](LICENSE).
