@@ -16,6 +16,7 @@ Common inputs include:
 - Selectors such as `area_id`, `device_id`, `floor_id`, `label_id`, and `domain`.
 - Statistic period: `5minute`, `hour`, or `day`.
 - Statistic types such as `mean`, `min`, `max`, `state`, and `sum`.
+- Pagination cursor for older rows. A `next_cursor` can only be passed back to `get_statistics` with the same resolved scope; omit `start`, `end`, and `hours` when using it.
 
 ## Bounds
 

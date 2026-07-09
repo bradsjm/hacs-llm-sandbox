@@ -51,6 +51,19 @@ def option_value(options: Mapping[str, object], key: str) -> object:
     return options.get(key, OPTION_DEFAULTS[key])
 
 
+def normalize_action_domains(domains: Iterable[str]) -> list[str]:
+    """Trim, lowercase, drop blank, and dedupe configured action domains."""
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for domain in domains:
+        value = domain.strip().lower()
+        if not value or value in seen:
+            continue
+        normalized.append(value)
+        seen.add(value)
+    return normalized
+
+
 @dataclass(frozen=True, slots=True)
 class SandboxSettings:
     """Per-entry configurable settings read from entry.options."""
@@ -85,7 +98,9 @@ def settings_from_entry(entry: SandboxConfigEntry) -> SandboxSettings:
         helper_call_budget=int(cast(int, option_value(options, CONF_HELPER_CALL_BUDGET))),
         scope=scope,
         actions_enabled=bool(option_value(options, CONF_ACTIONS_ENABLED)),
-        action_domains=frozenset(cast(Iterable[str], option_value(options, CONF_ACTION_DOMAINS))),
+        action_domains=frozenset(
+            normalize_action_domains(cast(Iterable[str], option_value(options, CONF_ACTION_DOMAINS)))
+        ),
         prompt_profile=prompt_profile,
     )
 

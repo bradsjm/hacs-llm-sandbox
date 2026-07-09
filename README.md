@@ -32,7 +32,7 @@ Once enabled, the assistant can call these tools during a conversation. Recorder
 
 | Tool | What it's for |
 | --- | --- |
-| **`execute_home_code`** | The assistant writes and runs a short Python snippet to read and reason over your home — current states, the entity/device/area/floor/label registries, repairs, persistent notifications, secret-stripped config entries, and read-only SQL via `await hass.query(...)` over visible snapshot states plus bounded recorder history/statistics. |
+| **`execute_home_code`** | The assistant writes and runs a short Python snippet to read and reason over your home — current states, derived state join keys, the entity/device/area/floor/label registries, repairs, persistent notifications, secret-stripped config entries, recorder history via `await hass.history(...)`, and read-only SQL via `await hass.query(...)` over visible snapshot states plus bounded recorder history/statistics. |
 | **`get_history`** | Recorded **state history** — raw changes up to 24 hours, legacy summaries such as transitions and time-in-state, or declarative analytics (`aggregate`, `group_by`, `bucket`, `where`, `order_by`, `limit`) up to 30 days. |
 | **`get_statistics`** | Pre-aggregated **long-term statistics** (`mean`, `min`, `max`, `state`, `sum`) over a period. Up to 30 days. |
 | **`get_logbook`** | The **activity timeline** — what happened and why (e.g. "did the front door open after midnight?"). Up to 24 hours. |
@@ -117,6 +117,7 @@ The safety model rests on two ideas: a **frozen snapshot** and an **isolated san
 ### Read-only (in-memory) SQL queries
 
 - `execute_home_code` can call `await hass.query(sql, hours=N)` to run read-only SQLite over a fresh per-run in-memory database, **not Home Assistant's live recorder database.**
+- Awaitable facades inside `execute_home_code` are `await hass.history(...)`, `await hass.query(...)`, and gated `await hass.services.async_call(...)`; state, registry, config, and service-catalog reads are synchronous.
 - It exposes visible `states` plus bounded recorder `history` and `statistics`; `states.attributes` is JSON text queryable with SQLite JSON functions such as `json_extract()`.
 - History and statistics rows load only when referenced, and their scope can be narrowed with `entity_ids` or HA-native selectors (`area_id`, `floor_id`, `device_id`, `label_id`, `domain`).
 - For discoverability, the in-memory database also exposes recorder-compatible views: `states_meta`, `statistics_meta`, `statistics_short_term`, `state_history`, and `long_term_statistics`.

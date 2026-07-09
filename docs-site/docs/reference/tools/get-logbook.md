@@ -14,6 +14,7 @@ Common inputs include:
 - `hours`, or ISO `start` and `end`.
 - Explicit `entity_ids`, capped at 20.
 - Selectors such as `area_id`, `device_id`, `floor_id`, `label_id`, and `domain`.
+- Pagination cursor for older entries. A `next_cursor` can only be passed back to `get_logbook` with the same resolved scope; omit `start`, `end`, and `hours` when using it.
 
 ## Bounds
 

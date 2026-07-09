@@ -5,7 +5,7 @@ import functools
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Literal, cast
 
 from homeassistant.components.logbook import DOMAIN as LOGBOOK_DOMAIN
@@ -36,7 +36,7 @@ from ..data.history import (
 from ..data.recorder_scope import _clamp_window, _validate_visibility
 from ..errors import RecoverableToolError
 from ..executor_support import json_safe
-from ._cursor import Cursor, decode_cursor, encode_cursor, paginate_stream
+from ._cursor import INVALID_CURSOR, Cursor, decode_cursor, encode_cursor, paginate_stream
 
 type StatisticValueType = Literal["mean", "min", "max", "state", "sum"]
 type StatisticQueryType = Literal["change", "last_reset", "max", "mean", "min", "state", "sum"]
@@ -94,11 +94,20 @@ def _resolve_window(
     now: datetime,
     default_hours: int,
     max_hours: int,
+    expected_kind: str,
+    expected_scope_ids: tuple[str, ...],
 ) -> tuple[datetime, datetime, Cursor]:
     """Return the stable query window and decoded cursor for one recorder page."""
     if (cursor_in := data.get("cursor")) is not None:
+        if any(key in data for key in ("start", "end", "hours")):
+            raise RecoverableToolError(
+                "invalid_tool_input",
+                {"error": "cursor cannot be combined with start, end, or hours"},
+            )
         # Cursor window wins while paging so the continuation is stable.
-        cursor = decode_cursor(cursor_in)
+        cursor = decode_cursor(cursor_in, expected_kind=expected_kind, expected_scope_ids=expected_scope_ids)
+        if cursor.start > cursor.end or cursor.end - cursor.start > timedelta(hours=max_hours):
+            raise RecoverableToolError(INVALID_CURSOR, {})
         return cursor.start, cursor.end, cursor
     start, end = _clamp_window(
         now,
@@ -108,7 +117,7 @@ def _resolve_window(
         default_hours=default_hours,
         max_hours=max_hours,
     )
-    return start, end, Cursor(start=start, end=end, cutoffs={})
+    return start, end, Cursor(kind=expected_kind, scope_ids=expected_scope_ids, start=start, end=end, cutoffs={})
 
 
 async def fetch_visible_history_rows(

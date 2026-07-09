@@ -77,9 +77,7 @@ class SafeServiceRegistry:
             service.lower(), SupportsResponse.NONE.value
         )
 
-    def async_services_for_target(
-        self, target: Mapping[str, object] | None
-    ) -> dict[str, dict[str, dict[str, object]]]:
+    def async_services_for_target(self, target: Mapping[str, object] | None) -> dict[str, object]:
         """Return compact, snapshot-derived service metadata for a target.
 
         Resolves ``entity_id``/``device_id``/``area_id``/``label_id``/``floor_id``
@@ -87,12 +85,14 @@ class SafeServiceRegistry:
         services whose declared target accepts that entity (mirroring HA's
         ``async_get_services_for_target``). Computed on demand from the frozen
         snapshot; no live Home Assistant call. Output is bounded to
-        ``_DISCOVERY_LIMIT`` entities; each service lists its field names.
+        ``_DISCOVERY_LIMIT`` entity entries; each service lists its field names.
+        When more entities resolve, the reserved ``_meta`` entry reports the
+        omitted count and limit. ``_meta`` is metadata, not an entity id.
         """
         entity_ids = sorted(_expand_target_entities(self._discovery, target))
         if not entity_ids:
             return {}
-        result: dict[str, dict[str, dict[str, object]]] = {}
+        result: dict[str, object] = {}
         for entity_id in entity_ids[:_DISCOVERY_LIMIT]:
             matched = _services_for_entity(self._discovery, entity_id)
             if not matched:
@@ -106,6 +106,11 @@ class SafeServiceRegistry:
                     "fields": fields,
                 }
             result[entity_id] = per_entity
+        if len(entity_ids) > _DISCOVERY_LIMIT:
+            result["_meta"] = {
+                "omitted_entities": len(entity_ids) - _DISCOVERY_LIMIT,
+                "limit": _DISCOVERY_LIMIT,
+            }
         return result
 
     def _policy_block(

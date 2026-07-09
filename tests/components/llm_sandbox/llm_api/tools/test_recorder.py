@@ -1,5 +1,7 @@
 """Behavior tests for recorder-backed LLM tools."""
 
+import base64
+import json
 import time
 from collections.abc import Mapping
 from datetime import timedelta
@@ -18,6 +20,11 @@ from homeassistant.helpers import llm
 from homeassistant.util import dt as dt_util
 from homeassistant.util.json import JsonObjectType
 from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+
+def _raw_cursor(payload: dict[str, object]) -> str:
+    """Encode a raw cursor payload for malformed-cursor behavior tests."""
+    return base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":")).encode("utf-8")).decode("ascii")
 
 
 async def test_history_returns_states_for_visible_entity(
@@ -184,6 +191,29 @@ async def test_logbook_returns_entries_for_visible_entity(
     row = result["entries"][-1]
     assert isinstance(row["when"], str)
     assert row["entity_id"] == "light.bedroom"
+
+
+async def test_logbook_same_scope_cursor_returns_older_page(
+    hass: HomeAssistant,
+    recorder_entry: MockConfigEntry,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Logbook cursors continue when replayed against the same entity scope."""
+    monkeypatch.setattr(recorder, "MAX_LOGBOOK_ENTRIES", 1)
+    for state in ("off", "on", "off"):
+        hass.states.async_set("light.bedroom", state, {"friendly_name": "Bedroom Light"})
+    await _sync_recorder(hass)
+
+    first = await _call_logbook(hass, recorder_entry, {"entity_ids": ["light.bedroom"]})
+    second = await _call_logbook(
+        hass,
+        recorder_entry,
+        {"entity_ids": ["light.bedroom"], "cursor": first["next_cursor"]},
+    )
+
+    assert len(first["entries"]) == 1
+    assert len(second["entries"]) == 1
+    assert first["entries"] != second["entries"]
 
 
 async def test_logbook_unavailable_returns_error_key(
@@ -453,6 +483,29 @@ async def test_history_bad_area_errors_with_candidates(
     assert "light.bedroom" in _guidance_candidate_ids(result["error"]["guidance"])
 
 
+async def test_history_mixed_selector_hit_and_miss_returns_selector_no_match(
+    hass: HomeAssistant,
+    recorder_entry: MockConfigEntry,
+) -> None:
+    """One bad location selector value is rejected even when another value matches."""
+    from homeassistant.helpers import area_registry as ar
+
+    hass.states.async_set("light.bedroom", "on", {"friendly_name": "Bedroom Light"})
+    await _sync_recorder(hass)
+    bedroom = ar.async_get(hass).async_get_area_by_name("Bedroom")
+    assert bedroom is not None
+
+    result = await _call_history(
+        hass,
+        recorder_entry,
+        {"area_id": [bedroom.id, "kichen-typo"], "domain": "light"},
+    )
+
+    assert result["status"] == "error"
+    assert result["error"]["key"] == "selector_no_match"
+    assert result["error"]["message"]
+
+
 async def test_history_paginates_large_result(
     hass: HomeAssistant,
     recorder_entry: MockConfigEntry,
@@ -491,6 +544,51 @@ async def test_history_pagination_walk_returns_older_page(
     assert _row_states(first["entities"]["light.bedroom"]["rows"]) == ["3", "4", "5"]
     assert _row_states(second["entities"]["light.bedroom"]["rows"]) == ["0", "1", "2"]
     assert "next_cursor" in second
+
+
+async def test_cursor_rejects_different_tool(
+    hass: HomeAssistant,
+    recorder_entry: MockConfigEntry,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A cursor from one recorder tool cannot continue a different tool."""
+    monkeypatch.setattr(recorder, "MAX_HISTORY_STATES", 1)
+    hass.states.async_set("light.bedroom", "off", {"friendly_name": "Bedroom Light"})
+    hass.states.async_set("light.bedroom", "on", {"friendly_name": "Bedroom Light"})
+    await _sync_recorder(hass)
+    first = await _call_history(hass, recorder_entry, {"entity_ids": ["light.bedroom"]})
+
+    result = await _call_logbook(
+        hass,
+        recorder_entry,
+        {"entity_ids": ["light.bedroom"], "cursor": first["next_cursor"]},
+    )
+
+    assert result["status"] == "error"
+    assert result["error"]["key"] == "invalid_cursor"
+
+
+async def test_cursor_rejects_different_scope(
+    hass: HomeAssistant,
+    recorder_entry: MockConfigEntry,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A cursor from one resolved scope cannot continue a different scope."""
+    monkeypatch.setattr(recorder, "MAX_HISTORY_STATES", 1)
+    hass.states.async_set("light.bedroom", "off", {"friendly_name": "Bedroom Light"})
+    hass.states.async_set("light.bedroom", "on", {"friendly_name": "Bedroom Light"})
+    hass.states.async_set("light.living_room", "on", {"friendly_name": "Living Room Light"})
+    await _sync_recorder(hass)
+    first = await _call_history(hass, recorder_entry, {"entity_ids": ["light.bedroom"]})
+
+    result = await _call_history(
+        hass,
+        recorder_entry,
+        {"entity_ids": ["light.living_room"], "cursor": first["next_cursor"]},
+    )
+
+    assert result["status"] == "error"
+    assert result["error"]["key"] == "invalid_cursor"
 
 
 async def test_history_multi_entity_paginates_independently(
@@ -611,6 +709,134 @@ async def test_malformed_cursor_returns_invalid_cursor(
     assert result["status"] == "error"
     assert result["error"]["key"] == "invalid_cursor"
     assert isinstance(result["error"]["message"], str)
+    assert result["error"]["message"]
+
+
+@pytest.mark.parametrize(
+    "cursor",
+    [
+        pytest.param(
+            _raw_cursor(
+                {
+                    "v": 2,
+                    "k": 123,
+                    "ids": ["light.bedroom"],
+                    "s": "2026-01-01T00:00:00+00:00",
+                    "e": "2026-01-01T01:00:00+00:00",
+                    "c": {},
+                }
+            ),
+            id="malformed-kind",
+        ),
+        pytest.param(
+            _raw_cursor(
+                {
+                    "v": 2,
+                    "k": "history",
+                    "ids": [123],
+                    "s": "2026-01-01T00:00:00+00:00",
+                    "e": "2026-01-01T01:00:00+00:00",
+                    "c": {},
+                }
+            ),
+            id="malformed-scope-ids",
+        ),
+    ],
+)
+async def test_malformed_cursor_kind_or_scope_returns_invalid_cursor(
+    hass: HomeAssistant,
+    recorder_entry: MockConfigEntry,
+    cursor: str,
+) -> None:
+    """Malformed cursor kind/scope fields return the stable invalid_cursor key."""
+    result = await _call_history(hass, recorder_entry, {"entity_ids": ["light.bedroom"], "cursor": cursor})
+
+    assert result["status"] == "error"
+    assert result["error"]["key"] == "invalid_cursor"
+
+
+@pytest.mark.parametrize(
+    "cursor",
+    [
+        pytest.param(
+            _raw_cursor(
+                {
+                    "v": 2,
+                    "k": "history",
+                    "ids": ["light.bedroom"],
+                    "s": "2026-01-01T01:00:00+00:00",
+                    "e": "2026-01-01T00:00:00+00:00",
+                    "c": {},
+                }
+            ),
+            id="start-after-end",
+        ),
+        pytest.param(
+            _raw_cursor(
+                {
+                    "v": 2,
+                    "k": "history",
+                    "ids": ["light.bedroom"],
+                    "s": "2026-01-01T00:00:00+00:00",
+                    "e": "2026-01-03T00:00:00+00:00",
+                    "c": {},
+                }
+            ),
+            id="oversized-window",
+        ),
+    ],
+)
+async def test_tampered_cursor_window_returns_invalid_cursor(
+    hass: HomeAssistant,
+    recorder_entry: MockConfigEntry,
+    cursor: str,
+) -> None:
+    """A cursor with a tampered but parseable window returns invalid_cursor."""
+    result = await _call_history(hass, recorder_entry, {"entity_ids": ["light.bedroom"], "cursor": cursor})
+
+    assert result["status"] == "error"
+    assert result["error"]["key"] == "invalid_cursor"
+
+
+@pytest.mark.parametrize(
+    ("tool_cls", "tool_name", "tool_args"),
+    [
+        pytest.param(
+            GetHistoryTool,
+            TOOL_GET_HISTORY,
+            {"entity_ids": ["light.bedroom"], "cursor": "not-a-valid-cursor", "hours": 1},
+            id="history-hours",
+        ),
+        pytest.param(
+            GetStatisticsTool,
+            TOOL_GET_STATISTICS,
+            {
+                "statistic_ids": ["light.bedroom"],
+                "cursor": "not-a-valid-cursor",
+                "start": dt_util.utcnow().isoformat(),
+            },
+            id="statistics-start",
+        ),
+        pytest.param(
+            GetLogbookTool,
+            TOOL_GET_LOGBOOK,
+            {"entity_ids": ["light.bedroom"], "cursor": "not-a-valid-cursor", "end": dt_util.utcnow().isoformat()},
+            id="logbook-end",
+        ),
+    ],
+)
+async def test_cursor_cannot_be_combined_with_window_args(
+    hass: HomeAssistant,
+    recorder_entry: MockConfigEntry,
+    tool_cls: type[GetHistoryTool | GetStatisticsTool | GetLogbookTool],
+    tool_name: str,
+    tool_args: dict[str, object],
+) -> None:
+    """Cursor calls reject explicit window arguments before decoding the cursor."""
+    result = await _call_tool(tool_cls(recorder_entry.entry_id), tool_name, hass, tool_args)
+
+    assert result["status"] == "error"
+    assert result["error"]["key"] == "invalid_tool_input"
     assert result["error"]["message"]
 
 

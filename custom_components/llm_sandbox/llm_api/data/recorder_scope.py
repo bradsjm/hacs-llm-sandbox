@@ -7,7 +7,7 @@ from homeassistant.util import dt as dt_util
 from ...const import MAX_RECORDER_ENTITY_IDS
 from ...snapshot.models import HomeSnapshot
 from ..errors import RecoverableToolError
-from .selectors import expand_aggregate_selectors
+from .selectors import expand_aggregate_selector
 
 ENTITY_NOT_VISIBLE = "entity_not_visible"
 SELECTOR_NO_MATCH = "selector_no_match"
@@ -57,27 +57,21 @@ def resolve_entity_ids(snapshot: HomeSnapshot, data: dict[str, object], id_key: 
     selector_present = bool(provided_selectors)
 
     selector_ids: list[str] = []
-    for requested_expansions in expand_aggregate_selectors(
-        snapshot,
-        data,
-        selector_keys=("area_id", "device_id", "label_id", "floor_id"),
-    ).values():
-        for _requested, expanded_ids in requested_expansions:
+    for selector in _LOCATION_SELECTOR_FIELDS:
+        for requested in _as_list(data.get(selector)):
+            expanded_ids = expand_aggregate_selector(snapshot, selector, requested)
+            # A supplied location selector value resolving to nothing is a naming
+            # error, not a cue to silently narrow to the other selector values.
+            if not expanded_ids:
+                raise RecoverableToolError(
+                    SELECTOR_NO_MATCH,
+                    {
+                        "selectors": selector,
+                        "selector_id": requested,
+                        "domain": next(iter(domains), ""),
+                    },
+                )
             selector_ids.extend(expanded_ids)
-
-    # A present selector resolving to nothing is a naming error (e.g. a typo'd
-    # area_id), not a cue to widen. Name the selector and surface candidate ids
-    # so the LLM can correct, mirroring the explicit-id visibility error.
-    if selector_present and not selector_ids:
-        selector_id = _as_list(data.get(provided_selectors[0]))[0]
-        raise RecoverableToolError(
-            SELECTOR_NO_MATCH,
-            {
-                "selectors": ", ".join(provided_selectors),
-                "selector_id": selector_id,
-                "domain": next(iter(domains), ""),
-            },
-        )
 
     def _domain_matches(entity_id: str) -> bool:
         return not domains or entity_id.split(".", 1)[0].lower() in domains

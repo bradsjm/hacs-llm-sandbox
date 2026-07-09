@@ -70,6 +70,18 @@ async def test_valid_submit_creates_entry(hass: HomeAssistant) -> None:
     assert result["data"] == {CONF_ASSISTANT: DEFAULT_ASSISTANT, CONF_NAME: name}
 
 
+async def test_blank_name_submit_shows_form_error(hass: HomeAssistant) -> None:
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={"source": "user"},
+        data={CONF_NAME: "   ", CONF_ASSISTANT: DEFAULT_ASSISTANT},
+    )
+
+    assert result["type"] == "form"
+    assert result["step_id"] == "user"
+    assert result["errors"] == {CONF_NAME: "name_required"}
+
+
 async def test_duplicate_assistant_aborts(hass: HomeAssistant) -> None:
     data = {CONF_NAME: "LLM Sandbox Test", CONF_ASSISTANT: DEFAULT_ASSISTANT}
     first = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"}, data=data)
@@ -187,6 +199,12 @@ def test_settings_from_entry_visibility_options(
             frozenset(),
             id="empty-domains",
         ),
+        pytest.param(
+            {CONF_ACTIONS_ENABLED: True, CONF_ACTION_DOMAINS: [" Light ", "light", "CUSTOM.Domain", "  "]},
+            True,
+            frozenset({"light", "custom.domain"}),
+            id="normalized-domains",
+        ),
     ],
 )
 def test_settings_from_entry_action_options(
@@ -226,7 +244,7 @@ async def test_options_flow_section_submission_flattens(
         },
         SECTION_ACTIONS: {
             CONF_ACTIONS_ENABLED: True,
-            CONF_ACTION_DOMAINS: ["light"],
+            CONF_ACTION_DOMAINS: [" Light ", "light", "CUSTOM.Domain", "  "],
         },
     }
 
@@ -242,5 +260,5 @@ async def test_options_flow_section_submission_flattens(
         CONF_EXCLUDE_CONFIG: False,
         CONF_INCLUDE_ALL_DIAGNOSTICS: True,
         CONF_ACTIONS_ENABLED: True,
-        CONF_ACTION_DOMAINS: ["light"],
+        CONF_ACTION_DOMAINS: ["light", "custom.domain"],
     }

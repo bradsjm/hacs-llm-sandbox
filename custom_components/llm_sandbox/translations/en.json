@@ -3,6 +3,9 @@
     "abort": {
       "already_configured": "Assist Sandbox is already configured for this assistant scope."
     },
+    "error": {
+      "name_required": "Name is required."
+    },
     "step": {
       "user": {
         "data": {

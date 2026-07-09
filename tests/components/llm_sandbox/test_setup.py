@@ -1,5 +1,8 @@
 """Tests for LLM Sandbox setup and unload lifecycle."""
 
+from unittest.mock import AsyncMock, patch
+
+from custom_components.llm_sandbox import _async_update_entry
 from custom_components.llm_sandbox.const import (
     CONF_ASSISTANT,
     CONF_NAME,
@@ -83,3 +86,18 @@ async def test_unload_cleans_up(
     apis = llm.async_get_apis(hass)
     sandbox_apis = [api for api in apis if api.id.startswith(DOMAIN)]
     assert len(sandbox_apis) == 0
+
+
+async def test_options_update_listener_reloads_entry(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+) -> None:
+    """The registered options-update listener delegates to HA entry reload."""
+    mock_config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    with patch.object(hass.config_entries, "async_reload", AsyncMock(return_value=True)) as async_reload:
+        await _async_update_entry(hass, mock_config_entry)
+
+    async_reload.assert_awaited_once_with(mock_config_entry.entry_id)

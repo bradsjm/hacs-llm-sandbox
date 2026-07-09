@@ -45,7 +45,7 @@ from .const import (
     SECTION_VISIBILITY,
 )
 from .llm_api.prompts import PROFILE_OPTIONS
-from .runtime import option_value
+from .runtime import normalize_action_domains, option_value
 from .schema_helpers import flatten_section_data, section_schema_key
 
 type UserInput = dict[str, Any]
@@ -62,6 +62,7 @@ class LlmSandboxOptionsFlow(OptionsFlow):
                 user_input,
                 [SECTION_PROMPT, SECTION_VISIBILITY, SECTION_ACTIONS, SECTION_EXECUTION_LIMITS],
             )
+            data[CONF_ACTION_DOMAINS] = normalize_action_domains(cast(Iterable[str], data[CONF_ACTION_DOMAINS]))
             return self.async_create_entry(data=data)
 
         options = self.config_entry.options
@@ -188,19 +189,31 @@ class LlmSandboxConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_user(self, user_input: UserInput | None = None) -> ConfigFlowResult:
         """Create a config entry for one assistant exposure scope."""
         if user_input is not None:
+            name = str(user_input[CONF_NAME])
+            if not name.strip():
+                return self.async_show_form(
+                    step_id="user",
+                    data_schema=_user_schema(),
+                    errors={CONF_NAME: "name_required"},
+                )
             assistant = user_input[CONF_ASSISTANT]
             _ = await self.async_set_unique_id(f"{DOMAIN}:{assistant}")
             _ = self._abort_if_unique_id_configured()
             return self.async_create_entry(
-                title=user_input[CONF_NAME],
-                data={CONF_ASSISTANT: assistant, CONF_NAME: user_input[CONF_NAME]},
+                title=name,
+                data={CONF_ASSISTANT: assistant, CONF_NAME: name},
             )
         return self.async_show_form(
             step_id="user",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(CONF_NAME, default=DEFAULT_NAME): str,
-                    vol.Required(CONF_ASSISTANT, default=DEFAULT_ASSISTANT): vol.In([DEFAULT_ASSISTANT]),
-                }
-            ),
+            data_schema=_user_schema(),
         )
+
+
+def _user_schema() -> vol.Schema:
+    """Return the initial config-flow schema."""
+    return vol.Schema(
+        {
+            vol.Required(CONF_NAME, default=DEFAULT_NAME): str,
+            vol.Required(CONF_ASSISTANT, default=DEFAULT_ASSISTANT): vol.In([DEFAULT_ASSISTANT]),
+        }
+    )

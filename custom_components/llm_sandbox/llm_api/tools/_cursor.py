@@ -20,7 +20,7 @@ from homeassistant.util import dt as dt_util
 from ..errors import RecoverableToolError
 
 INVALID_CURSOR = "invalid_cursor"
-_CURSOR_VERSION = 1
+_CURSOR_VERSION = 2
 # Logbook is a flat stream; key its cutoff under a sentinel so all recorder
 # tools share one cursor shape.
 _LOGBOOK_CURSOR_KEY = "logbook"
@@ -30,6 +30,8 @@ _LOGBOOK_CURSOR_KEY = "logbook"
 class Cursor:
     """Decoded pagination cursor: query window plus per-stream cutoffs."""
 
+    kind: str
+    scope_ids: tuple[str, ...]
     start: datetime
     end: datetime
     cutoffs: dict[str, str]
@@ -41,6 +43,8 @@ def encode_cursor(cursor: Cursor) -> str:
     """Encode a cursor to an opaque base64-url JSON string."""
     payload: dict[str, object] = {
         "v": _CURSOR_VERSION,
+        "k": cursor.kind,
+        "ids": list(cursor.scope_ids),
         "s": cursor.start.isoformat(),
         "e": cursor.end.isoformat(),
         "c": cursor.cutoffs,
@@ -54,7 +58,7 @@ def encode_cursor(cursor: Cursor) -> str:
     )
 
 
-def decode_cursor(value: object) -> Cursor:
+def decode_cursor(value: object, *, expected_kind: str, expected_scope_ids: tuple[str, ...]) -> Cursor:
     """Decode an opaque cursor, raising ``invalid_cursor`` on malformation."""
     try:
         if not isinstance(value, str):
@@ -62,6 +66,15 @@ def decode_cursor(value: object) -> Cursor:
         obj = json.loads(base64.urlsafe_b64decode(value.encode("ascii")))
         if not isinstance(obj, dict) or obj.get("v") != _CURSOR_VERSION:
             raise ValueError("unsupported cursor version")
+        raw_kind = obj.get("k")
+        if not isinstance(raw_kind, str):
+            raise ValueError("invalid cursor kind")
+        raw_scope_ids = obj.get("ids")
+        if not isinstance(raw_scope_ids, list) or not all(isinstance(item, str) for item in raw_scope_ids):
+            raise ValueError("invalid cursor scope")
+        scope_ids = tuple(raw_scope_ids)
+        if raw_kind != expected_kind or scope_ids != expected_scope_ids:
+            raise ValueError("cursor scope mismatch")
         raw_start = dt_util.parse_datetime(str(obj["s"]))
         raw_end = dt_util.parse_datetime(str(obj["e"]))
         # The cursor window was validated when created; None means corruption.
@@ -70,9 +83,11 @@ def decode_cursor(value: object) -> Cursor:
         start = dt_util.as_utc(raw_start)
         end = dt_util.as_utc(raw_end)
         raw_cutoffs = obj.get("c", {})
-        if not isinstance(raw_cutoffs, dict):
+        if not isinstance(raw_cutoffs, dict) or not all(
+            isinstance(key, str) and isinstance(item, str) for key, item in raw_cutoffs.items()
+        ):
             raise ValueError("invalid cursor cutoffs")
-        cutoffs = {str(k): str(v) for k, v in raw_cutoffs.items()}
+        cutoffs = dict(raw_cutoffs)
         raw_period = obj.get("p")
         period = str(raw_period) if raw_period is not None else None
         raw_statistic_types = obj.get("st")
@@ -87,7 +102,15 @@ def decode_cursor(value: object) -> Cursor:
     except ValueError, KeyError, TypeError, binascii.Error:
         # Fail closed: any decode/version/shape problem restarts the sequence.
         raise RecoverableToolError(INVALID_CURSOR, {}) from None
-    return Cursor(start=start, end=end, cutoffs=cutoffs, period=period, statistic_types=statistic_types)
+    return Cursor(
+        kind=raw_kind,
+        scope_ids=scope_ids,
+        start=start,
+        end=end,
+        cutoffs=cutoffs,
+        period=period,
+        statistic_types=statistic_types,
+    )
 
 
 def paginate_stream[T](

@@ -15,11 +15,11 @@ Runs a short Python/Monty snippet over a fresh, frozen, visibility-filtered Home
 
 ## Available data
 
-Inside code, the model can use Home Assistant-like facades such as `hass.states`, registry helpers, `hass.history(...)`, `hass.query(...)`, and gated `hass.services.async_call(...)`.
+Inside code, the model can use Home Assistant-like facades such as `hass.states`, registry helpers, `await hass.history(...)`, `await hass.query(...)`, and gated `await hass.services.async_call(...)`. State, registry, config, and service-catalog reads are synchronous.
 
 ## Result shape
 
-Successful calls return an object with `execution.status == "ok"` and `output` containing the JSON-safe result. The payload can also include printed lines, action records, normalization adjustments, entity resolutions, and notes.
+Successful calls return an object with `execution.status == "ok"` and `output` containing the JSON-safe result. The payload can also include top-level `printed`, `notes`, `actions`, normalization adjustments, and `resolutions`.
 
 Errors are structured as `setup_error`, `code_error`, or `helper_error`.
 

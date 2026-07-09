@@ -346,8 +346,8 @@ class GetHistoryTool(_RecorderTool):
             vol.Optional(
                 "cursor",
                 description=(
-                    "Opaque cursor from a prior next_cursor; pass it to fetch the next older page. "
-                    "Omit on the first call."
+                    "Opaque cursor from this tool's prior next_cursor for the same resolved scope; "
+                    "omit start, end, and hours when using it."
                 ),
             ): str,
         }
@@ -398,6 +398,8 @@ class GetHistoryTool(_RecorderTool):
             now=source.now,
             default_hours=DEFAULT_HISTORY_WINDOW_HOURS,
             max_hours=MAX_RECORDER_LOOKBACK_HOURS,
+            expected_kind="history",
+            expected_scope_ids=tuple(sorted(entity_ids)),
         )
         result = await source.fetch_history(entity_ids, start, end)
         budget = max(1, MAX_HISTORY_STATES // len(entity_ids))
@@ -421,7 +423,9 @@ class GetHistoryTool(_RecorderTool):
             start,
             end,
             {"entities": entities},
-            Cursor(start=start, end=end, cutoffs=next_cutoffs) if next_cutoffs else None,
+            Cursor(kind="history", scope_ids=cursor.scope_ids, start=start, end=end, cutoffs=next_cutoffs)
+            if next_cutoffs
+            else None,
         )
 
 
@@ -461,8 +465,8 @@ class GetStatisticsTool(_RecorderTool):
             vol.Optional(
                 "cursor",
                 description=(
-                    "Opaque cursor from a prior next_cursor; pass it to fetch the next older page. "
-                    "Omit on the first call."
+                    "Opaque cursor from this tool's prior next_cursor for the same resolved scope; "
+                    "omit start, end, and hours when using it."
                 ),
             ): str,
         }
@@ -481,6 +485,8 @@ class GetStatisticsTool(_RecorderTool):
             now=source.now,
             default_hours=DEFAULT_STATISTICS_WINDOW_HOURS,
             max_hours=MAX_STATISTICS_LOOKBACK_HOURS,
+            expected_kind="statistics",
+            expected_scope_ids=tuple(sorted(statistic_ids)),
         )
         if data.get("cursor") is not None:
             # Cursor carries period and selected fields so pagination stays consistent.
@@ -498,7 +504,15 @@ class GetStatisticsTool(_RecorderTool):
                 tuple[StatisticValueType, ...] | None,
                 tuple(cast(list[str] | None, data.get("types")) or ()) or None,
             )
-            cursor = Cursor(start=start, end=end, cutoffs={}, period=period, statistic_types=requested_types)
+            cursor = Cursor(
+                kind="statistics",
+                scope_ids=cursor.scope_ids,
+                start=start,
+                end=end,
+                cutoffs={},
+                period=period,
+                statistic_types=requested_types,
+            )
         query_types: set[StatisticQueryType] = (
             set(cast(tuple[StatisticQueryType, ...], requested_types))
             if requested_types is not None
@@ -520,7 +534,15 @@ class GetStatisticsTool(_RecorderTool):
             start,
             end,
             {"period": period, "statistics": shaped_statistics},
-            Cursor(start=start, end=end, cutoffs=next_cutoffs, period=period, statistic_types=requested_types)
+            Cursor(
+                kind="statistics",
+                scope_ids=cursor.scope_ids,
+                start=start,
+                end=end,
+                cutoffs=next_cutoffs,
+                period=period,
+                statistic_types=requested_types,
+            )
             if next_cutoffs
             else None,
         )
@@ -548,8 +570,8 @@ class GetLogbookTool(_RecorderTool):
             vol.Optional(
                 "cursor",
                 description=(
-                    "Opaque cursor from a prior next_cursor; pass it to fetch the next older page. "
-                    "Omit on the first call."
+                    "Opaque cursor from this tool's prior next_cursor for the same resolved scope; "
+                    "omit start, end, and hours when using it."
                 ),
             ): str,
         }
@@ -568,6 +590,8 @@ class GetLogbookTool(_RecorderTool):
             now=source.now,
             default_hours=DEFAULT_LOGBOOK_WINDOW_HOURS,
             max_hours=MAX_RECORDER_LOOKBACK_HOURS,
+            expected_kind="logbook",
+            expected_scope_ids=tuple(sorted(entity_ids)),
         )
         if not source.logbook_available:
             raise RecoverableToolError("logbook_unavailable", {})
@@ -584,7 +608,13 @@ class GetLogbookTool(_RecorderTool):
             start,
             end,
             {"entries": page_entries},
-            Cursor(start=start, end=end, cutoffs={_LOGBOOK_CURSOR_KEY: next_cutoff})
+            Cursor(
+                kind="logbook",
+                scope_ids=cursor.scope_ids,
+                start=start,
+                end=end,
+                cutoffs={_LOGBOOK_CURSOR_KEY: next_cutoff},
+            )
             if next_cutoff is not None
             else None,
         )

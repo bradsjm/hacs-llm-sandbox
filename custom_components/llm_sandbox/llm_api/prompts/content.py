@@ -186,8 +186,9 @@ def build_execute_home_code_description() -> str:
         f"{render_query_schema_prompt(compact=True, include_heading=False).removeprefix('- ')} "
         "The query load can be narrowed with entity_ids or area_id/floor_id/device_id/label_id/domain. "
         "Service-call availability follows the API prompt. "
-        "Success returns {execution:{status:'ok'}, output:<data>} with printed only when print() emitted lines "
-        "and resolutions only when a remembered missing literal was rewritten to a visible entity id. "
+        "Success returns {execution:{status:'ok'}, output:<data>} and may include top-level printed, notes, "
+        "actions, and resolutions; printed appears only when print() emitted lines, actions records service-call "
+        "outcomes, notes carries snapshot/action/read guidance, and resolutions reports auto-applied entity ids. "
         "If output is empty because a literal entity id is missing, note names the missing id and structured "
         "guidance may describe visible replacements. Errors return {execution:{status:'code_error'|'helper_error'|"
         "'setup_error', kind?, message, guidance?}, output:null}."
@@ -207,7 +208,8 @@ def build_get_history_description() -> str:
         "rows of [t, state] plus unit when known; rows omit attributes by default — pass attributes "
         "(a list of attribute names, opt-in) to append a {name: value} element per row carrying only the "
         "requested attributes that exist (bounded count). The first page returns the newest rows; when more "
-        "remain, next_cursor appears — pass it back as cursor (omit window args) to fetch the next older page. "
+        "remain, next_cursor appears — pass it back as cursor to the same tool with the same resolved scope "
+        "(omit start, end, and hours) to fetch the next older page. "
         "Pass aggregate=count_transitions|time_in_state|state_counts|first_seen|last_seen|on_duration "
         "to return {window, mode, summary} with no rows, cursor, or attributes; aggregate windows may be "
         "larger than raw history. count_transitions may include from_state/to_state filters; "
@@ -232,7 +234,8 @@ def build_get_statistics_description() -> str:
         "Success returns {window, period, statistics}, where statistics is keyed by statistic/entity id and each "
         "value has fields plus rows of [t, {field: value}]. Pass types (mean/min/max/state/sum) to select "
         "which statistic fields to include; omitted or null fields are left out. The first page returns the newest rows; when more remain, "
-        "next_cursor appears — pass it back as cursor (omit window args) to fetch the next older page. "
+        "next_cursor appears — pass it back as cursor to the same tool with the same resolved scope "
+        "(omit start, end, and hours) to fetch the next older page. "
         "Errors return {status:'error', error:{key, message, guidance?}}."
     )
 
@@ -247,7 +250,8 @@ def build_get_logbook_description() -> str:
         "size the window with hours=<n> or ISO start/end. "
         "Success returns {window, entries}, where entries is a flat list of timeline records each carrying "
         "its entity_id. The first page returns the newest entries; when more remain, next_cursor appears — "
-        "pass it back as cursor (omit window args) to fetch the next older page. "
+        "pass it back as cursor to the same tool with the same resolved scope "
+        "(omit start, end, and hours) to fetch the next older page. "
         "Errors return {status:'error', error:{key, message, guidance?}}."
     )
 

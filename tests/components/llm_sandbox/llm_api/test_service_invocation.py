@@ -26,6 +26,7 @@ from custom_components.llm_sandbox.llm_api.facades import (
 )
 from custom_components.llm_sandbox.llm_api.facades.services import ServiceDiscoveryFacts
 from custom_components.llm_sandbox.llm_api.prompts import resolve_profile
+from custom_components.llm_sandbox.llm_api.resolution import _DISCOVERY_LIMIT
 from custom_components.llm_sandbox.llm_api.sandbox_context import (
     RuntimeContext,
     activate_runtime,
@@ -541,6 +542,37 @@ async def test_async_services_for_target_reports_per_entity_services() -> None:
                 "turn_on": {"supports_response": SupportsResponse.NONE.value, "fields": ["brightness_pct"]},
             }
         }
+    }
+
+
+async def test_async_services_for_target_marks_omitted_entities() -> None:
+    """Discovery reports metadata when resolved target entities exceed the cap."""
+    entity_ids = tuple(f"light.test_{index}" for index in range(_DISCOVERY_LIMIT + 1))
+    snapshot = replace(
+        _snapshot(),
+        states={entity_id: _state(entity_id, "on", entity_id) for entity_id in entity_ids},
+        indexes=SnapshotIndexes(
+            entity_ids_by_device_id={},
+            entity_ids_by_area_id={"area-overflow": entity_ids},
+            device_ids_by_area_id={},
+            entity_ids_by_config_entry_id={},
+            entity_ids_by_label={},
+            device_ids_by_label={},
+            area_ids_by_floor_id={},
+        ),
+        services_target={"light": {"turn_on": {"entity": [{"domain": ["light"]}]}}},
+    )
+    harness = _service_harness(snapshot=snapshot)
+    clear_runtime()
+
+    result = harness.services.async_services_for_target({"area_id": "area-overflow"})
+
+    assert result["_meta"] == {"omitted_entities": 1, "limit": _DISCOVERY_LIMIT}
+    assert len([entity_id for entity_id in result if entity_id != "_meta"]) == _DISCOVERY_LIMIT
+    per_entity = cast(Mapping[str, Mapping[str, object]], result[entity_ids[0]])
+    assert per_entity["light"]["turn_on"] == {
+        "supports_response": SupportsResponse.NONE.value,
+        "fields": ["brightness_pct"],
     }
 
 
