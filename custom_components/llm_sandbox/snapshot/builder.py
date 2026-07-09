@@ -10,6 +10,9 @@ never filtered.
 
 from collections.abc import Mapping
 from dataclasses import replace
+from datetime import date, datetime
+from enum import Enum
+from math import isfinite
 from typing import cast
 
 from homeassistant.components.homeassistant.exposed_entities import async_should_expose
@@ -457,7 +460,7 @@ def _safe_state(
         object_id=state.object_id,
         name=state.name,
         state=state.state,
-        attributes=dict(state.attributes),
+        attributes=_json_normalized_dict(state.attributes),
         last_changed=state.last_changed.isoformat(),
         last_changed_timestamp=state.last_changed.timestamp(),
         last_reported=_iso(getattr(state, "last_reported", None)),
@@ -492,7 +495,7 @@ def _safe_entity(entry: er.RegistryEntry) -> SafeRegistryEntry:
         entity_category=_enum_value(entry.entity_category),
         device_class=entry.device_class,
         original_device_class=entry.original_device_class,
-        capabilities=dict(entry.capabilities) if entry.capabilities else None,
+        capabilities=_json_normalized_dict(entry.capabilities) if entry.capabilities else None,
         supported_features=entry.supported_features,
         translation_key=entry.translation_key,
         has_entity_name=entry.has_entity_name,
@@ -590,7 +593,9 @@ def _safe_issue(issue: ir.IssueEntry) -> SafeIssueEntry:
         active=issue.active,
         dismissed_version=issue.dismissed_version,
         translation_key=issue.translation_key,
-        translation_placeholders=(dict(issue.translation_placeholders) if issue.translation_placeholders else None),
+        translation_placeholders=(
+            _json_normalized_dict(issue.translation_placeholders) if issue.translation_placeholders else None
+        ),
         created=_iso(issue.created),
     )
 
@@ -728,6 +733,30 @@ def _iso(value: object) -> str | None:
     isoformat = getattr(value, "isoformat", None)
     if callable(isoformat):
         return str(isoformat())
+    return str(value)
+
+
+def _json_normalized_dict(value: Mapping[str, object]) -> dict[str, object]:
+    """Return a recursive, plain-dict JSON-compatible copy of a mapping."""
+    return {str(key): _json_normalize(item) for key, item in value.items()}
+
+
+def _json_normalize(value: object) -> object:
+    """Return a recursive JSON-compatible copy of a snapshot leaf value."""
+    if value is None or isinstance(value, str | bool):
+        return value
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    if isinstance(value, float):
+        return value if isfinite(value) else str(value)
+    if isinstance(value, datetime | date):
+        return value.isoformat()
+    if isinstance(value, Enum):
+        return _json_normalize(value.value)
+    if isinstance(value, Mapping):
+        return _json_normalized_dict(cast(Mapping[str, object], value))
+    if isinstance(value, list | tuple | set):
+        return [_json_normalize(item) for item in value]
     return str(value)
 
 

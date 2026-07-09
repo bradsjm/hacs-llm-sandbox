@@ -219,7 +219,7 @@ class SafeIssueEntry(_JsonSafeRecord):
     active: bool
     dismissed_version: str | None
     translation_key: str | None
-    translation_placeholders: dict[str, str] | None
+    translation_placeholders: dict[str, Any] | None
     created: str | None
 
 

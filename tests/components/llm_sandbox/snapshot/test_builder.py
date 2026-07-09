@@ -1,6 +1,7 @@
 """Tests for the snapshot builder."""
 
-from datetime import datetime
+from datetime import UTC, datetime
+from typing import cast
 
 import pytest
 import voluptuous as vol
@@ -18,6 +19,7 @@ from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import floor_registry as fr
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers import label_registry as lr
 from homeassistant.helpers.service import async_set_service_schema
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -136,6 +138,99 @@ async def test_snapshot_datetimes_are_iso_strings(hass: HomeAssistant) -> None:
     assert isinstance(state.last_reported_timestamp, float)
     assert state.last_reported is not None
     assert state.last_reported_timestamp == datetime.fromisoformat(state.last_reported).timestamp()
+
+
+async def test_snapshot_state_attributes_are_json_normalized_deep_copies(hass: HomeAssistant) -> None:
+    nested_numbers = [1, 2]
+    hass.states.async_set(
+        "sensor.deep_payload",
+        "on",
+        {
+            "nested": {"numbers": nested_numbers, "options": ("auto", "eco"), "labels": {"warm", "cool"}},
+            "seen_at": datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC),
+        },
+    )
+
+    snapshot = build_snapshot(hass)
+    live_state = hass.states.get("sensor.deep_payload")
+    assert live_state is not None
+
+    live_nested = cast(dict[str, object], live_state.attributes["nested"])
+    cast(list[int], live_nested["numbers"]).append(3)
+
+    attributes = snapshot.states["sensor.deep_payload"].attributes
+    nested = cast(dict[str, object], attributes["nested"])
+    assert isinstance(attributes, dict)
+    assert isinstance(nested, dict)
+    assert isinstance(nested["numbers"], list)
+    assert nested["numbers"] == [1, 2]
+    assert isinstance(nested["options"], list)
+    assert nested["options"] == ["auto", "eco"]
+    assert isinstance(nested["labels"], list)
+    assert set(cast(list[str], nested["labels"])) == {"warm", "cool"}
+    assert attributes["seen_at"] == "2026-01-02T03:04:05+00:00"
+
+
+async def test_snapshot_entity_capabilities_are_json_normalized_deep_copies(hass: HomeAssistant) -> None:
+    entity_registry = er.async_get(hass)
+    entity_registry.async_get_or_create("light", "test", "capable", suggested_object_id="capable")
+    entity_registry.async_update_entity(
+        "light.capable",
+        capabilities={"modes": ["auto"], "range": (1, 2), "flags": {"fast", "quiet"}},
+    )
+    hass.states.async_set("light.capable", "on")
+
+    snapshot = build_snapshot(hass)
+    live_entry = entity_registry.async_get("light.capable")
+    assert live_entry is not None
+    assert live_entry.capabilities is not None
+
+    cast(list[str], live_entry.capabilities["modes"]).append("manual")
+
+    capabilities = snapshot.entities["light.capable"].capabilities
+    assert isinstance(capabilities, dict)
+    assert isinstance(capabilities["modes"], list)
+    assert capabilities["modes"] == ["auto"]
+    assert isinstance(capabilities["range"], list)
+    assert capabilities["range"] == [1, 2]
+    assert isinstance(capabilities["flags"], list)
+    assert set(cast(list[str], capabilities["flags"])) == {"fast", "quiet"}
+
+
+async def test_snapshot_issue_placeholders_are_json_normalized_deep_copies(hass: HomeAssistant) -> None:
+    placeholders = cast(
+        dict[str, str],
+        {"device": "Kitchen", "details": {"ids": ["one"], "aliases": ("main",), "tags": {"urgent"}}},
+    )
+    ir.async_create_issue(
+        hass,
+        "test",
+        "deep_payload",
+        is_fixable=False,
+        severity=ir.IssueSeverity.WARNING,
+        translation_key="deep_payload",
+        translation_placeholders=placeholders,
+    )
+
+    snapshot = build_snapshot(hass)
+    issue = ir.async_get(hass).async_get_issue("test", "deep_payload")
+    assert issue is not None
+    assert issue.translation_placeholders is not None
+
+    live_details = cast(dict[str, object], cast(dict[str, object], issue.translation_placeholders)["details"])
+    cast(list[str], live_details["ids"]).append("two")
+
+    safe_issue = next(issue for issue in snapshot.issues if issue.issue_id == "deep_payload")
+    safe_placeholders = safe_issue.translation_placeholders
+    assert isinstance(safe_placeholders, dict)
+    details = cast(dict[str, object], safe_placeholders["details"])
+    assert isinstance(details, dict)
+    assert isinstance(details["ids"], list)
+    assert details["ids"] == ["one"]
+    assert isinstance(details["aliases"], list)
+    assert details["aliases"] == ["main"]
+    assert isinstance(details["tags"], list)
+    assert set(cast(list[str], details["tags"])) == {"urgent"}
 
 
 async def test_snapshot_effective_area_index_uses_entity_override_then_device(hass: HomeAssistant) -> None:

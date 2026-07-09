@@ -121,12 +121,57 @@ def test_referenced_base_tables_detects_exact_reads() -> None:
         assert db.referenced_base_tables("select * from state_history") == {"history"}
         assert db.referenced_base_tables("select * from long_term_statistics") == {"statistics"}
         assert db.referenced_base_tables("select * from statistics_meta") == {"statistics"}
+        assert db.referenced_base_tables("select * from statistics_short_term") == {"statistics_short_term"}
         # A CTE named ``history`` shadows the base table: no base-table read reported.
         assert db.referenced_base_tables("with history as (select 1 as x) select * from history") == set()
         # Invalid SQL fails open to an empty set so execute() surfaces the real error.
         assert db.referenced_base_tables("select bogus from nowhere") == set()
     finally:
         db.close()
+
+
+def test_statistics_short_term_is_distinct_base_table() -> None:
+    """Short-term statistics load and query independently from hourly statistics."""
+    db = HomeDatabase(_snapshot())
+    try:
+        db.initialize()
+        db.load_statistics(
+            [
+                {
+                    "statistic_id": "sensor.temp",
+                    "when": "2026-01-01T00:00:00+00:00",
+                    "mean": 20.0,
+                }
+            ]
+        )
+        db.load_short_term_statistics(
+            [
+                {
+                    "statistic_id": "sensor.temp",
+                    "when": "2026-01-01T00:05:00+00:00",
+                    "mean": 20.5,
+                }
+            ]
+        )
+        result = db.execute(
+            """
+            select 'hour' as table_name, when_iso, mean from statistics
+            union all
+            select 'short' as table_name, when_iso, mean from statistics_short_term
+            order by table_name
+            """,
+            9999999999,
+        )
+    finally:
+        db.close()
+
+    assert "statistics_short_term" in SCHEMA_TABLES
+    assert "statistics_short_term" not in SCHEMA_VIEWS
+    assert columns_for_table("statistics_short_term") == columns_for_table("statistics")
+    assert result.rows == [
+        {"table_name": "hour", "when_iso": "2026-01-01T00:00:00+00:00", "mean": 20.0},
+        {"table_name": "short", "when_iso": "2026-01-01T00:05:00+00:00", "mean": 20.5},
+    ]
 
 
 def test_load_history_caps_newest_first_and_reports_truncation() -> None:
@@ -239,6 +284,53 @@ def test_home_db_unknown_column_error_carries_fix() -> None:
     assert "entity_id" in {str(candidate["id"]) for candidate in candidates if isinstance(candidate, dict)}
 
 
+@pytest.mark.parametrize(
+    ("sql", "expected_candidate"),
+    [
+        pytest.param("select when_is from history", "when_iso", id="history"),
+        pytest.param("select statistic from statistics", "statistic_id", id="statistics"),
+        pytest.param("select statistic from statistics_short_term", "statistic_id", id="short-term"),
+    ],
+)
+def test_home_db_unknown_column_guidance_uses_referenced_table(sql: str, expected_candidate: str) -> None:
+    """Unknown column guidance uses the sole referenced recorder base table when known."""
+    db = HomeDatabase(_snapshot())
+    try:
+        db.initialize()
+        referenced_tables = db.referenced_schema_tables(sql)
+        with pytest.raises(HelperExecutionError) as err:
+            db.execute(sql, 9999999999, referenced_tables=referenced_tables)
+    finally:
+        db.close()
+
+    assert err.value.key == "sql_unknown_column"
+    assert err.value.guidance is not None
+    candidates = err.value.guidance["candidates"]
+    assert isinstance(candidates, list)
+    assert expected_candidate in {str(candidate["id"]) for candidate in candidates if isinstance(candidate, dict)}
+
+
+def test_home_db_unknown_column_guidance_falls_back_for_mixed_tables() -> None:
+    """Unknown column guidance stays generic when multiple base tables are referenced."""
+    db = HomeDatabase(_snapshot())
+    sql = "select when_is from states join history on history.entity_id = states.entity_id"
+    try:
+        db.initialize()
+        referenced_tables = db.referenced_schema_tables(sql)
+        with pytest.raises(HelperExecutionError) as err:
+            db.execute(sql, 9999999999, referenced_tables=referenced_tables)
+    finally:
+        db.close()
+
+    assert err.value.key == "sql_unknown_column"
+    assert err.value.guidance is not None
+    candidates = err.value.guidance["candidates"]
+    assert isinstance(candidates, list)
+    candidate_ids = {str(candidate["id"]) for candidate in candidates if isinstance(candidate, dict)}
+    assert "attributes" in candidate_ids
+    assert "when_iso" not in candidate_ids
+
+
 def test_home_db_unknown_table_error_carries_fix() -> None:
     """Unknown SQL tables expose a stable key and concrete table candidates."""
     db = HomeDatabase(_snapshot())
@@ -261,7 +353,6 @@ def test_home_db_unknown_table_error_carries_fix() -> None:
     [
         pytest.param("states_meta", id="states-meta"),
         pytest.param("statistics_meta", id="statistics-meta"),
-        pytest.param("statistics_short_term", id="statistics-short-term"),
         pytest.param("state_history", id="state-history"),
         pytest.param("long_term_statistics", id="long-term-statistics"),
     ],

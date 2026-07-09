@@ -195,6 +195,53 @@ async def fetch_flat_statistics_rows(
     sync: bool = True,
 ) -> list[dict[str, object]]:
     """Fetch JSON-compatible long-term statistics rows for facade SQL."""
+    return await _fetch_flat_statistics_rows_for_period(
+        hass,
+        snapshot,
+        deadline,
+        statistic_ids,
+        start,
+        end,
+        period="hour",
+        sync=sync,
+    )
+
+
+async def fetch_flat_short_term_statistics_rows(
+    hass: HomeAssistant,
+    snapshot: HomeSnapshot,
+    deadline: float,
+    statistic_ids: list[str],
+    start: datetime,
+    end: datetime,
+    *,
+    sync: bool = True,
+) -> list[dict[str, object]]:
+    """Fetch JSON-compatible 5-minute short-term statistics rows for facade SQL."""
+    return await _fetch_flat_statistics_rows_for_period(
+        hass,
+        snapshot,
+        deadline,
+        statistic_ids,
+        start,
+        end,
+        period="5minute",
+        sync=sync,
+    )
+
+
+async def _fetch_flat_statistics_rows_for_period(
+    hass: HomeAssistant,
+    snapshot: HomeSnapshot,
+    deadline: float,
+    statistic_ids: list[str],
+    start: datetime,
+    end: datetime,
+    *,
+    period: Literal["5minute", "hour"],
+    sync: bool,
+) -> list[dict[str, object]]:
+    """Fetch and flatten recorder statistics rows for one supported SQL period."""
     _validate_visibility(snapshot, statistic_ids)
     result = await _run_query(
         hass,
@@ -205,7 +252,7 @@ async def fetch_flat_statistics_rows(
             start_time=start,
             end_time=end,
             statistic_ids=set(statistic_ids),
-            period="hour",
+            period=period,
             units=None,
             types=set(_ALL_STAT_QUERY_TYPES),
         ),

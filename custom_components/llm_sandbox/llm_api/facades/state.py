@@ -2,7 +2,6 @@
 
 # ruff: noqa: D105, ANN401
 
-import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date as _date
@@ -159,8 +158,10 @@ def _query_scope(
         except RecoverableToolError as err:
             guidance = _query_scope_guidance(snapshot, data, err.placeholders)
             raise HelperExecutionError("query", err.key, err.placeholders, guidance=guidance) from err
-    # Advisory literal scan: only accept tokens that are real visible entity ids.
-    literal_ids = sorted(set(re.findall(r"['\"]([a-zA-Z0-9_]+\.[a-zA-Z0-9_]+)['\"]", sql)) & set(snapshot.states))
+    # Advisory literal scan: only accept single-quoted values outside comments
+    # that are real visible entity ids. Quoted identifiers and comments do not
+    # describe recorder scope.
+    literal_ids = sorted(set(_single_quoted_sql_literals(sql)) & set(snapshot.states))
     if literal_ids:
         if len(literal_ids) > MAX_RECORDER_ENTITY_IDS:
             raise HelperExecutionError(
@@ -267,9 +268,13 @@ class SafeHass:
             # Exact table detection via SQLite's own preparation: view aliases
             # resolve to base tables, and a CTE named ``history`` shadows it.
             tables = cast(set[str], await runtime.run_blocking(lambda: db.referenced_base_tables(sql)))
+            referenced_tables = cast(
+                frozenset[str], await runtime.run_blocking(lambda: db.referenced_schema_tables(sql))
+            )
             needs_history = "history" in tables
             needs_statistics = "statistics" in tables
-            if needs_history or needs_statistics:
+            needs_short_term_statistics = "statistics_short_term" in tables
+            if needs_history or needs_statistics or needs_short_term_statistics:
                 # Branch boundary: when history is referenced it forces the 24h recorder cap;
                 # statistics-only may use the longer analytics lookback. One window, one scope.
                 max_hours = MAX_RECORDER_LOOKBACK_HOURS if needs_history else MAX_HISTORY_AGGREGATE_LOOKBACK_HOURS
@@ -309,9 +314,27 @@ class SafeHass:
                         return
                     db.record_statistics_loaded(ids, start, end)
 
+                async def _load_short_term_statistics() -> None:
+                    if not needs_short_term_statistics or not db.short_term_statistics_needs_load(ids, start, end):
+                        return
+                    rows = await runtime.fetch_short_term_statistics(ids, start, end)
+                    truncated = cast(bool, await runtime.run_blocking(lambda: db.load_short_term_statistics(rows)))
+                    if truncated:
+                        runtime.state.notes.append(
+                            f"statistics_short_term load capped at {MAX_HISTORY_LOAD_ROWS} rows"
+                        )
+                        return
+                    db.record_short_term_statistics_loaded(ids, start, end)
+
                 await _load_history()
                 await _load_statistics()
-            result = cast(QueryResult, await runtime.run_blocking(lambda: db.execute(sql, runtime.deadline)))
+                await _load_short_term_statistics()
+            result = cast(
+                QueryResult,
+                await runtime.run_blocking(
+                    lambda: db.execute(sql, runtime.deadline, referenced_tables=referenced_tables)
+                ),
+            )
             if result.truncated:
                 runtime.state.notes.append("query result truncated")
             return result.rows
@@ -486,3 +509,35 @@ def _query_scope_guidance(
         snapshot,
         FailureContext(intent=Intent.QUERY_HISTORY, requested=requested, domain=domain),
     ).to_payload()
+
+
+def _single_quoted_sql_literals(sql: str) -> list[str]:
+    """Return single-quoted SQL string literals outside comments."""
+    literals: list[str] = []
+    index = 0
+    while index < len(sql):
+        if sql.startswith("--", index):
+            newline = sql.find("\n", index + 2)
+            index = len(sql) if newline == -1 else newline + 1
+            continue
+        if sql.startswith("/*", index):
+            end = sql.find("*/", index + 2)
+            index = len(sql) if end == -1 else end + 2
+            continue
+        if sql[index] != "'":
+            index += 1
+            continue
+        index += 1
+        value: list[str] = []
+        while index < len(sql):
+            if sql[index] == "'" and index + 1 < len(sql) and sql[index + 1] == "'":
+                value.append("'")
+                index += 2
+                continue
+            if sql[index] == "'":
+                index += 1
+                break
+            value.append(sql[index])
+            index += 1
+        literals.append("".join(value))
+    return literals

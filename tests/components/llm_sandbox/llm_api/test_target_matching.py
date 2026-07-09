@@ -233,6 +233,14 @@ def test_field_filter_matches_supported_features_and_attribute_intersection() ->
     assert field_filter_matches(transition, plain_bulb, None) is False
 
 
+def test_field_filter_matches_dict_attribute_fails_closed() -> None:
+    """Dict-valued attributes do not match scalar/list filters and do not raise."""
+    field_filter: ServiceFieldFilter = {"attribute": {"effect_options": ["rainbow"]}}
+    state = _state("light.bulb", {"effect_options": {"preset": "rainbow"}})
+
+    assert field_filter_matches(field_filter, state, None) is False
+
+
 def test_service_field_names_filters_by_capability() -> None:
     """The color-temperature example: only capability-supporting fields are returned."""
     snapshot = _snapshot(

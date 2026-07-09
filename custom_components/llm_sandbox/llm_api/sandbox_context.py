@@ -61,6 +61,7 @@ class RuntimeContext:
     invoke: ServiceInvoker
     fetch_history: HistoryFetcher = _unavailable_history_fetcher
     fetch_statistics: StatisticsFetcher = _unavailable_statistics_fetcher
+    fetch_short_term_statistics: StatisticsFetcher = _unavailable_statistics_fetcher
     run_blocking: BlockingRunner = _unavailable_blocking_runner
     deadline: float = math.inf
     memory: ResolutionMemory | None = None

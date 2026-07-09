@@ -65,6 +65,9 @@ from ._recorder_runtime import (
     fetch_flat_history_rows as fetch_flat_history_rows,
 )
 from ._recorder_runtime import (
+    fetch_flat_short_term_statistics_rows as fetch_flat_short_term_statistics_rows,
+)
+from ._recorder_runtime import (
     fetch_flat_statistics_rows as fetch_flat_statistics_rows,
 )
 from ._recorder_runtime import (

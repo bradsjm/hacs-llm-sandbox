@@ -174,6 +174,8 @@ def field_filter_matches(
     if isinstance(attribute, Mapping) and attribute:
         for attr_name, allowed in attribute.items():
             raw_value = state.attributes.get(attr_name)
+            if isinstance(raw_value, Mapping):
+                return False
             values = (
                 raw_value
                 if isinstance(raw_value, list | tuple | set)

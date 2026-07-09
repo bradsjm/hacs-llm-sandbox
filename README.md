@@ -118,9 +118,9 @@ The safety model rests on two ideas: a **frozen snapshot** and an **isolated san
 
 - `execute_home_code` can call `await hass.query(sql, hours=N)` to run read-only SQLite over a fresh per-run in-memory database, **not Home Assistant's live recorder database.**
 - Awaitable facades inside `execute_home_code` are `await hass.history(...)`, `await hass.query(...)`, and gated `await hass.services.async_call(...)`; state, registry, config, and service-catalog reads are synchronous.
-- It exposes visible `states` plus bounded recorder `history` and `statistics`; `states.attributes` is JSON text queryable with SQLite JSON functions such as `json_extract()`.
+- It exposes visible `states` plus bounded recorder `history`, hourly `statistics`, and distinct 5-minute short-term `statistics_short_term`; `states.attributes` is JSON text queryable with SQLite JSON functions such as `json_extract()`.
 - History and statistics rows load only when referenced, and their scope can be narrowed with `entity_ids` or HA-native selectors (`area_id`, `floor_id`, `device_id`, `label_id`, `domain`).
-- For discoverability, the in-memory database also exposes recorder-compatible views: `states_meta`, `statistics_meta`, `statistics_short_term`, `state_history`, and `long_term_statistics`.
+- For discoverability, the in-memory database also exposes recorder-compatible views: `states_meta`, `statistics_meta`, `state_history`, and `long_term_statistics` for hourly statistics.
 
 ## Things to know before you install
 

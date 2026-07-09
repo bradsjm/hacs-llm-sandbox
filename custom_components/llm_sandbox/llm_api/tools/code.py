@@ -28,7 +28,13 @@ from ..facades import build_llm_context
 from ..prompts import build_execute_home_code_description
 from ..sandbox_context import RuntimeContext
 from ._support import _require_loaded_entry_error, _require_sandbox_runtime
-from .recorder import RECORDER_UNAVAILABLE, fetch_flat_history_rows, fetch_flat_statistics_rows, recorder_available
+from .recorder import (
+    RECORDER_UNAVAILABLE,
+    fetch_flat_history_rows,
+    fetch_flat_short_term_statistics_rows,
+    fetch_flat_statistics_rows,
+    recorder_available,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -186,6 +192,17 @@ def _production_runtime(
             hass, snapshot, deadline, list(entity_ids), start, end, sync=state.live_write_dispatched
         )
 
+    async def _fetch_short_term_statistics(
+        entity_ids: Sequence[str], start: datetime, end: datetime
+    ) -> list[dict[str, object]]:
+        # Private host-side short-term statistics seam; loads 5-minute recorder
+        # rows into the distinct SQL table without exposing live recorder objects.
+        if not recorder_available(hass):
+            raise RecoverableToolError(RECORDER_UNAVAILABLE, {})
+        return await fetch_flat_short_term_statistics_rows(
+            hass, snapshot, deadline, list(entity_ids), start, end, sync=state.live_write_dispatched
+        )
+
     async def _run_blocking(fn: Callable[[], object]) -> object:
         return await hass.async_add_executor_job(fn)
 
@@ -197,6 +214,7 @@ def _production_runtime(
         invoke=_invoke,
         fetch_history=_fetch_history,
         fetch_statistics=_fetch_statistics,
+        fetch_short_term_statistics=_fetch_short_term_statistics,
         run_blocking=_run_blocking,
         deadline=deadline,
         memory=sandbox_runtime.memory_store.for_context(llm_context),

@@ -55,6 +55,8 @@ def _history_facade(
     snapshot: HomeSnapshot,
     fetch_history: Callable[[Sequence[str], datetime, datetime], Awaitable[list[dict[str, object]]]],
     fetch_statistics: Callable[[Sequence[str], datetime, datetime], Awaitable[list[dict[str, object]]]] | None = None,
+    fetch_short_term_statistics: Callable[[Sequence[str], datetime, datetime], Awaitable[list[dict[str, object]]]]
+    | None = None,
 ) -> tuple[SandboxHass, RuntimeContext]:
     """Activate a SafeHass facade with test runtime seams."""
 
@@ -82,6 +84,7 @@ def _history_facade(
         invoke=_invoke,
         fetch_history=fetch_history,
         fetch_statistics=fetch_statistics or _fetch_statistics,
+        fetch_short_term_statistics=fetch_short_term_statistics or _fetch_statistics,
         run_blocking=_run_blocking,
     )
     clear_runtime()
@@ -256,6 +259,88 @@ async def test_hass_query_literal_scope_appends_transparency_note() -> None:
 
     assert len(runtime.state.notes) == 1
     assert "sensor.temp" in runtime.state.notes[0]
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        pytest.param('select count(*) as c from history where "sensor.temp" = entity_id', id="double-quoted"),
+        pytest.param("-- sensor.temp\nselect count(*) as c from history", id="line-comment"),
+        pytest.param("/* sensor.temp */ select count(*) as c from history", id="block-comment"),
+    ],
+)
+async def test_hass_query_scope_ignores_identifiers_and_comments(sql: str) -> None:
+    """Only single-quoted SQL string literals infer recorder scope."""
+
+    async def _fetch_history(_entity_ids: Sequence[str], _start: datetime, _end: datetime) -> list[dict[str, object]]:
+        return []
+
+    hass_facade, _runtime = _history_facade(_snapshot(), _fetch_history)
+    try:
+        with pytest.raises(HelperExecutionError) as err:
+            await hass_facade.query(sql)
+    finally:
+        clear_runtime()
+
+    assert err.value.helper == "query"
+    assert err.value.key == "invalid_tool_input"
+
+
+async def test_hass_query_loads_statistics_tables_independently() -> None:
+    """Hourly and short-term statistics SQL references call their distinct fetch seams."""
+    stats_calls: list[tuple[str, ...]] = []
+    short_calls: list[tuple[str, ...]] = []
+
+    async def _fetch_history(_entity_ids: Sequence[str], _start: datetime, _end: datetime) -> list[dict[str, object]]:
+        return []
+
+    async def _fetch_statistics(
+        entity_ids: Sequence[str], _start: datetime, _end: datetime
+    ) -> list[dict[str, object]]:
+        stats_calls.append(tuple(entity_ids))
+        return [
+            {
+                "statistic_id": entity_id,
+                "when": "2026-01-01T00:00:00+00:00",
+                "mean": 20.0,
+            }
+            for entity_id in entity_ids
+        ]
+
+    async def _fetch_short_term_statistics(
+        entity_ids: Sequence[str], _start: datetime, _end: datetime
+    ) -> list[dict[str, object]]:
+        short_calls.append(tuple(entity_ids))
+        return [
+            {
+                "statistic_id": entity_id,
+                "when": "2026-01-01T00:05:00+00:00",
+                "mean": 20.5,
+            }
+            for entity_id in entity_ids
+        ]
+
+    hass_facade, _runtime = _history_facade(
+        _snapshot(),
+        _fetch_history,
+        fetch_statistics=_fetch_statistics,
+        fetch_short_term_statistics=_fetch_short_term_statistics,
+    )
+    try:
+        result = await hass_facade.query(
+            """
+            select 'hour' as table_name, mean from statistics where statistic_id = 'sensor.temp'
+            union all
+            select 'short' as table_name, mean from statistics_short_term where statistic_id = 'sensor.temp'
+            order by table_name
+            """
+        )
+    finally:
+        clear_runtime()
+
+    assert result == [{"table_name": "hour", "mean": 20.0}, {"table_name": "short", "mean": 20.5}]
+    assert stats_calls == [("sensor.temp",)]
+    assert short_calls == [("sensor.temp",)]
 
 
 async def test_hass_query_capped_history_load_does_not_mark_window_complete() -> None:

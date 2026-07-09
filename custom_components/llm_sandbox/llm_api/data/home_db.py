@@ -36,6 +36,18 @@ _READ_ONLY_ACTIONS = {
 # column vocabulary with SQLite types so the DDL and the guidance candidates can
 # never drift. Views declare a base table plus either an explicit column subset
 # or None (select *); the third flag records DISTINCT views.
+_STATISTICS_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("statistic_id", "text"),
+    ("entity_id", "text"),
+    ("when_iso", "text"),
+    ("when_ts", "real"),
+    ("mean", "real"),
+    ("min", "real"),
+    ("max", "real"),
+    ("state", "real"),
+    ("sum", "real"),
+)
+
 SCHEMA_TABLES: dict[str, tuple[tuple[str, str], ...]] = {
     "states": (
         ("entity_id", "text primary key"),
@@ -66,17 +78,8 @@ SCHEMA_TABLES: dict[str, tuple[tuple[str, str], ...]] = {
         ("state", "text"),
         ("value", "real"),
     ),
-    "statistics": (
-        ("statistic_id", "text"),
-        ("entity_id", "text"),
-        ("when_iso", "text"),
-        ("when_ts", "real"),
-        ("mean", "real"),
-        ("min", "real"),
-        ("max", "real"),
-        ("state", "real"),
-        ("sum", "real"),
-    ),
+    "statistics": _STATISTICS_COLUMNS,
+    "statistics_short_term": _STATISTICS_COLUMNS,
 }
 # View name -> (base table, explicit columns or None for select *, distinct).
 SCHEMA_VIEWS: dict[str, tuple[str, tuple[str, ...] | None, bool]] = {
@@ -84,7 +87,6 @@ SCHEMA_VIEWS: dict[str, tuple[str, tuple[str, ...] | None, bool]] = {
     "long_term_statistics": ("statistics", None, False),
     "states_meta": ("states", ("entity_id", "state", "attributes", "last_updated_ts", "last_changed_ts"), False),
     "statistics_meta": ("statistics", ("statistic_id", "entity_id"), True),
-    "statistics_short_term": ("statistics", None, False),
 }
 _SCHEMA_TABLE_NAMES: tuple[str, ...] = (*SCHEMA_TABLES, *SCHEMA_VIEWS)
 
@@ -117,7 +119,7 @@ def render_query_schema_prompt(*, compact: bool = False, include_heading: bool =
             f"{heading}"
             "- await hass.query(sql, hours=N) runs read-only SQLite over one per-run in-memory database, "
             f"not HA's live recorder. Tables: {'; '.join(table_parts)}. Views: {'; '.join(view_parts)}. "
-            "states.attributes is JSON text; use json_extract(attributes, '$.<key>'). History/statistics load "
+            "states.attributes is JSON text; use json_extract(attributes, '$.<key>'). History/statistics tables load "
             "on demand when referenced. No registry tables: use facades or denormalized area_id/floor_id/"
             "device_id/domain columns for location filtering."
         )
@@ -130,8 +132,8 @@ def render_query_schema_prompt(*, compact: bool = False, include_heading: bool =
         f"- Compatibility views: {'; '.join(view_parts)}.\n"
         "- states.attributes is JSON text; use SQLite JSON functions such as "
         "json_extract(attributes, '$.<key>') for attribute filters.\n"
-        "- history and statistics rows load on demand only when the SQL references history/state_history or "
-        "statistics/long_term_statistics/statistics_meta/statistics_short_term; hours=N bounds that load.\n"
+        "- history and statistics rows load on demand only when the SQL references history/state_history, "
+        "statistics/long_term_statistics/statistics_meta, or statistics_short_term; hours=N bounds that load.\n"
         "- There are no registry tables. Use registry facades before querying, or use the denormalized "
         "states/history columns area_id, floor_id, device_id, and domain for location/entity filtering."
     )
@@ -163,6 +165,7 @@ class HomeDatabase:
         self._conn: sqlite3.Connection | None = None
         self._history_windows: dict[str, tuple[datetime, datetime]] = {}
         self._statistics_windows: dict[str, tuple[datetime, datetime]] = {}
+        self._short_term_statistics_windows: dict[str, tuple[datetime, datetime]] = {}
 
     def initialize(self) -> None:
         """Connect, create schema, and load snapshot states for this per-run database."""
@@ -195,6 +198,11 @@ class HomeDatabase:
         """Whether recorder statistics were loaded for this run."""
         return bool(self._statistics_windows)
 
+    @property
+    def loaded_short_term_statistics(self) -> bool:
+        """Whether short-term recorder statistics were loaded for this run."""
+        return bool(self._short_term_statistics_windows)
+
     def history_needs_load(self, entity_ids: Sequence[str], start: datetime, end: datetime) -> bool:
         """Return whether history rows for the requested scope/window are missing."""
         return any(not _window_covers(self._history_windows.get(entity_id), start, end) for entity_id in entity_ids)
@@ -203,6 +211,13 @@ class HomeDatabase:
         """Return whether statistic rows for the requested scope/window are missing."""
         return any(
             not _window_covers(self._statistics_windows.get(statistic_id), start, end)
+            for statistic_id in statistic_ids
+        )
+
+    def short_term_statistics_needs_load(self, statistic_ids: Sequence[str], start: datetime, end: datetime) -> bool:
+        """Return whether short-term statistic rows for the requested scope/window are missing."""
+        return any(
+            not _window_covers(self._short_term_statistics_windows.get(statistic_id), start, end)
             for statistic_id in statistic_ids
         )
 
@@ -238,6 +253,19 @@ class HomeDatabase:
         self.conn.commit()
         return truncated
 
+    def load_short_term_statistics(self, rows: Sequence[Mapping[str, object]]) -> bool:
+        """Load flat short-term recorder statistics rows, keeping the newest rows when capped."""
+        kept, truncated = _cap_newest_first([self._statistic_row(row) for row in rows])
+        self.conn.executemany(
+            """
+            insert or ignore into statistics_short_term(statistic_id, entity_id, when_iso, when_ts, mean, min, max, state, sum)
+            values(:statistic_id, :entity_id, :when_iso, :when_ts, :mean, :min, :max, :state, :sum)
+            """,
+            kept,
+        )
+        self.conn.commit()
+        return truncated
+
     def record_history_loaded(self, entity_ids: Sequence[str], start: datetime, end: datetime) -> None:
         """Record the trusted recorder history scope now available in the DB."""
         for entity_id in entity_ids:
@@ -250,8 +278,17 @@ class HomeDatabase:
                 self._statistics_windows.get(statistic_id), start, end
             )
 
+    def record_short_term_statistics_loaded(
+        self, statistic_ids: Sequence[str], start: datetime, end: datetime
+    ) -> None:
+        """Record the trusted short-term recorder statistics scope now available in the DB."""
+        for statistic_id in statistic_ids:
+            self._short_term_statistics_windows[statistic_id] = _merge_window(
+                self._short_term_statistics_windows.get(statistic_id), start, end
+            )
+
     def referenced_base_tables(self, sql: str) -> set[str]:
-        """Return the base tables (history/statistics) the statement reads.
+        """Return the recorder base tables the statement reads.
 
         Uses a recording authorizer over ``EXPLAIN QUERY PLAN`` so the answer
         comes from SQLite's own preparation: view aliases resolve to their base
@@ -262,7 +299,7 @@ class HomeDatabase:
         seen: set[str] = set()
 
         def _record(action: int, arg1: str | None, _arg2: str | None, _db: str | None, _source: str | None) -> int:
-            if action == sqlite3.SQLITE_READ and arg1 in {"history", "statistics"}:
+            if action == sqlite3.SQLITE_READ and arg1 in {"history", "statistics", "statistics_short_term"}:
                 seen.add(str(arg1))
             return sqlite3.SQLITE_OK
 
@@ -276,7 +313,38 @@ class HomeDatabase:
             self.conn.set_authorizer(None)
         return seen
 
-    def execute(self, sql: str, deadline: float) -> QueryResult:
+    def referenced_schema_tables(self, sql: str) -> frozenset[str]:
+        """Return known schema tables/views named in FROM/JOIN clauses for guidance.
+
+        This intentionally ignores comments and string literals so error guidance
+        is based on SQL structure, not incidental prose or compared values.
+        """
+        tables: set[str] = set()
+        tokens = _sql_tokens_outside_literals_and_comments(sql)
+        index = 0
+        while index < len(tokens):
+            token = tokens[index]
+            if token not in {"from", "join"}:
+                index += 1
+                continue
+            index += 1
+            while index < len(tokens) and tokens[index] in {"(", ","}:
+                index += 1
+            if index >= len(tokens):
+                break
+            table = tokens[index]
+            # State mutation: schema-qualified references use the final identifier.
+            if index + 2 < len(tokens) and tokens[index + 1] == ".":
+                table = tokens[index + 2]
+                index += 2
+            if table in SCHEMA_TABLES:
+                tables.add(table)
+            elif table in SCHEMA_VIEWS:
+                tables.add(SCHEMA_VIEWS[table][0])
+            index += 1
+        return frozenset(tables)
+
+    def execute(self, sql: str, deadline: float, *, referenced_tables: frozenset[str] = frozenset()) -> QueryResult:
         """Execute one bounded read-only SQL statement."""
         self._arm_user_sql_guard(deadline)
         try:
@@ -287,7 +355,7 @@ class HomeDatabase:
             reason = "submit exactly one SQL statement" if "one statement at a time" in message.lower() else message
             raise HelperExecutionError("query", "sql_syntax_error", {"reason": reason}) from err
         except sqlite3.OperationalError as err:
-            raise self._refine_sql_error(str(err)) from err
+            raise self._refine_sql_error(str(err), referenced_tables=referenced_tables) from err
         except sqlite3.DatabaseError as err:
             raise HelperExecutionError("query", "sql_read_only", {"reason": str(err)}) from err
         finally:
@@ -321,6 +389,9 @@ class HomeDatabase:
             "coalesce(area_id, ''), coalesce(floor_id, ''), coalesce(device_id, ''), coalesce(domain, ''));"
         )
         statements.append("create unique index statistics_row_unique on statistics(statistic_id, when_iso);")
+        statements.append(
+            "create unique index statistics_short_term_row_unique on statistics_short_term(statistic_id, when_iso);"
+        )
         self.conn.executescript("\n".join(statements))
 
     def _arm_user_sql_guard(self, deadline: float) -> None:
@@ -401,7 +472,9 @@ class HomeDatabase:
             "sum": finite_float(row.get("sum")),
         }
 
-    def _refine_sql_error(self, message: str) -> HelperExecutionError:
+    def _refine_sql_error(
+        self, message: str, *, referenced_tables: frozenset[str] = frozenset()
+    ) -> HelperExecutionError:
         """Return a structured SQL helper error with targeted guidance."""
         from ..guidance import FailureContext, Intent, advise
 
@@ -424,9 +497,11 @@ class HomeDatabase:
                 table_ref = match.group("table")
                 table = _unquote_identifier(table_ref) if table_ref else None
                 requested = _unquote_identifier(match.group(2))
-            # SQLite omits the table qualifier for unqualified column errors; default
-            # to ``states``, the primary table LLM-queried read paths target.
-            table = table if table in _SCHEMA_TABLE_NAMES else "states"
+            if table not in _SCHEMA_TABLE_NAMES:
+                # SQLite omits the table qualifier for unqualified column errors;
+                # when exactly one base table is structurally referenced, guide
+                # against that table, otherwise fall back to states.
+                table = next(iter(referenced_tables)) if len(referenced_tables) == 1 else "states"
             return HelperExecutionError(
                 "query",
                 "sql_unknown_column",
@@ -466,6 +541,64 @@ def _unquote_identifier(table_ref: str) -> str:
     # schema/catalog qualifier such as ``main``.
     table_name = re.split(r"\s*\.\s*", table_ref)[-1]
     return table_name.strip('"`[]').lower()
+
+
+def _sql_tokens_outside_literals_and_comments(sql: str) -> list[str]:
+    """Tokenize identifiers/punctuation outside SQL comments and literals."""
+    tokens: list[str] = []
+    index = 0
+    while index < len(sql):
+        char = sql[index]
+        if char.isspace():
+            index += 1
+            continue
+        if sql.startswith("--", index):
+            newline = sql.find("\n", index + 2)
+            index = len(sql) if newline == -1 else newline + 1
+            continue
+        if sql.startswith("/*", index):
+            end = sql.find("*/", index + 2)
+            index = len(sql) if end == -1 else end + 2
+            continue
+        if char == "'":
+            index += 1
+            while index < len(sql):
+                if sql[index] == "'" and index + 1 < len(sql) and sql[index + 1] == "'":
+                    index += 2
+                    continue
+                if sql[index] == "'":
+                    index += 1
+                    break
+                index += 1
+            continue
+        if char in {'"', "`"}:
+            quote = char
+            index += 1
+            start = index
+            while index < len(sql) and sql[index] != quote:
+                index += 1
+            tokens.append(sql[start:index].lower())
+            index += 1 if index < len(sql) else 0
+            continue
+        if char == "[":
+            end = sql.find("]", index + 1)
+            if end == -1:
+                index += 1
+                continue
+            tokens.append(sql[index + 1 : end].lower())
+            index = end + 1
+            continue
+        if char.isalpha() or char == "_":
+            start = index
+            index += 1
+            while index < len(sql) and (sql[index].isalnum() or sql[index] == "_"):
+                index += 1
+            tokens.append(sql[start:index].lower())
+            continue
+        if char in {".", ",", "("}:
+            tokens.append(char)
+        index += 1
+    return tokens
 
 
 def _window_covers(loaded: tuple[datetime, datetime] | None, start: datetime, end: datetime) -> bool:

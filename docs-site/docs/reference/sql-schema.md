@@ -21,9 +21,13 @@ Columns include `entity_id`, `domain`, `area_id`, `floor_id`, `device_id`, `when
 
 Columns include `statistic_id`, `entity_id`, `when_iso`, `when_ts`, `mean`, `min`, `max`, `state`, and `sum`.
 
+### `statistics_short_term`
+
+Distinct 5-minute short-term statistics base table with the same columns as `statistics`.
+
 ## Compatibility views
 
-The in-memory database also exposes recorder-compatible views: `state_history`, `long_term_statistics`, `states_meta`, `statistics_meta`, and `statistics_short_term`.
+The in-memory database also exposes recorder-compatible views: `state_history`, `long_term_statistics` for hourly statistics, `states_meta`, and `statistics_meta`.
 
 ## Limits
 
