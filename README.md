@@ -12,7 +12,15 @@ Instead of only triggering hard-coded scenes or one service at a time, the assis
 
 It does all of this inside a [**minimal, secure Python interpreter written in Rust for use by AI**](https://github.com/pydantic/monty) that only ever sees a frozen, filtered copy of your home. It is **read-only by default**, and every safety boundary is opt-in.
 
-> This is an early **0.1.0** release. Treat it as a preview.
+---
+
+## EXPERIMENTAL STATUS
+
+This is an early **0.1.0** release. Treat it as an experimental preview.
+
+I wrote this to see how effective it would be to give a language model a python sandbox inside home assistant to increase the assist capabilities without needing hundreds of tools given that most language models have some knowledge already of the internals of Home Assistant to varying degrees.
+
+This is **not designed as a general purpose tool**, for that there are some great MCP servers to allow coding harnesses (claude, codex etc.) access to Home Assistant including [ha-mcp](https://github.com/homeassistant-ai/ha-mcp) and [opencode add-on](https://github.com/magnusoverli/opencode).
 
 Full user and developer documentation is published with GitHub Pages from the source in [`docs-site/`](docs-site/). To preview it locally, run `pnpm install`, `pnpm build`, and `pnpm serve` from `docs-site/`.
 
@@ -94,7 +102,7 @@ Open the integration's **Configure** dialog. Options are grouped into four secti
 
 ## How it works
 
-[![Overview](./artifacts/overview.png)]
+![Overview](./artifacts/overview.png)
 
 The safety model rests on two ideas: a **frozen snapshot** and an **isolated sandbox**.
 
@@ -106,19 +114,22 @@ The safety model rests on two ideas: a **frozen snapshot** and an **isolated san
 
 4. **A forgiveness layer fixes common mistakes.** The assistant's code passes through a normalization step that silently repairs harmless variations — a missing `await`, an imported `datetime`, a forgotten `result =` — so the assistant succeeds on the first try instead of burning retries (and tokens) on trivial errors. When the tool has already offered or applied entity-id guidance in the same conversation, it can also prefer that still-visible entity in later resolution and transparently report remembered literal rewrites in `resolutions`.
 
-### Read-only SQL queries
+### Read-only (in-memory)SQL queries
 
-`execute_home_code` can call `await hass.query(sql, hours=N)` to run read-only SQLite over a fresh per-run in-memory database, not Home Assistant's live recorder database. It exposes visible `states` plus bounded recorder `history` and `statistics`; `states.attributes` is JSON text queryable with SQLite JSON functions such as `json_extract()`. History and statistics rows load only when referenced, and their scope can be narrowed with `entity_ids` or HA-native selectors (`area_id`, `floor_id`, `device_id`, `label_id`, `domain`). For discoverability, the in-memory database also exposes recorder-compatible views: `states_meta`, `statistics_meta`, `statistics_short_term`, `state_history`, and `long_term_statistics`. It does not expose registry tables; use the registry facades or the denormalized state/history columns (`area_id`, `floor_id`, `device_id`, `domain`) for location/entity filtering.
+- `execute_home_code` can call `await hass.query(sql, hours=N)` to run read-only SQLite over a fresh per-run in-memory database, **not Home Assistant's live recorder database.**
+- It exposes visible `states` plus bounded recorder `history` and `statistics`; `states.attributes` is JSON text queryable with SQLite JSON functions such as `json_extract()`.
+- History and statistics rows load only when referenced, and their scope can be narrowed with `entity_ids` or HA-native selectors (`area_id`, `floor_id`, `device_id`, `label_id`, `domain`).
+- For discoverability, the in-memory database also exposes recorder-compatible views: `states_meta`, `statistics_meta`, `statistics_short_term`, `state_history`, and `long_term_statistics`.
 
 ## Things to know before you install
 
-- **You need a capable model.** This integration lives or dies by model quality. A weak model will write broken code, pick the wrong tool, or misread results. Budget for a strong cloud model, or run a strong local model.
+- **You need a capable model.** This integration lives or dies by model quality. A weak model will write broken code, pick the wrong tool, or misread results. Budget for a strong cloud model, or run a strong local model that is capable of writing python code (e.g. gpt-oss-20b or better).
 - **It costs tokens.** Each turn that uses these tools sends tool definitions, snapshots, and (for history/cameras) potentially large payloads to your model provider. Expect higher per-conversation cost than plain Assist.
 - **Attribute values are exposed.** Beyond stripping credentials out of config-entry data, **no value redaction is performed.** If any visible entity carries sensitive data in its attributes (codes, tokens, personal info), the model will see every value. Use the visibility restrictions — and your Assist exposure settings — to keep sensitive entities out of scope.
 - **Visibility is filtering, not a hard security boundary.** The visibility settings reduce *what's exposed* to the model; the actual isolation boundary is the Monty sandbox (no filesystem, network, live objects, or OS access). Don't rely on visibility toggles alone for sensitive environments.
 - **Actions are powerful — keep the allowlist tight.** If you turn actions on, the assistant can operate real devices. Restrict it to the domains you're comfortable with, and remember a capable model can chain many calls within one turn (bounded only by the call budget).
-- **The snapshot is frozen mid-request.** A service call made inside a code run won't be reflected in that same run's reads — the assistant is told this and will call the tool again to observe new state.
-- **One entry per assistant.** The integration is scoped to your default `conversation` assistant; only one sandbox entry is supported.
+- **The snapshot is frozen mid-request.** A service call made inside a code run won't be reflected in that same run's reads — the assistant is told this and should call the tool again to observe new state but simpler models may get confused.
+- **One entry per assistant.** The integration is scoped to your default `conversation` assistant; only one sandbox entry is supported at this time.
 
 ## Development
 
@@ -135,3 +146,8 @@ Eval runs for the dev-only `llm_sandbox_evals` package write `report.json` and a
 - [Report an issue](https://github.com/bradsjm/hacs-llm-sandbox/issues)
 - [Changelog](CHANGELOG.md)
 - Licensed under the [LICENSE](LICENSE).
+
+## Acknowledgements
+- Thanks to the developers of Home Assistant for the amazing platform.
+- This code is only possible due to the Monty (Python) sandbox by [pydantic](https://github.com/pydantic/monty).
+- Significant assistance with design and coding provided by GPT-5.5 ([OpenAI](https://openai.com/)) using OpenCode-AI ([opencode.ai](https://opencode.ai/)) under supervision.
