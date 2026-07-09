@@ -28,7 +28,7 @@ Once enabled, the assistant can call these tools during a conversation. Recorder
 | **`get_history`** | Recorded **state history** — raw changes up to 24 hours, legacy summaries such as transitions and time-in-state, or declarative analytics (`aggregate`, `group_by`, `bucket`, `where`, `order_by`, `limit`) up to 30 days. |
 | **`get_statistics`** | Pre-aggregated **long-term statistics** (`mean`, `min`, `max`, `state`, `sum`) over a period. Up to 30 days. |
 | **`get_logbook`** | The **activity timeline** — what happened and why (e.g. "did the front door open after midnight?"). Up to 24 hours. |
-| **`get_camera_image`** | Captures a **live frame** from a camera or image entity so a multimodal model can look at it ("what's on the front porch right now?"). |
+| **`get_camera_image`** | Captures a **live frame** from a camera or image entity so a multimodal model can look at it ("what's on the front porch right now?"). **NOTE! This only works with the hacs-pydantic-ai component at this time.** |
 
 ## Why you'd install it
 
@@ -93,6 +93,8 @@ Open the integration's **Configure** dialog. Options are grouped into four secti
 **Prompt** — the base instructions sent to the model. Ships with **Standard**, **Terse**, and **Minimal** profiles.
 
 ## How it works
+
+[![Overview](./artifacts/overview.png)]
 
 The safety model rests on two ideas: a **frozen snapshot** and an **isolated sandbox**.
 
