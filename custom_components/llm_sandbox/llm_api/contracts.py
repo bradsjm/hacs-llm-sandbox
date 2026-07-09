@@ -27,6 +27,87 @@ def filter(func: Any, iterable: Any) -> list[Any]: ...
 """
 
 
+def _format_type(annotation: object) -> str:
+    import inspect
+    from collections.abc import Mapping as AbcMapping
+    from types import UnionType
+    from typing import get_args, get_origin
+
+    if annotation is Any:
+        return "Any"
+    if annotation is type(None):
+        return "None"
+    if isinstance(annotation, type):
+        return annotation.__name__
+    if annotation is inspect.Parameter.empty:
+        return "Any"
+
+    origin = get_origin(annotation)
+    if origin is None:
+        return str(annotation).replace("typing.", "")
+
+    args = get_args(annotation)
+    if origin is UnionType:
+        return " | ".join(_format_type(arg) for arg in args)
+    if origin is AbcMapping:
+        return f"Mapping[{_format_type(args[0])}, {_format_type(args[1])}]"
+    if origin is list:
+        return f"list[{_format_type(args[0])}]"
+    if origin is dict:
+        return f"dict[{_format_type(args[0])}, {_format_type(args[1])}]"
+    if origin is tuple:
+        if len(args) == 2 and args[1] is Ellipsis:
+            return f"tuple[{_format_type(args[0])}, ...]"
+        return f"tuple[{', '.join(_format_type(arg) for arg in args)}]"
+    if origin is set:
+        return f"set[{_format_type(args[0])}]"
+    if getattr(origin, "__module__", "") == "typing" and getattr(origin, "__qualname__", "") == "Union":
+        return " | ".join(_format_type(arg) for arg in args)
+    return str(annotation).replace("typing.", "").replace("collections.abc.", "")
+
+
+def _render_fields(cls: type[Any]) -> list[str]:
+    from dataclasses import fields
+    from typing import get_type_hints
+
+    hints = get_type_hints(cls, include_extras=True)
+    public_fields = [f for f in fields(cls) if not f.name.startswith("_")]
+    return [f"    {f.name}: {_format_type(hints[f.name])}" for f in public_fields]
+
+
+def _render_methods(cls: type[Any]) -> list[str]:
+    import inspect
+
+    lines: list[str] = []
+    for name, member in inspect.getmembers(cls, predicate=inspect.isfunction):
+        if name.startswith("_") and name not in {"__getitem__", "__contains__", "__len__", "__iter__"}:
+            continue
+        try:
+            sig = inspect.signature(member)
+        except TypeError, ValueError:
+            continue
+        is_async = inspect.iscoroutinefunction(member)
+        prefix = "async def" if is_async else "def"
+        params: list[str] = ["self"]
+        returns = ""
+        for pname, param in sig.parameters.items():
+            if pname == "self" or param.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD):
+                continue
+            default = " = None" if param.default is not inspect.Parameter.empty else ""
+            params.append(f"{pname}: {_format_type(param.annotation)}{default}")
+        if sig.return_annotation is not inspect.Signature.empty:
+            returns = f" -> {_format_type(sig.return_annotation)}"
+        lines.append(f"    {prefix} {name}({', '.join(params)}){returns}: ...")
+    return lines
+
+
+def _render_class(cls: type[Any]) -> list[str]:
+    body = _render_fields(cls) + _render_methods(cls)
+    if not body:
+        return [f"class {cls.__name__}:", "    pass"]
+    return [f"class {cls.__name__}:", *body]
+
+
 def _build_monty_type_stubs() -> str:
     """Render Monty stubs from the facade dataclasses and their methods.
 
@@ -34,80 +115,6 @@ def _build_monty_type_stubs() -> str:
     ``get_type_hints``, then appends method signatures reflected from the
     class via ``inspect.signature`` so the stub stays in sync with the real API.
     """
-    import inspect
-    from collections.abc import Mapping as AbcMapping
-    from dataclasses import fields
-    from types import UnionType
-    from typing import get_args, get_origin, get_type_hints
-
-    def _format_type(annotation: object) -> str:
-        if annotation is Any:
-            return "Any"
-        if annotation is type(None):
-            return "None"
-        if isinstance(annotation, type):
-            return annotation.__name__
-        origin = get_origin(annotation)
-        if origin is None:
-            return str(annotation).replace("typing.", "")
-        args = get_args(annotation)
-        if origin is UnionType:
-            return " | ".join(_format_type(arg) for arg in args)
-        if origin is AbcMapping:
-            return f"Mapping[{_format_type(args[0])}, {_format_type(args[1])}]"
-        if origin is list:
-            return f"list[{_format_type(args[0])}]"
-        if origin is dict:
-            return f"dict[{_format_type(args[0])}, {_format_type(args[1])}]"
-        if origin is tuple:
-            if len(args) == 2 and args[1] is Ellipsis:
-                return f"tuple[{_format_type(args[0])}, ...]"
-            return f"tuple[{', '.join(_format_type(arg) for arg in args)}]"
-        if origin is set:
-            return f"set[{_format_type(args[0])}]"
-        if getattr(origin, "__module__", "") == "typing" and getattr(origin, "__qualname__", "") == "Union":
-            return " | ".join(_format_type(arg) for arg in args)
-        return str(annotation).replace("typing.", "").replace("collections.abc.", "")
-
-    def _render_fields(cls: type[Any]) -> list[str]:
-        hints = get_type_hints(cls, include_extras=True)
-        public_fields = [f for f in fields(cls) if not f.name.startswith("_")]
-        return [f"    {f.name}: {_format_type(hints[f.name])}" for f in public_fields] if public_fields else []
-
-    def _render_methods(cls: type[Any]) -> list[str]:
-        lines: list[str] = []
-        for name, member in inspect.getmembers(cls, predicate=inspect.isfunction):
-            if name.startswith("_") and name not in {"__getitem__", "__contains__", "__len__", "__iter__"}:
-                continue
-            try:
-                sig = inspect.signature(member)
-            except TypeError, ValueError:
-                continue
-            is_async = inspect.iscoroutinefunction(member)
-            prefix = "async def" if is_async else "def"
-            params: list[str] = ["self"]
-            returns = ""
-            for pname, param in sig.parameters.items():
-                if pname == "self":
-                    continue
-                if param.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD):
-                    continue
-                ptype = _format_type(param.annotation) if param.annotation is not inspect.Parameter.empty else "Any"
-                default = ""
-                if param.default is not inspect.Parameter.empty:
-                    default = " = None"
-                params.append(f"{pname}: {ptype}{default}")
-            if sig.return_annotation is not inspect.Signature.empty:
-                returns = f" -> {_format_type(sig.return_annotation)}"
-            lines.append(f"    {prefix} {name}({', '.join(params)}){returns}: ...")
-        return lines
-
-    def _render_class(cls: type[Any]) -> list[str]:
-        body = _render_fields(cls) + _render_methods(cls)
-        if not body:
-            return [f"class {cls.__name__}:", "    pass"]
-        return [f"class {cls.__name__}:", *body]
-
     all_classes = [*ATTRIBUTE_REACHABLE_RECORDS, *FACADE_CLASSES]
 
     sections: list[str] = ["from typing import Any, Mapping", ""]
@@ -117,8 +124,7 @@ def _build_monty_type_stubs() -> str:
 
     # Global declarations so Monty knows the root object types.
     sections.append("")
-    for name in AVAILABLE_GLOBALS:
-        sections.append(f"{name}: Any")
+    sections.extend(f"{name}: Any" for name in AVAILABLE_GLOBALS)
 
     sections.append("")
     sections.append(MONTY_BUILTIN_STUBS)

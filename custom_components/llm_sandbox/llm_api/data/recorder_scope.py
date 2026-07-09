@@ -97,9 +97,7 @@ def resolve_entity_ids(snapshot: HomeSnapshot, data: dict[str, object], id_key: 
         resolved.append(entity_id)
     # Pure-domain scope with no IDs and no selectors expands across all visible matching states.
     if not resolved and domains and not selector_present:
-        for entity_id in snapshot.states:
-            if _domain_matches(entity_id):
-                resolved.append(entity_id)
+        resolved.extend(entity_id for entity_id in snapshot.states if _domain_matches(entity_id))
 
     if not resolved:
         raise RecoverableToolError(

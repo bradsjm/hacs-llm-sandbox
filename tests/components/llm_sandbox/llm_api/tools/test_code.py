@@ -30,7 +30,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import llm
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from tests.components.llm_sandbox.llm_api.tools.test_analytics import _snapshot
+from .test_analytics import _snapshot
 
 
 async def _run_code(

@@ -310,7 +310,7 @@ class HomeDatabase:
         for view, (base, explicit, distinct) in SCHEMA_VIEWS.items():
             select = "*" if explicit is None else ", ".join(explicit)
             distinct_sql = "distinct " if distinct else ""
-            statements.append(f"create view {view} as select {distinct_sql}{select} from {base};")
+            statements.append(f"create view {view} as select {distinct_sql}{select} from {base};")  # noqa: S608
         # Dedup on every loaded column so only byte-identical rows collapse on a
         # re-load; COALESCE normalizes NULLs (SQLite treats NULLs as distinct in
         # unique indexes) so two identical rows with nullable fields still dedup.

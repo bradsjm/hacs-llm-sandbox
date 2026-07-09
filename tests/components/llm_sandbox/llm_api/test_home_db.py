@@ -11,7 +11,7 @@ from custom_components.llm_sandbox.llm_api.data.home_db import (
 )
 from custom_components.llm_sandbox.llm_api.errors import HelperExecutionError
 
-from tests.components.llm_sandbox.llm_api.tools.test_analytics import _snapshot
+from .tools.test_analytics import _snapshot
 
 
 @pytest.mark.parametrize(
@@ -297,7 +297,7 @@ def test_home_db_compat_views_queryable(view_name: str) -> None:
                 }
             ]
         )
-        result = db.execute(f"select * from {view_name}", 9999999999)
+        result = db.execute(f"select * from {view_name}", 9999999999)  # noqa: S608
     finally:
         db.close()
 

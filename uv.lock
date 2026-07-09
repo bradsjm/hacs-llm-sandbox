@@ -1295,7 +1295,6 @@ evals = [
     { name = "pydantic-evals", extra = ["logfire"] },
     { name = "python-dotenv" },
     { name = "rich" },
-    { name = "tenacity" },
 ]
 
 [package.metadata]
@@ -1325,7 +1324,6 @@ evals = [
     { name = "pydantic-evals", extras = ["logfire"], specifier = ">=2.5.0" },
     { name = "python-dotenv", specifier = ">=1.0" },
     { name = "rich", specifier = ">=13.0" },
-    { name = "tenacity", specifier = ">=8.0" },
 ]
 
 [[package]]

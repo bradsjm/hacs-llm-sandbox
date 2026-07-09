@@ -31,7 +31,6 @@ evals = [
   "pydantic-evals[logfire]>=2.5.0",
   "python-dotenv>=1.0",
   "rich>=13.0",
-  "tenacity>=8.0",
   "dspy>=2.6",
 ]
 
@@ -51,7 +50,7 @@ select = [
     "ASYNC",
     "B",
     "BLE",
-    "C4",
+    "C",
     "D",
     "DTZ",
     "E",
@@ -59,26 +58,66 @@ select = [
     "G",
     "I",
     "LOG",
+    "N804",
+    "N805",
+    "N806",
+    "N815",
+    "PERF",
+    "PGH",
     "PIE",
     "PT",
     "PTH",
     "RET",
     "RSE",
     "RUF",
+    "S102",
+    "S103",
+    "S108",
+    "S301",
+    "S306",
+    "S307",
+    "S313",
+    "S314",
+    "S315",
+    "S316",
+    "S317",
+    "S318",
+    "S319",
+    "S601",
+    "S602",
+    "S604",
+    "S608",
+    "S609",
     "SIM",
     "SLOT",
+    "T100",
     "T20",
     "TC",
+    "TID251",
     "UP",
     "W",
 ]
 ignore = [
+    "B008",
+    "D202",
+    "D203",
+    "D213",
+    "D406",
+    "D407",
+    "D417",
     "E501",
+    "SIM108",
     "TC001",
     "TC002",
     "TC003",
     "TC006",
 ]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"__future__.annotations".msg = "not needed because this project requires Python 3.14+"
+"async_timeout".msg = "use asyncio.timeout instead"
+"pytz".msg = "use zoneinfo instead"
+"tests".msg = "do not import from tests"
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
@@ -88,7 +127,7 @@ max-complexity = 25
 
 [tool.ruff.lint.per-file-ignores]
 "**/__init__.py" = ["D104"]
-"tests/**/*.py" = ["ARG", "D", "ANN", "TC"]
+"tests/**/*.py" = ["ARG", "D", "ANN", "TC", "TID251"]
 
 [tool.mypy]
 files = ["custom_components", "tests"]
@@ -102,6 +141,7 @@ explicit_package_bases = true
 strict_equality = true
 strict_bytes = true
 no_implicit_optional = true
+warn_incomplete_stub = true
 check_untyped_defs = true
 disallow_incomplete_defs = true
 disallow_subclassing_any = true

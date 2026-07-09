@@ -117,8 +117,8 @@ class _LocalBoundNames(ast.NodeVisitor):
         self.names.add(node.name)
         self.generic_visit(node)
 
-    visit_FunctionDef = _visit_def
-    visit_AsyncFunctionDef = _visit_def
+    visit_FunctionDef = _visit_def  # noqa: N815
+    visit_AsyncFunctionDef = _visit_def  # noqa: N815
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
         self.names.add(node.name)

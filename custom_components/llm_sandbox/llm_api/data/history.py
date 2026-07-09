@@ -12,7 +12,7 @@ from typing import Literal, cast
 from homeassistant.core import State
 from homeassistant.util import dt as dt_util
 
-from ...snapshot.models import HomeSnapshot
+from ...snapshot.models import HomeSnapshot, SafeState
 from ..errors import RecoverableToolError
 from .numeric import finite_float
 
@@ -302,21 +302,24 @@ def flat_history_rows(raw: Mapping[str, Iterable[HistoryRow]], snapshot: HomeSna
     rows: list[dict[str, object]] = []
     for entity_id, entity_rows in raw.items():
         state = snapshot.states.get(entity_id)
-        for row in entity_rows:
-            rows.append(
-                {
-                    "entity_id": entity_id,
-                    "domain": entity_id.split(".", 1)[0],
-                    "area_id": state.area_id if state is not None else None,
-                    "floor_id": state.floor_id if state is not None else None,
-                    "device_id": state.device_id if state is not None else None,
-                    "when": _row_time(row).isoformat(),
-                    "when_ts": _row_time(row).timestamp(),
-                    "state": _row_state(row),
-                    "value": _row_value(row),
-                }
-            )
+        rows.extend(_flat_history_row(entity_id, state, row) for row in entity_rows)
     return sorted(rows, key=lambda item: (str(item["entity_id"]), str(item["when"])))
+
+
+def _flat_history_row(entity_id: str, state: SafeState | None, row: HistoryRow) -> dict[str, object]:
+    """Render one recorder history row for the facade SQL/history table."""
+    when = _row_time(row)
+    return {
+        "entity_id": entity_id,
+        "domain": entity_id.split(".", 1)[0],
+        "area_id": state.area_id if state is not None else None,
+        "floor_id": state.floor_id if state is not None else None,
+        "device_id": state.device_id if state is not None else None,
+        "when": when.isoformat(),
+        "when_ts": when.timestamp(),
+        "state": _row_state(row),
+        "value": _row_value(row),
+    }
 
 
 def _aggregate_group(rows: list[HistoryRow], spec: AnalyticsSpec, start: datetime, end: datetime) -> dict[str, object]:
@@ -494,8 +497,7 @@ def _row_buckets(
         key: list[object] = []
         if bucket_seconds is not None:
             key.append(_bucket_start(_row_time(row), start, bucket_seconds).isoformat())
-        for group_key in spec.group_by:
-            key.append(_group_value(row, group_key, snapshot))
+        key.extend(_group_value(row, group_key, snapshot) for group_key in spec.group_by)
         buckets.setdefault(tuple(key), []).append(row)
     return buckets
 
