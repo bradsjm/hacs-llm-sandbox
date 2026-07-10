@@ -359,6 +359,34 @@ class SafeServiceRegistry:
                 return None
 
             action = _request_action(resolved_target)
+            remaining = runtime.deadline - time.monotonic()
+            if remaining <= 0:
+                # Branch boundary: the deadline elapsed before dispatch, so record
+                # the failed action without consuming service-call capacity.
+                record = _action_record(
+                    action,
+                    status="error",
+                    response=None,
+                    error=_action_error(
+                        "service_call_timeout",
+                        f"Service '{domain}.{service}' timed out before execution.",
+                    ),
+                    adjustments=[*selector_adjustments, *target_outcome.adjustments],
+                )
+                runtime.state.actions.append(record)
+                raise HelperExecutionError(
+                    "services.async_call",
+                    "service_call_timeout",
+                    {"domain": domain, "service": service},
+                )
+            # Branch boundary: validation passed but the dispatch limit is full.
+            # Do not record a successful action or consume capacity without invoking HA.
+            if runtime.state.dispatched_service_calls >= runtime.state.service_call_limit:
+                raise HelperExecutionError(
+                    "services.async_call",
+                    "service_call_limit_exceeded",
+                    {"limit": str(runtime.state.service_call_limit)},
+                )
             record = _action_record(
                 action,
                 status="ok",
@@ -367,25 +395,11 @@ class SafeServiceRegistry:
                 adjustments=[*selector_adjustments, *target_outcome.adjustments],
             )
             runtime.state.actions.append(record)
-            remaining = runtime.deadline - time.monotonic()
-            # Mutate the just-recorded action before raising when no per-call budget remains.
-            if remaining <= 0:
-                error = _action_error(
-                    "service_call_timeout",
-                    f"Service '{domain}.{service}' timed out before execution.",
-                )
-                record["status"] = "error"
-                record["error"] = error
-                raise HelperExecutionError(
-                    "services.async_call",
-                    "service_call_timeout",
-                    {"domain": domain, "service": service},
-                )
             try:
-                # Mark that this run dispatched a live write so later recorder-backed
-                # reads know to synchronize before reading (read-after-write). Set
-                # before invoking so a partial write (or a failure) still counts.
+                # State mutation points: a live dispatch makes later recorder reads
+                # synchronize, and it consumes capacity even when live HA fails.
                 runtime.state.live_write_dispatched = True
+                runtime.state.dispatched_service_calls += 1
                 result = await asyncio.wait_for(runtime.invoke(action), timeout=remaining)
             except TimeoutError as err:
                 error = _action_error(
@@ -575,7 +589,7 @@ class SafeServiceRegistry:
         return HelperExecutionError("services.async_call", key, placeholders)
 
     def _require_state(self) -> Any:
-        """Return the active runtime's execution state for helper-call budgeting."""
+        """Return the active runtime's execution state for response handling."""
         return require_runtime(None).state
 
     def __llm_sandbox_json__(self) -> JsonValueType:

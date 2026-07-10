@@ -1,5 +1,6 @@
 """Behavior tests for live service invocation through the safe facade."""
 
+import asyncio
 import math
 import time
 from collections.abc import Iterator, Mapping
@@ -87,10 +88,13 @@ class RecordingInvoker:
     responses: list[object] = field(default_factory=list)
     errors: list[Exception] = field(default_factory=list)
     calls: list[ProposedAction] = field(default_factory=list)
+    wait_forever: bool = False
 
     async def __call__(self, action: ProposedAction) -> object:
         """Record the action and then return or raise the configured outcome."""
         self.calls.append(_copy_action(action))
+        if self.wait_forever:
+            await asyncio.Event().wait()
         if self.errors:
             raise self.errors.pop(0)
         if self.responses:
@@ -196,6 +200,7 @@ async def test_return_response_records_service_response_on_success() -> None:
         "expected_status",
         "expected_error_key",
         "expected_invoker_calls",
+        "expected_dispatched_service_calls",
     ),
     [
         pytest.param(
@@ -217,6 +222,7 @@ async def test_return_response_records_service_response_on_success() -> None:
                     "return_response": True,
                 }
             ],
+            1,
             id="only-accommodated",
         ),
         pytest.param(
@@ -238,7 +244,21 @@ async def test_return_response_records_service_response_on_success() -> None:
                     "return_response": True,
                 }
             ],
+            1,
             id="optional-accommodated",
+        ),
+        pytest.param(
+            "light",
+            "turn_on",
+            False,
+            True,
+            None,
+            None,
+            "error",
+            "service_response_requires_blocking",
+            [],
+            0,
+            id="response-without-blocking-rejected",
         ),
         pytest.param(
             "light",
@@ -250,6 +270,7 @@ async def test_return_response_records_service_response_on_success() -> None:
             "error",
             "service_response_not_supported",
             [],
+            0,
             id="none-rejected",
         ),
     ],
@@ -264,6 +285,7 @@ async def test_response_mode_policy(
     expected_status: str,
     expected_error_key: str | None,
     expected_invoker_calls: list[ProposedAction],
+    expected_dispatched_service_calls: int,
 ) -> None:
     """Response-mode policy accommodates ONLY/OPTIONAL and blocks NONE before invocation."""
     responses = [] if service_response is None else [service_response]
@@ -273,6 +295,7 @@ async def test_response_mode_policy(
 
     assert result == expected_result
     assert harness.invoker.calls == expected_invoker_calls
+    assert harness.runtime.state.dispatched_service_calls == expected_dispatched_service_calls
     assert harness.runtime.state.actions[0]["status"] == expected_status
     if expected_error_key is None:
         assert harness.runtime.state.actions[0]["response"] == service_response
@@ -311,6 +334,7 @@ async def test_service_not_found_records_blocked_action_and_returns_none() -> No
     assert action_error["message"] != action_error["key"]
     assert {"light.get_state", "light.turn_on"} <= _guidance_candidate_ids(action_error["guidance"])
     assert harness.invoker.calls == []
+    assert harness.runtime.state.dispatched_service_calls == 0
 
 
 async def test_service_validation_error_uses_translation_key_and_message() -> None:
@@ -376,6 +400,53 @@ async def test_expired_per_call_deadline_records_timeout_action_error() -> None:
     assert _action_statuses(payload) == ["error"]
     assert _action_keys(payload) == ["service_call_timeout"]
     assert harness.invoker.calls == []
+    assert harness.runtime.state.dispatched_service_calls == 0
+
+
+async def test_service_dispatch_limit_permits_exactly_its_configured_capacity() -> None:
+    """The N+1 validated service call stops before the private live invoker."""
+    harness = _service_harness(service_call_limit=2)
+
+    await _ok_call(harness, "light", "turn_on", target={"entity_id": "light.bedroom"})
+    await _ok_call(harness, "light", "turn_on", target={"entity_id": "light.bedroom"})
+    payload = await _helper_error_for(harness, "light", "turn_on", target={"entity_id": "light.bedroom"})
+
+    assert payload["execution"]["kind"] == "service_call_limit_exceeded"
+    assert _action_statuses(payload) == ["ok", "ok"]
+    assert len(harness.invoker.calls) == 2
+    assert harness.runtime.state.dispatched_service_calls == 2
+
+
+async def test_service_budget_ignores_catalog_reads_and_pre_dispatch_blocks() -> None:
+    """A blocked request and catalog inspection leave the single live dispatch available."""
+    harness = _service_harness(service_call_limit=1)
+
+    assert harness.services.has_service("light", "turn_on") is True
+    assert "turn_on" in harness.services.async_services_for_domain("light")
+    assert await _ok_call(harness, "light", "missing") is None
+    assert await _ok_call(harness, "light", "turn_on", target={"entity_id": "light.bedroom"}) is None
+    payload = await _helper_error_for(harness, "light", "turn_on", target={"entity_id": "light.bedroom"})
+
+    assert payload["execution"]["kind"] == "service_call_limit_exceeded"
+    assert _action_statuses(payload) == ["error", "ok"]
+    assert len(harness.invoker.calls) == 1
+    assert harness.runtime.state.dispatched_service_calls == 1
+
+
+async def test_dispatched_service_timeout_consumes_service_capacity() -> None:
+    """A timeout after entering the private invoker still consumes one dispatch."""
+    harness = _service_harness(
+        deadline=time.monotonic() + 0.01,
+        invoker=RecordingInvoker(wait_forever=True),
+        service_call_limit=1,
+    )
+
+    payload = await _helper_error_for(harness, "light", "turn_on", target={"entity_id": "light.bedroom"})
+
+    assert payload["execution"]["kind"] == "service_call_timeout"
+    assert _action_statuses(payload) == ["error"]
+    assert len(harness.invoker.calls) == 1
+    assert harness.runtime.state.dispatched_service_calls == 1
 
 
 async def test_explicit_hidden_entity_target_resolves_to_unique_visible_entity() -> None:
@@ -484,6 +555,7 @@ async def test_empty_entity_target_is_rejected_before_invocation() -> None:
     assert _action_statuses_via_state(harness) == ["error"]
     assert _action_keys_via_state(harness) == ["service_target_not_visible"]
     assert harness.invoker.calls == []
+    assert harness.runtime.state.dispatched_service_calls == 0
 
 
 async def test_ambiguous_entity_target_blocks_with_candidates() -> None:
@@ -520,6 +592,7 @@ async def test_helper_error_payload_keeps_prior_success_and_failed_action() -> N
     assert payload["execution"]["message"] != "service_call_failed"
     assert _action_statuses(payload) == ["ok", "error"]
     assert _action_keys(payload) == [None, "service_call_failed"]
+    assert harness.runtime.state.dispatched_service_calls == 2
 
 
 async def test_actions_disabled_gate_records_blocked_action_and_returns_none() -> None:
@@ -532,6 +605,7 @@ async def test_actions_disabled_gate_records_blocked_action_and_returns_none() -
     assert _action_statuses_via_state(harness) == ["error"]
     assert _action_keys_via_state(harness) == ["actions_disabled"]
     assert harness.invoker.calls == []
+    assert harness.runtime.state.dispatched_service_calls == 0
 
 
 async def test_action_domain_allowlist_blocks_unlisted_domain() -> None:
@@ -544,6 +618,7 @@ async def test_action_domain_allowlist_blocks_unlisted_domain() -> None:
     assert _action_statuses_via_state(harness) == ["error"]
     assert _action_keys_via_state(harness) == ["action_domain_not_allowed"]
     assert harness.invoker.calls == []
+    assert harness.runtime.state.dispatched_service_calls == 0
 
 
 async def test_async_services_for_target_reports_per_entity_services() -> None:
@@ -749,6 +824,7 @@ async def test_service_target_filter_block_happens_before_live_invoke() -> None:
     assert result is None
     assert _action_keys_via_state(harness) == ["service_target_not_supported"]
     assert harness.invoker.calls == []
+    assert harness.runtime.state.dispatched_service_calls == 0
 
 
 async def test_service_data_capability_block_happens_before_live_invoke() -> None:
@@ -771,6 +847,7 @@ async def test_service_data_capability_block_happens_before_live_invoke() -> Non
     assert result is None
     assert _action_keys_via_state(harness) == ["service_data_not_supported"]
     assert harness.invoker.calls == []
+    assert harness.runtime.state.dispatched_service_calls == 0
 
 
 async def test_unresolved_target_fix_list_ranks_service_supported_entities_first() -> None:
@@ -1022,15 +1099,16 @@ def _service_harness(
     invoker: RecordingInvoker | None = None,
     deadline: float = math.inf,
     snapshot: HomeSnapshot | None = None,
+    service_call_limit: int = 20,
 ) -> ServiceHarness:
     """Build a snapshot-backed services facade with an active runtime."""
     snapshot = snapshot or _snapshot()
     active_invoker = invoker or RecordingInvoker()
     runtime = RuntimeContext(
-        state=ExecutionState(helper_call_limit=20),
+        state=ExecutionState(service_call_limit=service_call_limit),
         settings=SandboxSettings(
             execution_timeout_seconds=10,
-            helper_call_budget=20,
+            service_call_limit=service_call_limit,
             scope=DEFAULT_SCOPE,
             actions_enabled=actions_enabled,
             action_domains=action_domains,

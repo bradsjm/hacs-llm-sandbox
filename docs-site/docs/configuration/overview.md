@@ -26,5 +26,5 @@ The default configuration is conservative:
 - Only selected useful diagnostic entities are included.
 - Actions are disabled.
 - Execution timeout is 12 seconds.
-- Service-call budget is 32 calls.
+- Service-call limit is 32 dispatched calls.
 - Prompt profile is `standard`.

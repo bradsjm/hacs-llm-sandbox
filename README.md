@@ -96,7 +96,7 @@ Open the integration's **Configure** dialog. Options are grouped into four secti
 | Option | Default | Range |
 | --- | --- | --- |
 | Maximum execution time | 12 seconds | 3–30 s |
-| Maximum service calls per request | 32 | 1–100 |
+| Maximum service calls per request | 32 | 1–100 validated calls dispatched to Home Assistant |
 
 **Prompt** — the base instructions sent to the model. Ships with **Standard**, **Terse**, and **Minimal** profiles.
 
@@ -110,7 +110,7 @@ The safety model rests on two ideas: a **frozen snapshot** and an **isolated san
 
 2. **Code runs inside Monty, an isolated Python sandbox.** The assistant's snippet never touches the *live* Home Assistant object. It only receives safe, frozen copies built from the snapshot. Read-only SQL is executed against a per-run in-memory SQLite database populated from that snapshot and bounded recorder rows. The sandbox has **no access** to your filesystem, the network, the event bus, authentication, your configuration files, or any OS/process APIs. Imports are limited to `json`, `math`, and `re`.
 
-3. **Reads are always allowed; control is gated.** Reading state and history works out of the box. Calling services (turning things on/off) is **off by default**. When you enable it, every single call is re-checked against that request's snapshot: the domain must be allowed, the target must be visible, and it must fit within the call budget. Calls run through a private path that never hands the live Home Assistant object to the sandbox.
+3. **Reads are always allowed; control is gated.** Reading state and history works out of the box. Calling services (turning things on/off) is **off by default**. When you enable it, every single call is re-checked against that request's snapshot: the domain must be allowed, the target must be visible, and it must fit within the service-call limit. Only validated calls dispatched through the private path count, including calls that then fail or time out; reads and pre-dispatch blocks do not. Calls run through a private path that never hands the live Home Assistant object to the sandbox.
 
 4. **A forgiveness layer fixes common mistakes.** The assistant's code passes through a normalization step that silently repairs harmless variations — a missing `await`, an imported `datetime`, a forgotten `result =` — so the assistant succeeds on the first try instead of burning retries (and tokens) on trivial errors. When the tool has already offered or applied entity-id guidance in the same conversation, it can also prefer that still-visible entity in later resolution and transparently report remembered literal rewrites in `resolutions`.
 
@@ -130,7 +130,7 @@ Snapshot records and `llm_context` support read-only mapping-style access such a
 - **It costs tokens.** Each turn that uses these tools sends tool definitions, snapshots, and (for history/cameras) potentially large payloads to your model provider. Expect higher per-conversation cost than plain Assist.
 - **Attribute values are exposed.** Beyond stripping credentials out of config-entry data, **no value redaction is performed.** If any visible entity carries sensitive data in its attributes (codes, tokens, personal info), the model will see every value. Use the visibility restrictions — and your Assist exposure settings — to keep sensitive entities out of scope.
 - **Visibility is filtering, not a hard security boundary.** The visibility settings reduce *what's exposed* to the model; the actual isolation boundary is the Monty sandbox (no filesystem, network, live objects, or OS access). Don't rely on visibility toggles alone for sensitive environments.
-- **Actions are powerful — keep the allowlist tight.** If you turn actions on, the assistant can operate real devices. Restrict it to the domains you're comfortable with, and remember a capable model can chain many calls within one turn (bounded only by the call budget).
+- **Actions are powerful — keep the allowlist tight.** If you turn actions on, the assistant can operate real devices. Restrict it to the domains you're comfortable with, and remember a capable model can chain many calls within one turn (bounded only by the service-call limit).
 - **The snapshot is frozen mid-request.** A service call made inside a code run won't be reflected in that same run's reads — the assistant is told this and should call the tool again to observe new state but simpler models may get confused.
 - **One entry per assistant.** The integration is scoped to your default `conversation` assistant; only one sandbox entry is supported at this time.
 

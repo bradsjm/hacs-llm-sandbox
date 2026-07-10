@@ -51,27 +51,17 @@ def test_json_safe_set_contents_and_unknown_object_stringification() -> None:
 
 
 async def test_helper_response_returns_json_safe_sync_value() -> None:
-    state = ExecutionState(helper_call_limit=2)
+    state = ExecutionState(service_call_limit=2)
 
     value = await helper_response(state, "helper.sync", lambda: {1: {"a", "b"}})
 
     assert value["1"] in (["a", "b"], ["b", "a"])
-    assert state.helper_calls == 1
+    assert state.dispatched_service_calls == 0
     assert state.last_helper_error is None
 
 
-async def test_helper_response_budget_exceeded_raises_helper_error() -> None:
-    state = ExecutionState(helper_call_limit=0)
-
-    with pytest.raises(HelperExecutionError) as err:
-        await helper_response(state, "helper.too_many", lambda: None)
-
-    assert err.value.key == "call_budget_exceeded"
-    assert state.last_helper_error is err.value
-
-
 async def test_helper_response_maps_service_validation_and_clears_before_later_success() -> None:
-    state = ExecutionState(helper_call_limit=3)
+    state = ExecutionState(service_call_limit=3)
     service_error = validation_error("invalid_tool_input", {"field": "code"})
 
     with pytest.raises(HelperExecutionError) as err:
@@ -83,13 +73,6 @@ async def test_helper_response_maps_service_validation_and_clears_before_later_s
 
     assert await helper_response(state, "helper.ok", lambda: "ok") == "ok"
     assert state.last_helper_error is None
-
-
-async def test_helper_response_does_not_count_free_helper_call() -> None:
-    state = ExecutionState(helper_call_limit=0)
-
-    assert await helper_response(state, "helper.free", lambda: "ok", count_call=False) == "ok"
-    assert state.helper_calls == 0
 
 
 def test_underlying_exception_unwraps_monty_style_wrapper() -> None:
@@ -127,7 +110,7 @@ def test_helper_error_payload_messages_are_specific(
     tokens: tuple[str, ...],
 ) -> None:
     """Helper payloads use shared specific messages while preserving reason overrides."""
-    payload = helper_error_payload_for_state(err, ExecutionState(helper_call_limit=2))
+    payload = helper_error_payload_for_state(err, ExecutionState(service_call_limit=2))
 
     message = payload["execution"]["message"]
     assert all(token in message for token in tokens)

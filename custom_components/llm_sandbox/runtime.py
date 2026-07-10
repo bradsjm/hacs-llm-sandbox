@@ -14,19 +14,19 @@ from .const import (
     CONF_EXCLUDE_CONFIG,
     CONF_EXCLUDE_HIDDEN,
     CONF_EXECUTION_TIMEOUT,
-    CONF_HELPER_CALL_BUDGET,
     CONF_INCLUDE_ALL_DIAGNOSTICS,
     CONF_PROMPT_PROFILE,
     CONF_RESTRICT_TO_ASSIST_EXPOSED,
+    CONF_SERVICE_CALL_LIMIT,
     DEFAULT_ACTION_DOMAINS,
     DEFAULT_ACTIONS_ENABLED,
     DEFAULT_EXCLUDE_CONFIG,
     DEFAULT_EXCLUDE_HIDDEN,
     DEFAULT_EXECUTION_TIMEOUT_SECONDS,
-    DEFAULT_HELPER_CALL_BUDGET,
     DEFAULT_INCLUDE_ALL_DIAGNOSTICS,
     DEFAULT_PROMPT_PROFILE,
     DEFAULT_RESTRICT_TO_ASSIST_EXPOSED,
+    DEFAULT_SERVICE_CALL_LIMIT,
 )
 from .llm_api.prompts import PromptProfile, resolve_profile
 from .llm_api.resolution_memory import ResolutionMemoryStore
@@ -42,7 +42,7 @@ OPTION_DEFAULTS: Mapping[str, object] = {
     CONF_ACTIONS_ENABLED: DEFAULT_ACTIONS_ENABLED,
     CONF_ACTION_DOMAINS: DEFAULT_ACTION_DOMAINS,
     CONF_EXECUTION_TIMEOUT: DEFAULT_EXECUTION_TIMEOUT_SECONDS,
-    CONF_HELPER_CALL_BUDGET: DEFAULT_HELPER_CALL_BUDGET,
+    CONF_SERVICE_CALL_LIMIT: DEFAULT_SERVICE_CALL_LIMIT,
     CONF_PROMPT_PROFILE: DEFAULT_PROMPT_PROFILE,
 }
 _ACTION_DOMAIN_RE = re.compile(r"^[a-z0-9_]+(?:\.[a-z0-9_]+)*$")
@@ -76,7 +76,7 @@ class SandboxSettings:
     """Per-entry configurable settings read from entry.options."""
 
     execution_timeout_seconds: int
-    helper_call_budget: int
+    service_call_limit: int
     scope: SnapshotScope
     actions_enabled: bool
     action_domains: frozenset[str]
@@ -102,7 +102,7 @@ def settings_from_entry(entry: SandboxConfigEntry) -> SandboxSettings:
     prompt_profile = resolve_profile(str(option_value(options, CONF_PROMPT_PROFILE)))
     return SandboxSettings(
         execution_timeout_seconds=int(cast(int, option_value(options, CONF_EXECUTION_TIMEOUT))),
-        helper_call_budget=int(cast(int, option_value(options, CONF_HELPER_CALL_BUDGET))),
+        service_call_limit=int(cast(int, option_value(options, CONF_SERVICE_CALL_LIMIT))),
         scope=scope,
         actions_enabled=bool(option_value(options, CONF_ACTIONS_ENABLED)),
         action_domains=frozenset(

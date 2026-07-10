@@ -25,6 +25,6 @@ Check the front porch camera for a package.
 
 ## Bounds
 
-The tool accepts `target_width` from 512 to 1920 pixels and defaults to 1280 pixels. Images are normalized to JPEG and checked against the attachment-size budget before they are returned.
+The tool accepts `target_width` from 384 to 1920 pixels and defaults to 1280 pixels. Images are normalized to JPEG and must fit within the 5 MiB attachment cap before they are returned.
 
 The implementation lives in [`tools/vision.py`](https://github.com/bradsjm/hacs-llm-sandbox/blob/main/custom_components/llm_sandbox/llm_api/tools/vision.py). Image bytes do not enter Monty.

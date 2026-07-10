@@ -23,7 +23,7 @@ Every call is checked against the fresh snapshot and current settings:
 - The service must exist in the snapshot service catalog.
 - The target must resolve to visible entities when a target is used.
 - Response-mode requirements must match the service catalog.
-- The request must fit inside the service-call budget.
+- The validated call must fit inside the service-call limit before it is dispatched.
 
 ## Recommendation
 

@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from types import ModuleType
 from typing import cast
 
-from custom_components.llm_sandbox.const import DEFAULT_HELPER_CALL_BUDGET
+from custom_components.llm_sandbox.const import DEFAULT_SERVICE_CALL_LIMIT
 from custom_components.llm_sandbox.llm_api.data.history import HistoryRow, flat_history_rows
 from custom_components.llm_sandbox.llm_api.executor_support import ExecutionState
 from custom_components.llm_sandbox.llm_api.prompts import PromptProfile
@@ -56,7 +56,7 @@ def build_eval_runtime(
     invoker = RecordingInvoker()
     settings = SandboxSettings(
         execution_timeout_seconds=10,
-        helper_call_budget=DEFAULT_HELPER_CALL_BUDGET,
+        service_call_limit=DEFAULT_SERVICE_CALL_LIMIT,
         scope=EVAL_SCOPE,
         actions_enabled=case.actions_enabled,
         action_domains=case.action_domains,
@@ -133,8 +133,8 @@ def _eval_runtime_context_factory(
     """Return a factory because execute_home_code state is per tool invocation."""
 
     def factory() -> RuntimeContext:
-        # State mutation point: each execute_home_code call gets fresh helper/action accounting.
-        state = ExecutionState(helper_call_limit=settings.helper_call_budget)
+        # State mutation point: each execute_home_code call gets fresh service/action accounting.
+        state = ExecutionState(service_call_limit=settings.service_call_limit)
         return RuntimeContext(
             state=state,
             settings=settings,

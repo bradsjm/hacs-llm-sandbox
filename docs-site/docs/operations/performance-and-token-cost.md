@@ -11,7 +11,7 @@ Tool use adds work to each conversation turn. The integration builds snapshots, 
 
 - Number of visible entities and attributes.
 - Prompt profile verbosity.
-- Recorder query windows and output limits.
+- Recorder query windows and byte-bounded cursor pages.
 - SQL queries that load history or statistics.
 - Camera images.
 - Follow-up calls caused by weak model behavior.

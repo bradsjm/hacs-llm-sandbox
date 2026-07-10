@@ -15,12 +15,12 @@ Common inputs include:
 - Explicit statistic or entity IDs, depending on model/tool usage.
 - Selectors such as `area_id`, `device_id`, `floor_id`, `label_id`, and `domain`.
 - Statistic period: `5minute`, `hour`, or `day`.
-- Statistic types such as `mean`, `min`, `max`, `state`, and `sum`.
+- One or more statistic types selected from `mean`, `min`, `max`, `state`, and `sum`.
 - Pagination cursor for older rows. A `next_cursor` can only be passed back to `get_statistics` with the same resolved scope; omit `start`, `end`, and `hours` when using it.
 
 ## Bounds
 
-Statistics default to a 24-hour window and are capped at 30 days. Output rows are bounded.
+Statistics default to a 24-hour window and are capped at 30 days. Raw cursor pages normally fit their complete compact UTF-8 JSON response within 16 KiB; 1000 rows remains an emergency ceiling. Rows are never split, and a single oversized row is returned intact on its own so the existing cursor can make progress.
 
 ## Source
 

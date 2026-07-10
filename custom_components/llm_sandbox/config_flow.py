@@ -27,18 +27,18 @@ from .const import (
     CONF_EXCLUDE_CONFIG,
     CONF_EXCLUDE_HIDDEN,
     CONF_EXECUTION_TIMEOUT,
-    CONF_HELPER_CALL_BUDGET,
     CONF_INCLUDE_ALL_DIAGNOSTICS,
     CONF_NAME,
     CONF_PROMPT_PROFILE,
     CONF_RESTRICT_TO_ASSIST_EXPOSED,
+    CONF_SERVICE_CALL_LIMIT,
     DEFAULT_ASSISTANT,
     DEFAULT_NAME,
     DOMAIN,
     MAX_EXECUTION_TIMEOUT_SECONDS,
-    MAX_HELPER_CALL_BUDGET,
+    MAX_SERVICE_CALL_LIMIT,
     MIN_EXECUTION_TIMEOUT_SECONDS,
-    MIN_HELPER_CALL_BUDGET,
+    MIN_SERVICE_CALL_LIMIT,
     SECTION_ACTIONS,
     SECTION_EXECUTION_LIMITS,
     SECTION_PROMPT,
@@ -197,12 +197,12 @@ def _options_schema(
             )
         ),
         vol.Required(
-            CONF_HELPER_CALL_BUDGET,
-            default=option_value(options, CONF_HELPER_CALL_BUDGET),
+            CONF_SERVICE_CALL_LIMIT,
+            default=option_value(options, CONF_SERVICE_CALL_LIMIT),
         ): NumberSelector(
             NumberSelectorConfig(
-                min=MIN_HELPER_CALL_BUDGET,
-                max=MAX_HELPER_CALL_BUDGET,
+                min=MIN_SERVICE_CALL_LIMIT,
+                max=MAX_SERVICE_CALL_LIMIT,
                 mode=NumberSelectorMode.BOX,
                 step=1,
             )

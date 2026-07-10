@@ -286,16 +286,24 @@ def _production_recorder_source(
     deadline: float,
 ) -> RecorderSource:
     """Build a RecorderSource backed by the live recorder and logbook."""
+    recorder_synced = False
 
     async def _fetch_history(entity_ids: list[str], start: datetime, end: datetime) -> dict[str, list[HistoryRow]]:
+        nonlocal recorder_synced
         # Reuses the existing visibility-validating helper unchanged so the
         # code.py facade seam and the tool path share one fetch implementation.
-        return await fetch_visible_history_rows(hass, snapshot, deadline, entity_ids, start, end)
+        result = await fetch_visible_history_rows(
+            hass, snapshot, deadline, entity_ids, start, end, sync=not recorder_synced
+        )
+        # One source is built per tool invocation; later grouped reads share its barrier.
+        recorder_synced = True
+        return result
 
     async def _fetch_statistics(
         statistic_ids: list[str], start: datetime, end: datetime, period: str, types: set[str]
     ) -> Mapping[str, list[dict[str, object]]]:
-        return cast(
+        nonlocal recorder_synced
+        result = cast(
             Mapping[str, list[dict[str, object]]],
             await _run_query(
                 hass,
@@ -310,17 +318,27 @@ def _production_recorder_source(
                     units=None,
                     types=cast(set[StatisticQueryType], types),
                 ),
+                sync=not recorder_synced,
             ),
         )
+        # One source is built per tool invocation; later grouped reads share its barrier.
+        recorder_synced = True
+        return result
 
     async def _fetch_logbook(entity_ids: list[str], start: datetime, end: datetime) -> list[dict[str, object]]:
+        nonlocal recorder_synced
         event_types = async_determine_event_types(hass, entity_ids, None)
         processor = EventProcessor(
             hass, event_types, entity_ids, None, None, timestamp=False, include_entity_name=True
         )
         raw_entries = await _run_query(
-            hass, deadline, functools.partial(processor.get_events, start_day=start, end_day=end)
+            hass,
+            deadline,
+            functools.partial(processor.get_events, start_day=start, end_day=end),
+            sync=not recorder_synced,
         )
+        # One source is built per tool invocation; later grouped reads share its barrier.
+        recorder_synced = True
         # Plain-dict conversion lives here so the core (and eval fixtures) always
         # see JSON-mutable dicts.
         return [dict(entry) for entry in raw_entries]

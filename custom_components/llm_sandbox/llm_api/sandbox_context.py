@@ -52,7 +52,7 @@ class RuntimeContext:
 
     Reads against the frozen snapshot are pure and need no runtime access.
     The services facade reaches into ``state`` to record action outcomes and
-    enforce helper-call budgets. Live Home Assistant access remains behind the
+    enforce service-call limits. Live Home Assistant access remains behind the
     private ``invoke`` callable; no live HA object is exposed to Monty.
     """
 

@@ -26,7 +26,7 @@ async def test_get_camera_image_returns_multimodal_envelope(
     """A visible camera returns one strict-base64 inline image attachment."""
     _seed_camera(hass)
     with patch.object(vision, "_async_get_camera_image", return_value=(_tiny_jpeg(), "image/jpeg")):
-        result = await _call_tool(hass, loaded_entry, {"image_entity": "camera.front_door"})
+        result = await _call_tool(hass, loaded_entry, {"image_entity": "camera.front_door", "target_width": 384})
 
     assert result["_type"] == "ha_multimodal_tool_result"
     attachments = cast(list[dict[str, str]], result["attachments"])
@@ -36,6 +36,8 @@ async def test_get_camera_image_returns_multimodal_envelope(
     assert attachment["mime_type"] == "image/jpeg"
     decoded = base64.b64decode(attachment["base64"], validate=True)
     assert decoded
+    with PILImage.open(io.BytesIO(decoded)) as image:
+        assert image.size == (2, 2)
 
 
 async def test_get_camera_image_rejects_non_visible_entity(
@@ -124,17 +126,30 @@ async def test_get_camera_image_maps_capture_failure(
     assert "camera.front_door" in str(result["error"]["message"])
 
 
+@pytest.mark.parametrize(
+    ("tool_args", "expected_token"),
+    [
+        pytest.param({"image_entity": "not_an_entity"}, "not_an_entity", id="malformed-entity-id"),
+        pytest.param(
+            {"image_entity": "camera.front_door", "target_width": 383}, "target_width", id="below-minimum-width"
+        ),
+    ],
+)
 async def test_get_camera_image_rejects_invalid_tool_input(
     hass: HomeAssistant,
     loaded_entry: MockConfigEntry,
+    tool_args: dict[str, object],
+    expected_token: str,
 ) -> None:
-    """Malformed entity IDs are reported as invalid tool input."""
-    result = await _call_tool(hass, loaded_entry, {"image_entity": "not_an_entity"})
+    """Malformed entity IDs and widths below 384 are rejected as tool input."""
+    _seed_camera(hass)
+
+    result = await _call_tool(hass, loaded_entry, tool_args)
 
     assert result["status"] == "error"
     assert result["error"]["key"] == "invalid_tool_input"
     message = str(result["error"]["message"])
-    assert "not_an_entity" in message
+    assert expected_token in message
     assert "schema" in message
 
 

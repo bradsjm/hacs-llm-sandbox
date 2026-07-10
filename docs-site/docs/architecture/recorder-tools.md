@@ -11,6 +11,8 @@ Recorder-backed behavior is split between public tool classes and runtime helper
 
 [`tools/recorder.py`](https://github.com/bradsjm/hacs-llm-sandbox/blob/main/custom_components/llm_sandbox/llm_api/tools/recorder.py) defines the LLM-facing `get_history`, `get_statistics`, and `get_logbook` tools.
 
+Raw cursor pages normally fit a complete compact UTF-8 response within 16 KiB. Whole records are preserved, a single oversized record can be returned alone, and the existing cursor continues with older records; row ceilings remain emergency limits.
+
 ## Runtime helpers
 
 [`tools/_recorder_runtime.py`](https://github.com/bradsjm/hacs-llm-sandbox/blob/main/custom_components/llm_sandbox/llm_api/tools/_recorder_runtime.py) implements query execution, validation, scoping, aggregation, pagination, and JSON-safe row formatting.

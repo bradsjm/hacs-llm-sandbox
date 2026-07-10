@@ -27,6 +27,11 @@ def _raw_cursor(payload: dict[str, object]) -> str:
     return base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":")).encode("utf-8")).decode("ascii")
 
 
+def _compact_json_bytes(payload: Mapping[str, object]) -> int:
+    """Measure a payload with the recorder response's compact UTF-8 encoding."""
+    return len(json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8"))
+
+
 async def test_history_returns_states_for_visible_entity(
     hass: HomeAssistant,
     recorder_entry: MockConfigEntry,
@@ -98,6 +103,65 @@ async def test_history_includes_requested_attributes(
     assert missing_row[2] == {}
 
 
+async def test_history_page_uses_compact_utf8_byte_limit(
+    hass: HomeAssistant,
+    recorder_entry: MockConfigEntry,
+) -> None:
+    """Multibyte row values are measured as UTF-8 bytes in the full response."""
+    start = dt_util.utcnow().isoformat()
+    for state in ("one", "two"):
+        hass.states.async_set(
+            "light.bedroom",
+            state,
+            {"friendly_name": "Bedroom Light", "payload": "é" * 3000},
+        )
+    await _sync_recorder(hass)
+
+    result = await _call_history(
+        hass,
+        recorder_entry,
+        {"entity_ids": ["light.bedroom"], "start": start, "attributes": ["payload"]},
+    )
+
+    assert _row_states(result["entities"]["light.bedroom"]["rows"])[-2:] == ["one", "two"]
+    assert _compact_json_bytes(result) <= recorder.MAX_RECORDER_PAGE_BYTES
+    assert set(result) == {"window", "entities"}
+
+
+async def test_history_oversized_first_row_is_intact_and_cursor_progresses(
+    hass: HomeAssistant,
+    recorder_entry: MockConfigEntry,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An oversized newest row is returned alone and does not hide older rows."""
+    # Keep the payload below recorder's own storage cap while exercising the page cap.
+    monkeypatch.setattr(recorder, "MAX_RECORDER_PAGE_BYTES", 8 * 1024)
+    start = dt_util.utcnow().isoformat()
+    hass.states.async_set("light.bedroom", "older", {"friendly_name": "Bedroom Light", "payload": "small"})
+    hass.states.async_set(
+        "light.bedroom",
+        "newest",
+        {"friendly_name": "Bedroom Light", "payload": "x" * (recorder.MAX_RECORDER_PAGE_BYTES + 1)},
+    )
+    await _sync_recorder(hass)
+
+    first = await _call_history(
+        hass,
+        recorder_entry,
+        {"entity_ids": ["light.bedroom"], "start": start, "attributes": ["payload"]},
+    )
+    second = await _call_history(
+        hass,
+        recorder_entry,
+        {"entity_ids": ["light.bedroom"], "cursor": first["next_cursor"]},
+    )
+
+    assert _row_states(first["entities"]["light.bedroom"]["rows"]) == ["newest"]
+    assert _compact_json_bytes(first) > recorder.MAX_RECORDER_PAGE_BYTES
+    assert "older" in _row_states(second["entities"]["light.bedroom"]["rows"])
+    assert "newest" not in _row_states(second["entities"]["light.bedroom"]["rows"])
+
+
 async def test_statistics_returns_rows_for_visible_statistic(
     hass: HomeAssistant,
     recorder_entry: MockConfigEntry,
@@ -153,7 +217,7 @@ async def test_statistics_returns_rows_for_visible_statistic(
     sum_only = await _call_statistics(
         hass,
         recorder_entry,
-        {"statistic_ids": ["sensor.energy"], "period": "hour", "types": ["sum"]},
+        {"statistic_ids": ["sensor.energy"], "period": "hour", "types": ["sum"] * 6},
     )
     sum_rows = sum_only["statistics"]["sensor.energy"]["rows"]
     assert sum_rows
@@ -524,6 +588,7 @@ async def test_history_paginates_large_result(
     assert result["overflow"]["truncated"] is True
     assert result["overflow"]["next_cursor"] == result["next_cursor"]
     assert _row_states(result["entities"]["light.bedroom"]["rows"]) == ["3", "4", "5"]
+    assert len(result["entities"]["light.bedroom"]["rows"]) <= recorder.MAX_HISTORY_STATES
 
 
 async def test_history_pagination_walk_returns_older_page(
@@ -545,6 +610,11 @@ async def test_history_pagination_walk_returns_older_page(
     assert _row_states(first["entities"]["light.bedroom"]["rows"]) == ["3", "4", "5"]
     assert _row_states(second["entities"]["light.bedroom"]["rows"]) == ["0", "1", "2"]
     assert "next_cursor" in second
+    walked = _row_states(first["entities"]["light.bedroom"]["rows"]) + _row_states(
+        second["entities"]["light.bedroom"]["rows"]
+    )
+    assert len(walked) == len(set(walked)) == 6
+    assert set(walked) == {str(index) for index in range(6)}
 
 
 async def test_cursor_rejects_different_tool(

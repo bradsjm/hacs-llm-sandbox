@@ -104,8 +104,8 @@ def code_error_payload_for_state(
 
 def _helper_error_message(err: HelperExecutionError, state: ExecutionState) -> str:
     """Return one actionable sentence for a helper execution error."""
-    if err.key == "call_budget_exceeded":
-        return f"Stopped after {state.helper_call_limit} service calls; do not retry the same call."
+    if err.key == "service_call_limit_exceeded":
+        return f"Stopped after {state.service_call_limit} dispatched service calls; do not retry the same call."
     if reason := err.placeholders.get("reason"):
         return f"Fix the {err.helper} call failure: {reason}."
     if message := tool_error_message(err.key, err.placeholders):

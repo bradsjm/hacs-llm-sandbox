@@ -14,7 +14,7 @@ Errors are intended to be recoverable by the model. They usually include a stabl
 | `ok` | Code ran successfully, though individual service actions can still be blocked and recorded. |
 | `setup_error` | The tool could not start, often because the integration entry is unavailable. |
 | `code_error` | Monty could not run the submitted code. |
-| `helper_error` | A facade or helper call failed during execution. |
+| `helper_error` | A facade operation failed during execution. |
 
 ## Common tool keys
 

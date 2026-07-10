@@ -135,10 +135,10 @@ class ExecuteHomeCodeTool(llm.Tool):
             if isinstance(result, dict):
                 execution = result.get("execution", {})
                 _LOGGER.debug(
-                    "execute_home_code: status=%s helper_calls=%s/%s actions=%d",
+                    "execute_home_code: status=%s dispatched_service_calls=%s/%s actions=%d",
                     execution.get("status") if isinstance(execution, dict) else "n/a",
-                    runtime.state.helper_calls,
-                    runtime.state.helper_call_limit,
+                    runtime.state.dispatched_service_calls,
+                    runtime.state.service_call_limit,
                     len(runtime.state.actions),
                 )
             return cast(JsonObjectType, result)
@@ -207,7 +207,7 @@ def _production_runtime(
         return await hass.async_add_executor_job(fn)
 
     # Hoist state so the fetcher closures can read the live-write flag.
-    state = ExecutionState(helper_call_limit=settings.helper_call_budget)
+    state = ExecutionState(service_call_limit=settings.service_call_limit)
     return RuntimeContext(
         state=state,
         settings=settings,

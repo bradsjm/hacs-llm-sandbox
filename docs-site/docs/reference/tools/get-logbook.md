@@ -18,7 +18,7 @@ Common inputs include:
 
 ## Bounds
 
-Logbook defaults to a bounded recent window and is capped at 24 hours, with at most 200 returned entries.
+Logbook defaults to a bounded recent window and is capped at 24 hours. Cursor pages normally fit their complete compact UTF-8 JSON response within 16 KiB; 200 entries remains an emergency ceiling. Entries are never split, and a single oversized entry is returned intact on its own so the existing cursor can make progress.
 
 ## Runtime requirement
 

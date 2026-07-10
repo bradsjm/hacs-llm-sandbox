@@ -9,7 +9,7 @@ import pydantic_monty  # Required manifest dependency; do not convert to a dynam
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.util.json import JsonValueType
 
-from ...const import DEFAULT_HELPER_CALL_BUDGET
+from ...const import DEFAULT_SERVICE_CALL_LIMIT
 from ...types import ActionRecord
 from ..data.home_db import HomeDatabase
 from ..errors import HelperExecutionError, RecoverableToolError
@@ -50,16 +50,16 @@ class MontyFactory(Protocol):
 
 @dataclass(slots=True)
 class ExecutionState:
-    """Mutable per-run bookkeeping for helper call budget enforcement."""
+    """Mutable per-run bookkeeping for service dispatch limits and outputs."""
 
-    helper_calls: int = 0
-    helper_call_limit: int = DEFAULT_HELPER_CALL_BUDGET
+    dispatched_service_calls: int = 0
+    service_call_limit: int = DEFAULT_SERVICE_CALL_LIMIT
     # Internal forgiveness-layer labels. Payloads expose these as concise
     # adjustments that tell the model the change was already applied.
     normalizations: list[str] = field(default_factory=list)
     adjustments: list[dict[str, object]] = field(default_factory=list)
-    # Captured print() output, one entry per call. Independent of the helper
-    # call budget: print() routes through Monty's print_callback, not helper_response.
+    # Captured print() output, one entry per call. Independent of the service
+    # dispatch limit: print() routes through Monty's print_callback.
     printed: list[str] = field(default_factory=list)
     # Structured truncation metadata for large executor-owned surfaces. Individual
     # helpers can add surface-specific records while preserving existing payloads.
@@ -87,16 +87,8 @@ async def helper_response(
     state: ExecutionState,
     helper: str,
     callback: Callable[[], object],
-    *,
-    count_call: bool = True,
 ) -> JsonValueType:
-    """Run one approved helper and return a raw JSON-safe result."""
-    if count_call:
-        state.helper_calls += 1
-        if state.helper_calls > state.helper_call_limit:
-            err = HelperExecutionError(helper, "call_budget_exceeded", {})
-            state.last_helper_error = err
-            raise err
+    """Run one approved helper with async, error, and JSON handling."""
     # Clear any prior helper error so a user try/except that swallowed a
     # previous helper error cannot shadow a later genuine code error.
     state.last_helper_error = None

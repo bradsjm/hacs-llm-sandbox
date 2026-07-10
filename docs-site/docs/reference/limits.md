@@ -11,16 +11,19 @@ The current limits are defined mainly in [`const.py`](https://github.com/bradsjm
 | --- | --- |
 | Monty code length | 8000 characters. |
 | Execution timeout option | 3 to 30 seconds, default 12. |
-| Service-call budget option | 1 to 100 calls, default 32. |
+| Service-call limit option | 1 to 100 validated calls dispatched to Home Assistant, default 32. |
 | Raw history lookback | Up to 24 hours. |
 | History aggregate lookback | Up to 30 days. |
 | Statistics lookback | Up to 30 days. |
-| History rows | Up to 1000 returned rows. |
-| Statistics rows | Up to 1000 returned rows. |
-| Logbook entries | Up to 200 returned entries. |
+| Raw recorder response | Compact UTF-8 JSON is normally limited to 16 KiB, including the window and continuation metadata. |
+| History rows | Emergency ceiling of 1000 rows per raw page. |
+| Statistics rows | Emergency ceiling of 1000 rows per raw page. |
+| Logbook entries | Emergency ceiling of 200 entries per raw page. |
 | Explicit recorder entity IDs | Up to 20. |
 | SQL length | Up to 4000 characters. |
 | SQL result rows | Up to 500 rows. |
 | Loaded history/statistics rows for SQL | Up to 20000 rows. |
-| Camera target width | 512 to 1920 pixels, default 1280. |
+| Camera target width | 384 to 1920 pixels, default 1280. |
 | Image attachment size | Up to 5 MiB. |
+
+Only dispatched service calls consume the service-call limit, including failures and timeouts after dispatch; reads and pre-dispatch blocks do not. Raw recorder pages preserve whole records and use their existing `next_cursor` to continue with older data.

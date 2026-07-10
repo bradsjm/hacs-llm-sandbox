@@ -12,12 +12,12 @@ Captures a visible `camera.*` or `image.*` entity and returns an inline image re
 | Field | Meaning |
 | --- | --- |
 | `entity_id` | Camera or image entity to capture. |
-| `target_width` | Optional output width from 512 to 1920 pixels. Defaults to 1280. |
+| `target_width` | Optional output width from 384 to 1920 pixels. Defaults to 1280. |
 | `question` | Optional caption or task for the multimodal model. |
 
 ## Bounds
 
-Images are downscaled and normalized to JPEG. The returned attachment must fit within the configured image attachment budget.
+Images are downscaled and normalized to JPEG. The returned attachment must fit within the 5 MiB image attachment cap.
 
 ## Source
 

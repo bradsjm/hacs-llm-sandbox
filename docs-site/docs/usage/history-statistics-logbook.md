@@ -37,6 +37,10 @@ What happened around the time the alarm armed last night?
 
 `get_logbook` returns bounded activity entries when logbook runtime data is available.
 
+## Raw-page pagination
+
+Raw `get_history`, `get_statistics`, and `get_logbook` pages are assembled newest-first and emitted in their normal ascending stream order. Each complete compact UTF-8 response, including its cursor metadata, normally fits within 16 KiB. Row ceilings remain emergency limits (1000 history/statistics rows and 200 logbook entries). Records are never split; if one record alone is larger, it is returned intact by itself and the existing cursor continues with older records.
+
 ## Source
 
 The public recorder tools live in [`tools/recorder.py`](https://github.com/bradsjm/hacs-llm-sandbox/blob/main/custom_components/llm_sandbox/llm_api/tools/recorder.py), with runtime query helpers in [`tools/_recorder_runtime.py`](https://github.com/bradsjm/hacs-llm-sandbox/blob/main/custom_components/llm_sandbox/llm_api/tools/_recorder_runtime.py).

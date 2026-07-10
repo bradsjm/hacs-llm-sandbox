@@ -57,6 +57,7 @@ def _history_facade(
     fetch_statistics: Callable[[Sequence[str], datetime, datetime], Awaitable[list[dict[str, object]]]] | None = None,
     fetch_short_term_statistics: Callable[[Sequence[str], datetime, datetime], Awaitable[list[dict[str, object]]]]
     | None = None,
+    service_call_limit: int = 20,
 ) -> tuple[SandboxHass, RuntimeContext]:
     """Activate a SafeHass facade with test runtime seams."""
 
@@ -72,10 +73,10 @@ def _history_facade(
         return fn()
 
     runtime = RuntimeContext(
-        state=ExecutionState(),
+        state=ExecutionState(service_call_limit=service_call_limit),
         settings=SandboxSettings(
             execution_timeout_seconds=10,
-            helper_call_budget=20,
+            service_call_limit=service_call_limit,
             scope=DEFAULT_SCOPE,
             actions_enabled=False,
             action_domains=frozenset(),
@@ -217,6 +218,22 @@ result = await hass.query("select entity_id, state from states where entity_id =
 
     assert result["execution"]["status"] == "ok"
     assert result["output"] == [{"entity_id": "light.bedroom", "state": "on"}]
+
+
+async def test_repeated_history_and_query_reads_do_not_consume_service_capacity() -> None:
+    """Read facades leave a one-call service dispatch budget fully available."""
+
+    async def _fetch_history(_entity_ids: Sequence[str], _start: datetime, _end: datetime) -> list[dict[str, object]]:
+        return []
+
+    hass, runtime = _history_facade(_snapshot(), _fetch_history, service_call_limit=1)
+
+    await hass.history(entity_ids="sensor.temp")
+    await hass.history(entity_ids="sensor.temp")
+    await hass.query("select entity_id from states where entity_id = 'sensor.temp'")
+    await hass.query("select entity_id from states where entity_id = 'sensor.temp'")
+
+    assert runtime.state.dispatched_service_calls == 0
 
 
 async def test_hass_query_rejects_writes(

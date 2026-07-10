@@ -19,7 +19,7 @@ Common inputs include:
 
 ## Bounds
 
-Raw history defaults to a one-hour window and is capped at 24 hours. Aggregate history can look back up to 30 days. Output rows are bounded.
+Raw history defaults to a one-hour window and is capped at 24 hours. Aggregate history can look back up to 30 days. Raw cursor pages normally fit their complete compact UTF-8 JSON response within 16 KiB; 1000 rows remains an emergency ceiling. Rows are never split, and a single oversized row is returned intact on its own so the existing cursor can make progress.
 
 ## Source
 

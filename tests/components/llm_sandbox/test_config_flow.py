@@ -11,18 +11,18 @@ from custom_components.llm_sandbox.const import (
     CONF_EXCLUDE_CONFIG,
     CONF_EXCLUDE_HIDDEN,
     CONF_EXECUTION_TIMEOUT,
-    CONF_HELPER_CALL_BUDGET,
     CONF_INCLUDE_ALL_DIAGNOSTICS,
     CONF_NAME,
     CONF_PROMPT_PROFILE,
     CONF_RESTRICT_TO_ASSIST_EXPOSED,
+    CONF_SERVICE_CALL_LIMIT,
     DEFAULT_ACTIONS_ENABLED,
     DEFAULT_ASSISTANT,
     DEFAULT_EXCLUDE_HIDDEN,
     DEFAULT_EXECUTION_TIMEOUT_SECONDS,
-    DEFAULT_HELPER_CALL_BUDGET,
     DEFAULT_PROMPT_PROFILE,
     DEFAULT_RESTRICT_TO_ASSIST_EXPOSED,
+    DEFAULT_SERVICE_CALL_LIMIT,
     DOMAIN,
     SECTION_ACTIONS,
     SECTION_EXECUTION_LIMITS,
@@ -34,6 +34,7 @@ from custom_components.llm_sandbox.runtime import SandboxSettings, settings_from
 from custom_components.llm_sandbox.snapshot import SnapshotScope
 from homeassistant.config_entries import ConfigFlowResult
 from homeassistant.core import HomeAssistant
+from homeassistant.data_entry_flow import InvalidData
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 
@@ -103,7 +104,7 @@ def test_settings_from_entry_defaults() -> None:
 
     assert settings == SandboxSettings(
         execution_timeout_seconds=DEFAULT_EXECUTION_TIMEOUT_SECONDS,
-        helper_call_budget=DEFAULT_HELPER_CALL_BUDGET,
+        service_call_limit=DEFAULT_SERVICE_CALL_LIMIT,
         scope=SnapshotScope(
             assistant=DEFAULT_ASSISTANT,
             restrict_to_assist_exposed=DEFAULT_RESTRICT_TO_ASSIST_EXPOSED,
@@ -233,8 +234,8 @@ async def test_options_flow_section_submission_flattens(
     options = {
         SECTION_PROMPT: {CONF_PROMPT_PROFILE: DEFAULT_PROMPT_PROFILE},
         SECTION_EXECUTION_LIMITS: {
-            CONF_EXECUTION_TIMEOUT: 17,
-            CONF_HELPER_CALL_BUDGET: 48,
+            CONF_EXECUTION_TIMEOUT: 3,
+            CONF_SERVICE_CALL_LIMIT: 48,
         },
         SECTION_VISIBILITY: {
             CONF_RESTRICT_TO_ASSIST_EXPOSED: False,
@@ -253,8 +254,8 @@ async def test_options_flow_section_submission_flattens(
     assert result["type"] == "create_entry"
     assert mock_config_entry.options == {
         CONF_PROMPT_PROFILE: DEFAULT_PROMPT_PROFILE,
-        CONF_EXECUTION_TIMEOUT: 17.0,
-        CONF_HELPER_CALL_BUDGET: 48.0,
+        CONF_EXECUTION_TIMEOUT: 3.0,
+        CONF_SERVICE_CALL_LIMIT: 48.0,
         CONF_RESTRICT_TO_ASSIST_EXPOSED: False,
         CONF_EXCLUDE_HIDDEN: False,
         CONF_EXCLUDE_CONFIG: False,
@@ -275,7 +276,7 @@ async def test_options_flow_rejects_invalid_action_domain(
         SECTION_PROMPT: {CONF_PROMPT_PROFILE: DEFAULT_PROMPT_PROFILE},
         SECTION_EXECUTION_LIMITS: {
             CONF_EXECUTION_TIMEOUT: 17,
-            CONF_HELPER_CALL_BUDGET: 48,
+            CONF_SERVICE_CALL_LIMIT: 48,
         },
         SECTION_VISIBILITY: {
             CONF_RESTRICT_TO_ASSIST_EXPOSED: False,
@@ -294,3 +295,32 @@ async def test_options_flow_rejects_invalid_action_domain(
     assert result["type"] == "form"
     assert result["step_id"] == "init"
     assert result["errors"] == {CONF_ACTION_DOMAINS: "invalid_action_domain"}
+
+
+async def test_options_flow_rejects_timeout_below_three_seconds(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+) -> None:
+    """The execution-timeout boundary rejects values below three seconds."""
+    mock_config_entry.add_to_hass(hass)
+    init_result = await hass.config_entries.options.async_init(mock_config_entry.entry_id)
+    options = {
+        SECTION_PROMPT: {CONF_PROMPT_PROFILE: DEFAULT_PROMPT_PROFILE},
+        SECTION_EXECUTION_LIMITS: {
+            CONF_EXECUTION_TIMEOUT: 2,
+            CONF_SERVICE_CALL_LIMIT: 48,
+        },
+        SECTION_VISIBILITY: {
+            CONF_RESTRICT_TO_ASSIST_EXPOSED: False,
+            CONF_EXCLUDE_HIDDEN: False,
+            CONF_EXCLUDE_CONFIG: False,
+            CONF_INCLUDE_ALL_DIAGNOSTICS: True,
+        },
+        SECTION_ACTIONS: {
+            CONF_ACTIONS_ENABLED: True,
+            CONF_ACTION_DOMAINS: ["light"],
+        },
+    }
+
+    with pytest.raises(InvalidData):
+        await hass.config_entries.options.async_configure(init_result["flow_id"], user_input=options)
