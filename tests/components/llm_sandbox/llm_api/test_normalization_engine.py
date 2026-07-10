@@ -13,6 +13,12 @@ from custom_components.llm_sandbox.llm_api.normalization.rules.builtin_rules imp
 from custom_components.llm_sandbox.llm_api.normalization.rules.datetime_rules import (
     DATETIME_IMPORTS_RESOLVED,
 )
+from custom_components.llm_sandbox.llm_api.normalization.rules.registry_import_rules import (
+    REGISTRY_IMPORTS_RESOLVED,
+)
+from custom_components.llm_sandbox.llm_api.normalization.rules.service_target_rules import (
+    REWROTE_POSITIONAL_SERVICE_TARGET,
+)
 from custom_components.llm_sandbox.llm_api.normalization.rules.state_sugar_rules import (
     REWROTE_SYNC_SUBSCRIPT,
 )
@@ -126,6 +132,74 @@ from custom_components.llm_sandbox.llm_api.normalization.rules.state_sugar_rules
     ],
 )
 def test_rewrite_datetime_imports(
+    code: str,
+    expected_code: str,
+    expected_labels: set[str],
+) -> None:
+    normalized, labels = rewrite(code)
+
+    assert normalized == expected_code
+    assert set(labels) == expected_labels
+
+
+@pytest.mark.parametrize(
+    ("code", "expected_code", "expected_labels"),
+    [
+        pytest.param(
+            "from homeassistant.helpers import entity_registry as er\nresult = er.async_get(hass)",
+            "result = er.async_get(hass)",
+            {REGISTRY_IMPORTS_RESOLVED},
+            id="short-entity-registry-alias",
+        ),
+        pytest.param(
+            "from homeassistant.helpers import floor_registry\nresult = floor_registry.async_list_floors()",
+            "result = floor_registry.async_list_floors()",
+            {REGISTRY_IMPORTS_RESOLVED},
+            id="long-floor-registry-name",
+        ),
+        pytest.param(
+            "from homeassistant.helpers import area_registry as ar, label_registry as lr\nresult = ar.async_list_areas()",
+            "result = ar.async_list_areas()",
+            {REGISTRY_IMPORTS_RESOLVED},
+            id="multiple-supported-registry-imports",
+        ),
+    ],
+)
+def test_rewrite_supported_module_registry_imports(
+    code: str,
+    expected_code: str,
+    expected_labels: set[str],
+) -> None:
+    normalized, labels = rewrite(code)
+
+    assert normalized == expected_code
+    assert set(labels) == expected_labels
+
+
+@pytest.mark.parametrize(
+    ("code", "expected_code", "expected_labels"),
+    [
+        pytest.param(
+            "from homeassistant.helpers import entity_registry as er",
+            "",
+            {REGISTRY_IMPORTS_RESOLVED},
+            id="direct-module-import-rewritten",
+        ),
+        pytest.param(
+            "if enabled:\n    from homeassistant.helpers import entity_registry as er",
+            "if enabled:\n    from homeassistant.helpers import entity_registry as er",
+            set(),
+            id="module-if-import-left-alone",
+        ),
+        pytest.param(
+            "try:\n    from homeassistant.helpers import entity_registry as er\nexcept Exception:\n    pass",
+            "try:\n    from homeassistant.helpers import entity_registry as er\nexcept Exception:\n    pass",
+            set(),
+            id="module-try-import-left-alone",
+        ),
+    ],
+)
+def test_rewrite_registry_imports_only_from_direct_module_body(
     code: str,
     expected_code: str,
     expected_labels: set[str],
@@ -353,6 +427,18 @@ def test_rewrite_builtins(
             set(),
             id="syntax-error-fail-open",
         ),
+        pytest.param(
+            "result = hass.services.async_call('light', 'turn_on', {'brightness_pct': 80}, {'entity_id': 'light.bedroom'})",
+            "result = await hass.services.async_call('light', 'turn_on', {'brightness_pct': 80}, target={'entity_id': 'light.bedroom'})",
+            {REWROTE_POSITIONAL_SERVICE_TARGET, AWAITED_ASYNC_CALLS},
+            id="mapping-fourth-argument-becomes-target",
+        ),
+        pytest.param(
+            "result = hass.services.async_call('light', 'turn_on', {}, {'entity_id': 'light.bedroom'}, blocking=True)",
+            "result = await hass.services.async_call('light', 'turn_on', {}, target={'entity_id': 'light.bedroom'}, blocking=True)",
+            {REWROTE_POSITIONAL_SERVICE_TARGET, AWAITED_ASYNC_CALLS},
+            id="mapping-fourth-argument-with-blocking-keyword",
+        ),
     ],
 )
 def test_rewrite_awaits_rooted_facade_operations(
@@ -364,6 +450,26 @@ def test_rewrite_awaits_rooted_facade_operations(
 
     assert normalized == expected_code
     assert set(labels) == expected_labels
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        pytest.param(
+            "result = await hass.services.async_call(*args, 'light', 'turn_on', {'entity_id': 'light.bedroom'})",
+            id="starred-argument",
+        ),
+        pytest.param(
+            "result = await hass.services.async_call('light', 'turn_on', {}, {'entity_id': 'light.bedroom'}, **options)",
+            id="keyword-unpacking",
+        ),
+    ],
+)
+def test_rewrite_positional_service_target_leaves_unpacking_alone(code: str) -> None:
+    normalized, labels = rewrite(code)
+
+    assert normalized == code
+    assert set(labels) == set()
 
 
 @pytest.mark.parametrize(
@@ -387,6 +493,26 @@ def test_rewrite_awaits_rooted_facade_operations(
         pytest.param(
             "import datetime as dt\nfrom json import dumps as dt\nresult = dt.datetime.now()",
             id="from-import-rebind-invalidates-datetime-alias",
+        ),
+        pytest.param(
+            "from homeassistant.helpers import entity_registry as registry\nresult = registry.async_get(hass)",
+            id="non-facade-registry-alias-left-alone",
+        ),
+        pytest.param(
+            "def get_registry():\n    from homeassistant.helpers import entity_registry as er\n    return er.async_get(hass)",
+            id="function-registry-import-left-alone",
+        ),
+        pytest.param(
+            "er = object()\nfrom homeassistant.helpers import entity_registry as er\nresult = er.async_get(hass)",
+            id="shadowed-registry-import-left-alone",
+        ),
+        pytest.param(
+            "result = await hass.services.async_call('light', 'turn_on', {}, target={'entity_id': 'light.bedroom'})",
+            id="existing-service-target-left-alone",
+        ),
+        pytest.param(
+            "result = await hass.services.async_call('light', 'turn_on', {}, target_value)",
+            id="dynamic-fourth-service-argument-left-alone",
         ),
     ],
 )

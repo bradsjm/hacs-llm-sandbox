@@ -60,6 +60,10 @@ class ScopeStack:
         """Return false when a tracked name is bound in any active scope."""
         return all(name not in scope.bound for scope in self._scopes)
 
+    def in_module_scope(self) -> bool:
+        """Return whether the active lexical scope is the module body."""
+        return len(self._scopes) == 1 and self._scopes[0].kind is ScopeKind.MODULE
+
 
 def target_names(node: ast.AST, tracked: frozenset[str]) -> set[str]:
     """Return tracked names bound by an assignment-style target."""

@@ -420,21 +420,21 @@ def _tool_result_failures(
 
 
 def _combined_execute_output(events: Sequence[ToolEvent]) -> dict[str, object]:
-    """Return one searchable payload made from successful execute_home_code calls."""
-    return {"execution": {"status": "ok"}, "output": [event.output for event in events]}
+    """Return one searchable payload from successful execute result values only."""
+    outputs = [event.output.get("output") for event in events if event.output.get("output") is not None]
+    return {"output": outputs or None}
 
 
 def _execute_result_failures(expected: ToolResultCheck, output: Mapping[str, object]) -> list[str]:
-    """Return structured mismatches for one successful execute_home_code payload."""
+    """Return mismatches using only the top-level execute ``output`` value."""
     failures: list[str] = []
     result = output.get("output")
-    printed = output.get("printed")
-    has_result = result is not None or (isinstance(printed, list) and bool(printed))
+    has_result = result is not None
     if expected.min_results == 0 and has_result:
         failures.append("unexpected_results")
     elif expected.min_results > 0 and not has_result:
         failures.append("empty_output")
-    output_blob = json.dumps(output, ensure_ascii=False, sort_keys=True, default=str).lower()
+    output_blob = json.dumps(result, ensure_ascii=False, sort_keys=True, default=str).lower()
     failures.extend(
         f"missing_entry_entity:{entity_id}"
         for entity_id in expected.entity_ids

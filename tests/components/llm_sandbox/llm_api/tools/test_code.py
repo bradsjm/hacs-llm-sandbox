@@ -152,6 +152,56 @@ result = {
     assert output["len"] >= 2
 
 
+async def test_snapshot_records_and_llm_context_support_read_only_mapping_reads(
+    hass: HomeAssistant,
+    loaded_entry: MockConfigEntry,
+) -> None:
+    """Monty can use mapping reads over records and the request context without mutation APIs."""
+    result = await _run_code(
+        hass,
+        loaded_entry,
+        """
+state = hass.states.get("light.bedroom")
+result = {
+    "state_get": state.get("state"),
+    "state_keys": "attributes" in state.keys(),
+    "state_items": state.items()[0][0],
+    "state_values": "on" in state.values(),
+    "context_id": llm_context.context.get("id"),
+    "context_keys": "device_id" in llm_context.keys(),
+    "context_items": llm_context.items()[0][0],
+    "context_values": "test" in llm_context.values(),
+    "mutation_api": hasattr(state, "update") or hasattr(llm_context, "update"),
+}
+""",
+    )
+
+    assert result["execution"]["status"] == "ok"
+    output = result["output"]
+    assert isinstance(output, dict)
+    assert output["state_get"] == "on"
+    assert output["state_keys"] is True
+    assert output["state_items"] == "entity_id"
+    assert output["state_values"] is True
+    assert isinstance(output["context_id"], str)
+    assert output["context_keys"] is True
+    assert output["context_items"] == "platform"
+    assert output["context_values"] is True
+    assert output["mutation_api"] is False
+
+
+async def test_print_only_execution_keeps_null_output(
+    hass: HomeAssistant,
+    loaded_entry: MockConfigEntry,
+) -> None:
+    """Print-only code keeps its result distinct from captured output lines."""
+    result = await _run_code(hass, loaded_entry, 'print("Bedroom light is on")')
+
+    assert result["execution"]["status"] == "ok"
+    assert result["output"] is None
+    assert result["printed"] == ["Bedroom light is on"]
+
+
 async def test_hass_query_reads_visible_states(
     hass: HomeAssistant,
     loaded_entry: MockConfigEntry,
@@ -840,6 +890,49 @@ result = ret
     assert "frozen snapshot" in result["notes"][0]
     assert "do not reread state" in result["notes"][0]
     assert events == ["turn_on"]
+
+
+async def test_mapping_fourth_positional_service_target_is_normalized(
+    hass: HomeAssistant,
+    loaded_entry: MockConfigEntry,
+) -> None:
+    """Verify a fourth positional mapping target executes through the facade."""
+    events: list[str] = []
+    hass.bus.async_listen("call_service", lambda event: events.append(event.data.get("service", "")))
+    code = """
+await hass.services.async_call(
+    "light",
+    "turn_on",
+    {"brightness_pct": 80},
+    {"entity_id": "light.bedroom"},
+    blocking=True,
+)
+result = "done"
+"""
+
+    result = await _run_code(hass, loaded_entry, code)
+    await hass.async_block_till_done()
+
+    assert result["execution"]["status"] == "ok"
+    assert result["output"] == "done"
+    assert result["actions"][0]["target"]["entity_id"] == ["light.bedroom"]
+    assert events == ["turn_on"]
+
+
+async def test_helper_registry_import_is_normalized(
+    hass: HomeAssistant,
+    loaded_entry: MockConfigEntry,
+) -> None:
+    """Verify a supported helper-registry import resolves to its facade global."""
+    code = """
+from homeassistant.helpers import entity_registry as er
+result = er.async_get(hass).async_get("light.bedroom").entity_id
+"""
+
+    result = await _run_code(hass, loaded_entry, code)
+
+    assert result["execution"]["status"] == "ok"
+    assert result["output"] == "light.bedroom"
 
 
 async def test_policy_blocked_service_call_adds_action_failure_metadata(

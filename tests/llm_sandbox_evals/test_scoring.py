@@ -152,6 +152,45 @@ def test_execute_tool_payload_evidence_can_span_successful_calls() -> None:
     assert score_case(checks) == pytest.approx(0.9444444444)
 
 
+def test_execute_structured_checks_ignore_printed_lines_and_envelope_metadata() -> None:
+    """Only an execute envelope's top-level output can satisfy structured evidence."""
+    checks = check_case(
+        _case(
+            Expected(
+                tool_result_checks=(
+                    ToolResultCheck(
+                        tool_name="execute_home_code",
+                        entity_ids=("sensor.living_temp",),
+                        entry_values=("23.4",),
+                    ),
+                ),
+            )
+        ),
+        "I checked it.",
+        (),
+        1,
+        (
+            ToolEvent(
+                tool_name="execute_home_code",
+                args={"code": "print('sensor.living_temp is 23.4')"},
+                output={
+                    "execution": {"status": "ok", "note": "sensor.living_temp"},
+                    "output": None,
+                    "printed": ["sensor.living_temp is 23.4"],
+                    "notes": ["sensor.living_temp"],
+                },
+            ),
+        ),
+    )
+
+    check = next(check for check in checks if check.name == "tool_result_check_0")
+    assert check.passed is False
+    assert "empty_output" in check.feedback
+    assert "missing_entry_entity:sensor.living_temp" in check.feedback
+    assert "missing_entry_value:23.4" in check.feedback
+    assert score_case(checks) == 0.0
+
+
 def test_provenance_evidence_reads_tool_payloads() -> None:
     tool_events = (
         ToolEvent(

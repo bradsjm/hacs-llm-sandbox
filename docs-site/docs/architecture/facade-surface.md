@@ -7,6 +7,8 @@ description: The Home Assistant-like API exposed inside Monty.
 
 Facades are safe objects built from snapshot records. They preserve useful Home Assistant read idioms without exposing live Home Assistant internals.
 
+Snapshot records and `llm_context` also support read-only mapping-style reads: `record.get("field")`, `record.keys()`, `record.items()`, and `record.values()`. These views do not expose mapping mutation methods.
+
 ## State facade
 
 [`facades/state.py`](https://github.com/bradsjm/hacs-llm-sandbox/blob/main/custom_components/llm_sandbox/llm_api/facades/state.py) provides `hass.states` methods such as `get`, `async_all`, `is_state`, `async_entity_ids`, and `entity_ids`. `SafeHass` exposes only `states`, `services`, and `config`, plus async helpers such as `hass.history(...)` and `hass.query(...)`.

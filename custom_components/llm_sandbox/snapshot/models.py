@@ -44,20 +44,56 @@ type ServiceTargetBrief = dict[str, tuple[ServiceTargetFilter, ...] | list[Servi
 
 
 class _JsonSafeRecord:
-    """Serialize a frozen record to a dict of its dataclass fields.
+    """Expose frozen record fields through JSON and read-only mapping-style APIs.
 
     The hook returns raw field values; the executor's ``json_safe`` recursion
     converts nested ``Safe*`` records, tuples (incl. tuple-of-tuples), dicts,
     and sets to JSON-safe structures. ``__slots__`` keeps subclasses with
-    ``slots=True`` truly slot-only.
+    ``slots=True`` truly slot-only. Mapping reads use a newly-built dict so
+    records never expose a mutable backing mapping.
     """
 
     __slots__ = ()
 
+    def _mapping(self) -> dict[str, object]:
+        """Return the dataclass fields as a fresh mapping for safe reads."""
+        return {f.name: getattr(self, f.name) for f in fields(cast(Any, self))}
+
+    def _get(self, key: str, default: object | None = None) -> object | None:
+        """Return a field by name, or ``default`` when it is absent."""
+        return self._mapping().get(key, default)
+
+    def _keys(self) -> list[str]:
+        """Return the available field names as a concrete list."""
+        return list(self._mapping())
+
+    def _items(self) -> list[tuple[str, object]]:
+        """Return the available fields as concrete key/value tuples."""
+        return list(self._mapping().items())
+
+    def _values(self) -> list[object]:
+        """Return the available field values as a concrete list."""
+        return list(self._mapping().values())
+
+    def __getattr__(self, name: str) -> object:
+        """Resolve the fixed read-only mapping method surface for Monty calls."""
+        # Monty dispatches missing public dataclass method calls to this host
+        # object. Keep the exposed names explicit so no mutation API exists.
+        readers = {
+            "get": self._get,
+            "keys": self._keys,
+            "items": self._items,
+            "values": self._values,
+        }
+        try:
+            return readers[name]
+        except KeyError:
+            raise AttributeError(name) from None
+
     def __llm_sandbox_json__(self) -> JsonValueType:
         # Mixin is consumed only by dataclass subclasses; cast satisfies the
         # dataclass-typed ``fields()`` argument without weakening the surface.
-        return cast(JsonValueType, {f.name: getattr(self, f.name) for f in fields(cast(Any, self))})
+        return cast(JsonValueType, self._mapping())
 
 
 @dataclass(frozen=True, slots=True)

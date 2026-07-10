@@ -161,7 +161,7 @@ def recorder() -> RecorderData:
                     "last_updated": "2026-06-29T00:00:00+00:00",
                 },
                 {
-                    "state": "79.25",
+                    "state": "77",
                     "attributes": {"unit_of_measurement": "°F"},
                     "last_changed": "2026-06-29T12:00:00+00:00",
                     "last_updated": "2026-06-29T12:00:00+00:00",

@@ -17,6 +17,8 @@ from .rules.datetime_rules import (
     DatetimeFromImportRule,
     DatetimeImportRule,
 )
+from .rules.registry_import_rules import RegistryImportRule
+from .rules.service_target_rules import PositionalServiceTargetRule
 from .rules.state_sugar_rules import StateContainsRule, StateLenRule, StateSubscriptRule
 from .scopes import (
     ScopeKind,
@@ -63,10 +65,16 @@ _ASYNC_METHODS, _SYNC_METHODS = _classify_view_methods(MONTY_DATACLASS_REGISTRY)
 class ResolutionContext:
     """Read-only resolution window exposed to rewrite rules."""
 
-    def __init__(self, scopes: ScopeStack, module_bound_names: set[str]) -> None:
+    def __init__(
+        self,
+        scopes: ScopeStack,
+        module_bound_names: set[str],
+        direct_module_body_nodes: set[int],
+    ) -> None:
         """Initialize with the active scope stack and module-level binding scan."""
         self._scopes = scopes
         self._module_bound_names = module_bound_names
+        self._direct_module_body_nodes = direct_module_body_nodes
         # Two-tier datetime alias model: dropped stdlib module aliases are stored
         # for attribute rewrites, while kept imports bind shadows and are omitted.
         self._rewrite_aliases: dict[str, str] = {}
@@ -79,6 +87,14 @@ class ResolutionContext:
     def is_intact_name(self, name: str) -> bool:
         """Return whether a name has no active tracked shadow binding."""
         return self._scopes.is_intact(name)
+
+    def in_module_scope(self) -> bool:
+        """Return whether a rewrite is currently visiting the module body."""
+        return self._scopes.in_module_scope()
+
+    def is_direct_module_body_statement(self, node: ast.AST) -> bool:
+        """Return whether ``node`` is an immediate statement in the module body."""
+        return id(node) in self._direct_module_body_nodes
 
     def sandbox_global(self, name: str) -> type[Any] | None:
         """Return the facade global type only when the name is unshadowed."""
@@ -153,12 +169,16 @@ class RewriteEngine(ast.NodeTransformer):
         """Initialize the engine with an ordered rewrite rule registry."""
         self._rules = rules
         self._scopes = ScopeStack(_TRACKED_NAMES)
-        self._ctx = ResolutionContext(self._scopes, set())
+        self._ctx = ResolutionContext(self._scopes, set(), set())
         self._applied: set[str] = set()
 
     def run(self, module: ast.Module) -> tuple[ast.Module, tuple[str, ...]]:
         """Rewrite a parsed module and return ordered unique labels."""
-        self._ctx = ResolutionContext(self._scopes, _module_bound_names(module))
+        self._ctx = ResolutionContext(
+            self._scopes,
+            _module_bound_names(module),
+            {id(statement) for statement in module.body},
+        )
         new_module = self.visit(module)
         if not isinstance(new_module, ast.Module):
             return module, ()
@@ -493,6 +513,7 @@ class _ModuleBindingCollector(ast.NodeVisitor):
 RULES: tuple[RewriteRule, ...] = cast(
     tuple[RewriteRule, ...],
     (
+        RegistryImportRule(),
         DatetimeImportRule(),
         DatetimeFromImportRule(),
         DatetimeAttributeRule(),
@@ -501,6 +522,7 @@ RULES: tuple[RewriteRule, ...] = cast(
         StateSubscriptRule(),
         StateContainsRule(),
         StateLenRule(),
+        PositionalServiceTargetRule(),
         AwaitStripRule(),
         AwaitInsertRule(),
     ),

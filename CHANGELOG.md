@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Improve read-only facade and eval contracts
+
+- Added immutable mapping-style reads to snapshot records and `llm_context` in Monty.
+- Kept print-only executions as `output: null` with captured `printed` lines, and made eval structured checks use only execute result output.
+
 ### Expose persistent notifications
 
 - Added a `persistent_notifications` Monty global for reading active Home Assistant persistent notifications.

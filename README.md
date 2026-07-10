@@ -114,6 +114,8 @@ The safety model rests on two ideas: a **frozen snapshot** and an **isolated san
 
 4. **A forgiveness layer fixes common mistakes.** The assistant's code passes through a normalization step that silently repairs harmless variations — a missing `await`, an imported `datetime`, a forgotten `result =` — so the assistant succeeds on the first try instead of burning retries (and tokens) on trivial errors. When the tool has already offered or applied entity-id guidance in the same conversation, it can also prefer that still-visible entity in later resolution and transparently report remembered literal rewrites in `resolutions`.
 
+Snapshot records and `llm_context` support read-only mapping-style access such as `state.get("state")`, `state.get("attributes")`, and `llm_context.keys()`. They do not expose mapping mutation methods.
+
 ### Read-only (in-memory) SQL queries
 
 - `execute_home_code` can call `await hass.query(sql, hours=N)` to run read-only SQLite over a fresh per-run in-memory database, **not Home Assistant's live recorder database.**

@@ -16,6 +16,7 @@ from custom_components.llm_sandbox.llm_api.prompts import (
     compose_system_prompt,
     render_home_inventory,
     render_request_location,
+    render_tool_capabilities,
 )
 from custom_components.llm_sandbox.llm_api.tools.code import ExecuteHomeCodeTool
 from custom_components.llm_sandbox.llm_api.tools.recorder import (
@@ -59,10 +60,11 @@ class _EvalTool(Protocol):
 
 def build_agent(runtime: EvalRuntime, model_id: str) -> Agent[EvalRuntime, str]:
     """Build a Pydantic AI agent with production schemas and eval deps."""
+    tools = build_agent_tools(runtime)
     return Agent(
         model=make_model(model_id),
-        tools=build_agent_tools(runtime),
-        system_prompt=render_eval_system_prompt(runtime),
+        tools=tools,
+        system_prompt=render_eval_system_prompt(runtime, tools),
         output_type=str,
         deps_type=EvalRuntime,
         name="llm_sandbox_eval",
@@ -71,16 +73,25 @@ def build_agent(runtime: EvalRuntime, model_id: str) -> Agent[EvalRuntime, str]:
 
 def build_agent_tools(runtime: EvalRuntime) -> list[Tool[EvalRuntime]]:
     """Build executable Pydantic AI tools backed by production tool cores."""
-    tools: list[Tool[EvalRuntime]] = [_make_code_tool(runtime.code_tool)]
+    descriptions = {
+        TOOL_GET_HISTORY: runtime.candidate.get_history_description,
+        TOOL_GET_STATISTICS: runtime.candidate.get_statistics_description,
+        TOOL_GET_LOGBOOK: runtime.candidate.get_logbook_description,
+    }
+    tools: list[Tool[EvalRuntime]] = [
+        _make_code_tool(runtime.code_tool, runtime.candidate.execute_home_code_description)
+    ]
     for tool in runtime.recorder_tools:
         # Branch boundary: production omits get_logbook when logbook is unavailable.
         if isinstance(tool, GetLogbookTool) and not runtime.recorder_source.logbook_available:
             continue
-        tools.append(_make_recorder_tool(tool))
+        tools.append(_make_recorder_tool(tool, descriptions[tool.name]))
     return tools
 
 
-def _make_recorder_tool(tool: GetHistoryTool | GetStatisticsTool | GetLogbookTool) -> Tool[EvalRuntime]:
+def _make_recorder_tool(
+    tool: GetHistoryTool | GetStatisticsTool | GetLogbookTool, description: str
+) -> Tool[EvalRuntime]:
     """Return one pydantic-ai Tool backed by _RecorderTool.run_query."""
     json_schema = convert(tool.parameters)
 
@@ -93,13 +104,13 @@ def _make_recorder_tool(tool: GetHistoryTool | GetStatisticsTool | GetLogbookToo
     return Tool.from_schema(
         execute,
         name=tool.name,
-        description=tool.description,
+        description=description,
         json_schema=json_schema,
         takes_ctx=True,
     )
 
 
-def _make_code_tool(tool: ExecuteHomeCodeTool) -> Tool[EvalRuntime]:
+def _make_code_tool(tool: ExecuteHomeCodeTool, description: str) -> Tool[EvalRuntime]:
     """Return one pydantic-ai Tool backed by ExecuteHomeCodeTool.run_execute."""
     json_schema = convert(tool.parameters)
 
@@ -120,7 +131,7 @@ def _make_code_tool(tool: ExecuteHomeCodeTool) -> Tool[EvalRuntime]:
     return Tool.from_schema(
         execute,
         name=tool.name,
-        description=tool.description,
+        description=description,
         json_schema=json_schema,
         takes_ctx=True,
     )
@@ -157,8 +168,8 @@ def _validate_code_tool(tool: ExecuteHomeCodeTool, kwargs: dict[str, object]) ->
         return _ValidationResult({}, cast(JsonObjectType, setup_error_payload(key, placeholders)))
 
 
-def render_eval_system_prompt(runtime: EvalRuntime) -> str:
-    """Render the byte-identical production system prompt for a fixture snapshot."""
+def render_eval_system_prompt(runtime: EvalRuntime, tools: list[Tool[EvalRuntime]]) -> str:
+    """Render the eval system prompt for a fixture snapshot and available tools."""
     inventory_section = render_home_inventory(
         runtime.snapshot,
         recorder_available=True,
@@ -167,6 +178,9 @@ def render_eval_system_prompt(runtime: EvalRuntime) -> str:
     return compose_system_prompt(
         runtime.candidate.api_prompt,
         runtime.case.actions_enabled,
+        # The same available Pydantic tools provide both provider schemas and the
+        # prompt summary, so candidate descriptions cannot diverge between them.
+        tool_section=render_tool_capabilities(cast(list[llm.Tool], tools)),
         location_section=_eval_location_section(runtime),
         inventory_section=inventory_section,
     )

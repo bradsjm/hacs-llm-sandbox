@@ -11,6 +11,7 @@ Static LLM-facing prose lives in ``prompts.py``.
 
 from typing import Any
 
+from ..snapshot.models import _JsonSafeRecord
 from .facade_registry import ATTRIBUTE_REACHABLE_RECORDS, AVAILABLE_GLOBALS, FACADE_CLASSES
 
 # Builtin callables Monty runs natively but does not auto-declare to its
@@ -25,6 +26,13 @@ def iter(obj: Any) -> Any: ...
 def map(func: Any, *iterables: Any) -> list[Any]: ...
 def filter(func: Any, iterable: Any) -> list[Any]: ...
 """
+
+_RECORD_MAPPING_READ_STUBS = (
+    "    def get(self, key: str, default: object = None) -> object | None: ...",
+    "    def keys(self) -> list[str]: ...",
+    "    def items(self) -> list[tuple[str, object]]: ...",
+    "    def values(self) -> list[object]: ...",
+)
 
 
 def _format_type(annotation: object) -> str:
@@ -98,6 +106,10 @@ def _render_methods(cls: type[Any]) -> list[str]:
         if sig.return_annotation is not inspect.Signature.empty:
             returns = f" -> {_format_type(sig.return_annotation)}"
         lines.append(f"    {prefix} {name}({', '.join(params)}){returns}: ...")
+    if issubclass(cls, _JsonSafeRecord):
+        # Monty resolves these record reads through _JsonSafeRecord.__getattr__
+        # so its field-discovery surface remains limited to actual record data.
+        lines.extend(_RECORD_MAPPING_READ_STUBS)
     return lines
 
 

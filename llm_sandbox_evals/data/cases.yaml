@@ -1197,7 +1197,7 @@ cases:
     expected:
       expected_values: []
       answer_values:
-      - '79.25'
+      - '77'
       provenance_values:
       - sensor.tempest_temperature
       tool_result_checks:
@@ -1209,7 +1209,7 @@ cases:
         period: null
         entry_values_by_entity: {}
         entry_values:
-        - '79.25'
+        - '77'
         min_results: 1
       - tool_name: execute_home_code
         entity_ids: []
@@ -1407,7 +1407,7 @@ cases:
       expected_values: []
       answer_values:
       - '78.1'
-      - '79.25'
+      - '77'
       provenance_values:
       - sensor.tempest_temperature
       tool_result_checks:
@@ -1420,7 +1420,7 @@ cases:
         entry_values_by_entity: {}
         entry_values:
         - '78.1'
-        - '79.25'
+        - '77'
         min_results: 3
       blocked_outcome: null
       answer_excludes: []
@@ -1724,7 +1724,7 @@ cases:
     expected:
       expected_values: []
       answer_values:
-      - '79.25'
+      - '77'
       provenance_values:
       - sensor.tempest_temperature
       - cover.office_blinds
@@ -1738,7 +1738,7 @@ cases:
         entry_values_by_entity: {}
         entry_values:
         - '78.1'
-        - '79.25'
+        - '77'
         min_results: 3
       blocked_outcome: null
       answer_excludes: []
@@ -1770,7 +1770,7 @@ cases:
     expected:
       expected_values: []
       answer_values:
-      - '79.25'
+      - '77'
       provenance_values:
       - sensor.tempest_temperature
       - cover.office_blinds
@@ -2519,7 +2519,7 @@ cases:
     expected:
       expected_values: []
       answer_values:
-      - '26.25'
+      - '25'
       provenance_values:
       - sensor.tempest_temperature
       tool_result_checks:
@@ -2531,7 +2531,7 @@ cases:
         period: null
         entry_values_by_entity: {}
         entry_values:
-        - '79.25'
+        - '77'
         min_results: 1
       - tool_name: execute_home_code
         entity_ids: []
@@ -2549,7 +2549,7 @@ cases:
         period: null
         entry_values_by_entity: {}
         entry_values:
-        - '26.25'
+        - '25'
         min_results: 1
       blocked_outcome: null
       answer_excludes: []
