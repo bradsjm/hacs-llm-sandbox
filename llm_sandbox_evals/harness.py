@@ -15,7 +15,7 @@ from llm_sandbox_evals.agent_runner import build_agent, build_model_settings
 from llm_sandbox_evals.config import EvalConfig
 from llm_sandbox_evals.homes import get_home
 from llm_sandbox_evals.runtime import build_eval_runtime
-from llm_sandbox_evals.schema import CaseTrace, CheckResult, EvalCase, PromptCandidate, ToolEvent
+from llm_sandbox_evals.schema import CaseTrace, CheckResult, EvalCase, Expected, PromptCandidate, ToolEvent
 from llm_sandbox_evals.scoring import check_case, score_case
 from llm_sandbox_evals.tools import EVAL_SCOPE, _for_scoring, apply_scope
 
@@ -75,6 +75,8 @@ async def run_case(
             error=None,
             tool_events=tool_events,
             conversation_id=conversation_id,
+            user_request=case.user_request,
+            expected_summary=_expected_summary(case.expected),
         )
     except UsageLimitExceeded as err:
         tool_events = _tool_events(captured)
@@ -163,7 +165,40 @@ def _error_trace(
         error=f"{check_name}: {feedback}",
         tool_events=tool_events,
         conversation_id=conversation_id,
+        user_request=case.user_request,
+        expected_summary=_expected_summary(case.expected),
     )
+
+
+def _expected_summary(expected: Expected) -> tuple[str, ...]:
+    """Return plain-language bullets describing what a correct run must show.
+
+    This is a human-readable projection of the scoring oracle (actions, blocked
+    outcome, recorder/tool-result checks, provenance evidence) for the HTML report,
+    so a reader can see what "correct" meant without decoding scoring internals.
+    """
+    bullets: list[str] = []
+    # Allowed-action expectations: the exact successful side effects required.
+    for action in expected.actions:
+        targets = ", ".join(action.target_entity_ids) if action.target_entity_ids else "the referenced target"
+        bullets.append(f"Perform {action.domain}.{action.service} on {targets}")
+    # Blocked-action expectation: no successful action, bounded blocked attempts.
+    if expected.blocked_outcome is not None:
+        attempts = expected.blocked_outcome.max_attempts
+        plural = "" if attempts == 1 else "s"
+        bullets.append(f"Refuse to act — perform no successful action (\u2264{attempts} blocked attempt{plural})")
+    # Structured tool-result expectations: which tool must return which evidence.
+    for check in expected.tool_result_checks:
+        scope = ", ".join(check.entity_ids or check.statistic_ids) or "a relevant result"
+        detail = f" containing {', '.join(check.entry_values)}" if check.entry_values else ""
+        if check.min_results == 0:
+            bullets.append(f"{check.tool_name} returns no results for {scope}")
+        else:
+            bullets.append(f"{check.tool_name} returns {scope}{detail}")
+    # Provenance evidence that must appear in the structured tool/action output.
+    if expected.provenance_values:
+        bullets.append(f"Tool results contain: {', '.join(expected.provenance_values)}")
+    return tuple(bullets)
 
 
 def _format_exception(err: BaseException, *, timeout: float | None = None) -> str:

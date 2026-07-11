@@ -172,3 +172,8 @@ class CaseTrace:
     # omit tool events (e.g. synthetic traces in tests / error traces).
     tool_events: tuple[ToolEvent, ...] = ()
     conversation_id: str | None = None
+    # Report-context fields (default-valued for back-compat with older traces and
+    # synthetic test constructors): the originating task prompt and a plain-language
+    # summary of the case oracle, both surfaced by the HTML report for comprehension.
+    user_request: str = ""
+    expected_summary: tuple[str, ...] = ()
