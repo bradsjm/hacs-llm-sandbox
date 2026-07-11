@@ -4,61 +4,17 @@ from homeassistant.helpers import llm
 
 from ...snapshot.models import HomeSnapshot
 from ..data.home_db import render_query_schema_prompt
+from .profiles import PromptDetail, PromptProfile
 
 _INVENTORY_AREA_NAME_CAP = 30
 _DOMAIN_COUNT_SEPARATOR = "\N{MULTIPLICATION SIGN}"
 
-ERROR_GUIDANCE_PROMPT = (
-    "## Error guidance\n"
-    "- Recoverable errors may include guidance: {confidence, candidates, reason, next_step, cross_kind}. "
-    "confidence controls candidates: exact/high means a strong single suggestion to act on; "
-    "ambiguous/listing means choose carefully from the list; none means nothing matched. "
-    "next_step is the concrete next action.\n"
-    "- candidates are {id, name, match, detail}.\n"
-    "- In execute_home_code success, actions[] may include status:'error' even when execution.status:'ok'; "
-    "blocked or failed service calls are recorded action outcomes, not code crashes, and top-level notes "
-    "summarizes failed actions.\n"
-    "- If a target was auto-resolved, success includes resolutions:[{requested, applied}] and action records "
-    "carry resolved_from; report the applied id, not the requested alias."
-)
-
-ACTIONS_ENABLED_PROMPT = (
-    "## Service calls (enabled)\n"
-    "- await hass.services.async_call('<domain>', '<service>', service_data, "
-    "target={'entity_id': '<entity_id>'}, blocking=True) performs the call for "
-    "real.\n"
-    "- Keep service data and target separate; put entities in target "
-    "(entity_id/device_id/area_id/label_id/floor_id).\n"
-    "- blocking=True waits and reports outcome; blocking=False is "
-    "fire-and-forget and yields no detailed error. Prefer blocking when you need "
-    "to know it succeeded.\n"
-    "- return_response=True requires blocking=True and is needed for services "
-    "that produce a response.\n"
-    "- Calls run sequentially with no rollback; a later failure does not undo "
-    "earlier calls.\n"
-    "- Action results are compact records with service, target, status, and "
-    "resolved_from or error when relevant.\n"
-    "- Service calls are prevalidated against the fresh snapshot for target visibility, target capability, "
-    "service-data field capability, response mode, and configured action-domain policy before live dispatch.\n"
-    "- An action with status:'error' under execution.status:'ok' is a recorded "
-    "blocked or failed call, not a code crash; read top-level notes for the "
-    "summary and any error.guidance for the next step.\n"
-)
-
-
-ACTIONS_DISABLED_PROMPT = (
-    "## Service calls (disabled)\n"
-    "Service calls are disabled for this assistant. hass.services.async_call is "
-    "rejected. Use the service-catalog reads (has_service, "
-    "async_services_for_domain, async_services_for_target, supports_response), "
-    "states, and registries only.\n"
-)
-
 
 def compose_system_prompt(
-    base_prompt: str,
+    profile: PromptProfile,
     actions_enabled: bool,
     *,
+    base_prompt: str | None = None,
     tool_section: str | None = None,
     location_section: str | None = None,
     inventory_section: str | None = None,
@@ -67,8 +23,10 @@ def compose_system_prompt(
     # Exactly one service-call section per instance: live-call guidance when
     # actions are enabled, the rejection notice otherwise. The static tool
     # descriptions stay action-neutral.
-    section = ACTIONS_ENABLED_PROMPT if actions_enabled else ACTIONS_DISABLED_PROMPT
-    prompt_parts = [part for part in (tool_section, base_prompt, section, ERROR_GUIDANCE_PROMPT) if part]
+    selected_base_prompt = profile.base_prompt if base_prompt is None else base_prompt
+    action_section = _render_action_guidance(profile.detail, actions_enabled)
+    error_section = _render_error_guidance(profile.detail)
+    prompt_parts = [part for part in (tool_section, selected_base_prompt, action_section, error_section) if part]
     prompt = "\n\n".join(prompt_parts)
     # Dynamic inventory comes before request-location scope so the location hint
     # stays the final, most specific request context.
@@ -77,6 +35,52 @@ def compose_system_prompt(
     if location_section is not None:
         prompt = f"{prompt}\n\n{location_section}"
     return prompt
+
+
+def _render_action_guidance(detail: PromptDetail, actions_enabled: bool) -> str:
+    """Render exactly one action contract at the requested profile detail."""
+    if not actions_enabled:
+        return (
+            "## Service calls (disabled)\n"
+            "Service calls are disabled for this assistant. hass.services.async_call is rejected. Use service-catalog reads "
+            "(has_service, async_services_for_domain, async_services_for_target, supports_response), states, and registries only."
+        )
+    if detail is PromptDetail.GUIDED:
+        return """## Service calls (enabled)
+- await hass.services.async_call('<domain>', '<service>', service_data, target={'entity_id': '<entity_id>'}, blocking=True) performs a real call.
+- Keep service data separate from target; targets use entity_id/device_id/area_id/label_id/floor_id. blocking=True waits and reports the outcome; blocking=False is fire-and-forget without detailed errors. Services advertising optional or required responses are automatically run blocking with response capture.
+- Calls run sequentially with no rollback: later failures do not undo earlier calls. Each call is prevalidated against the fresh snapshot for target visibility, target capability, service-data field capability, response mode, and configured action-domain policy before live dispatch.
+- Action records are compact {service, target, status, resolved_from? | error?}. status:'error' under execution.status:'ok' is a recorded blocked/failed action, not a code crash; use top-level notes and error.guidance to recover."""
+    if detail is PromptDetail.BALANCED:
+        return """## Service calls (enabled)
+- await hass.services.async_call('<domain>', '<service>', service_data, target={'entity_id': '<entity_id>'}, blocking=True). Keep service_data and target separate; target accepts entity_id/device_id/area_id/label_id/floor_id. blocking=True reports outcomes; blocking=False is fire-and-forget. Services advertising optional or required responses are automatically run blocking with response capture.
+- Calls are sequential with no rollback and are prevalidated against the fresh snapshot for target visibility/capability, service-data fields, response mode, and action-domain policy. Records contain service, target, status, and resolved_from or error; status:'error' may occur under execution.status:'ok' with recovery in notes/error.guidance."""
+    return """## Service calls (enabled)
+- await hass.services.async_call(domain, service, service_data, target={entity_id|device_id|area_id|label_id|floor_id: ...}, blocking=True); keep data and target separate. Optional or required response services are automatically run blocking with response capture.
+- Calls are sequential/no rollback; fresh-snapshot validation covers target visibility/capability, fields, response mode, and action policy.
+- Outcome: {service,target,status,resolved_from?|error?}; status:'error' can accompany execution.status:'ok', with notes/error.guidance."""
+
+
+def _render_error_guidance(detail: PromptDetail) -> str:
+    """Render structured recovery metadata without changing its stable contract."""
+    if detail is PromptDetail.GUIDED:
+        return """## Error guidance
+- Recoverable errors may include guidance: {confidence, candidates, reason, next_step, cross_kind}. exact/high means a strong single suggestion; ambiguous/listing means choose carefully from candidates; none means nothing matched. next_step is the concrete next action.
+- candidates are {id, name, match, detail}. In execute_home_code success, actions[] may include status:'error' while execution.status:'ok': these are recorded blocked/failed action outcomes, not code crashes, and top-level notes summarizes them.
+- Auto-resolved targets appear in resolutions:[{requested, applied}] and action records carry resolved_from; report the applied ID, not the requested alias."""
+    confidence = (
+        "confidence: exact/high is strong, ambiguous/listing needs selection, none has no match. "
+        if detail is PromptDetail.BALANCED
+        else "confidence distinguishes strong, ambiguous/listing, and no-match guidance. "
+    )
+    return (
+        "## Error guidance\n"
+        "- Recoverable errors may include guidance:{confidence,candidates,reason,next_step,cross_kind}; "
+        f"{confidence}candidates are {{id,name,match,detail}} and next_step is the next action.\n"
+        "- execute_home_code may succeed with actions[].status:'error' and execution.status:'ok': actions are recorded "
+        "blocked/failed outcomes, not crashes; see notes/error.guidance. Auto-resolution reports "
+        "resolutions:[{requested,applied}] and action resolved_from; report the applied ID."
+    )
 
 
 def render_tool_capabilities(tools: list[llm.Tool]) -> str:

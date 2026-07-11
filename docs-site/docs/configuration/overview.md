@@ -27,4 +27,4 @@ The default configuration is conservative:
 - Actions are disabled.
 - Execution timeout is 12 seconds.
 - Service-call limit is 32 dispatched calls.
-- Prompt profile is `standard`.
+- Prompt profile is `balanced`.

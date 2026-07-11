@@ -1,20 +1,20 @@
 ---
 title: Prompt Profiles
-description: Choose the base prompt profile used by the LLM API.
+description: Choose the model-guidance strategy used by the LLM API.
 ---
 
 # Prompt Profiles
 
-Prompt profiles tune the base instructions exposed through the LLM API. The current options are `standard`, `terse`, and `minimal`.
+Prompt profiles tune how the LLM API explains its tools and sandbox surface. All profiles expose the same capabilities and safety boundaries; they differ only in guidance, examples, and presentation density.
 
-Profiles are selected by the options flow in [`config_flow.py`](https://github.com/bradsjm/hacs-llm-sandbox/blob/main/custom_components/llm_sandbox/config_flow.py) and resolved through runtime settings in [`runtime.py`](https://github.com/bradsjm/hacs-llm-sandbox/blob/main/custom_components/llm_sandbox/runtime.py).
+Profiles are selected in the options flow and resolved through runtime settings in [`config_flow.py`](https://github.com/bradsjm/hacs-llm-sandbox/blob/main/custom_components/llm_sandbox/config_flow.py) and [`runtime.py`](https://github.com/bradsjm/hacs-llm-sandbox/blob/main/custom_components/llm_sandbox/runtime.py).
 
 ## Choosing a profile
 
 | Profile | Use when |
 | --- | --- |
-| `standard` | You want the richest guidance and the safest default for setup and exploration. |
-| `terse` | You want fewer prompt tokens but still want meaningful tool guidance. |
-| `minimal` | You are using a strong model and want the shortest base instructions. |
+| `guided` | A weaker or more literal model benefits from explicit routing and compact code examples. |
+| `balanced` | You want the readable default: complete capability guidance without tutorial examples or repeated coaching. |
+| `frontier` | You are using a GPT-5.6-class model and want a compact, complete capability contract. |
 
-The prompt profile does not change the runtime safety boundary. Snapshots, Monty execution, visibility filtering, and action gates still apply.
+The profile never changes the runtime safety boundary. Fresh frozen snapshots, Monty execution, visibility filtering, recorder limits, and action validation continue to apply regardless of selection.

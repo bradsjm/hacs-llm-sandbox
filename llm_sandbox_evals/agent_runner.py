@@ -176,8 +176,9 @@ def render_eval_system_prompt(runtime: EvalRuntime, tools: list[Tool[EvalRuntime
         logbook_available=runtime.recorder_source.logbook_available,
     )
     return compose_system_prompt(
-        runtime.candidate.api_prompt,
+        runtime.settings.prompt_profile,
         runtime.case.actions_enabled,
+        base_prompt=runtime.candidate.api_prompt,
         # The same available Pydantic tools provide both provider schemas and the
         # prompt summary, so candidate descriptions cannot diverge between them.
         tool_section=render_tool_capabilities(cast(list[llm.Tool], tools)),

@@ -9,6 +9,7 @@ from custom_components.llm_sandbox.llm_api.prompts import (
     build_get_history_description,
     build_get_logbook_description,
     build_get_statistics_description,
+    compose_system_prompt,
     render_tool_capabilities,
     resolve_profile,
 )
@@ -18,10 +19,10 @@ from custom_components.llm_sandbox.llm_api.tools.vision import GetCameraImageToo
 
 
 def test_registry_has_expected_profiles() -> None:
-    assert [p.id for p in PROFILE_OPTIONS] == [DEFAULT_PROMPT_PROFILE, "terse", "minimal"]
+    assert [p.id for p in PROFILE_OPTIONS] == ["guided", DEFAULT_PROMPT_PROFILE, "frontier"]
 
 
-def test_resolve_standard_profile() -> None:
+def test_resolve_default_profile() -> None:
     profile = resolve_profile(DEFAULT_PROMPT_PROFILE)
 
     assert isinstance(profile, PromptProfile)
@@ -36,9 +37,9 @@ def test_resolve_unknown_profile_raises() -> None:
 
 @pytest.mark.parametrize("profile", PROFILE_OPTIONS, ids=[profile.id for profile in PROFILE_OPTIONS])
 def test_profile_sql_guidance_describes_query_contract(profile: PromptProfile) -> None:
-    """Every profile carries accurate compact SQL guidance."""
+    """Every profile carries the full SQL capability contract."""
     assert "await hass.query(sql, hours=N)" in profile.base_prompt
-    assert "per-run in-memory database" in profile.base_prompt
+    assert "in-memory database" in profile.base_prompt
     assert "json_extract(attributes" in profile.base_prompt
     assert "registry tables" in profile.base_prompt
 
@@ -105,6 +106,76 @@ def test_profile_lists_exposed_snapshot_fields(profile: PromptProfile) -> None:
         assert field in profile.base_prompt
     assert "created_at" in profile.base_prompt
     assert "modified_at" in profile.base_prompt
+
+
+@pytest.mark.parametrize("profile", PROFILE_OPTIONS, ids=[profile.id for profile in PROFILE_OPTIONS])
+def test_profiles_keep_representative_capabilities(profile: PromptProfile) -> None:
+    """Profile detail changes coaching, never the supported capability surface."""
+    for capability in (
+        "frozen visible snapshot",
+        "repairs.async_issues",
+        "persistent_notifications.async_get_notifications",
+        "config_entries.async_entries",
+        "async_services_for_target",
+        "Builtins:",
+        "Imports",
+        "No filesystem",
+        "event bus",
+        "Effective area",
+        "HA two-",
+    ):
+        assert capability in profile.base_prompt
+
+
+def test_guided_profile_includes_routes_and_compact_examples() -> None:
+    prompt = resolve_profile("guided").base_prompt
+
+    for heading in ("### Current state", "### Registry join", "### Composed recorder read", "### Enabled action"):
+        assert heading in prompt
+    assert "matching standalone tool" in prompt
+    assert "Independent direct reads may run in parallel" in prompt
+    assert "do not refetch it" in prompt
+
+
+@pytest.mark.parametrize("profile_id", ["balanced", "frontier"])
+def test_balanced_and_frontier_omit_guided_examples(profile_id: str) -> None:
+    prompt = resolve_profile(profile_id).base_prompt
+
+    assert "```" not in prompt
+    assert "### Current state" not in prompt
+    assert "### Registry join" not in prompt
+
+
+@pytest.mark.parametrize("profile", PROFILE_OPTIONS, ids=[profile.id for profile in PROFILE_OPTIONS])
+@pytest.mark.parametrize("actions_enabled", [True, False], ids=["enabled", "disabled"])
+def test_profile_composition_retains_action_and_error_contracts(profile: PromptProfile, actions_enabled: bool) -> None:
+    prompt = compose_system_prompt(profile, actions_enabled)
+
+    assert prompt.count("## Service calls") == 1
+    assert "## Error guidance" in prompt
+    assert "guidance" in prompt
+    assert "candidates" in prompt
+    assert "resolutions" in prompt
+    assert "resolved_from" in prompt
+    if actions_enabled:
+        assert "sequential" in prompt
+        assert "no rollback" in prompt
+        assert "target" in prompt
+        assert "response capture" in prompt
+        assert "return_response=True requires" not in prompt
+    else:
+        assert "async_call is rejected" in prompt
+        assert "service-catalog reads" in prompt
+
+
+def test_empty_candidate_base_prompt_override_is_preserved() -> None:
+    """An optimized eval candidate may intentionally replace the base prompt with empty text."""
+    profile = resolve_profile("balanced")
+
+    prompt = compose_system_prompt(profile, actions_enabled=False, base_prompt="", tool_section="# Candidate tools")
+
+    assert prompt.startswith("# Candidate tools\n\n## Service calls (disabled)")
+    assert profile.base_prompt not in prompt
 
 
 def test_execute_home_code_description_includes_sql_schema_contract() -> None:

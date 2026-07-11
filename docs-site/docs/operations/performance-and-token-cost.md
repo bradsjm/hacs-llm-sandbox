@@ -31,4 +31,4 @@ Tool use adds work to each conversation turn. The integration builds snapshots, 
 - Ask scoped questions: include area, domain, entity, or time window.
 - Prefer smaller history windows unless a broader trend is needed.
 - Use the matching standalone recorder tool for a direct answer, and run independent direct reads in parallel. When recorder data must be combined with current snapshot data, conditional reasoning, or an action, one `execute_home_code` call avoids a sequential model/tool round, though its recorder work still consumes that execution deadline.
-- Use `terse` or `minimal` prompt profiles only after validating model quality.
+- Choose `guided` for weaker or literal models, keep `balanced` for readable general use, and use `frontier` with GPT-5.6-class models that benefit from a compact contract. Validate answer quality and token cost on representative requests before changing profiles.

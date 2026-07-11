@@ -57,7 +57,7 @@ Flags:
 - `--length-penalty` — penalty coefficient applied when selecting COPRO candidates to tie-break toward smaller prompts at equal quality (default: `0.02`; `0` disables the size tie-break).
 - `--cases` — case ids/categories used as the optimization trainset (keep small to bound cost).
 - `--cross-eval-models` — models for the baseline-vs-optimized leaderboard.
-- `--prompt-profile PROFILE_ID` — selects one production prompt profile for the baseline candidate and runtime settings (default: `standard`). This is separate from `--candidates`, which selects eval prompt candidates.
+- `--prompt-profile PROFILE_ID` — selects one production prompt profile for the baseline candidate and runtime settings (default: `balanced`). This is separate from `--candidates`, which selects eval prompt candidates.
 - `--target-reasoning` — reasoning effort stored for DSPy target-model configuration; the eval harness itself uses `--reasoning` / `config.reasoning_effort` when running `run_case(...)`.
 - `--proposer-reasoning` — reasoning effort for the proposer model during DSPy.
 - `--reasoning` — reasoning effort forwarded to the cross-eval harness models.
@@ -66,7 +66,7 @@ It writes `optimized_candidate.json` + `optimized_prompt.md` and prints a baseli
 
 ```bash
 uv run --group dev --group evals python -m llm_sandbox_evals eval \
-  --prompt-profile standard \
+  --prompt-profile balanced \
   --candidates baseline,optimized:eval_data/runs/<run_id>/optimized_candidate.json \
   --models openrouter:deepseek/deepseek-v4-flash,stub
 ```
@@ -84,12 +84,12 @@ python -m llm_sandbox_evals report <run_id> [--html] [--runs-dir PATH]
 - `report <run_id>` re-renders saved native analyses and cell scores from `report.json` and makes no model calls; add `--html` to regenerate `report.html` only.
 - `--cases` accepts case ids **or** category names (`state_read`, `registry_read`, `recorder_read`, `action_allowed`, `action_blocked`, `complex`, `recovery`).
 - `--candidates` accepts `baseline`, `profile:<id>` production profiles, and `optimized:<path>` (a saved `optimized_candidate.json`).
-- `--prompt-profile PROFILE_ID` selects one production base prompt profile for the whole run (default: `standard`); it is not comma-separated and is separate from `--candidates`.
-- `terse` and `minimal` are condensed production profiles for capability-vs-size analysis; compare them with `--candidates baseline,profile:terse,profile:minimal` or select one via `--prompt-profile`.
+- `--prompt-profile PROFILE_ID` selects one production base prompt profile for the whole run (default: `balanced`); it is not comma-separated and is separate from `--candidates`.
+- `guided`, `balanced`, and `frontier` preserve the same capability/safety catalog while varying coaching and density; compare them with `--candidates baseline,profile:guided,profile:balanced,profile:frontier` or select one via `--prompt-profile`.
 - `--reasoning LEVEL` forwards a reasoning effort (e.g. `medium`/`high`, or `none` to disable a reasoning model) to real models via Pydantic AI provider settings (OpenRouter/OpenAI reasoning effort). `optimize` adds `--target-reasoning` and `--proposer-reasoning` to control the target and proposer models independently (e.g. `--target-reasoning none --proposer-reasoning high`).
 - `--model-timeout SECONDS` bounds one model generation before recording `model_error` (default `75`). Slow free models may need a higher value or lower `--concurrency`.
 - `--logfire` enables optional native Pydantic Logfire instrumentation when `LOGFIRE_TOKEN` is available.
-- Defaults: `--models stub`, `--candidates baseline`, `--prompt-profile standard`, all cases.
+- Defaults: `--models stub`, `--candidates baseline`, `--prompt-profile balanced`, all cases.
 
 ## Checks
 
@@ -169,7 +169,7 @@ Add a module under `homes/` exposing `snapshot() -> HomeSnapshot` and `recorder(
 
 ## Adding prompt candidates
 
-`baseline` (auto-built from production `prompts.py`), `profile:<id>` production profiles such as `profile:terse` and `profile:minimal`, and any `optimized:<path>` candidate (a saved `optimized_candidate.json`) are loadable via `--candidates`. `load_candidates` rejects unknown ids. To evaluate a hand-authored alternative prompt, add a `PromptCandidate` and expose it through `prompts.load_candidates`. The `optimize` command emits optimized candidates through this same seam.
+`baseline` (auto-built from production `prompts.py`), `profile:<id>` production profiles such as `profile:guided`, `profile:balanced`, and `profile:frontier`, and any `optimized:<path>` candidate (a saved `optimized_candidate.json`) are loadable via `--candidates`. `load_candidates` rejects unknown ids. To evaluate a hand-authored alternative prompt, add a `PromptCandidate` and expose it through `prompts.load_candidates`. The `optimize` command emits optimized candidates through this same seam.
 
 ## Artifacts
 

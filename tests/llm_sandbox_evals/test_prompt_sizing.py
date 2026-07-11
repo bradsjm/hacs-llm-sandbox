@@ -15,10 +15,10 @@ from voluptuous_openapi import convert
 
 
 def test_load_candidates_accepts_profile_candidate() -> None:
-    candidates = load_candidates(["profile:standard"], DEFAULT_PROMPT_PROFILE)
+    candidates = load_candidates(["profile:guided"], DEFAULT_PROMPT_PROFILE)
 
     assert len(candidates) == 1
-    assert candidates[0].id == "profile:standard"
+    assert candidates[0].id == "profile:guided"
     assert candidates[0].api_prompt
 
     candidate = replace(
@@ -73,22 +73,19 @@ def test_load_candidates_accepts_profile_candidate() -> None:
     assert "Candidate logbook capability." not in no_logbook_prompt
 
 
-@pytest.mark.parametrize("profile_id", ["terse", "minimal"])
-def test_condensed_profiles_load_and_are_smaller_than_standard(profile_id: str) -> None:
-    standard = load_candidates(["profile:standard"], DEFAULT_PROMPT_PROFILE)[0]
-    terse = load_candidates(["profile:terse"], DEFAULT_PROMPT_PROFILE)[0]
-    minimal = load_candidates(["profile:minimal"], DEFAULT_PROMPT_PROFILE)[0]
+@pytest.mark.parametrize("profile_id", ["guided", "balanced", "frontier"])
+def test_profiles_load_with_expected_size_order(profile_id: str) -> None:
+    guided = load_candidates(["profile:guided"], DEFAULT_PROMPT_PROFILE)[0]
+    balanced = load_candidates(["profile:balanced"], DEFAULT_PROMPT_PROFILE)[0]
+    frontier = load_candidates(["profile:frontier"], DEFAULT_PROMPT_PROFILE)[0]
     candidate = load_candidates([f"profile:{profile_id}"], DEFAULT_PROMPT_PROFILE)[0]
 
-    standard_api_chars, _standard_authored_chars = candidate_prompt_sizes(standard)
-    terse_api_chars, _terse_authored_chars = candidate_prompt_sizes(terse)
-    minimal_api_chars, _minimal_authored_chars = candidate_prompt_sizes(minimal)
-    candidate_api_chars, _candidate_authored_chars = candidate_prompt_sizes(candidate)
-
+    guided_api_chars, _guided_authored_chars = candidate_prompt_sizes(guided)
+    balanced_api_chars, _balanced_authored_chars = candidate_prompt_sizes(balanced)
+    frontier_api_chars, _frontier_authored_chars = candidate_prompt_sizes(frontier)
     assert candidate.id == f"profile:{profile_id}"
     assert candidate.api_prompt
-    assert candidate_api_chars < standard_api_chars
-    assert minimal_api_chars < terse_api_chars < standard_api_chars
+    assert frontier_api_chars < balanced_api_chars < guided_api_chars
 
 
 def test_load_candidates_rejects_unknown_profile() -> None:

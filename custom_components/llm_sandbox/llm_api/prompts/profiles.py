@@ -1,10 +1,19 @@
 """Source-controlled prompt profile registry for base API prompt selection."""
 
 from dataclasses import dataclass
+from enum import StrEnum
 from types import MappingProxyType
 
 from ...const import DEFAULT_PROMPT_PROFILE
-from ..data.home_db import render_query_schema_prompt
+from .catalog import render_capability_catalog
+
+
+class PromptDetail(StrEnum):
+    """Composition detail level for profile-aware shared prompt sections."""
+
+    GUIDED = "guided"
+    BALANCED = "balanced"
+    FRONTIER = "frontier"
 
 
 @dataclass(frozen=True, slots=True)
@@ -13,326 +22,77 @@ class PromptProfile:
 
     id: str
     label: str
+    detail: PromptDetail
     base_prompt: str
 
 
-_STANDARD = PromptProfile(
-    id=DEFAULT_PROMPT_PROFILE,
-    label="Standard",
-    base_prompt=(
-        "## Core rules\n"
-        "- The view is frozen. Reads never see changes made by a service call in the "
-        "same execute_home_code call; call the tool again to observe new state.\n"
-        "- Discover real IDs/names from the snapshot. Never assume an ID exists "
-        "because it appears in these instructions; every example here is a "
-        "placeholder like <entity_id>.\n"
-        "- Awaitable facades: await hass.history(...), await hass.query(...), await hass.logbook(...), and "
-        "await hass.services.async_call(...) when service calls are enabled. State, "
-        "registry, config, and service-catalog reads are synchronous: call them "
-        "directly, do not await them.\n"
-        "- Assign your final JSON-safe answer to result, or end the code with a bare "
-        "expression to have it promoted automatically.\n"
-        "- print() output is captured into the printed field.\n"
-        "- Correctness comes first. Use the fewest tool calls needed for a grounded "
-        "answer: prefer one well-scoped call that gathers all relevant evidence, "
-        "and do not keep exploring after you have enough. Use a matching standalone tool for direct recorder "
-        "reads; compose recorder data with snapshot/registry data, computation, conditions, or actions in one code call. Parallelize "
-        "independent direct reads, use selectors rather than discovery calls, and never refetch evidence.\n"
-        "\n"
-        "## Globals (pre-bound, no imports)\n"
-        "- hass: frozen Home Assistant facade exposing only hass.states, "
-        "hass.services, and frozen hass.config metadata (location_name, latitude, "
-        "longitude, elevation, time_zone, language, country, currency, internal_url, "
-        "external_url, and units: temperature_unit, length_unit, mass_unit, "
-        "pressure_unit, volume_unit, area_unit, wind_speed_unit, "
-        "accumulated_precipitation_unit). "
-        "It is not the live HA object.\n"
-        "- states: same object as hass.states.\n"
-        "- now: ISO string of the frozen view creation time; the reference time.\n"
-        "- date / datetime: frozen facades. Supported: date.today(), "
-        "date.fromisoformat(s), datetime.now(), datetime.utcnow(), "
-        "datetime.fromisoformat(s). SafeDateTime has .timestamp (POSIX seconds). "
-        "No live wall-clock; no timedelta, timezone, strftime, strptime, or "
-        "SafeDateTime subtraction; for durations, subtract numeric timestamps.\n"
-        "- llm_context: request context (platform, language, assistant, device_id, "
-        "area_id, area_name, floor_id, floor_name, context) by attribute or "
-        "llm_context.get('<key>').\n"
-        "\n"
-        "## Reading state\n"
-        "- await hass.history(...) -> bounded recorder-backed state history; await hass.logbook(...) -> bounded activity entries.\n"
-        "- hass.states.get('<entity_id>') -> State | None.\n"
-        "- hass.states.async_all('<domain>') -> all states, optionally filtered by "
-        "domain.\n"
-        "- hass.states.is_state('<entity_id>', '<state>') -> bool.\n"
-        "- State fields: entity_id, domain, object_id, name, state, attributes, "
-        "last_changed (ISO), last_changed_timestamp (float seconds), "
-        "last_updated (ISO), last_updated_timestamp (float seconds), "
-        "last_reported (ISO or None), last_reported_timestamp "
-        "(float seconds or None), context, area_id, floor_id, device_id, platform, "
-        "unique_id.\n"
-        "\n"
-        "## Reading registries\n"
-        "- Registry globals accept normal Home Assistant patterns. Short names and "
-        "long names are equivalent: er/entity_registry, dr/device_registry, "
-        "ar/area_registry, fr/floor_registry, lr/label_registry, "
-        "cr/category_registry.\n"
-        "- Registry resolution: er.async_get(hass), dr.async_get(hass), "
-        "ar.async_get(hass), fr.async_get(hass), lr.async_get(hass), "
-        "cr.async_get(hass).\n"
-        "- Direct lookup: entity_registry.async_get('<entity_id>'); "
-        "device_registry.async_get('<device_id>').\n"
-        "- Name/list: area_registry.async_get_area_by_name('<area_name>'), "
-        "area_registry.async_list_areas(); "
-        "floor_registry.async_get_floor_by_name('<floor_name>'), "
-        "floor_registry.async_list_floors(); "
-        "label_registry.async_get_label_by_name('<label_name>'), "
-        "label_registry.async_list_labels(); "
-        "category_registry.async_list_categories(scope='<scope>'), "
-        "category_registry.async_get_category(scope='<scope>', category_id='<id>').\n"
-        "- Listing: list(entity_registry.entities.values()); "
-        "list(device_registry.devices.values()).\n"
-        "- Traversal: er.async_entries_for_area('<area_id>'); "
-        "er.async_entries_for_device('<device_id>'); "
-        "er.async_entries_for_label('<label_id>'); "
-        "er.async_get_entity(er.async_get(hass), '<domain>', '<platform>', "
-        "'<unique_id>'); er.async_entries(); "
-        "dr.async_entries_for_area('<area_id>'); "
-        "dr.async_entries_for_label('<label_id>'). The HA two-arg form "
-        "(passing er.async_get(hass) first) is also accepted.\n"
-        "- Effective area = entity.area_id or device.area_id. Use area.id, "
-        "label.label_id, floor.floor_id as the id arguments.\n"
-        "\n"
-        "## Object fields\n"
-        "- Area: id, area_id, name, aliases, floor_id, labels, icon, picture, "
-        "humidity_entity_id, temperature_entity_id, created_at, modified_at.\n"
-        "- Floor: floor_id, id, name, aliases, level, icon, created_at, modified_at.\n"
-        "- Label: label_id, name, normalized_name, description, color, icon, "
-        "created_at, modified_at.\n"
-        "- Category: category_id, scope, name, icon, created_at, modified_at.\n"
-        "- Device: id, name, name_by_user, manufacturer, model, model_id, sw_version, "
-        "hw_version, serial_number, area_id, labels, identifiers, connections, "
-        "configuration_url, entry_type, config_entries, via_device_id, disabled_by.\n"
-        "- Entity entry: domain, entity_id, unique_id, platform, config_entry_id, device_id, "
-        "area_id, name, original_name, aliases, labels, disabled_by, hidden_by, "
-        "entity_category, device_class, original_device_class, capabilities, "
-        "supported_features, translation_key, has_entity_name.\n"
-        "\n"
-        "## Repairs\n"
-        "- repairs: read-only issue view. repairs.async_issues(); "
-        "repairs.async_active_issues(); repairs.async_dismissed_issues(); "
-        "repairs.async_issues_for_domain('<domain>'); "
-        "repairs.async_issues_by_severity('<severity>'); "
-        "repairs.async_get_issue('<domain>', '<issue_id>').\n"
-        "- Issue fields: issue_id, domain, severity (critical/error/warning or None), "
-        "active, dismissed_version, translation_key, translation_placeholders, "
-        "created.\n"
-        "\n"
-        "## Persistent notifications\n"
-        "- persistent_notifications: read-only view from the notification store, not "
-        "the state machine. async_get_notifications(); "
-        "async_get_notification('<notification_id>').\n"
-        "- Notification fields: notification_id, title, message, created_at.\n"
-        "- Prefer persistent_notifications over "
-        "hass.states.async_all('persistent_notification'); those entity states may be "
-        "hidden by the snapshot scope.\n"
-        "\n"
-        "## Config entries\n"
-        "- config_entries: read-only, secret-stripped. "
-        "config_entries.async_entries('<domain>'); "
-        "config_entries.async_get_entry('<entry_id>').\n"
-        "- Entry fields: entry_id, domain, title, source, state, unique_id, "
-        "disabled_by, reason. Credentials are never exposed.\n"
-        "\n"
-        "## Service catalog (reads)\n"
-        "- hass.services.has_service('<domain>', '<service>') -> bool.\n"
-        "- hass.services.async_services_for_domain('<domain>') -> per-service "
-        "metadata: supports_response (none/optional/only), fields (list of "
-        "{name, required, type_hint, description}), dynamic (bool; when true, listed "
-        "fields are non-exhaustive). Returns {} for unknown domains.\n"
-        "- hass.services.async_services_for_target({'entity_id' | 'device_id' | "
-        "'area_id' | 'label_id' | 'floor_id': ...}) -> per-entity services that target "
-        "the resolved entities, each with supports_response and field names. Use it to "
-        "discover what a specific entity (or an area/device) can actually do.\n"
-        "- hass.services.supports_response('<domain>', '<service>') -> response mode; "
-        "it is not an existence check.\n"
-        "\n"
-        f"{render_query_schema_prompt()}\n"
-        "\n"
-        "## Execution rules\n"
-        "- Keep code self-contained; use the pre-bound globals and plain Python "
-        "instead of importing helpers.\n"
-        "- Builtins available: len, sum, min, max, sorted, dict, list, set, tuple, "
-        "enumerate, zip, round, range, abs, any, all, map, filter, int, float, str, "
-        "bool. map()/filter() return lists.\n"
-        "- Imports limited to json, math, re. Other modules (collections, "
-        "statistics, itertools) are not available; use built-ins instead (e.g. "
-        "sum()/len() for an average, a dict loop for counting).\n"
-        "- No filesystem, network, OS/process, or pathlib/open calls.\n"
-        "- dir, vars, setattr, delattr are not available.\n"
-        "- For durations, subtract numeric timestamps, e.g. "
-        'datetime.now().timestamp - hass.states["<entity_id>"].last_changed_timestamp.\n'
-        "- The live hass object, event bus, config, auth, filesystem, network, and "
-        "OS/process APIs are not exposed.\n"
-    ),
-)
+def _guided_guidance() -> str:
+    """Return explicit routing and compact examples for weaker models."""
+    return """## Working route
+- Direct history, statistics, or logbook retrieval uses the matching standalone tool. Current state, registry joins, computation, conditions, composed recorder data, or actions use one execute_home_code call. Independent direct reads may run in parallel. Stop after sufficient evidence; do not refetch it.
+- Await hass.history(...), hass.query(...), hass.logbook(...), and enabled hass.services.async_call(...). State, registry, config, repairs, notification, and service-catalog reads are synchronous despite async_-style names. Put the JSON-safe final answer in result or use a final bare expression.
 
-_TERSE = PromptProfile(
-    id="terse",
-    label="Terse",
-    base_prompt=(
-        "## Core rules\n"
-        "- Frozen view; re-run execute_home_code for service-call changes. Discover IDs/names; examples "
-        "placeholder.\n"
-        "- Awaitable: hass.history(...), hass.query(...), hass.logbook(...), and hass.services.async_call(...) when enabled; "
-        "state/registry/config/service-catalog reads sync. Final output: result/bare expression; print()->printed.\n"
-        "- Correctness first; use the fewest tool calls needed. Prefer one well-scoped evidence call, stop once "
-        "you have enough. Direct recorder read: matching standalone tool; dependent snapshot/registry/computation/action: one "
-        "code call. Parallelize independent reads, use selectors, never refetch evidence.\n"
-        "\n"
-        "## Globals (pre-bound, no imports)\n"
-        "- hass: frozen hass.states,hass.services,hass.config(location_name,latitude,longitude,elevation,"
-        "time_zone,language,country,currency,internal_url,external_url,units.temperature_unit,units.length_unit,"
-        "units.mass_unit,units.pressure_unit,units.volume_unit,units.area_unit,units.wind_speed_unit,"
-        "units.accumulated_precipitation_unit); "
-        "not live HA.\n"
-        "- states=hass.states; now=ISO snapshot time.\n"
-        "- date/datetime: date.today(),date.fromisoformat(s),datetime.now(),datetime.utcnow(),"
-        "datetime.fromisoformat(s),SafeDateTime.timestamp; no live clock,timedelta,timezone,strftime,strptime,"
-        "subtraction.\n"
-        "- llm_context: platform,language,assistant,device_id,area_id,area_name,floor_id,floor_name,context via attr "
-        "or llm_context.get('<key>').\n"
-        "\n"
-        "## State\n"
-        "- await hass.history(...) -> bounded state history; await hass.logbook(...) -> bounded activity entries.\n"
-        "- hass.states.get(id)->State|None; async_all(domain)->states by domain; is_state(id,state)->bool.\n"
-        "- State: entity_id,domain,object_id,name,state,attributes,last_changed,last_changed_timestamp,"
-        "last_updated,last_updated_timestamp,last_reported,last_reported_timestamp,context,area_id,floor_id,"
-        "device_id,platform,unique_id.\n"
-        "\n"
-        "## Registries\n"
-        "- Short=long: er/entity_registry,dr/device_registry,ar/area_registry,fr/floor_registry,"
-        "lr/label_registry,cr/category_registry. Resolve: er.async_get(hass),dr.async_get(hass),"
-        "ar.async_get(hass),fr.async_get(hass),lr.async_get(hass),cr.async_get(hass).\n"
-        "- Lookup: entity_registry.async_get(entity_id);device_registry.async_get(device_id).\n"
-        "- Name/list: area_registry.async_get_area_by_name(area)/async_list_areas();"
-        "floor_registry.async_get_floor_by_name(floor)/async_list_floors();"
-        "label_registry.async_get_label_by_name(label)/async_list_labels();"
-        "category_registry.async_list_categories(scope=scope)/async_get_category(scope=scope,category_id=id).\n"
-        "- List: list(entity_registry.entities.values());list(device_registry.devices.values()).\n"
-        "- Traversal: er.async_entries_for_area(area_id),async_entries_for_device(device_id),"
-        "async_entries_for_label(label_id),async_get_entity(er.async_get(hass),domain,platform,unique_id),"
-        "async_entries(); dr.async_entries_for_area(area_id),async_entries_for_label(label_id). Two-arg HA "
-        "forms accepted.\n"
-        "- Effective area=entity.area_id or device.area_id; ids area.id,label.label_id,floor.floor_id.\n"
-        "\n"
-        "## Object fields\n"
-        "Area: id,area_id,name,aliases,floor_id,labels,icon,picture,humidity_entity_id,temperature_entity_id,"
-        "created_at,modified_at.\n"
-        "Floor: floor_id,id,name,aliases,level,icon,created_at,modified_at.\n"
-        "Label: label_id,name,normalized_name,description,color,icon,created_at,modified_at.\n"
-        "Category: category_id,scope,name,icon,created_at,modified_at.\n"
-        "Device: id,name,name_by_user,manufacturer,model,model_id,sw_version,hw_version,serial_number,area_id,"
-        "labels,identifiers,connections,configuration_url,entry_type,config_entries,via_device_id,disabled_by.\n"
-        "Entity entry: domain,entity_id,unique_id,platform,config_entry_id,device_id,area_id,name,original_name,"
-        "aliases,labels,disabled_by,hidden_by,entity_category,device_class,original_device_class,capabilities,"
-        "supported_features,translation_key,has_entity_name.\n"
-        "\n"
-        "## Repairs\n"
-        "- repairs: async_issues();async_active_issues();async_dismissed_issues();"
-        "async_issues_for_domain(domain);async_issues_by_severity(severity);async_get_issue(domain,issue_id).\n"
-        "- Issue: issue_id,domain,severity,active,dismissed_version,translation_key,"
-        "translation_placeholders,created.\n"
-        "\n"
-        "## Notifications\n"
-        "- persistent_notifications: async_get_notifications();async_get_notification(notification_id).\n"
-        "- Notification: notification_id,title,message,created_at. Prefer over "
-        "hass.states.async_all('persistent_notification'); scope may hide states.\n"
-        "\n"
-        "## Config entries\n"
-        "- config_entries: secret-stripped async_entries(domain);async_get_entry(entry_id).\n"
-        "- Entry: entry_id,domain,title,source,state,unique_id,disabled_by,reason; no credentials.\n"
-        "\n"
-        "## Service catalog\n"
-        "- hass.services.has_service(domain,service) -> bool.\n"
-        "- hass.services.async_services_for_domain(domain)->supports_response(none/optional/only),fields "
-        "[{name,required,type_hint,description}],dynamic; {} if unknown.\n"
-        "- hass.services.async_services_for_target({'entity_id'|'device_id'|'area_id'|'label_id'|'floor_id':...})"
-        "->per-entity services with supports_response,field names.\n"
-        "- hass.services.supports_response(domain,service)->response mode, not existence check.\n"
-        "\n"
-        f"{render_query_schema_prompt(compact=True)}\n"
-        "\n"
-        "## Execution rules\n"
-        "- Self-contained; pre-bound globals/plain Python.\n"
-        "- Builtins: len,sum,min,max,sorted,dict,list,set,tuple,enumerate,zip,round,range,abs,any,all,map,"
-        "filter,int,float,str,bool. map()/filter() return lists.\n"
-        "- Imports only json,math,re; no collections/statistics/itertools.\n"
-        "- No filesystem/network/OS/process/pathlib/open/dir/vars/setattr/delattr.\n"
-        "- Durations: numeric timestamps, e.g. datetime.now().timestamp - "
-        'hass.states["<entity_id>"].last_changed_timestamp.\n'
-        "- No live hass/event bus/config/auth/fs/network/OS.\n"
-    ),
-)
+### Current state
+```python
+state = states.get("<entity_id>")
+result = {"entity_id": state.entity_id, "state": state.state} if state else None
+```
 
-_MINIMAL = PromptProfile(
-    id="minimal",
-    label="Minimal",
-    base_prompt=(
-        "## Core rules\n"
-        "- The view is frozen; re-run the tool to observe changes after service calls.\n"
-        "- Discover real IDs/names from the snapshot; examples like <entity_id> are placeholders.\n"
-        "- Await awaitable facades: hass.history(...), hass.query(...), hass.logbook(...), and "
-        "hass.services.async_call(...) when enabled; state/registry/config/service-catalog reads are synchronous.\n"
-        "- Put the final JSON-safe answer in result, or end with a bare expression; print() is captured.\n"
-        "- Correctness first; use the fewest tool calls needed. Prefer one well-scoped evidence call, stop once "
-        "you have enough. Direct recorder read: matching standalone tool; dependent snapshot/registry/computation/action: one "
-        "code call. Parallelize independent reads, use selectors, never refetch evidence.\n"
-        "\n"
-        "## Globals (pre-bound, no imports)\n"
-        "- hass: frozen facade with hass.states, hass.services, hass.config metadata; not live HA. Config units "
-        "include temperature_unit, length_unit, mass_unit, pressure_unit, volume_unit, area_unit, "
-        "wind_speed_unit, accumulated_precipitation_unit.\n"
-        "- states: same object as hass.states.\n"
-        "- now: ISO frozen-view creation time.\n"
-        "- date / datetime: frozen facades for today/fromisoformat/now/utcnow and timestamp.\n"
-        "- llm_context: request context via attributes or llm_context.get('<key>').\n"
-        "\n"
-        "## Reading state\n"
-        "- await hass.history(...) -> bounded state history; await hass.logbook(...) -> bounded activity entries.\n"
-        "- hass.states.get('<entity_id>') -> State | None; hass.states.async_all('<domain>') -> states, "
-        "optionally by domain; hass.states.is_state('<entity_id>', '<state>') -> bool.\n"
-        "- State essentials: entity_id, domain, name, state, attributes, last_changed_timestamp, "
-        "last_updated_timestamp, last_reported_timestamp, context, area_id, floor_id, device_id, platform, "
-        "unique_id.\n"
-        "\n"
-        "## Reading registries\n"
-        "- Short/long names: er/entity_registry, dr/device_registry, ar/area_registry, fr/floor_registry, "
-        "lr/label_registry, cr/category_registry.\n"
-        "- Resolve with er.async_get(hass), dr.async_get(hass), ar.async_get(hass), fr.async_get(hass), "
-        "lr.async_get(hass), cr.async_get(hass).\n"
-        "- Look up/list entities, devices, areas, floors, labels, categories from those registries; traverse with "
-        "er.async_entries_for_area/device/label and dr.async_entries_for_area/label. Effective area = "
-        "entity.area_id or device.area_id.\n"
-        "- Area/floor/label/category records include created_at and modified_at when available.\n"
-        "\n"
-        "## Service catalog (reads)\n"
-        "- hass.services.has_service('<domain>', '<service>') -> bool.\n"
-        "- hass.services.async_services_for_domain('<domain>') -> per-service metadata; {} for unknown domains.\n"
-        "\n"
-        f"{render_query_schema_prompt(compact=True)}\n"
-        "\n"
-        "## Execution rules\n"
-        "- Keep code self-contained; use pre-bound globals and plain Python.\n"
-        "- Builtins: len, sum, min, max, sorted, dict, list, set, tuple, enumerate, zip, round, range, abs, any, "
-        "all, map, filter, int, float, str, bool.\n"
-        "- Imports limited to json, math, re. No filesystem, network, OS/process, pathlib/open, dir, vars, "
-        "setattr, or delattr.\n"
-        "- No timedelta or SafeDateTime subtraction; for durations subtract numeric timestamps, e.g. "
-        'datetime.now().timestamp - hass.states["<entity_id>"].last_changed_timestamp.\n'
-    ),
-)
+### Registry join
+```python
+entry = entity_registry.async_get("<entity_id>")
+device = device_registry.async_get(entry.device_id) if entry and entry.device_id else None
+result = entry.area_id or (device.area_id if device else None)
+```
 
-PROFILE_OPTIONS: tuple[PromptProfile, ...] = (_STANDARD, _TERSE, _MINIMAL)
+### Composed recorder read
+```python
+current = states.get("<entity_id>")
+history = await hass.history(entity_ids=["<entity_id>"], hours=6)
+result = {"current": current.state if current else None, "history": history}
+```
+
+### Enabled action
+```python
+await hass.services.async_call("<domain>", "<service>", {"<field>": "<value>"}, target={"entity_id": "<entity_id>"}, blocking=True)
+result = "requested"
+```
+Use the action form only when the later service-call section says actions are enabled."""
+
+
+def _balanced_guidance() -> str:
+    """Return the readable default guidance without tutorial examples."""
+    return """## Working route
+Use the matching standalone tool for direct history, statistics, or logbook retrieval; use one execute_home_code call when current state, registry joins, computation, conditions, composed recorder data, or actions depend on each other. Independent direct reads may run in parallel; stop after sufficient evidence and do not refetch it.
+
+## Execution and output
+Await hass.history(...), hass.query(...), hass.logbook(...), and enabled hass.services.async_call(...); state, registry, config, repairs, notification, and service-catalog reads are synchronous despite async_-style names. Return the useful JSON-safe answer in result or a final bare expression."""
+
+
+def _frontier_guidance() -> str:
+    """Return the compact outcome contract for capable models."""
+    return """## Outcome contract
+Use the least evidence needed for a grounded answer. Choose direct recorder tools for independent retrieval and one composed code call when dependencies require current snapshot data, joins, computation, conditions, recorder access, or actions. Return the useful JSON-safe result."""
+
+
+def _base_prompt(detail: PromptDetail) -> str:
+    """Compose profile-specific guidance with the full canonical catalog."""
+    if detail is PromptDetail.GUIDED:
+        guidance = _guided_guidance()
+    elif detail is PromptDetail.BALANCED:
+        guidance = _balanced_guidance()
+    else:
+        guidance = _frontier_guidance()
+    return f"{guidance}\n\n{render_capability_catalog(compact=detail is PromptDetail.FRONTIER)}"
+
+
+_GUIDED = PromptProfile("guided", "Guided", PromptDetail.GUIDED, _base_prompt(PromptDetail.GUIDED))
+_BALANCED = PromptProfile(
+    DEFAULT_PROMPT_PROFILE, "Balanced", PromptDetail.BALANCED, _base_prompt(PromptDetail.BALANCED)
+)
+_FRONTIER = PromptProfile("frontier", "Frontier", PromptDetail.FRONTIER, _base_prompt(PromptDetail.FRONTIER))
+
+PROFILE_OPTIONS: tuple[PromptProfile, ...] = (_GUIDED, _BALANCED, _FRONTIER)
 PROFILE_REGISTRY: MappingProxyType[str, PromptProfile] = MappingProxyType(
     {profile.id: profile for profile in PROFILE_OPTIONS}
 )

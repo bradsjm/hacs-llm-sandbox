@@ -58,7 +58,7 @@
               "prompt_profile": "Base prompt profile"
             },
             "data_description": {
-              "prompt_profile": "Selects the source-controlled base API prompt sent to the model."
+              "prompt_profile": "Selects a source-controlled model-guidance strategy. All profiles retain the same sandbox capabilities and safety boundaries."
             },
             "name": "Prompt"
           },

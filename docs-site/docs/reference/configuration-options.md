@@ -7,7 +7,7 @@ description: Current options, defaults, and ranges.
 
 | Option | Default | Range or values | Source |
 | --- | --- | --- | --- |
-| Prompt profile | `standard` | `standard`, `terse`, `minimal` | [`const.py`](https://github.com/bradsjm/hacs-llm-sandbox/blob/main/custom_components/llm_sandbox/const.py) |
+| Prompt profile | `balanced` | `guided`, `balanced`, `frontier` | [`const.py`](https://github.com/bradsjm/hacs-llm-sandbox/blob/main/custom_components/llm_sandbox/const.py) |
 | Restrict to Assist-exposed entities | On | Boolean | [`runtime.py`](https://github.com/bradsjm/hacs-llm-sandbox/blob/main/custom_components/llm_sandbox/runtime.py) |
 | Exclude hidden entities | On | Boolean | [`runtime.py`](https://github.com/bradsjm/hacs-llm-sandbox/blob/main/custom_components/llm_sandbox/runtime.py) |
 | Exclude configuration entities | On | Boolean | [`runtime.py`](https://github.com/bradsjm/hacs-llm-sandbox/blob/main/custom_components/llm_sandbox/runtime.py) |

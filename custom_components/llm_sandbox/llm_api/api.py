@@ -13,6 +13,7 @@ from ..const import DEFAULT_PROMPT_PROFILE, DOMAIN
 from ..runtime import SandboxConfigEntry
 from ..snapshot import build_snapshot
 from .prompts import (
+    PromptProfile,
     compose_system_prompt,
     render_home_inventory,
     render_request_location,
@@ -48,7 +49,7 @@ class LlmSandboxAPI(llm.API):
     async def async_get_api_instance(self, llm_context: llm.LLMContext) -> llm.APIInstance:
         entry = self._hass.config_entries.async_get_entry(self.entry_id)
         actions_enabled = False
-        base_prompt = resolve_profile(DEFAULT_PROMPT_PROFILE).base_prompt
+        profile = resolve_profile(DEFAULT_PROMPT_PROFILE)
         inventory_section: str | None = None
         recorder_ok = recorder_available(self._hass)
         logbook_ok = logbook_available(self._hass)
@@ -65,7 +66,7 @@ class LlmSandboxAPI(llm.API):
             assert runtime_data is not None
             settings = runtime_data.settings
             actions_enabled = settings.actions_enabled
-            base_prompt = settings.prompt_profile.base_prompt
+            profile = settings.prompt_profile
             # This prompt-time snapshot is only an advisory inventory digest;
             # every tool call still builds its own fresh validated snapshot.
             snapshot = build_snapshot(
@@ -83,7 +84,7 @@ class LlmSandboxAPI(llm.API):
             api_prompt=_build_api_prompt(
                 self._hass,
                 llm_context,
-                base_prompt,
+                profile,
                 actions_enabled,
                 tool_section=render_tool_capabilities(tools),
                 inventory_section=inventory_section,
@@ -96,7 +97,7 @@ class LlmSandboxAPI(llm.API):
 def _build_api_prompt(
     hass: HomeAssistant,
     llm_context: llm.LLMContext,
-    base_prompt: str,
+    profile: PromptProfile,
     actions_enabled: bool,
     *,
     tool_section: str | None = None,
@@ -105,7 +106,7 @@ def _build_api_prompt(
     """Return the base API prompt plus concise dynamic request context."""
     location_prompt = _request_location_prompt(hass, llm_context.device_id)
     return compose_system_prompt(
-        base_prompt,
+        profile,
         actions_enabled,
         tool_section=tool_section,
         location_section=location_prompt,

@@ -128,7 +128,7 @@ def _add_eval_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPar
     eval_parser.add_argument(
         "--prompt-profile",
         metavar="PROFILE_ID",
-        help="production prompt profile id to use for the baseline candidate and runtime settings (default: standard).",
+        help="production prompt profile id to use for the baseline candidate and runtime settings (default: balanced).",
     )
     eval_parser.add_argument(
         "--cases",
@@ -282,7 +282,7 @@ def _add_optimize_parser(subparsers: argparse._SubParsersAction[argparse.Argumen
     optimize_parser.add_argument(
         "--prompt-profile",
         metavar="PROFILE_ID",
-        help="production prompt profile id to use for the baseline candidate and runtime settings (default: standard).",
+        help="production prompt profile id to use for the baseline candidate and runtime settings (default: balanced).",
     )
     optimize_parser.add_argument(
         "--reasoning",
