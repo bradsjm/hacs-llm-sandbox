@@ -53,9 +53,29 @@ def resolve_entity_ids(snapshot: HomeSnapshot, data: dict[str, object], id_key: 
     # Explicit IDs must each be visible (named in the error so the LLM can correct).
     _validate_visibility(snapshot, explicit)
     domains = {domain.lower() for domain in _as_list(data.get("domain"))}
-    provided_selectors = [field for field in _LOCATION_SELECTOR_FIELDS if _as_list(data.get(field))]
-    selector_present = bool(provided_selectors)
+    selector_ids, selector_present = _expand_selector_ids(snapshot, data, domains)
+    resolved = _merge_entity_ids(snapshot, explicit, selector_ids, domains, selector_present)
 
+    if not resolved:
+        raise RecoverableToolError(
+            "invalid_tool_input",
+            {"error": "no visible entity IDs or scope selectors resolved"},
+        )
+    if len(resolved) > MAX_RECORDER_ENTITY_IDS:
+        raise RecoverableToolError(
+            "invalid_tool_input",
+            {"error": f"scope resolves to {len(resolved)} entities; narrow it to at most {MAX_RECORDER_ENTITY_IDS}"},
+        )
+    return resolved
+
+
+def _expand_selector_ids(
+    snapshot: HomeSnapshot,
+    data: dict[str, object],
+    domains: set[str],
+) -> tuple[list[str], bool]:
+    """Expand location selectors, rejecting every supplied value with no match."""
+    provided_selectors = [field for field in _LOCATION_SELECTOR_FIELDS if _as_list(data.get(field))]
     selector_ids: list[str] = []
     for selector in _LOCATION_SELECTOR_FIELDS:
         for requested in _as_list(data.get(selector)):
@@ -72,6 +92,17 @@ def resolve_entity_ids(snapshot: HomeSnapshot, data: dict[str, object], id_key: 
                     },
                 )
             selector_ids.extend(expanded_ids)
+    return selector_ids, bool(provided_selectors)
+
+
+def _merge_entity_ids(
+    snapshot: HomeSnapshot,
+    explicit: list[str],
+    selector_ids: list[str],
+    domains: set[str],
+    selector_present: bool,
+) -> list[str]:
+    """Merge visible explicit and selector IDs in encounter order without duplicates."""
 
     def _domain_matches(entity_id: str) -> bool:
         return not domains or entity_id.split(".", 1)[0].lower() in domains
@@ -92,17 +123,6 @@ def resolve_entity_ids(snapshot: HomeSnapshot, data: dict[str, object], id_key: 
     # Pure-domain scope with no IDs and no selectors expands across all visible matching states.
     if not resolved and domains and not selector_present:
         resolved.extend(entity_id for entity_id in snapshot.states if _domain_matches(entity_id))
-
-    if not resolved:
-        raise RecoverableToolError(
-            "invalid_tool_input",
-            {"error": "no visible entity IDs or scope selectors resolved"},
-        )
-    if len(resolved) > MAX_RECORDER_ENTITY_IDS:
-        raise RecoverableToolError(
-            "invalid_tool_input",
-            {"error": f"scope resolves to {len(resolved)} entities; narrow it to at most {MAX_RECORDER_ENTITY_IDS}"},
-        )
     return resolved
 
 

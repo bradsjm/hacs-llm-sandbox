@@ -176,6 +176,32 @@ def analytics_spec_from_data(data: Mapping[str, object]) -> AnalyticsSpec:
     All mode/op/group validation happens here once; ``run_analytics`` and its
     helpers read the typed spec fields directly without re-checking.
     """
+    mode, filters, numeric = _parse_aggregate(data)
+    group_by = tuple(str(item) for item in _ensure_list(data.get("group_by")))
+    unknown_groups = sorted(set(group_by) - GROUP_KEYS)
+    if unknown_groups:
+        raise RecoverableToolError(
+            "analytics_unknown_group_key",
+            {"group_key": unknown_groups[0], "valid": ", ".join(sorted(GROUP_KEYS))},
+        )
+    where = tuple(_condition(item) for item in _ensure_list(data.get("where")))
+    limit = cast(str | int | float | None, data.get("limit"))
+    return AnalyticsSpec(
+        mode=mode,
+        filters=filters,
+        numeric=numeric,
+        group_by=group_by,
+        bucket=cast(str | None, data.get("bucket")),
+        where=where,
+        order_by=cast(str | None, data.get("order_by")),
+        limit=int(limit) if limit is not None else None,
+    )
+
+
+def _parse_aggregate(
+    data: Mapping[str, object],
+) -> tuple[AggregateMode | None, AggregateFilters, tuple[tuple[str, tuple[NumericOp, ...]], ...]]:
+    """Parse aggregate shorthand/maps and validate modes and numeric operations."""
     aggregate = data.get("aggregate")
     data_from_state = cast(str | None, data.get("from_state"))
     data_to_state = cast(str | None, data.get("to_state"))
@@ -223,27 +249,7 @@ def analytics_spec_from_data(data: Mapping[str, object]) -> AnalyticsSpec:
                     )
                 fields.append((str(field), cast(tuple[NumericOp, ...], op_names)))
             numeric = tuple(fields)
-
-    filters = AggregateFilters(from_state=effective_from_state, to_state=effective_to_state)
-    group_by = tuple(str(item) for item in _ensure_list(data.get("group_by")))
-    unknown_groups = sorted(set(group_by) - GROUP_KEYS)
-    if unknown_groups:
-        raise RecoverableToolError(
-            "analytics_unknown_group_key",
-            {"group_key": unknown_groups[0], "valid": ", ".join(sorted(GROUP_KEYS))},
-        )
-    where = tuple(_condition(item) for item in _ensure_list(data.get("where")))
-    limit = cast(str | int | float | None, data.get("limit"))
-    return AnalyticsSpec(
-        mode=mode,
-        filters=filters,
-        numeric=numeric,
-        group_by=group_by,
-        bucket=cast(str | None, data.get("bucket")),
-        where=where,
-        order_by=cast(str | None, data.get("order_by")),
-        limit=int(limit) if limit is not None else None,
-    )
+    return mode, AggregateFilters(effective_from_state, effective_to_state), numeric
 
 
 def run_analytics(
@@ -444,11 +450,7 @@ def _duration_bucket_results(
     snapshot: HomeSnapshot,
 ) -> list[dict[str, object]]:
     """Attribute state durations to bucket overlaps in one pass per entity stream."""
-    grouped: dict[tuple[object, ...], dict[str, list[HistoryRow]]] = {}
-    for row in rows:
-        group_key = tuple(_group_value(row, key, snapshot) for key in spec.group_by)
-        entity_id = str(_field_value(row, "entity_id", None))
-        grouped.setdefault(group_key, {}).setdefault(entity_id, []).append(row)
+    grouped = _group_duration_streams(rows, spec, snapshot)
     if not _seed_empty_group(grouped, spec, {}):
         return []
 
@@ -470,13 +472,31 @@ def _duration_bucket_results(
                         totals[state] = totals.get(state, 0.0) + seconds
                     cursor += timedelta(seconds=bucket_seconds)
 
-    mode = spec.mode
+    return _format_duration_bucket_results(bucket_state, spec)
+
+
+def _group_duration_streams(
+    rows: list[HistoryRow], spec: AnalyticsSpec, snapshot: HomeSnapshot
+) -> dict[tuple[object, ...], dict[str, list[HistoryRow]]]:
+    """Group duration rows by requested dimensions, then by independent entity stream."""
+    grouped: dict[tuple[object, ...], dict[str, list[HistoryRow]]] = {}
+    for row in rows:
+        group_key = tuple(_group_value(row, key, snapshot) for key in spec.group_by)
+        entity_id = str(_field_value(row, "entity_id", None))
+        grouped.setdefault(group_key, {}).setdefault(entity_id, []).append(row)
+    return grouped
+
+
+def _format_duration_bucket_results(
+    bucket_state: dict[tuple[object, ...], dict[str, float]], spec: AnalyticsSpec
+) -> list[dict[str, object]]:
+    """Format duration bucket state totals in deterministic bucket/group order."""
     results: list[dict[str, object]] = []
     for bucket_key, state_totals in sorted(bucket_state.items(), key=lambda item: _bucket_sort_key(item[0])):
         output: dict[str, object] = {"bucket": bucket_key[0]}
         for index, group_field in enumerate(spec.group_by):
             output[group_field] = bucket_key[index + 1]
-        if mode == "on_duration":
+        if spec.mode == "on_duration":
             output.update({"on_duration": state_totals.get("on", 0.0), "unit": "seconds"})
         else:
             output.update({"time_in_state": state_totals, "unit": "seconds"})

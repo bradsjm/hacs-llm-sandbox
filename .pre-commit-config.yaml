@@ -30,6 +30,7 @@ repos:
       - id: codespell
         additional_dependencies: ["tomli"]
         args: ["--toml", "pyproject.toml"]
+        files: \.(py|md)$
   - repo: https://github.com/adrienverge/yamllint.git
     rev: v1.38.0
     hooks:

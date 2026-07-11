@@ -453,103 +453,31 @@ class SafeServiceRegistry:
         adjustments: list[dict[str, object]] = []
         memory = require_runtime(None).memory
 
-        if "entity_id" in target:
-            supported_keys.append("entity_id")
-            for entity_id in _target_values(target["entity_id"]):
-                supported_values.append(entity_id)
-                if entity_id in snapshot.states:
-                    entity_ids.add(entity_id)
-                    continue
-                resolve_domain = entity_id.split(".", 1)[0] if "." in entity_id else domain
-                outcome = resolve_target_entity(snapshot, entity_id, resolve_domain)
-                if outcome.is_resolved:
-                    resolved_entity_id = cast(str, outcome.resolved)
-                    entity_ids.add(resolved_entity_id)
-                    if memory is not None and resolved_entity_id != entity_id:
-                        # Persist only after the fresh snapshot resolver chose a
-                        # visible entity id for this requested target literal.
-                        memory.record(entity_id, resolved_entity_id)
-                    adjustments.append(_target_entity_resolved_adjustment(entity_id, resolved_entity_id))
-                else:
-                    guidance = advise(
-                        snapshot,
-                        FailureContext(
-                            intent=Intent.RESOLVE_SELECTOR,
-                            requested=entity_id,
-                            domain=resolve_domain,
-                            service=service or "",
-                            selector="entity_id",
-                        ),
-                    ).to_payload()
-                    return _UnresolvedTarget(
-                        requested=entity_id,
-                        selector="entity_id",
-                        scope_domain=resolve_domain,
-                        guidance=guidance,
-                    )
-        first_supported: tuple[str, str] | None = None
-        first_existing_selector: tuple[str, str] | None = None
-        for selector in AGGREGATE_SELECTOR_KEYS:
-            if selector not in target:
-                continue
-            supported_keys.append(selector)
-            for requested in _target_values(target[selector]):
-                supported_values.append(requested)
-                if first_supported is None:
-                    first_supported = (selector, requested)
-                if first_existing_selector is None and _selector_exists(snapshot, selector, requested):
-                    first_existing_selector = (selector, requested)
-        for selector, requested_expansions in expand_aggregate_selectors(snapshot, target).items():
-            for requested, resolved in requested_expansions:
-                domain_resolved = _domain_filtered_entity_ids(snapshot, resolved, domain)
-                entity_ids.update(domain_resolved)
-                adjustments.append(_target_selector_expanded_adjustment(selector, requested, domain_resolved))
+        entity_resolution = _resolve_entity_id_targets(snapshot, target, domain, service, memory)
+        supported_keys.extend(entity_resolution.supported_keys)
+        supported_values.extend(entity_resolution.supported_values)
+        entity_ids.update(entity_resolution.entity_ids)
+        adjustments.extend(entity_resolution.adjustments)
+        if entity_resolution.unresolved is not None:
+            return entity_resolution.unresolved
+        aggregate_resolution = _resolve_aggregate_targets(snapshot, target, domain)
+        supported_keys.extend(aggregate_resolution.supported_keys)
+        supported_values.extend(aggregate_resolution.supported_values)
+        entity_ids.update(aggregate_resolution.entity_ids)
+        adjustments.extend(aggregate_resolution.adjustments)
 
         if entity_ids:
             return _ResolvedTarget({"entity_id": sorted(entity_ids)}, tuple(adjustments))
-        if first_existing_selector is not None:
-            selector, requested = first_existing_selector
-            guidance = advise(
-                snapshot,
-                FailureContext(
-                    intent=Intent.RESOLVE_SELECTOR,
-                    requested=requested,
-                    domain=domain,
-                    service=service or "",
-                    selector=selector,
-                ),
-            ).to_payload()
-            return _UnresolvedTarget(
-                requested=requested,
-                selector=selector,
-                scope_domain=domain,
-                guidance=guidance,
-            )
-        if supported_values:
-            selector, requested = first_supported or (supported_keys[0], supported_values[0])
-            guidance = advise(
-                snapshot,
-                FailureContext(
-                    intent=Intent.RESOLVE_SELECTOR,
-                    requested=requested,
-                    domain=domain,
-                    service=service or "",
-                    selector=selector,
-                ),
-            ).to_payload()
-            return _UnresolvedTarget(
-                requested=requested,
-                selector=selector,
-                scope_domain=domain,
-                guidance=guidance,
-            )
-        if supported_keys:
-            return _UnresolvedTarget(
-                requested=supported_keys[0],
-                selector=supported_keys[0],
-                scope_domain=domain,
-                guidance=None,
-            )
+        if unresolved := _unresolved_selector_target(
+            snapshot,
+            domain,
+            service,
+            supported_keys,
+            supported_values,
+            aggregate_resolution.first_supported,
+            aggregate_resolution.first_existing_selector,
+        ):
+            return unresolved
         return _ResolvedTarget(cast(dict[str, object], json_safe(target)))
 
     def _service_call_error(
@@ -612,6 +540,144 @@ def _selector_exists(snapshot: HomeSnapshot, selector: str, requested: str) -> b
     if selector in {"label_id", "label"}:
         return requested in snapshot.labels
     return False
+
+
+@dataclass(frozen=True, slots=True)
+class _EntityIdResolution:
+    """Results of resolving explicit entity-id selectors against one snapshot."""
+
+    entity_ids: set[str]
+    supported_values: list[str]
+    supported_keys: list[str]
+    adjustments: list[dict[str, object]]
+    unresolved: _UnresolvedTarget | None = None
+
+
+def _resolve_entity_id_targets(
+    snapshot: HomeSnapshot,
+    target: Mapping[str, object],
+    domain: str,
+    service: str | None,
+    memory: Any,
+) -> _EntityIdResolution:
+    """Resolve explicit entity ids, preserving exact-match and memory-write policy."""
+    if "entity_id" not in target:
+        return _EntityIdResolution(set(), [], [], [])
+    entity_ids: set[str] = set()
+    supported_values: list[str] = []
+    adjustments: list[dict[str, object]] = []
+    for entity_id in _target_values(target["entity_id"]):
+        supported_values.append(entity_id)
+        if entity_id in snapshot.states:
+            entity_ids.add(entity_id)
+            continue
+        resolve_domain = entity_id.split(".", 1)[0] if "." in entity_id else domain
+        outcome = resolve_target_entity(snapshot, entity_id, resolve_domain)
+        if not outcome.is_resolved:
+            guidance = advise(
+                snapshot,
+                FailureContext(
+                    intent=Intent.RESOLVE_SELECTOR,
+                    requested=entity_id,
+                    domain=resolve_domain,
+                    service=service or "",
+                    selector="entity_id",
+                ),
+            ).to_payload()
+            return _EntityIdResolution(
+                entity_ids,
+                supported_values,
+                ["entity_id"],
+                adjustments,
+                _UnresolvedTarget(entity_id, "entity_id", resolve_domain, guidance),
+            )
+        resolved_entity_id = cast(str, outcome.resolved)
+        entity_ids.add(resolved_entity_id)
+        if memory is not None and resolved_entity_id != entity_id:
+            # State mutation boundary: remember only a fresh-snapshot-visible rewrite.
+            memory.record(entity_id, resolved_entity_id)
+        adjustments.append(_target_entity_resolved_adjustment(entity_id, resolved_entity_id))
+    return _EntityIdResolution(entity_ids, supported_values, ["entity_id"], adjustments)
+
+
+@dataclass(frozen=True, slots=True)
+class _AggregateTargetResolution:
+    """Results of collecting and expanding aggregate target selectors."""
+
+    entity_ids: set[str]
+    supported_values: list[str]
+    supported_keys: list[str]
+    adjustments: list[dict[str, object]]
+    first_supported: tuple[str, str] | None = None
+    first_existing_selector: tuple[str, str] | None = None
+
+
+def _resolve_aggregate_targets(
+    snapshot: HomeSnapshot,
+    target: Mapping[str, object],
+    domain: str,
+) -> _AggregateTargetResolution:
+    """Collect aggregate selectors and expand them to domain-scoped visible entities."""
+    entity_ids: set[str] = set()
+    supported_values: list[str] = []
+    supported_keys: list[str] = []
+    adjustments: list[dict[str, object]] = []
+    first_supported: tuple[str, str] | None = None
+    first_existing_selector: tuple[str, str] | None = None
+    for selector in AGGREGATE_SELECTOR_KEYS:
+        if selector not in target:
+            continue
+        supported_keys.append(selector)
+        for requested in _target_values(target[selector]):
+            supported_values.append(requested)
+            if first_supported is None:
+                first_supported = (selector, requested)
+            if first_existing_selector is None and _selector_exists(snapshot, selector, requested):
+                first_existing_selector = (selector, requested)
+    for selector, requested_expansions in expand_aggregate_selectors(snapshot, target).items():
+        for requested, resolved in requested_expansions:
+            domain_resolved = _domain_filtered_entity_ids(snapshot, resolved, domain)
+            entity_ids.update(domain_resolved)
+            adjustments.append(_target_selector_expanded_adjustment(selector, requested, domain_resolved))
+    return _AggregateTargetResolution(
+        entity_ids,
+        supported_values,
+        supported_keys,
+        adjustments,
+        first_supported,
+        first_existing_selector,
+    )
+
+
+def _unresolved_selector_target(
+    snapshot: HomeSnapshot,
+    domain: str,
+    service: str | None,
+    supported_keys: list[str],
+    supported_values: list[str],
+    first_supported: tuple[str, str] | None,
+    first_existing_selector: tuple[str, str] | None,
+) -> _UnresolvedTarget | None:
+    """Apply unresolved-selector precedence and build the existing guidance payload."""
+    if first_existing_selector is not None:
+        selector, requested = first_existing_selector
+    elif supported_values:
+        selector, requested = first_supported or (supported_keys[0], supported_values[0])
+    elif supported_keys:
+        return _UnresolvedTarget(supported_keys[0], supported_keys[0], domain)
+    else:
+        return None
+    guidance = advise(
+        snapshot,
+        FailureContext(
+            intent=Intent.RESOLVE_SELECTOR,
+            requested=requested,
+            domain=domain,
+            service=service or "",
+            selector=selector,
+        ),
+    ).to_payload()
+    return _UnresolvedTarget(requested, selector, domain, guidance)
 
 
 def _domain_filtered_entity_ids(snapshot: HomeSnapshot, entity_ids: tuple[str, ...], domain: str) -> tuple[str, ...]:

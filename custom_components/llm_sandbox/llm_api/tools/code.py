@@ -152,6 +152,91 @@ class ExecuteHomeCodeTool(llm.Tool):
             return cast(JsonObjectType, setup_error_payload(key, placeholders))
 
 
+class _ProductionRecorderFetcher:
+    """Keep live recorder seams behind the Monty runtime boundary."""
+
+    def __init__(self, hass: HomeAssistant, snapshot: HomeSnapshot, deadline: float, state: ExecutionState) -> None:
+        """Initialize a fetcher for one snapshot and execution state."""
+        self._hass = hass
+        self._snapshot = snapshot
+        self._deadline = deadline
+        self._state = state
+
+    def _require_recorder(self) -> None:
+        """Preserve the recorder availability gate before every host query."""
+        if not recorder_available(self._hass):
+            raise RecoverableToolError(RECORDER_UNAVAILABLE, {})
+
+    async def fetch_history(
+        self, entity_ids: Sequence[str], start: datetime, end: datetime
+    ) -> list[dict[str, object]]:
+        """Fetch flat history rows using the current run's sync state."""
+        self._require_recorder()
+        return await fetch_flat_history_rows(
+            self._hass,
+            self._snapshot,
+            self._deadline,
+            list(entity_ids),
+            start,
+            end,
+            sync=self._state.live_write_dispatched,
+        )
+
+    async def fetch_statistics(
+        self, entity_ids: Sequence[str], start: datetime, end: datetime
+    ) -> list[dict[str, object]]:
+        """Fetch long-term statistics rows using the current run's sync state."""
+        self._require_recorder()
+        return await fetch_flat_statistics_rows(
+            self._hass,
+            self._snapshot,
+            self._deadline,
+            list(entity_ids),
+            start,
+            end,
+            sync=self._state.live_write_dispatched,
+        )
+
+    async def fetch_short_term_statistics(
+        self, entity_ids: Sequence[str], start: datetime, end: datetime
+    ) -> list[dict[str, object]]:
+        """Fetch short-term statistics rows using the current run's sync state."""
+        self._require_recorder()
+        return await fetch_flat_short_term_statistics_rows(
+            self._hass,
+            self._snapshot,
+            self._deadline,
+            list(entity_ids),
+            start,
+            end,
+            sync=self._state.live_write_dispatched,
+        )
+
+    async def fetch_logbook(
+        self, entity_ids: Sequence[str], start: datetime, end: datetime
+    ) -> list[dict[str, object]]:
+        """Fetch visible logbook entries with dependency gates intact."""
+        self._require_recorder()
+        if not logbook_available(self._hass):
+            raise RecoverableToolError("logbook_unavailable", {})
+        return await fetch_visible_logbook_entries(
+            self._hass,
+            self._snapshot,
+            self._deadline,
+            list(entity_ids),
+            start,
+            end,
+            sync=self._state.live_write_dispatched,
+        )
+
+
+def _production_recorder_fetcher(
+    hass: HomeAssistant, snapshot: HomeSnapshot, deadline: float, state: ExecutionState
+) -> _ProductionRecorderFetcher:
+    """Create the host-side recorder boundary for one execution."""
+    return _ProductionRecorderFetcher(hass, snapshot, deadline, state)
+
+
 def _production_runtime(
     hass: HomeAssistant,
     snapshot: HomeSnapshot,
@@ -162,6 +247,8 @@ def _production_runtime(
     """Build a RuntimeContext backed by live Home Assistant host seams."""
     settings = sandbox_runtime.settings
     real_context = llm_context.context if llm_context.context is not None else Context()
+    state = ExecutionState(service_call_limit=settings.service_call_limit)
+    recorder_fetcher = _production_recorder_fetcher(hass, snapshot, deadline, state)
 
     async def _invoke(action: ProposedAction) -> object:
         return await hass.services.async_call(
@@ -174,62 +261,17 @@ def _production_runtime(
             context=real_context,
         )
 
-    async def _fetch_history(entity_ids: Sequence[str], start: datetime, end: datetime) -> list[dict[str, object]]:
-        # Private host-side recorder seam: validates against the fresh snapshot
-        # and never passes live hass/recorder objects into Monty-visible inputs.
-        # Sync only when this run dispatched a live write (read-after-write);
-        # standalone tools keep the unconditional default sync=True.
-        if not recorder_available(hass):
-            raise RecoverableToolError(RECORDER_UNAVAILABLE, {})
-        return await fetch_flat_history_rows(
-            hass, snapshot, deadline, list(entity_ids), start, end, sync=state.live_write_dispatched
-        )
-
-    async def _fetch_statistics(entity_ids: Sequence[str], start: datetime, end: datetime) -> list[dict[str, object]]:
-        # Private host-side statistics seam; statistics are recorder-derived live
-        # reads but cross into Monty only as JSON-safe rows.
-        if not recorder_available(hass):
-            raise RecoverableToolError(RECORDER_UNAVAILABLE, {})
-        return await fetch_flat_statistics_rows(
-            hass, snapshot, deadline, list(entity_ids), start, end, sync=state.live_write_dispatched
-        )
-
-    async def _fetch_short_term_statistics(
-        entity_ids: Sequence[str], start: datetime, end: datetime
-    ) -> list[dict[str, object]]:
-        # Private host-side short-term statistics seam; loads 5-minute recorder
-        # rows into the distinct SQL table without exposing live recorder objects.
-        if not recorder_available(hass):
-            raise RecoverableToolError(RECORDER_UNAVAILABLE, {})
-        return await fetch_flat_short_term_statistics_rows(
-            hass, snapshot, deadline, list(entity_ids), start, end, sync=state.live_write_dispatched
-        )
-
-    async def _fetch_logbook(entity_ids: Sequence[str], start: datetime, end: datetime) -> list[dict[str, object]]:
-        # Private host-side logbook seam: availability and snapshot visibility
-        # stay outside Monty, and a prior live write alone requests synchronization.
-        # Availability gates preserve helper errors before the host query starts.
-        if not recorder_available(hass):
-            raise RecoverableToolError(RECORDER_UNAVAILABLE, {})
-        if not logbook_available(hass):
-            raise RecoverableToolError("logbook_unavailable", {})
-        return await fetch_visible_logbook_entries(
-            hass, snapshot, deadline, list(entity_ids), start, end, sync=state.live_write_dispatched
-        )
-
     async def _run_blocking(fn: Callable[[], object]) -> object:
         return await hass.async_add_executor_job(fn)
 
-    # Hoist state so the fetcher closures can read the live-write flag.
-    state = ExecutionState(service_call_limit=settings.service_call_limit)
     return RuntimeContext(
         state=state,
         settings=settings,
         invoke=_invoke,
-        fetch_history=_fetch_history,
-        fetch_statistics=_fetch_statistics,
-        fetch_short_term_statistics=_fetch_short_term_statistics,
-        fetch_logbook=_fetch_logbook,
+        fetch_history=recorder_fetcher.fetch_history,
+        fetch_statistics=recorder_fetcher.fetch_statistics,
+        fetch_short_term_statistics=recorder_fetcher.fetch_short_term_statistics,
+        fetch_logbook=recorder_fetcher.fetch_logbook,
         run_blocking=_run_blocking,
         deadline=deadline,
         memory=sandbox_runtime.memory_store.for_context(llm_context),

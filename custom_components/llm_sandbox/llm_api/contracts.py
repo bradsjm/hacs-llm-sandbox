@@ -35,11 +35,10 @@ _RECORD_MAPPING_READ_STUBS = (
 )
 
 
-def _format_type(annotation: object) -> str:
-    from collections.abc import Mapping as AbcMapping
+def _format_simple_type(annotation: object) -> str | None:
+    """Format annotations that do not require origin-specific handling."""
     import inspect
-    from types import UnionType
-    from typing import get_args, get_origin
+    from typing import get_origin
 
     if annotation is Any:
         return "Any"
@@ -49,12 +48,23 @@ def _format_type(annotation: object) -> str:
         return annotation.__name__
     if annotation is inspect.Parameter.empty:
         return "Any"
-
-    origin = get_origin(annotation)
-    if origin is None:
+    if get_origin(annotation) is None:
         return str(annotation).replace("typing.", "")
+    return None
 
-    args = get_args(annotation)
+
+def _format_tuple_type(args: tuple[object, ...]) -> str:
+    """Format a tuple origin, including its variable-length form."""
+    if len(args) == 2 and args[1] is Ellipsis:
+        return f"tuple[{_format_type(args[0])}, ...]"
+    return f"tuple[{', '.join(_format_type(arg) for arg in args)}]"
+
+
+def _format_origin_type(annotation: object, origin: object, args: tuple[object, ...]) -> str:
+    """Format the supported parameterized annotation origins."""
+    from collections.abc import Mapping as AbcMapping
+    from types import UnionType
+
     if origin is UnionType:
         return " | ".join(_format_type(arg) for arg in args)
     if origin is AbcMapping:
@@ -64,14 +74,23 @@ def _format_type(annotation: object) -> str:
     if origin is dict:
         return f"dict[{_format_type(args[0])}, {_format_type(args[1])}]"
     if origin is tuple:
-        if len(args) == 2 and args[1] is Ellipsis:
-            return f"tuple[{_format_type(args[0])}, ...]"
-        return f"tuple[{', '.join(_format_type(arg) for arg in args)}]"
+        return _format_tuple_type(args)
     if origin is set:
         return f"set[{_format_type(args[0])}]"
     if getattr(origin, "__module__", "") == "typing" and getattr(origin, "__qualname__", "") == "Union":
         return " | ".join(_format_type(arg) for arg in args)
     return str(annotation).replace("typing.", "").replace("collections.abc.", "")
+
+
+def _format_type(annotation: object) -> str:
+    from typing import get_args, get_origin
+
+    simple = _format_simple_type(annotation)
+    if simple is not None:
+        return simple
+
+    origin = get_origin(annotation)
+    return _format_origin_type(annotation, origin, get_args(annotation))
 
 
 def _render_fields(cls: type[Any]) -> list[str]:

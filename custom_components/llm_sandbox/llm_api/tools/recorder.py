@@ -115,33 +115,17 @@ def _fit_recorder_page_bytes[T](
             for stream_id, rows in pages.items()
         }
 
-    def _next_cutoffs(selected: Mapping[str, list[T]]) -> dict[str, str]:
-        next_cutoffs: dict[str, str] = {}
-        for stream_id, full_page in pages.items():
-            selected_page = selected[stream_id]
-            if len(selected_page) == len(full_page):
-                # The emergency row pager already knows whether older rows remain.
-                if (next_cutoff := full_next_cutoffs.get(stream_id)) is not None:
-                    next_cutoffs[stream_id] = next_cutoff
-                elif not full_next_cutoffs:
-                    # The emergency pager collapses an all-exhausted map to {}.
-                    # Keep this stream exhausted while another byte-limited stream
-                    # continues, or it would restart on the next cursor request.
-                    next_cutoffs[stream_id] = ""
-            elif selected_page:
-                # Rows withheld for bytes are older than this stream's oldest return.
-                next_cutoffs[stream_id] = ts_of(selected_page[0])
-            elif (current_cutoff := current_cutoffs.get(stream_id)) is not None:
-                # Preserve an exhausted-stream sentinel while another stream advances.
-                next_cutoffs[stream_id] = current_cutoff
-        # Match the existing cursor contract: all exhausted sentinels end paging.
-        return {} if next_cutoffs and all(cutoff == "" for cutoff in next_cutoffs.values()) else next_cutoffs
-
     for selected_count, (_timestamp, stream_id, index) in enumerate(candidates):
         was_empty = selected_count == 0
         selected_indexes[stream_id].add(index)
         selected = _selected_pages()
-        next_cutoffs = _next_cutoffs(selected)
+        next_cutoffs = _compute_next_cutoffs(
+            pages,
+            selected,
+            current_cutoffs=current_cutoffs,
+            full_next_cutoffs=full_next_cutoffs,
+            ts_of=ts_of,
+        )
         tentative = payload_for(selected, next_cutoffs)
         encoded = json.dumps(tentative, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
         if len(encoded) > MAX_RECORDER_PAGE_BYTES and not was_empty:
@@ -149,7 +133,79 @@ def _fit_recorder_page_bytes[T](
             selected_indexes[stream_id].remove(index)
             break
     selected = _selected_pages()
-    return selected, _next_cutoffs(selected)
+    return selected, _compute_next_cutoffs(
+        pages,
+        selected,
+        current_cutoffs=current_cutoffs,
+        full_next_cutoffs=full_next_cutoffs,
+        ts_of=ts_of,
+    )
+
+
+def _compute_next_cutoffs[T](
+    pages: Mapping[str, list[T]],
+    selected: Mapping[str, list[T]],
+    *,
+    current_cutoffs: Mapping[str, str],
+    full_next_cutoffs: Mapping[str, str],
+    ts_of: Callable[[T], str],
+) -> dict[str, str]:
+    """Compute continuation cutoffs for rows accepted by the byte fit."""
+    next_cutoffs: dict[str, str] = {}
+    for stream_id, full_page in pages.items():
+        selected_page = selected[stream_id]
+        if len(selected_page) == len(full_page):
+            # The emergency row pager already knows whether older rows remain.
+            if (next_cutoff := full_next_cutoffs.get(stream_id)) is not None:
+                next_cutoffs[stream_id] = next_cutoff
+            elif not full_next_cutoffs:
+                # The emergency pager collapses an all-exhausted map to {}.
+                # Keep this stream exhausted while another byte-limited stream
+                # continues, or it would restart on the next cursor request.
+                next_cutoffs[stream_id] = ""
+        elif selected_page:
+            # Rows withheld for bytes are older than this stream's oldest return.
+            next_cutoffs[stream_id] = ts_of(selected_page[0])
+        elif (current_cutoff := current_cutoffs.get(stream_id)) is not None:
+            # Preserve an exhausted-stream sentinel while another stream advances.
+            next_cutoffs[stream_id] = current_cutoff
+    # Match the existing cursor contract: all exhausted sentinels end paging.
+    return {} if next_cutoffs and all(cutoff == "" for cutoff in next_cutoffs.values()) else next_cutoffs
+
+
+def _paged_recorder_response(
+    stream_rows: dict[str, list[list[object]]],
+    *,
+    budget: int,
+    current_cutoffs: Mapping[str, str],
+    start: datetime,
+    end: datetime,
+    limit: int,
+    ts_of: Callable[[list[object]], str],
+    cursor_for: Callable[[dict[str, str]], Cursor],
+    body_for: Callable[[dict[str, list[list[object]]]], dict[str, object]],
+) -> JsonObjectType:
+    """Page, byte-fit, and envelope one recorder response across streams."""
+    emergency_pages, emergency_next_cutoffs = _paginate_streams(stream_rows, budget=budget, cutoffs=current_cutoffs)
+
+    def _payload(pages: dict[str, list[list[object]]], next_cutoffs: dict[str, str]) -> JsonObjectType:
+        return _windowed_payload(
+            start,
+            end,
+            body_for(pages),
+            cursor_for(next_cutoffs) if next_cutoffs else None,
+            returned=sum(len(page) for page in pages.values()),
+            limit=limit,
+        )
+
+    pages, next_cutoffs = _fit_recorder_page_bytes(
+        emergency_pages,
+        current_cutoffs=current_cutoffs,
+        full_next_cutoffs=emergency_next_cutoffs,
+        ts_of=ts_of,
+        payload_for=_payload,
+    )
+    return _payload(pages, next_cutoffs)
 
 
 def _continuation_query_groups(
@@ -518,34 +574,29 @@ class GetHistoryTool(_RecorderTool):
         for entity_id in entity_ids:
             if entity_id not in result and cursor.cutoffs.get(entity_id) == "":
                 stream_rows[entity_id] = []
-        emergency_pages, emergency_next_cutoffs = _paginate_streams(stream_rows, budget=budget, cutoffs=cursor.cutoffs)
 
-        def _payload(pages: dict[str, list[list[object]]], next_cutoffs: dict[str, str]) -> JsonObjectType:
+        def _body(pages: dict[str, list[list[object]]]) -> dict[str, object]:
             entities: dict[str, dict[str, object]] = {}
             for entity_id, page in pages.items():
                 entity: dict[str, object] = {"rows": page}
                 if (unit := stream_units.get(entity_id)) is not None:
                     entity["unit"] = unit
                 entities[entity_id] = entity
-            return _windowed_payload(
-                start,
-                end,
-                {"entities": entities},
-                Cursor(kind="history", scope_ids=cursor.scope_ids, start=start, end=end, cutoffs=next_cutoffs)
-                if next_cutoffs
-                else None,
-                returned=sum(len(cast(list[object], entity["rows"])) for entity in entities.values()),
-                limit=budget * len(entity_ids),
-            )
+            return {"entities": entities}
 
-        pages, next_cutoffs = _fit_recorder_page_bytes(
-            emergency_pages,
+        return _paged_recorder_response(
+            stream_rows,
+            budget=budget,
             current_cutoffs=cursor.cutoffs,
-            full_next_cutoffs=emergency_next_cutoffs,
+            start=start,
+            end=end,
+            limit=budget * len(entity_ids),
             ts_of=_row_timestamp,
-            payload_for=_payload,
+            cursor_for=lambda cutoffs: Cursor(
+                kind="history", scope_ids=cursor.scope_ids, start=start, end=end, cutoffs=cutoffs
+            ),
+            body_for=_body,
         )
-        return _payload(pages, next_cutoffs)
 
 
 @final
@@ -661,39 +712,32 @@ class GetStatisticsTool(_RecorderTool):
         for statistic_id in statistic_ids:
             if statistic_id not in result and cursor.cutoffs.get(statistic_id) == "":
                 stream_rows[statistic_id] = []
-        emergency_pages, emergency_next_cutoffs = _paginate_streams(stream_rows, budget=budget, cutoffs=cursor.cutoffs)
 
-        def _payload(pages: dict[str, list[list[object]]], next_cutoffs: dict[str, str]) -> JsonObjectType:
+        def _body(pages: dict[str, list[list[object]]]) -> dict[str, object]:
             shaped_statistics = {
                 statistic_id: {"rows": page, "fields": _statistic_fields(page)} for statistic_id, page in pages.items()
             }
-            return _windowed_payload(
-                start,
-                end,
-                {"period": period, "statistics": shaped_statistics},
-                Cursor(
-                    kind="statistics",
-                    scope_ids=cursor.scope_ids,
-                    start=start,
-                    end=end,
-                    cutoffs=next_cutoffs,
-                    period=period,
-                    statistic_types=requested_types,
-                )
-                if next_cutoffs
-                else None,
-                returned=sum(len(cast(list[object], item["rows"])) for item in shaped_statistics.values()),
-                limit=budget * len(statistic_ids),
-            )
+            return {"period": period, "statistics": shaped_statistics}
 
-        pages, next_cutoffs = _fit_recorder_page_bytes(
-            emergency_pages,
+        return _paged_recorder_response(
+            stream_rows,
+            budget=budget,
             current_cutoffs=cursor.cutoffs,
-            full_next_cutoffs=emergency_next_cutoffs,
+            start=start,
+            end=end,
+            limit=budget * len(statistic_ids),
             ts_of=_row_timestamp,
-            payload_for=_payload,
+            cursor_for=lambda cutoffs: Cursor(
+                kind="statistics",
+                scope_ids=cursor.scope_ids,
+                start=start,
+                end=end,
+                cutoffs=cutoffs,
+                period=period,
+                statistic_types=requested_types,
+            ),
+            body_for=_body,
         )
-        return _payload(pages, next_cutoffs)
 
 
 @final

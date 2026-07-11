@@ -662,23 +662,7 @@ def _build_indexes(
     entity-level area override wins and entities otherwise inherit their
     device's area, matching Home Assistant's resolution semantics.
     """
-    by_device: dict[str, list[str]] = {}
-    by_area: dict[str, list[str]] = {}
-    by_config_entry: dict[str, list[str]] = {}
-    by_label: dict[str, list[str]] = {}
-
-    for entity_id, entry in entities.items():
-        if entry.device_id:
-            by_device.setdefault(entry.device_id, []).append(entity_id)
-        effective_area = _effective_area_id(
-            entry, devices.get(entry.device_id) if entry.device_id is not None else None
-        )
-        if effective_area is not None:
-            by_area.setdefault(effective_area, []).append(entity_id)
-        if entry.config_entry_id:
-            by_config_entry.setdefault(entry.config_entry_id, []).append(entity_id)
-        for label in entry.labels:
-            by_label.setdefault(label, []).append(entity_id)
+    by_device, by_area, by_config_entry, by_label = _build_entity_indexes(entities, devices)
 
     device_by_area: dict[str, list[str]] = {}
     for device_id, device in devices.items():
@@ -704,6 +688,32 @@ def _build_indexes(
         device_ids_by_label=_freeze_index(device_by_label),
         area_ids_by_floor_id=_freeze_index(area_by_floor),
     )
+
+
+def _build_entity_indexes(
+    entities: dict[str, SafeRegistryEntry],
+    devices: dict[str, SafeDeviceEntry],
+) -> tuple[dict[str, list[str]], dict[str, list[str]], dict[str, list[str]], dict[str, list[str]]]:
+    """Build indexes derived from entity registry entries."""
+    by_device: dict[str, list[str]] = {}
+    by_area: dict[str, list[str]] = {}
+    by_config_entry: dict[str, list[str]] = {}
+    by_label: dict[str, list[str]] = {}
+
+    for entity_id, entry in entities.items():
+        if entry.device_id:
+            by_device.setdefault(entry.device_id, []).append(entity_id)
+        effective_area = _effective_area_id(
+            entry, devices.get(entry.device_id) if entry.device_id is not None else None
+        )
+        if effective_area is not None:
+            by_area.setdefault(effective_area, []).append(entity_id)
+        if entry.config_entry_id:
+            by_config_entry.setdefault(entry.config_entry_id, []).append(entity_id)
+        for label in entry.labels:
+            by_label.setdefault(label, []).append(entity_id)
+
+    return by_device, by_area, by_config_entry, by_label
 
 
 def _empty_indexes() -> SnapshotIndexes:

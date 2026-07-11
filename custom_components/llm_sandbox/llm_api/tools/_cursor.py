@@ -39,6 +39,19 @@ class Cursor:
     statistic_types: tuple[str, ...] | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class _ValidatedCursorPayload:
+    """Validated cursor fields before tool and scope matching."""
+
+    kind: str
+    scope_ids: tuple[str, ...]
+    start: datetime
+    end: datetime
+    cutoffs: dict[str, str]
+    period: str | None
+    statistic_types: tuple[str, ...] | None
+
+
 def encode_cursor(cursor: Cursor) -> str:
     """Encode a cursor to an opaque base64-url JSON string."""
     payload: dict[str, object] = {
@@ -61,55 +74,81 @@ def encode_cursor(cursor: Cursor) -> str:
 def decode_cursor(value: object, *, expected_kind: str, expected_scope_ids: tuple[str, ...]) -> Cursor:
     """Decode an opaque cursor, raising ``invalid_cursor`` on malformation."""
     try:
-        if not isinstance(value, str):
-            raise ValueError("cursor must be a string")
-        obj = json.loads(base64.urlsafe_b64decode(value.encode("ascii")))
-        if not isinstance(obj, dict) or obj.get("v") != _CURSOR_VERSION:
-            raise ValueError("unsupported cursor version")
-        raw_kind = obj.get("k")
-        if not isinstance(raw_kind, str):
-            raise ValueError("invalid cursor kind")
-        raw_scope_ids = obj.get("ids")
-        if not isinstance(raw_scope_ids, list) or not all(isinstance(item, str) for item in raw_scope_ids):
-            raise ValueError("invalid cursor scope")
-        scope_ids = tuple(raw_scope_ids)
-        if raw_kind != expected_kind or scope_ids != expected_scope_ids:
-            raise ValueError("cursor scope mismatch")
-        raw_start = dt_util.parse_datetime(str(obj["s"]))
-        raw_end = dt_util.parse_datetime(str(obj["e"]))
-        # The cursor window was validated when created; None means corruption.
-        if raw_start is None or raw_end is None:
-            raise ValueError("invalid cursor window")
-        start = dt_util.as_utc(raw_start)
-        end = dt_util.as_utc(raw_end)
-        raw_cutoffs = obj.get("c", {})
-        if not isinstance(raw_cutoffs, dict) or not all(
-            isinstance(key, str) and isinstance(item, str) for key, item in raw_cutoffs.items()
-        ):
-            raise ValueError("invalid cursor cutoffs")
-        cutoffs = dict(raw_cutoffs)
-        raw_period = obj.get("p")
-        period = str(raw_period) if raw_period is not None else None
-        raw_statistic_types = obj.get("st")
-        statistic_types = None
-        if raw_statistic_types is not None:
-            # Cursor-carried statistic field projection must stay a bounded string list.
-            if not isinstance(raw_statistic_types, list) or not all(
-                isinstance(item, str) for item in raw_statistic_types
-            ):
-                raise ValueError("invalid cursor statistic types")
-            statistic_types = tuple(raw_statistic_types)
-    except ValueError, KeyError, TypeError, binascii.Error:
+        payload = _decode_cursor_payload(value)
+        validated = _validate_cursor_payload(payload)
+        _match_cursor_scope(validated, expected_kind=expected_kind, expected_scope_ids=expected_scope_ids)
+        return _cursor_from_payload(validated)
+    except ValueError, KeyError, TypeError, binascii.Error, UnicodeError, OverflowError:
         # Fail closed: any decode/version/shape problem restarts the sequence.
         raise RecoverableToolError(INVALID_CURSOR, {}) from None
-    return Cursor(
+
+
+def _decode_cursor_payload(value: object) -> dict[str, object]:
+    """Decode base64 JSON without applying tool or scope matching."""
+    if not isinstance(value, str):
+        raise ValueError("cursor must be a string")
+    decoded = json.loads(base64.urlsafe_b64decode(value.encode("ascii")))
+    if not isinstance(decoded, dict):
+        raise ValueError("cursor payload must be an object")
+    return decoded
+
+
+def _validate_cursor_payload(payload: dict[str, object]) -> _ValidatedCursorPayload:
+    """Validate decoded cursor fields and normalize typed values."""
+    if payload.get("v") != _CURSOR_VERSION:
+        raise ValueError("unsupported cursor version")
+    raw_kind = payload.get("k")
+    if not isinstance(raw_kind, str):
+        raise ValueError("invalid cursor kind")
+    raw_scope_ids = payload.get("ids")
+    if not isinstance(raw_scope_ids, list) or not all(isinstance(item, str) for item in raw_scope_ids):
+        raise ValueError("invalid cursor scope")
+    raw_start = dt_util.parse_datetime(str(payload["s"]))
+    raw_end = dt_util.parse_datetime(str(payload["e"]))
+    if raw_start is None or raw_end is None:
+        raise ValueError("invalid cursor window")
+    raw_cutoffs = payload.get("c", {})
+    if not isinstance(raw_cutoffs, dict) or not all(
+        isinstance(key, str) and isinstance(item, str) for key, item in raw_cutoffs.items()
+    ):
+        raise ValueError("invalid cursor cutoffs")
+    raw_period = payload.get("p")
+    period = str(raw_period) if raw_period is not None else None
+    raw_statistic_types = payload.get("st")
+    statistic_types = None
+    if raw_statistic_types is not None:
+        if not isinstance(raw_statistic_types, list) or not all(isinstance(item, str) for item in raw_statistic_types):
+            raise ValueError("invalid cursor statistic types")
+        statistic_types = tuple(raw_statistic_types)
+    return _ValidatedCursorPayload(
         kind=raw_kind,
-        scope_ids=scope_ids,
-        start=start,
-        end=end,
-        cutoffs=cutoffs,
+        scope_ids=tuple(raw_scope_ids),
+        start=dt_util.as_utc(raw_start),
+        end=dt_util.as_utc(raw_end),
+        cutoffs=dict(raw_cutoffs),
         period=period,
         statistic_types=statistic_types,
+    )
+
+
+def _match_cursor_scope(
+    payload: _ValidatedCursorPayload, *, expected_kind: str, expected_scope_ids: tuple[str, ...]
+) -> None:
+    """Require a valid cursor to belong to this tool and resolved scope."""
+    if payload.kind != expected_kind or payload.scope_ids != expected_scope_ids:
+        raise ValueError("cursor scope mismatch")
+
+
+def _cursor_from_payload(payload: _ValidatedCursorPayload) -> Cursor:
+    """Construct the public cursor after validation and matching."""
+    return Cursor(
+        kind=payload.kind,
+        scope_ids=payload.scope_ids,
+        start=payload.start,
+        end=payload.end,
+        cutoffs=payload.cutoffs,
+        period=payload.period,
+        statistic_types=payload.statistic_types,
     )
 
 

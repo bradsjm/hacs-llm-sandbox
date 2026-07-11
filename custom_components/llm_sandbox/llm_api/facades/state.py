@@ -2,7 +2,7 @@
 
 # ruff: noqa: D105, ANN401
 
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date as _date
 from datetime import datetime as _datetime
@@ -195,6 +195,30 @@ def _query_scope(
     )
 
 
+async def _load_query_table(
+    runtime: Any,
+    table: str,
+    ids: Sequence[str],
+    start: _datetime,
+    end: _datetime,
+    needs_load: Callable[[Sequence[str], _datetime, _datetime], bool],
+    fetch_rows: Callable[[Sequence[str], _datetime, _datetime], Awaitable[list[dict[str, object]]]],
+    load_rows: Callable[[Sequence[Mapping[str, object]]], bool],
+    record_loaded: Callable[[Sequence[str], _datetime, _datetime], None],
+) -> None:
+    """Load one recorder table only when needed, retaining conservative cap semantics."""
+    if not needs_load(ids, start, end):
+        return
+    rows = await fetch_rows(ids, start, end)
+    truncated = cast(bool, await runtime.run_blocking(lambda: load_rows(rows)))
+    if truncated:
+        runtime.state.notes.append(f"{table} load capped at {MAX_HISTORY_LOAD_ROWS} rows")
+        # Branch boundary: capped data is not a complete window and must be refetched later.
+        return
+    # State mutation boundary: only an uncapped fetch can satisfy the requested window.
+    record_loaded(ids, start, end)
+
+
 @dataclass(frozen=True, slots=True)
 class SafeHass:
     """Root Home Assistant facade exposed to Monty.
@@ -360,45 +384,46 @@ class SafeHass:
                 if inferred:
                     runtime.state.notes.append(f"query scope inferred from SQL literals: {', '.join(ids)}")
 
-                async def _load_history() -> None:
-                    if not needs_history or not db.history_needs_load(ids, start, end):
-                        return
-                    rows = await runtime.fetch_history(ids, start, end)
-                    truncated = cast(bool, await runtime.run_blocking(lambda: db.load_history(rows)))
-                    if truncated:
-                        runtime.state.notes.append(f"history load capped at {MAX_HISTORY_LOAD_ROWS} rows")
-                        # A capped load is intentionally NOT marked complete: the cap keeps
-                        # only the newest rows for the fetched scope, so a later narrower
-                        # query for an entity whose rows fell outside the cap must still be
-                        # allowed to re-fetch. Re-inserts stay cheap via the full-row dedup index.
-                        return
-                    db.record_history_loaded(ids, start, end)
-
-                async def _load_statistics() -> None:
-                    if not needs_statistics or not db.statistics_needs_load(ids, start, end):
-                        return
-                    rows = await runtime.fetch_statistics(ids, start, end)
-                    truncated = cast(bool, await runtime.run_blocking(lambda: db.load_statistics(rows)))
-                    if truncated:
-                        runtime.state.notes.append(f"statistics load capped at {MAX_HISTORY_LOAD_ROWS} rows")
-                        return
-                    db.record_statistics_loaded(ids, start, end)
-
-                async def _load_short_term_statistics() -> None:
-                    if not needs_short_term_statistics or not db.short_term_statistics_needs_load(ids, start, end):
-                        return
-                    rows = await runtime.fetch_short_term_statistics(ids, start, end)
-                    truncated = cast(bool, await runtime.run_blocking(lambda: db.load_short_term_statistics(rows)))
-                    if truncated:
-                        runtime.state.notes.append(
-                            f"statistics_short_term load capped at {MAX_HISTORY_LOAD_ROWS} rows"
-                        )
-                        return
-                    db.record_short_term_statistics_loaded(ids, start, end)
-
-                await _load_history()
-                await _load_statistics()
-                await _load_short_term_statistics()
+                await _load_query_table(
+                    runtime,
+                    "history",
+                    ids,
+                    start,
+                    end,
+                    lambda query_ids, query_start, query_end: (
+                        needs_history and db.history_needs_load(query_ids, query_start, query_end)
+                    ),
+                    runtime.fetch_history,
+                    db.load_history,
+                    db.record_history_loaded,
+                )
+                await _load_query_table(
+                    runtime,
+                    "statistics",
+                    ids,
+                    start,
+                    end,
+                    lambda query_ids, query_start, query_end: (
+                        needs_statistics and db.statistics_needs_load(query_ids, query_start, query_end)
+                    ),
+                    runtime.fetch_statistics,
+                    db.load_statistics,
+                    db.record_statistics_loaded,
+                )
+                await _load_query_table(
+                    runtime,
+                    "statistics_short_term",
+                    ids,
+                    start,
+                    end,
+                    lambda query_ids, query_start, query_end: (
+                        needs_short_term_statistics
+                        and db.short_term_statistics_needs_load(query_ids, query_start, query_end)
+                    ),
+                    runtime.fetch_short_term_statistics,
+                    db.load_short_term_statistics,
+                    db.record_short_term_statistics_loaded,
+                )
             result = cast(
                 QueryResult,
                 await runtime.run_blocking(
