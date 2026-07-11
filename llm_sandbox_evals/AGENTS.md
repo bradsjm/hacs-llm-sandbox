@@ -50,7 +50,7 @@ Prioritize accommodating reasonable intent over increasing prompting length.
 - Optimize: `uv run --group dev --group evals python -m llm_sandbox_evals optimize --target-model <real-model>`
 - Report: `uv run --group dev --group evals python -m llm_sandbox_evals report <run_id>`
 
-Note: eval runs need **both** groups (`dev` provides `homeassistant`, `evals` provides `pydantic-ai-slim` and `pydantic-evals`). Artifacts go to the gitignored `eval_data/runs/`; each native eval run writes `report.json`. Pass `--logfire` to enable optional Pydantic Logfire export when `LOGFIRE_TOKEN` is available.
+Note: eval runs need **both** groups (`dev` provides `homeassistant`, `evals` provides `pydantic-ai-slim` and `pydantic-evals`). Artifacts go to the gitignored `eval_data/runs/`; each native eval run writes `report.json`. A non-empty `LOGFIRE_TOKEN` automatically enables Pydantic Logfire export; telemetry console output is disabled to preserve Rich Live and stdout/stderr contracts.
 
 ## Architecture And Data Flow
 
@@ -86,7 +86,7 @@ The harness owns the snapshot lifecycle and builds a fresh scoped snapshot per c
 - `terminal.py` — the eval command's stderr-only Rich Live composition (TTY), redirected-stderr lifecycle-line fallback, and compact successful final summary. It never changes stdout, artifacts, scoring, or matrix execution.
 - `reports.py` — `write_report_json(...)` and `load_report(...)` for the single saved native `report.json` artifact.
 - `html_report.py` — `render_html(...)` / `write_html(...)` for the interactive self-contained `report.html` dashboard.
-- `logfire_config.py` — optional Pydantic Logfire configuration used only when `eval --logfire` is passed.
+- `logfire_config.py` — token-enabled Pydantic Logfire configuration with console output disabled.
 - `optimize_dspy.py` — DSPy COPRO prompt optimizer that exports optimized `PromptCandidate` artifacts and reuses the real harness metric path.
 - `cli.py` / `__main__.py` — `eval`, `report`, and `optimize` subcommands.
 

@@ -2,8 +2,8 @@
 
 
 def configure_logfire() -> None:
-    """Configure Logfire only when the eval CLI explicitly asks for it."""
+    """Configure token-enabled telemetry without writing to terminal streams."""
     import logfire
 
-    logfire.configure(send_to_logfire="if-token-present", service_name="llm-sandbox-evals")
+    logfire.configure(send_to_logfire="if-token-present", service_name="llm-sandbox-evals", console=False)
     logfire.instrument_pydantic_ai()

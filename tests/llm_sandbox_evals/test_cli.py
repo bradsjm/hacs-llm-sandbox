@@ -8,7 +8,7 @@ from pydantic_ai.models import Model
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 import pytest
 
-from llm_sandbox_evals import agent_runner, cli
+from llm_sandbox_evals import agent_runner, cli, logfire_config
 
 
 def test_eval_keeps_stdout_factual_and_writes_artifacts(capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
@@ -35,6 +35,38 @@ def test_eval_keeps_stdout_factual_and_writes_artifacts(capsys: pytest.CaptureFi
     assert "\x1b" not in captured.out
     assert (run_dir / "report.json").is_file()
     assert (run_dir / "report.html").is_file()
+
+
+def test_eval_token_telemetry_does_not_pollute_terminal_output(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    configured: list[None] = []
+    monkeypatch.setenv("LOGFIRE_TOKEN", "test-token")
+    monkeypatch.setattr(logfire_config, "configure_logfire", lambda: configured.append(None))
+
+    exit_code = main(
+        [
+            "eval",
+            "--models",
+            "stub",
+            "--cases",
+            "state_living_temperature",
+            "--runs-dir",
+            str(tmp_path),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert configured == [None]
+    assert captured.out.startswith("run_dir: ")
+    assert "Logfire" not in captured.out
+    assert "Logfire" not in captured.err
+
+
+def test_eval_parser_does_not_accept_logfire_flag() -> None:
+    with pytest.raises(SystemExit, match="2"):
+        cli._build_parser().parse_args(["eval", "--logfire"])
 
 
 def test_eval_reports_completed_cell_error_on_redirected_stderr(

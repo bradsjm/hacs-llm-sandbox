@@ -75,7 +75,7 @@ uv run --group dev --group evals python -m llm_sandbox_evals eval \
 ## Commands
 
 ```text
-python -m llm_sandbox_evals eval [--models id,...] [--candidates id,...] [--prompt-profile ID] [--cases id,...|category,...] [--concurrency N] [--max-tool-calls N] [--model-timeout SECONDS] [--reasoning LEVEL] [--logfire] [--runs-dir PATH]
+python -m llm_sandbox_evals eval [--models id,...] [--candidates id,...] [--prompt-profile ID] [--cases id,...|category,...] [--concurrency N] [--max-tool-calls N] [--model-timeout SECONDS] [--reasoning LEVEL] [--runs-dir PATH]
 python -m llm_sandbox_evals optimize --target-model ID [--proposer-model ID] [--prompt-profile ID] [--breadth N] [--depth N] [--length-penalty COEFF] [--cases ...] [--cross-eval-models ...] [--target-reasoning LEVEL] [--proposer-reasoning LEVEL] [--reasoning LEVEL] [--runs-dir PATH]
 python -m llm_sandbox_evals report <run_id> [--html] [--runs-dir PATH]
 ```
@@ -89,7 +89,7 @@ python -m llm_sandbox_evals report <run_id> [--html] [--runs-dir PATH]
 - `guided`, `balanced`, and `frontier` preserve the same capability/safety catalog while varying coaching and density; compare them with `--candidates baseline,profile:guided,profile:balanced,profile:frontier` or select one via `--prompt-profile`.
 - `--reasoning LEVEL` forwards a reasoning effort (e.g. `medium`/`high`, or `none` to disable a reasoning model) to real models via Pydantic AI provider settings (OpenRouter/OpenAI reasoning effort). `optimize` adds `--target-reasoning` and `--proposer-reasoning` to control the target and proposer models independently (e.g. `--target-reasoning none --proposer-reasoning high`).
 - `--model-timeout SECONDS` bounds one model generation before recording `model_error` (default `75`). Slow free models may need a higher value or lower `--concurrency`.
-- `--logfire` enables optional native Pydantic Logfire instrumentation when `LOGFIRE_TOKEN` is available.
+- A non-empty `LOGFIRE_TOKEN` automatically enables native Pydantic Logfire instrumentation. Telemetry console output is disabled so it cannot corrupt Rich Live, stderr, or machine-readable stdout.
 - Defaults: `--models stub`, `--candidates baseline`, `--prompt-profile balanced`, all cases.
 
 ## Checks
@@ -183,6 +183,6 @@ DSPy optimization runs write `optimized_candidate.json` and `optimized_prompt.md
 
 ## Scope
 
-**In:** deterministic structured-outcome scoring, successful-call efficiency scoring, tool-call count reporting, multi-model matrix, native `pydantic_evals` `Dataset` / `EvaluationReport` integration, optional Logfire export via `--logfire`, Pydantic AI agent tool-calling, offline FunctionModel stub validation, production `execute_home_code` and recorder cores against frozen snapshots, `report.json` artifacts, and DSPy COPRO instruction optimization (export-only; never auto-patches production `prompts.py`).
+**In:** deterministic structured-outcome scoring, successful-call efficiency scoring, tool-call count reporting, multi-model matrix, native `pydantic_evals` `Dataset` / `EvaluationReport` integration, token-enabled Logfire export with console output disabled, Pydantic AI agent tool-calling, offline FunctionModel stub validation, production `execute_home_code` and recorder cores against frozen snapshots, `report.json` artifacts, and DSPy COPRO instruction optimization (export-only; never auto-patches production `prompts.py`).
 
 **Out of scope:** LLM-as-judge scoring, live Home Assistant or recorder DB, CI jobs that call paid models, mutable cross-turn fixture state, and auto-editing production `prompts.py`. GEPA/MIPROv2 (richer feedback-driven or joint demo+instruction search) are not yet wired; COPRO is the implemented optimizer.

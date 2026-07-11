@@ -21,7 +21,7 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_evals.reporting.analyses import ScalarResult, TableResult
 import pytest
 
-from llm_sandbox_evals import agent_runner, reports
+from llm_sandbox_evals import agent_runner, logfire_config, reports
 
 
 async def test_run_matrix_stub_slice_writes_reloadable_report_json(tmp_path: Path) -> None:
@@ -63,6 +63,27 @@ async def test_run_matrix_stub_slice_writes_reloadable_report_json(tmp_path: Pat
     # The stub read the temperature entity, so one tool event with its return is persisted.
     assert len(report_case.output.tool_events) == 1
     assert report_case.output.tool_events[0].tool_name == "execute_home_code"
+
+
+async def test_run_matrix_does_not_configure_logfire_without_token(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    configured: list[None] = []
+    monkeypatch.setattr(logfire_config, "configure_logfire", lambda: configured.append(None))
+
+    await run_matrix(_config(tmp_path, cases=["state_living_temperature"]), run_id="no-logfire-token")
+
+    assert configured == []
+
+
+async def test_run_matrix_configures_logfire_with_token(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    configured: list[None] = []
+    monkeypatch.setenv("LOGFIRE_TOKEN", "test-token")
+    monkeypatch.setattr(logfire_config, "configure_logfire", lambda: configured.append(None))
+
+    await run_matrix(_config(tmp_path, cases=["state_living_temperature"]), run_id="with-logfire-token")
+
+    assert configured == [None]
 
 
 async def test_run_matrix_emits_cell_and_tool_lifecycle_events(tmp_path: Path) -> None:

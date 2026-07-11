@@ -249,11 +249,6 @@ def _add_eval_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPar
         "(default: unset; left to the provider so reasoning-capable models do not warn about "
         "unsupported sampling parameters). Ignored by 'stub'.",
     )
-    eval_parser.add_argument(
-        "--logfire",
-        action="store_true",
-        help="send evaluation traces and analyses to Pydantic Logfire when LOGFIRE_TOKEN is set.",
-    )
 
 
 def _add_report_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -403,7 +398,7 @@ def _run_eval(args: argparse.Namespace) -> int:
     run_id = _derive_run_id()
     try:
         with MatrixTerminalReporter() as reporter:
-            report = asyncio.run(_run_eval_matrix(config, run_id, args.logfire, reporter))
+            report = asyncio.run(_run_eval_matrix(config, run_id, reporter))
     except _EvalCancelled:
         sys.stderr.write("eval cancelled\n")
         return 130
@@ -422,12 +417,10 @@ def _run_eval(args: argparse.Namespace) -> int:
 
 
 async def _run_eval_matrix(
-    config: EvalConfig, run_id: str, logfire_enabled: bool, reporter: MatrixTerminalReporter
+    config: EvalConfig, run_id: str, reporter: MatrixTerminalReporter
 ) -> EvaluationReport[MatrixCellRef, CaseTrace, MatrixCellMeta]:
     """Run one matrix, allowing Escape to cancel only interactive terminal sessions."""
-    task = asyncio.create_task(
-        experiment.run_matrix(config, run_id=run_id, logfire_enabled=logfire_enabled, on_event=reporter.handle)
-    )
+    task = asyncio.create_task(experiment.run_matrix(config, run_id=run_id, on_event=reporter.handle))
     # Branch boundary: redirected streams retain their existing non-interactive behavior.
     if not _is_interactive_eval():
         return await task

@@ -3,6 +3,7 @@
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+import os
 from time import perf_counter
 from typing import Literal
 
@@ -246,14 +247,14 @@ async def run_matrix(
     config: EvalConfig,
     *,
     run_id: str | None = None,
-    logfire_enabled: bool = False,
     on_event: MatrixEventCallback | None = None,
 ) -> EvaluationReport[MatrixCellRef, CaseTrace, MatrixCellMeta]:
     """Run the full matrix through one native pydantic-evals experiment."""
     # Branch boundary: direct callers may omit a run id, but each cell still gets one for Logfire/report joins.
     if run_id is None:
         run_id = datetime.now(UTC).strftime("%Y%m%d-%H%M%S-%f")
-    if logfire_enabled:
+    # Branch boundary: retain a zero-import, zero-export path when telemetry is not configured.
+    if os.environ.get("LOGFIRE_TOKEN"):
         from llm_sandbox_evals.logfire_config import configure_logfire
 
         configure_logfire()
