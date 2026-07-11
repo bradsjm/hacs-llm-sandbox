@@ -35,6 +35,22 @@ Did the front door open after 10pm last night? Include nearby logbook activity.
 Which room had the highest average humidity over the last 24 hours?
 ```
 
+## Composed recorder reasoning
+
+```text
+If the living-room light was turned on after midnight and is still on, turn it off.
+```
+
+This should use one `execute_home_code` call: inspect the frozen state, `await hass.logbook(...)`, and conditionally act without a sequential recorder round.
+
+## Independent direct reads
+
+```text
+Show the front-door activity and the bedroom humidity average for the last day.
+```
+
+These independent requests can use `get_logbook` and `get_statistics` in parallel.
+
 ## Visual checks
 
 ```text

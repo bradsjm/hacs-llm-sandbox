@@ -33,6 +33,8 @@ from .recorder import (
     fetch_flat_history_rows,
     fetch_flat_short_term_statistics_rows,
     fetch_flat_statistics_rows,
+    fetch_visible_logbook_entries,
+    logbook_available,
     recorder_available,
 )
 
@@ -203,6 +205,18 @@ def _production_runtime(
             hass, snapshot, deadline, list(entity_ids), start, end, sync=state.live_write_dispatched
         )
 
+    async def _fetch_logbook(entity_ids: Sequence[str], start: datetime, end: datetime) -> list[dict[str, object]]:
+        # Private host-side logbook seam: availability and snapshot visibility
+        # stay outside Monty, and a prior live write alone requests synchronization.
+        # Availability gates preserve helper errors before the host query starts.
+        if not recorder_available(hass):
+            raise RecoverableToolError(RECORDER_UNAVAILABLE, {})
+        if not logbook_available(hass):
+            raise RecoverableToolError("logbook_unavailable", {})
+        return await fetch_visible_logbook_entries(
+            hass, snapshot, deadline, list(entity_ids), start, end, sync=state.live_write_dispatched
+        )
+
     async def _run_blocking(fn: Callable[[], object]) -> object:
         return await hass.async_add_executor_job(fn)
 
@@ -215,6 +229,7 @@ def _production_runtime(
         fetch_history=_fetch_history,
         fetch_statistics=_fetch_statistics,
         fetch_short_term_statistics=_fetch_short_term_statistics,
+        fetch_logbook=_fetch_logbook,
         run_blocking=_run_blocking,
         deadline=deadline,
         memory=sandbox_runtime.memory_store.for_context(llm_context),

@@ -24,6 +24,7 @@ class ServiceInvoker(Protocol):
 
 type HistoryFetcher = Callable[[Sequence[str], datetime, datetime], Awaitable[list[dict[str, object]]]]
 type StatisticsFetcher = Callable[[Sequence[str], datetime, datetime], Awaitable[list[dict[str, object]]]]
+type LogbookFetcher = Callable[[Sequence[str], datetime, datetime], Awaitable[list[dict[str, object]]]]
 type BlockingRunner = Callable[[Callable[[], object]], Awaitable[object]]
 
 
@@ -39,6 +40,13 @@ async def _unavailable_statistics_fetcher(
 ) -> list[dict[str, object]]:
     """Raise when statistics helpers are used without execute_home_code wiring."""
     raise RuntimeError("LLM Sandbox statistics fetcher is unavailable outside execute_home_code")
+
+
+async def _unavailable_logbook_fetcher(
+    _entity_ids: Sequence[str], _start: datetime, _end: datetime
+) -> list[dict[str, object]]:
+    """Raise when logbook helpers are used without execute_home_code wiring."""
+    raise RuntimeError("LLM Sandbox logbook fetcher is unavailable outside execute_home_code")
 
 
 async def _unavailable_blocking_runner[T](_fn: Callable[[], T]) -> T:
@@ -62,6 +70,7 @@ class RuntimeContext:
     fetch_history: HistoryFetcher = _unavailable_history_fetcher
     fetch_statistics: StatisticsFetcher = _unavailable_statistics_fetcher
     fetch_short_term_statistics: StatisticsFetcher = _unavailable_statistics_fetcher
+    fetch_logbook: LogbookFetcher = _unavailable_logbook_fetcher
     run_blocking: BlockingRunner = _unavailable_blocking_runner
     deadline: float = math.inf
     memory: ResolutionMemory | None = None

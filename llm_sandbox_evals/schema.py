@@ -46,7 +46,7 @@ class ExpectedAction:
 
 @dataclass(frozen=True, slots=True)
 class ToolResultCheck:
-    """Structured evidence expected in a successful recorder tool result."""
+    """Structured evidence expected in a successful tool result."""
 
     tool_name: str
     entity_ids: tuple[str, ...] = ()

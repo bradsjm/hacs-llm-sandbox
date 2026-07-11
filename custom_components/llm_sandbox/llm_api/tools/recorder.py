@@ -77,6 +77,9 @@ from ._recorder_runtime import (
     fetch_visible_history_rows as fetch_visible_history_rows,
 )
 from ._recorder_runtime import (
+    fetch_visible_logbook_entries as fetch_visible_logbook_entries,
+)
+from ._recorder_runtime import (
     logbook_available as logbook_available,
 )
 from ._support import _omit_empty_optional_args, _require_loaded_entry_error, _require_sandbox_runtime

@@ -21,7 +21,7 @@ Expected behavior: the model should call `execute_home_code`, inspect `hass.stat
 Did any exterior doors open after midnight? Summarize the timeline.
 ```
 
-Expected behavior: the model may call `get_history`, `get_logbook`, or `execute_home_code` with `await hass.history(...)`, depending on the agent.
+Expected behavior: this is a direct timeline question, so the model should call `get_logbook` (or `get_history` for state transitions). If the timeline must be combined with current state or used to decide an action, it should use one `execute_home_code` call with `await hass.history(...)` or `await hass.logbook(...)`.
 
 ## Ask for a statistic
 

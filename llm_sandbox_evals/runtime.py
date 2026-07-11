@@ -106,12 +106,7 @@ def build_fixture_recorder_source(snapshot: HomeSnapshot, fixture: ModuleType) -
         }
 
     async def fetch_logbook(entity_ids: list[str], start: datetime, end: datetime) -> list[dict[str, object]]:
-        entries = [
-            _logbook_entry(entity_id, row)
-            for entity_id in entity_ids
-            for row in _windowed_rows(logbook.get(entity_id, []), start, end, _logbook_timestamp)
-        ]
-        return sorted(entries, key=lambda row: _logbook_timestamp(row))
+        return await _eval_fetch_logbook(fixture, entity_ids, start, end)
 
     return RecorderSource(
         now=_parse_datetime(snapshot.created_at),
@@ -145,6 +140,9 @@ def _eval_runtime_context_factory(
             fetch_statistics=lambda statistic_ids, start, end: _eval_fetch_statistics(
                 fixture, statistic_ids, start, end
             ),
+            # The facade receives only this fresh fixture seam, never recorder data
+            # cached from a prior execute_home_code invocation.
+            fetch_logbook=lambda entity_ids, start, end: _eval_fetch_logbook(fixture, entity_ids, start, end),
             run_blocking=_eval_run_blocking,
             deadline=time.monotonic() + settings.execution_timeout_seconds,
             memory=ResolutionMemory(),
@@ -199,6 +197,22 @@ async def _eval_fetch_statistics(
             for row in _windowed_rows(statistics.get(statistic_id, []), start, end, _statistics_timestamp)
         )
     return rows
+
+
+async def _eval_fetch_logbook(
+    fixture: ModuleType,
+    entity_ids: Sequence[str],
+    start: datetime,
+    end: datetime,
+) -> list[dict[str, object]]:
+    """Return chronological, entity-scoped fixture logbook entries for Monty."""
+    logbook = _recorder_section(_recorder_data(fixture), "logbook")
+    entries = [
+        _logbook_entry(entity_id, row)
+        for entity_id in entity_ids
+        for row in _windowed_rows(logbook.get(entity_id, []), start, end, _logbook_timestamp)
+    ]
+    return sorted(entries, key=_logbook_timestamp)
 
 
 def _recorder_data(fixture: ModuleType) -> dict[str, object]:

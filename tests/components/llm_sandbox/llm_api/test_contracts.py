@@ -53,6 +53,7 @@ def test_monty_type_stubs_exclude_private_methods() -> None:
         pytest.param("def async_get", id="async-get"),
         pytest.param("def async_entries_for_label", id="async-entries-for-label"),
         pytest.param("async def history", id="history"),
+        pytest.param("async def logbook", id="logbook"),
         pytest.param("async def query", id="query"),
         pytest.param("class SafeConfig:", id="safe-config"),
         pytest.param("class SafeUnitSystem:", id="safe-unit-system"),
@@ -74,6 +75,14 @@ def test_monty_type_stubs_exclude_private_methods() -> None:
 def test_monty_type_stubs_expose_required_surface(symbol: str) -> None:
     """The LLM-facing stub surface keeps required public types and methods."""
     assert symbol in MONTY_TYPE_STUBS
+
+
+def test_monty_type_stubs_expose_bounded_logbook_signature() -> None:
+    """The generated facade contract exposes only the public logbook inputs."""
+    assert re.search(
+        r"async def logbook\(self, entity_ids: str \| list\[str\] \| None = None, hours: float \| None = None\)",
+        MONTY_TYPE_STUBS,
+    )
 
 
 def test_monty_type_stubs_include_alias_fields() -> None:

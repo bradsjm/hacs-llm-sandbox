@@ -17,6 +17,8 @@ Raw cursor pages normally fit a complete compact UTF-8 response within 16 KiB. W
 
 [`tools/_recorder_runtime.py`](https://github.com/bradsjm/hacs-llm-sandbox/blob/main/custom_components/llm_sandbox/llm_api/tools/_recorder_runtime.py) implements query execution, validation, scoping, aggregation, pagination, and JSON-safe row formatting.
 
+`hass.logbook(...)` uses the same production logbook query path for bounded composition inside `execute_home_code`. Entries cross into Monty only as copied JSON-safe dictionaries through a private runtime seam; live recorder and logbook objects are not exposed.
+
 ## SQL helper
 
 [`llm_api/data/home_db.py`](https://github.com/bradsjm/hacs-llm-sandbox/blob/main/custom_components/llm_sandbox/llm_api/data/home_db.py) builds the bounded in-memory SQLite database used by `hass.query`.

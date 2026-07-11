@@ -161,7 +161,13 @@ def _tool_call_efficiency_check(expected: Expected, tool_call_count: int) -> Che
 
 
 def _tool_call_par(expected: Expected) -> int:
-    """Return explicit par or derive one from required structured work."""
+    """Return explicit par or derive one from required structured work.
+
+    The harness counts tool calls, not provider turn boundaries. Dependent cases
+    therefore set an explicit par of one as the smallest observable contract for
+    one composed execute_home_code call; the intentional independent-read case
+    uses par two because its two standalone calls may be issued in parallel.
+    """
     if expected.tool_call_par is not None:
         return max(1, min(MAX_TOOL_CALLS, expected.tool_call_par))
     action_step = 1 if expected.actions or expected.blocked_outcome is not None else 0
@@ -366,7 +372,7 @@ def _guidance_payloads(content: Mapping[str, object]) -> list[Mapping[str, objec
 
 
 def _tool_result_check(expected: ToolResultCheck, tool_events: tuple[ToolEvent, ...], index: int) -> CheckResult:
-    """Return a structured evidence check over successful recorder tool outputs."""
+    """Return a structured evidence check over successful tool outputs."""
     matching_events = [
         event
         for event in tool_events

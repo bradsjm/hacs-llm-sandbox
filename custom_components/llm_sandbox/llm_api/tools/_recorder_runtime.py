@@ -186,6 +186,39 @@ async def fetch_flat_history_rows(
     return flat_history_rows(result, snapshot)
 
 
+async def fetch_visible_logbook_entries(
+    hass: HomeAssistant,
+    snapshot: HomeSnapshot,
+    deadline: float,
+    entity_ids: list[str],
+    start: datetime,
+    end: datetime,
+    *,
+    sync: bool = True,
+) -> list[dict[str, object]]:
+    """Fetch copied logbook entries for visible snapshot entity ids.
+
+    The recorder query stays entirely host-side. ``sync`` controls the shared
+    read-after-write barrier, matching the history and statistics fetch seams.
+    """
+    # Availability gates preserve the stable recorder/logbook helper errors.
+    if not recorder_available(hass):
+        raise RecoverableToolError("recorder_unavailable", {})
+    if not logbook_available(hass):
+        raise RecoverableToolError("logbook_unavailable", {})
+    _validate_visibility(snapshot, entity_ids)
+    event_types = async_determine_event_types(hass, entity_ids, None)
+    processor = EventProcessor(hass, event_types, entity_ids, None, None, timestamp=False, include_entity_name=True)
+    raw_entries = await _run_query(
+        hass,
+        deadline,
+        functools.partial(processor.get_events, start_day=start, end_day=end),
+        sync=sync,
+    )
+    # Copy host-produced mappings before they cross the private runtime seam.
+    return [dict(entry) for entry in raw_entries]
+
+
 async def fetch_flat_statistics_rows(
     hass: HomeAssistant,
     snapshot: HomeSnapshot,
@@ -327,21 +360,12 @@ def _production_recorder_source(
 
     async def _fetch_logbook(entity_ids: list[str], start: datetime, end: datetime) -> list[dict[str, object]]:
         nonlocal recorder_synced
-        event_types = async_determine_event_types(hass, entity_ids, None)
-        processor = EventProcessor(
-            hass, event_types, entity_ids, None, None, timestamp=False, include_entity_name=True
-        )
-        raw_entries = await _run_query(
-            hass,
-            deadline,
-            functools.partial(processor.get_events, start_day=start, end_day=end),
-            sync=not recorder_synced,
+        result = await fetch_visible_logbook_entries(
+            hass, snapshot, deadline, entity_ids, start, end, sync=not recorder_synced
         )
         # One source is built per tool invocation; later grouped reads share its barrier.
         recorder_synced = True
-        # Plain-dict conversion lives here so the core (and eval fixtures) always
-        # see JSON-mutable dicts.
-        return [dict(entry) for entry in raw_entries]
+        return result
 
     return RecorderSource(
         now=dt_util.utcnow(),

@@ -18,7 +18,8 @@ The current limits are defined mainly in [`const.py`](https://github.com/bradsjm
 | Raw recorder response | Compact UTF-8 JSON is normally limited to 16 KiB, including the window and continuation metadata. |
 | History rows | Emergency ceiling of 1000 rows per raw page. |
 | Statistics rows | Emergency ceiling of 1000 rows per raw page. |
-| Logbook entries | Emergency ceiling of 200 entries per raw page. |
+| Standalone logbook entries | Emergency ceiling of 200 entries per raw 16 KiB cursor page. |
+| `hass.logbook` | At most 20 visible entities, a 24-hour window, and the newest 200 chronological entries; no cursor. |
 | Explicit recorder entity IDs | Up to 20. |
 | SQL length | Up to 4000 characters. |
 | SQL result rows | Up to 500 rows. |
@@ -26,4 +27,4 @@ The current limits are defined mainly in [`const.py`](https://github.com/bradsjm
 | Camera target width | 384 to 1920 pixels, default 1280. |
 | Image attachment size | Up to 5 MiB. |
 
-Only dispatched service calls consume the service-call limit, including failures and timeouts after dispatch; reads and pre-dispatch blocks do not. Raw recorder pages preserve whole records and use their existing `next_cursor` to continue with older data.
+Only dispatched service calls consume the service-call limit, including failures and timeouts after dispatch; reads and pre-dispatch blocks do not. Raw standalone recorder pages preserve whole records and use their existing `next_cursor` to continue with older data. The `hass.logbook` helper is not a standalone page and does not use the 16 KiB cursor-page budget.

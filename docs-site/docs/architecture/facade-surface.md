@@ -11,7 +11,9 @@ Snapshot records and `llm_context` also support read-only mapping-style reads: `
 
 ## State facade
 
-[`facades/state.py`](https://github.com/bradsjm/hacs-llm-sandbox/blob/main/custom_components/llm_sandbox/llm_api/facades/state.py) provides `hass.states` methods such as `get`, `async_all`, `is_state`, `async_entity_ids`, and `entity_ids`. `SafeHass` exposes only `states`, `services`, and `config`, plus async helpers such as `hass.history(...)` and `hass.query(...)`.
+[`facades/state.py`](https://github.com/bradsjm/hacs-llm-sandbox/blob/main/custom_components/llm_sandbox/llm_api/facades/state.py) provides `hass.states` methods such as `get`, `async_all`, `is_state`, `async_entity_ids`, and `entity_ids`. `SafeHass` exposes only `states`, `services`, and `config`, plus async helpers such as `hass.history(...)`, `hass.logbook(...)`, and `hass.query(...)`.
+
+`hass.logbook(entity_ids=None, hours=None)` is a bounded composition helper: it checks entity visibility against the fresh snapshot, accepts at most 20 visible entities and a maximum 24-hour window, and returns at most the newest 200 chronological copied JSON-safe entries. It has no pagination cursor and is available only with recorder and logbook runtime support.
 
 ## Registry facades
 

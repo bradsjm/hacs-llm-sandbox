@@ -21,3 +21,7 @@ Tool availability depends on runtime support:
 - Recorder tools require recorder support.
 - Logbook requires logbook support.
 - Camera capture requires visible camera or image entities at call time.
+
+## Round-aware routing
+
+The model should use `get_history`, `get_statistics`, or `get_logbook` for a direct answer from that one recorder source. It can call independent direct reads in parallel. When recorder data depends on current snapshot state or registries, needs computation or other evidence, or drives a condition or action, it should use one `execute_home_code` call with `await hass.history(...)`, `await hass.query(...)`, or `await hass.logbook(...)`.

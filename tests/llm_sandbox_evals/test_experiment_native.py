@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 from custom_components.llm_sandbox.const import DEFAULT_PROMPT_PROFILE
+from freezegun.api import FrozenDateTimeFactory
 from llm_sandbox_evals.config import EvalConfig
 from llm_sandbox_evals.experiment import MatrixCellRef, build_dataset, run_matrix
 from llm_sandbox_evals.schema import (
@@ -60,6 +61,32 @@ async def test_run_matrix_stub_slice_writes_reloadable_report_json(tmp_path: Pat
     # The stub read the temperature entity, so one tool event with its return is persisted.
     assert len(report_case.output.tool_events) == 1
     assert report_case.output.tool_events[0].tool_name == "execute_home_code"
+
+
+@pytest.mark.parametrize(
+    ("case_id", "expected_domain", "expected_service"),
+    [
+        pytest.param("multi_history_then_living_fan", "fan", "set_percentage", id="history-action"),
+        pytest.param("multi_logbook_then_living_light_off", "light", "turn_off", id="logbook-action"),
+    ],
+)
+async def test_stub_completes_dependent_recorder_actions_in_one_execute_call(
+    tmp_path: Path,
+    freezer: FrozenDateTimeFactory,
+    case_id: str,
+    expected_domain: str,
+    expected_service: str,
+) -> None:
+    freezer.move_to("2026-06-29T12:00:00+00:00")
+    report = await run_matrix(_config(tmp_path, cases=[case_id]), run_id=f"stub-{case_id}")
+    trace = report.cases[0].output
+
+    assert isinstance(trace, CaseTrace)
+    assert trace.score == pytest.approx(1.0)
+    assert trace.tool_call_count == 1
+    assert [event.tool_name for event in trace.tool_events] == ["execute_home_code"]
+    assert trace.recorded_actions[0]["domain"] == expected_domain
+    assert trace.recorded_actions[0]["service"] == expected_service
 
 
 async def test_sandbox_outcome_reports_score_required_gate_and_model_error_label(tmp_path: Path) -> None:

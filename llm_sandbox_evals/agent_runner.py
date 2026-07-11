@@ -259,9 +259,9 @@ def _stub_initial_calls(user_request: str) -> tuple[tuple[str, dict[str, object]
             ),
         )
     if "find the living room temperature sensor" in lowered:
-        return ((TOOL_EXECUTE_HOME_CODE, {"code": 'result = states.get("sensor.living_temp")'}),)
-    if "living room temperature has been above 25" in lowered:
-        return ((TOOL_GET_HISTORY, {"entity_ids": ["sensor.living_temp"], **_last_day_window()}),)
+        return ((TOOL_EXECUTE_HOME_CODE, {"code": _discover_living_temperature_history_code()}),)
+    if "temperature state history" in lowered and "above 25" in lowered:
+        return ((TOOL_EXECUTE_HOME_CODE, {"code": _history_action_code("fan.living_fan")}),)
     if "light.living last turn on" in lowered or "light.living last turned on" in lowered:
         return (
             (
@@ -271,17 +271,18 @@ def _stub_initial_calls(user_request: str) -> tuple[tuple[str, dict[str, object]
         )
     if "living room light turned on today" in lowered:
         return ((TOOL_GET_LOGBOOK, {"entity_ids": ["light.living"], **_today_window()}),)
+    if "logbook entry showing it turned on today" in lowered:
+        return ((TOOL_EXECUTE_HOME_CODE, {"code": _logbook_light_off_code()}),)
+    if "light state history shows it was on today" in lowered:
+        return ((TOOL_EXECUTE_HOME_CODE, {"code": _history_light_off_code()}),)
     if "living room light on right now" in lowered and "last change" in lowered:
-        return (
-            (TOOL_EXECUTE_HOME_CODE, {"code": 'result = states.get("light.living")'}),
-            (TOOL_GET_LOGBOOK, {"entity_ids": ["light.living"], **_today_window()}),
-        )
+        return ((TOOL_EXECUTE_HOME_CODE, {"code": _state_and_logbook_code()}),)
     if "light in this room" in lowered:
-        return ((TOOL_EXECUTE_HOME_CODE, {"code": 'result = states.get("light.living")'}),)
+        return ((TOOL_GET_LOGBOOK, {"entity_ids": ["light.living"], **_today_window()}),)
     if "garage door opener" in lowered:
         return ((TOOL_EXECUTE_HOME_CODE, {"code": "result = states.entity_ids()"}),)
     if "outside temperature stayed below 80" in lowered:
-        return ((TOOL_GET_HISTORY, {"entity_ids": ["sensor.tempest_temperature"], **_last_day_window()}),)
+        return ((TOOL_EXECUTE_HOME_CODE, {"code": _history_action_code("cover.office_blinds")}),)
     # Branch boundary: state-read of the living room temperature reads the entity so
     # the observed value surfaces in the tool return + final answer. Exclude history
     # and threshold phrasings, which are handled by their own routes or the recorder
@@ -300,16 +301,6 @@ def _stub_followup_calls(user_request: str, tool_count: int) -> tuple[tuple[str,
         return ((TOOL_EXECUTE_HOME_CODE, {"code": 'result = states.get("sensor.living_temp")'}),)
     if "sensor.living_room_temperature" in lowered and tool_count == 2:
         return ((TOOL_GET_HISTORY, {"entity_ids": ["sensor.living_temp"], **_last_day_window()}),)
-    if "find the living room temperature sensor" in lowered and tool_count == 1:
-        return ((TOOL_GET_HISTORY, {"entity_ids": ["sensor.living_temp"], **_last_day_window()}),)
-    if "living room temperature has been above 25" in lowered and tool_count == 1:
-        return ((TOOL_EXECUTE_HOME_CODE, {"code": _fan_50_code("fan.living_fan")}),)
-    if "living room light turned on today" in lowered and tool_count == 1:
-        return ((TOOL_EXECUTE_HOME_CODE, {"code": _service_code("light", "turn_off", "light.living")}),)
-    if "light in this room" in lowered and tool_count == 1:
-        return ((TOOL_GET_LOGBOOK, {"entity_ids": ["light.living"], **_today_window()}),)
-    if "outside temperature stayed below 80" in lowered and tool_count == 1:
-        return ((TOOL_EXECUTE_HOME_CODE, {"code": _service_code("cover", "close_cover", "cover.office_blinds")}),)
     return ()
 
 
@@ -336,6 +327,63 @@ def _fan_50_code(entity_id: str) -> str:
     return (
         'await hass.services.async_call("fan", "set_percentage", {"percentage": 50}, '
         f'target={{"entity_id": "{entity_id}"}})\nresult = "ok"'
+    )
+
+
+def _discover_living_temperature_history_code() -> str:
+    """Return one snippet that discovers the sensor before reading its history."""
+    return (
+        'matches = [state for state in hass.states.async_all("sensor") if state.name == "Living Temperature"]\n'
+        "history = await hass.history(matches[0].entity_id, hours=24)\n"
+        'result = {"entity_id": matches[0].entity_id, "history": history}'
+    )
+
+
+def _history_action_code(target_entity_id: str) -> str:
+    """Return one snippet that reads temperature history and conditionally acts."""
+    # Branch boundary: fan and cover cases use different history predicates and services.
+    if target_entity_id.startswith("fan."):
+        return (
+            'history = await hass.history("sensor.living_temp", hours=24)\n'
+            'if any(float(row["state"]) > 25 for row in history):\n'
+            '    await hass.services.async_call("fan", "set_percentage", {"percentage": 50}, '
+            'target={"entity_id": "fan.living_fan"})\n'
+            'result = {"entity_id": "sensor.living_temp", "history": history}'
+        )
+    return (
+        'history = await hass.history("sensor.tempest_temperature", hours=24)\n'
+        'if all(float(row["state"]) < 80 for row in history):\n'
+        '    await hass.services.async_call("cover", "close_cover", target={"entity_id": "cover.office_blinds"})\n'
+        'result = {"entity_id": "sensor.tempest_temperature", "history": history}'
+    )
+
+
+def _logbook_light_off_code() -> str:
+    """Return one snippet that reads logbook evidence before turning the light off."""
+    return (
+        'entries = await hass.logbook("light.living", hours=24)\n'
+        'if any(entry["message"] == "turned on" for entry in entries):\n'
+        '    await hass.services.async_call("light", "turn_off", target={"entity_id": "light.living"})\n'
+        'result = {"entity_id": "light.living", "entries": entries}'
+    )
+
+
+def _history_light_off_code() -> str:
+    """Return one snippet that reads state history before turning the light off."""
+    return (
+        'history = await hass.history("light.living", hours=24)\n'
+        'if any(row["state"] == "on" for row in history):\n'
+        '    await hass.services.async_call("light", "turn_off", target={"entity_id": "light.living"})\n'
+        'result = {"entity_id": "light.living", "history": history}'
+    )
+
+
+def _state_and_logbook_code() -> str:
+    """Return one snippet that combines current state with latest logbook activity."""
+    return (
+        'current = hass.states.get("light.living")\n'
+        'entries = await hass.logbook("light.living", hours=24)\n'
+        'result = {"current": current, "entries": entries}'
     )
 
 

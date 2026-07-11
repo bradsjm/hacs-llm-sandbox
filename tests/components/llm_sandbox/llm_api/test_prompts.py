@@ -6,6 +6,9 @@ from custom_components.llm_sandbox.llm_api.prompts import (
     PROFILE_OPTIONS,
     PromptProfile,
     build_execute_home_code_description,
+    build_get_history_description,
+    build_get_logbook_description,
+    build_get_statistics_description,
     render_tool_capabilities,
     resolve_profile,
 )
@@ -47,6 +50,7 @@ def test_profile_describes_awaitable_facades(profile: PromptProfile) -> None:
     assert "only awaitable" not in profile.base_prompt.lower()
     assert "hass.history(...)" in profile.base_prompt
     assert "hass.query(...)" in profile.base_prompt
+    assert "hass.logbook(...)" in profile.base_prompt
     assert "hass.services.async_call" in profile.base_prompt
     assert "service-catalog reads" in profile.base_prompt
     assert "sync" in profile.base_prompt.lower()
@@ -64,10 +68,17 @@ def test_tool_capability_summary_matches_registered_tools() -> None:
 
     summary = render_tool_capabilities(tools)
 
-    assert [line.split(":", 1)[0].removeprefix("- ") for line in summary.splitlines() if line.startswith("- ")] == [
-        tool.name for tool in tools
-    ] + ["get_logbook", "get_history", "get_statistics"]
+    assert [
+        line.split(":", 1)[0].removeprefix("- ")
+        for line in summary.splitlines()
+        if line.startswith("- ") and ":" in line
+    ] == [tool.name for tool in tools]
     assert "get_camera_image" in summary
+    assert "direct history, statistics, or logbook retrieval/summarization" in summary
+    assert "one execute_home_code call" in summary
+    assert "in parallel" in summary
+    assert "selectors instead of discovery calls" in summary
+    assert "never retrieve the same evidence twice" in summary
 
 
 @pytest.mark.parametrize("profile", PROFILE_OPTIONS, ids=[profile.id for profile in PROFILE_OPTIONS])
@@ -104,6 +115,7 @@ def test_execute_home_code_description_includes_sql_schema_contract() -> None:
     assert "Tables: states(" in description
     assert "Views: state_history(" in description
     assert "No registry tables" in description
+    assert "hass.logbook(...)" in description
 
 
 def test_execute_home_code_description_includes_success_metadata() -> None:
@@ -114,3 +126,17 @@ def test_execute_home_code_description_includes_success_metadata() -> None:
     assert "actions" in description
     assert "resolutions" in description
     assert "overflow" in description
+
+
+@pytest.mark.parametrize(
+    "description",
+    [
+        pytest.param(build_get_history_description(), id="history"),
+        pytest.param(build_get_statistics_description(), id="statistics"),
+        pytest.param(build_get_logbook_description(), id="logbook"),
+    ],
+)
+def test_standalone_recorder_descriptions_route_dependent_work_to_code(description: str) -> None:
+    """Standalone recorder descriptions direct dependent work to one code call."""
+    assert "Prefer this standalone tool for direct retrieval" in description
+    assert "one execute_home_code call for dependent composition or actions" in description

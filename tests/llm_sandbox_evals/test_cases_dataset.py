@@ -21,6 +21,16 @@ _REMOVED_TOOL_CONTRACT_CASE_IDS = frozenset(
     }
 )
 _ENTITY_ID_RE = re.compile(r"\b[a-z_]+\.[a-z0-9_]+\b")
+_DEPENDENT_RECORDER_CASE_IDS = frozenset(
+    {
+        "multi_discover_living_temp_history",
+        "multi_history_then_living_fan",
+        "multi_logbook_then_living_light_off",
+        "multi_history_then_living_light_off",
+        "multi_state_and_logbook_living_light",
+        "multi_real_history_then_close_blinds",
+    }
+)
 
 
 def test_load_cases_returns_native_dataset_inputs_in_stable_order() -> None:
@@ -92,6 +102,32 @@ def test_blocked_cases_expect_blocked_outcome_without_successful_actions() -> No
     ]
 
     assert invalid_blocked_case_ids == []
+
+
+def test_dependent_recorder_cases_require_one_composed_execute_call() -> None:
+    dependent_cases = [case for case in CASES if case.id in _DEPENDENT_RECORDER_CASE_IDS]
+
+    assert {case.id for case in dependent_cases} == _DEPENDENT_RECORDER_CASE_IDS
+    assert all(case.expected.tool_call_par == 1 for case in dependent_cases)
+    assert all(
+        [check.tool_name for check in case.expected.tool_result_checks] == ["execute_home_code"]
+        for case in dependent_cases
+    )
+
+
+def test_direct_recorder_cases_retain_standalone_tools_and_parallel_policy() -> None:
+    direct_cases = [
+        case for case in CASES if case.category == "recorder_read" and case.id not in _DEPENDENT_RECORDER_CASE_IDS
+    ]
+    direct_tool_names = {check.tool_name for case in direct_cases for check in case.expected.tool_result_checks}
+    parallel_case = _case_by_id(CASES, "multi_parallel_temp_history_humidity_stats")
+
+    assert direct_tool_names == {"get_history", "get_statistics", "get_logbook"}
+    assert [check.tool_name for check in parallel_case.expected.tool_result_checks] == [
+        "get_history",
+        "get_statistics",
+    ]
+    assert parallel_case.expected.tool_call_par == 2
 
 
 def _native_dataset() -> Dataset[EvalCase, object, object]:

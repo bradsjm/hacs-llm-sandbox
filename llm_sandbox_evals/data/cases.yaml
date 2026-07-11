@@ -244,7 +244,7 @@ cases:
       answer_excludes: []
       actions: []
       guidance_candidate: null
-      tool_call_par: null
+      tool_call_par: 1
       max_tool_calls: 10
     action_domains: []
   metadata: null
@@ -749,7 +749,7 @@ cases:
       provenance_values:
       - sensor.living_temp
       tool_result_checks:
-      - tool_name: get_history
+      - tool_name: execute_home_code
         entity_ids:
         - sensor.living_temp
         statistic_ids: []
@@ -759,12 +759,13 @@ cases:
         entry_values:
         - '24.4'
         - '25.2'
-        min_results: 3
+        min_results: 1
       blocked_outcome: null
       answer_excludes: []
       actions: []
       guidance_candidate: null
-      tool_call_par: null
+      # One composed execute call avoids a discovery round before recorder access.
+      tool_call_par: 1
       max_tool_calls: 10
     action_domains: []
   metadata: null
@@ -791,7 +792,7 @@ cases:
       - sensor.living_temp
       - fan.living_fan
       tool_result_checks:
-      - tool_name: get_history
+      - tool_name: execute_home_code
         entity_ids:
         - sensor.living_temp
         statistic_ids: []
@@ -800,7 +801,7 @@ cases:
         entry_values_by_entity: {}
         entry_values:
         - '25.2'
-        min_results: 3
+        min_results: 1
       blocked_outcome: null
       answer_excludes: []
       actions:
@@ -811,7 +812,8 @@ cases:
         service_data:
           percentage: 50
       guidance_candidate: null
-      tool_call_par: null
+      # History-derived actions must complete inside one execute_home_code call.
+      tool_call_par: 1
       max_tool_calls: 10
     action_domains: []
   metadata: null
@@ -836,7 +838,7 @@ cases:
       provenance_values:
       - light.living
       tool_result_checks:
-      - tool_name: get_logbook
+      - tool_name: execute_home_code
         entity_ids:
         - light.living
         statistic_ids: []
@@ -845,7 +847,7 @@ cases:
         entry_values_by_entity: {}
         entry_values:
         - turned on
-        min_results: 2
+        min_results: 1
       blocked_outcome: null
       answer_excludes: []
       actions:
@@ -855,7 +857,8 @@ cases:
         - light.living
         service_data: null
       guidance_candidate: null
-      tool_call_par: null
+      # Logbook-derived actions must complete inside one execute_home_code call.
+      tool_call_par: 1
       max_tool_calls: 10
     action_domains: []
   metadata: null
@@ -880,7 +883,7 @@ cases:
       provenance_values:
       - light.living
       tool_result_checks:
-      - tool_name: get_history
+      - tool_name: execute_home_code
         entity_ids:
         - light.living
         statistic_ids: []
@@ -899,7 +902,8 @@ cases:
         - light.living
         service_data: null
       guidance_candidate: null
-      tool_call_par: null
+      # History-derived actions must complete inside one execute_home_code call.
+      tool_call_par: 1
       max_tool_calls: 10
     action_domains: []
   metadata: null
@@ -934,22 +938,14 @@ cases:
         entry_values_by_entity: {}
         entry_values:
         - 'on'
-        min_results: 1
-      - tool_name: get_logbook
-        entity_ids:
-        - light.living
-        statistic_ids: []
-        fields: []
-        period: null
-        entry_values_by_entity: {}
-        entry_values:
         - turned on
-        min_results: 2
+        min_results: 1
       blocked_outcome: null
       answer_excludes: []
       actions: []
       guidance_candidate: null
-      tool_call_par: null
+      # Current state and logbook activity are dependent evidence in one call.
+      tool_call_par: 1
       max_tool_calls: 10
     action_domains: []
   metadata: null
@@ -1042,7 +1038,8 @@ cases:
       answer_excludes: []
       actions: []
       guidance_candidate: null
-      tool_call_par: null
+      # Independent history and statistics calls may share one parallel round.
+      tool_call_par: 2
       max_tool_calls: 10
     action_domains: []
   metadata: null
@@ -1082,7 +1079,8 @@ cases:
       answer_excludes: []
       actions: []
       guidance_candidate: null
-      tool_call_par: null
+      # This is direct activity retrieval; location scope is already available to the model.
+      tool_call_par: 1
       max_tool_calls: 10
     action_domains: []
   metadata: null
@@ -1729,7 +1727,7 @@ cases:
       - sensor.tempest_temperature
       - cover.office_blinds
       tool_result_checks:
-      - tool_name: get_history
+      - tool_name: execute_home_code
         entity_ids:
         - sensor.tempest_temperature
         statistic_ids: []
@@ -1739,7 +1737,7 @@ cases:
         entry_values:
         - '78.1'
         - '77'
-        min_results: 3
+        min_results: 1
       blocked_outcome: null
       answer_excludes: []
       actions:
@@ -1749,7 +1747,8 @@ cases:
         - cover.office_blinds
         service_data: null
       guidance_candidate: null
-      tool_call_par: null
+      # History-derived actions must complete inside one execute_home_code call.
+      tool_call_par: 1
       max_tool_calls: 10
     action_domains: []
   metadata: null

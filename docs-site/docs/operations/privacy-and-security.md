@@ -9,7 +9,7 @@ Assist Agent Sandbox reduces model exposure through visibility filtering and pro
 
 ## What can reach the model
 
-Visible snapshot records can include entity states, attributes, registry metadata, repairs, persistent notifications, service catalog metadata, recorder rows, logbook entries, and camera images requested by a tool call.
+Visible snapshot records can include entity states, attributes, registry metadata, repairs, persistent notifications, service catalog metadata, recorder rows, logbook entries, and camera images requested by a tool call. For `hass.logbook(...)`, activity entries enter Monty only as copied JSON-safe dictionaries through a private runtime seam.
 
 Beyond omitting config-entry data/options/runtime/subentries, the integration does not promise broad value redaction. If a visible entity carries sensitive data in its state or attributes, the model may see it.
 

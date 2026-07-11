@@ -15,7 +15,13 @@ Runs a short Python/Monty snippet over a fresh, frozen, visibility-filtered Home
 
 ## Available data
 
-Inside code, the model can use Home Assistant-like facades such as `hass.states`, registry helpers, `await hass.history(...)`, `await hass.query(...)`, and gated `await hass.services.async_call(...)`. State, registry, config, and service-catalog reads are synchronous.
+Inside code, the model can use Home Assistant-like facades such as `hass.states`, registry helpers, `await hass.history(...)`, `await hass.logbook(...)`, `await hass.query(...)`, and gated `await hass.services.async_call(...)`. State, registry, config, and service-catalog reads are synchronous.
+
+## Recorder composition
+
+Use one `execute_home_code` call when recorder data must be combined with current state or registries, computed or compared across sources, used for conditional reasoning, or used to decide or perform an action. Use the matching standalone recorder tool for a direct history, statistics, or logbook answer; independent direct reads can run in parallel.
+
+`await hass.logbook(entity_ids=None, hours=None)` accepts up to 20 visible entities, defaults to and caps at 24 hours, and returns at most the newest 200 chronological JSON-safe entries. It has no cursor and requires recorder plus logbook runtime support.
 
 ## Result shape
 

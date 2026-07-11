@@ -152,6 +152,76 @@ def test_execute_tool_payload_evidence_can_span_successful_calls() -> None:
     assert score_case(checks) == pytest.approx(0.9444444444)
 
 
+@pytest.mark.parametrize(
+    ("output", "tool_check", "expected_action", "recorded_action"),
+    [
+        pytest.param(
+            {
+                "entity_id": "sensor.living_temp",
+                "history": [{"entity_id": "sensor.living_temp", "state": "25.2"}],
+            },
+            ToolResultCheck(
+                tool_name="execute_home_code",
+                entity_ids=("sensor.living_temp",),
+                entry_values=("25.2",),
+            ),
+            ExpectedAction("fan", "set_percentage", ("fan.living_fan",), service_data={"percentage": 50}),
+            {
+                "domain": "fan",
+                "service": "set_percentage",
+                "target": {"entity_id": "fan.living_fan"},
+                "status": "ok",
+                "service_data": {"percentage": 50},
+            },
+            id="history-action",
+        ),
+        pytest.param(
+            {
+                "current": {"entity_id": "light.living", "state": "on"},
+                "entries": [{"entity_id": "light.living", "message": "turned on"}],
+            },
+            ToolResultCheck(
+                tool_name="execute_home_code",
+                entity_ids=("light.living",),
+                entry_values=("on", "turned on"),
+            ),
+            ExpectedAction("light", "turn_off", ("light.living",)),
+            {
+                "domain": "light",
+                "service": "turn_off",
+                "target": {"entity_id": "light.living"},
+                "status": "ok",
+            },
+            id="state-logbook-action",
+        ),
+    ],
+)
+def test_one_execute_call_scores_dependent_recorder_evidence_and_action(
+    output: dict[str, object],
+    tool_check: ToolResultCheck,
+    expected_action: ExpectedAction,
+    recorded_action: dict[str, object],
+) -> None:
+    checks = check_case(
+        _case(Expected(tool_result_checks=(tool_check,), actions=(expected_action,), tool_call_par=1)),
+        "Completed.",
+        _actions(recorded_action),
+        1,
+        (
+            ToolEvent(
+                tool_name="execute_home_code",
+                args={"code": "result = await hass.history(...)"},
+                output={"execution": {"status": "ok"}, "output": output},
+            ),
+        ),
+    )
+
+    passed_by_name = {check.name: check.passed for check in checks}
+    assert passed_by_name["tool_result_check_0"] is True
+    assert passed_by_name["actions_match"] is True
+    assert score_case(checks) == pytest.approx(1.0)
+
+
 def test_execute_structured_checks_ignore_printed_lines_and_envelope_metadata() -> None:
     """Only an execute envelope's top-level output can satisfy structured evidence."""
     checks = check_case(

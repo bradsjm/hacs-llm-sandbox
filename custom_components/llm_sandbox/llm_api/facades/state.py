@@ -13,8 +13,10 @@ from homeassistant.util.json import JsonValueType
 
 from ...const import (
     DEFAULT_HISTORY_WINDOW_HOURS,
+    DEFAULT_LOGBOOK_WINDOW_HOURS,
     MAX_HISTORY_AGGREGATE_LOOKBACK_HOURS,
     MAX_HISTORY_STATES,
+    MAX_LOGBOOK_ENTRIES,
     MAX_RECORDER_ENTITY_IDS,
     MAX_RECORDER_LOOKBACK_HOURS,
 )
@@ -88,8 +90,12 @@ class SafeStateMachine:
         return cast(JsonValueType, {"type": self.type, "entity_count": len(self.states)})
 
 
-def _history_entity_ids(snapshot: HomeSnapshot, entity_ids: str | list[str] | None) -> list[str]:
-    """Resolve explicit facade history ids or default to all visible states."""
+def _recorder_entity_ids(
+    snapshot: HomeSnapshot,
+    entity_ids: str | list[str] | None,
+    helper: str,
+) -> list[str]:
+    """Resolve explicit facade recorder ids or default to all visible states."""
     if entity_ids is None:
         ids = sorted(snapshot.states)
     elif isinstance(entity_ids, str):
@@ -103,10 +109,10 @@ def _history_entity_ids(snapshot: HomeSnapshot, entity_ids: str | list[str] | No
             snapshot,
             FailureContext(intent=Intent.QUERY_HISTORY, requested=missing[0], domain=domain),
         ).to_payload()
-        raise HelperExecutionError("history", "entity_not_visible", {"entity_id": missing[0]}, guidance=guidance)
+        raise HelperExecutionError(helper, "entity_not_visible", {"entity_id": missing[0]}, guidance=guidance)
     if not ids or len(ids) > MAX_RECORDER_ENTITY_IDS:
         raise HelperExecutionError(
-            "history",
+            helper,
             "invalid_tool_input",
             {"reason": f"scope must resolve to 1..{MAX_RECORDER_ENTITY_IDS} visible entities"},
         )
@@ -120,6 +126,14 @@ def _coerce_id_list(value: str | list[str] | None) -> list[str] | None:
     if isinstance(value, str):
         return [value]
     return [str(item) for item in value]
+
+
+def _logbook_entry_when(entry: Mapping[str, object]) -> str:
+    """Return a comparable ISO timestamp for one copied logbook entry."""
+    when = entry["when"]
+    if isinstance(when, _datetime):
+        return dt_util.as_utc(when).isoformat()
+    return str(when)
 
 
 def _query_scope(
@@ -219,7 +233,7 @@ class SafeHass:
                 default_hours=DEFAULT_HISTORY_WINDOW_HOURS,
                 max_hours=MAX_HISTORY_AGGREGATE_LOOKBACK_HOURS if analytics else MAX_RECORDER_LOOKBACK_HOURS,
             )
-            ids = _history_entity_ids(snapshot, entity_ids)
+            ids = _recorder_entity_ids(snapshot, entity_ids, "history")
             rows = await runtime.fetch_history(ids, start, end)
             if not analytics:
                 if len(rows) > MAX_HISTORY_STATES:
@@ -257,6 +271,45 @@ class SafeHass:
             return run_analytics(cast(list[HistoryRow], rows), spec, (start, end), snapshot)
 
         return await helper_response(require_runtime(None).state, "history", _call)
+
+    async def logbook(
+        self,
+        entity_ids: str | list[str] | None = None,
+        hours: float | None = None,
+    ) -> JsonValueType:
+        """Return bounded logbook activity for visible snapshot entities."""
+
+        async def _call() -> object:
+            runtime = require_runtime(None)
+            snapshot = require_snapshot()
+            start, end = _clamp_window(
+                dt_util.utcnow(),
+                None,
+                None,
+                hours=hours,
+                default_hours=DEFAULT_LOGBOOK_WINDOW_HOURS,
+                max_hours=MAX_RECORDER_LOOKBACK_HOURS,
+            )
+            ids = _recorder_entity_ids(snapshot, entity_ids, "logbook")
+            entries = await runtime.fetch_logbook(ids, start, end)
+            # Logbook queries may return source order; expose chronological activity.
+            ordered_entries = sorted(entries, key=_logbook_entry_when)
+            if len(ordered_entries) > MAX_LOGBOOK_ENTRIES:
+                # Keep the newest bounded slice while preserving ascending order.
+                capped_entries = ordered_entries[-MAX_LOGBOOK_ENTRIES:]
+                runtime.state.notes.append(f"logbook result capped at {MAX_LOGBOOK_ENTRIES} entries")
+                return {
+                    "entries": capped_entries,
+                    "overflow": overflow_metadata(
+                        truncated=True,
+                        limit=MAX_LOGBOOK_ENTRIES,
+                        returned=len(capped_entries),
+                        omitted=len(ordered_entries) - len(capped_entries),
+                    ),
+                }
+            return ordered_entries
+
+        return await helper_response(require_runtime(None).state, "logbook", _call)
 
     async def query(
         self,

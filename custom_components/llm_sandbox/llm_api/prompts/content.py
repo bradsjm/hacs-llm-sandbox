@@ -89,19 +89,18 @@ def render_tool_capabilities(tools: list[llm.Tool]) -> str:
         if first_sentence and not first_sentence.endswith("."):
             first_sentence = f"{first_sentence}."
         lines.append(f"- {tool.name}: {first_sentence}")
-    recorder_lines: list[str] = []
-    if "get_logbook" in tool_names:
-        recorder_lines.append('- get_logbook: "what happened with X", activity, events, or a human-readable timeline.')
-    if "get_history" in tool_names:
-        recorder_lines.append(
-            "- get_history: how an entity's state value changed over time, as raw rows or summaries."
+    recorder_tools = tool_names & {"get_history", "get_statistics", "get_logbook"}
+    if recorder_tools:
+        lines.extend(
+            (
+                "",
+                "## Recorder routing",
+                "- For direct history, statistics, or logbook retrieval/summarization, use the matching standalone tool.",
+                "- For recorder data combined with current state/registries, computation, conditional reasoning, or actions, use one "
+                "execute_home_code call with await hass.history(...), hass.query(...), or hass.logbook(...).",
+                "- Run independent direct reads in parallel. Scope them with selectors instead of discovery calls, and never retrieve the same evidence twice.",
+            )
         )
-    if "get_statistics" in tool_names:
-        recorder_lines.append(
-            "- get_statistics: pre-aggregated statistics over a period, not current values or discovery."
-        )
-    if recorder_lines:
-        lines.extend(("", "## Choosing a recorder tool", *recorder_lines))
     return "\n".join(lines)
 
 
@@ -129,7 +128,9 @@ def render_home_inventory(
         )
     else:
         if not logbook_available:
-            lines.append("- Logbook is unavailable: the activity/events timeline tool is not offered this request.")
+            lines.append(
+                "- Logbook is unavailable: standalone and hass.logbook activity/events access are not offered this request."
+            )
         if not _has_statistics_candidate(snapshot):
             lines.append(
                 "- No visible entities expose long-term statistics (state_class); get_statistics will return empty."
@@ -217,6 +218,8 @@ def build_execute_home_code_description() -> str:
         "Read states and registries using the native Home Assistant patterns documented in the API prompt. "
         f"{render_query_schema_prompt(compact=True, include_heading=False).removeprefix('- ')} "
         "The query load can be narrowed with entity_ids or area_id/floor_id/device_id/label_id/domain. "
+        "Use await hass.history(...), hass.query(...), or hass.logbook(...) to compose bounded recorder data with "
+        "current state, registries, computation, conditional reasoning, or an action in this one call. "
         "Service-call availability follows the API prompt. "
         "Success returns {execution:{status:'ok'}, output:<data>} and may include top-level printed, notes, "
         "actions, resolutions, and overflow; printed appears only when print() emitted lines, actions records service-call "
@@ -235,6 +238,7 @@ def build_get_history_description() -> str:
         "entities over a bounded UTC window; use when you need how a state or "
         "attribute changed over time. Prefer aggregate modes for counts, durations, first/last sightings, "
         "or time in state instead of paging raw rows. "
+        "Prefer this standalone tool for direct retrieval; use one execute_home_code call for dependent composition or actions. "
         "Scope with entity_ids or HA-native selectors (area_id/device_id/floor_id/label_id/domain); "
         "size the window with hours=<n> or ISO start/end. "
         "Raw success returns {window, entities}, where entities is keyed by entity_id and each value has "
@@ -261,8 +265,9 @@ def build_get_statistics_description() -> str:
         "These are historical aggregates over a period, not current values; for "
         "a current value or an average of current states, read states in "
         "execute_home_code instead. Each statistic ID must be a currently-visible "
-        "entity ID; external or non-entity statistic IDs are rejected. Scope with "
-        "statistic_ids or HA-native selectors "
+        "entity ID; external or non-entity statistic IDs are rejected. "
+        "Prefer this standalone tool for direct retrieval; use one execute_home_code call for dependent composition or actions. "
+        "Scope with statistic_ids or HA-native selectors "
         "(area_id/device_id/floor_id/label_id/domain); size the window with hours=<n> or ISO start/end. "
         "Success returns {window, period, statistics}, where statistics is keyed by statistic/entity id and each "
         "value has fields plus rows of [t, {field: value}]. Pass types (mean/min/max/state/sum) to select "
@@ -279,6 +284,7 @@ def build_get_logbook_description() -> str:
         "Return human-readable logbook entries (the activity/events timeline — "
         "what happened and why) for visible entities over a bounded UTC window; "
         "use for 'what happened with X', activity, or a timeline. "
+        "Prefer this standalone tool for direct retrieval; use one execute_home_code call for dependent composition or actions. "
         "Scope with entity_ids or HA-native selectors (area_id/device_id/floor_id/label_id/domain); "
         "size the window with hours=<n> or ISO start/end. "
         "Success returns {window, entries}, where entries is a flat list of timeline records each carrying "

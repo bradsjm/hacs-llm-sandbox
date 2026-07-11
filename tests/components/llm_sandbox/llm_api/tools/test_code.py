@@ -1,13 +1,19 @@
 """End-to-end tests for the Monty executor with HA-native facades."""
 
 import json
+import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, cast
 
 import pytest
-from custom_components.llm_sandbox.const import CONF_ACTIONS_ENABLED, DEFAULT_PROMPT_PROFILE, TOOL_EXECUTE_HOME_CODE
+from custom_components.llm_sandbox.const import (
+    CONF_ACTIONS_ENABLED,
+    DEFAULT_PROMPT_PROFILE,
+    MAX_LOGBOOK_ENTRIES,
+    TOOL_EXECUTE_HOME_CODE,
+)
 from custom_components.llm_sandbox.llm_api import executor
 from custom_components.llm_sandbox.llm_api.data.home_db import MAX_HISTORY_LOAD_ROWS
 from custom_components.llm_sandbox.llm_api.errors import HelperExecutionError
@@ -18,11 +24,13 @@ from custom_components.llm_sandbox.llm_api.facades import (
 from custom_components.llm_sandbox.llm_api.facades import build_facades
 from custom_components.llm_sandbox.llm_api.prompts.profiles import resolve_profile
 from custom_components.llm_sandbox.llm_api.sandbox_context import RuntimeContext, activate_runtime, clear_runtime
+from custom_components.llm_sandbox.llm_api.tools import recorder as recorder_tools
 from custom_components.llm_sandbox.llm_api.tools.code import ExecuteHomeCodeTool
 from custom_components.llm_sandbox.llm_api.tools.recorder import MAX_HISTORY_STATES, MAX_RECORDER_ENTITY_IDS
 from custom_components.llm_sandbox.runtime import SandboxSettings
 from custom_components.llm_sandbox.snapshot.models import DEFAULT_SCOPE, HomeSnapshot, SafeAreaEntry, SnapshotIndexes
 from custom_components.llm_sandbox.types import ProposedAction
+from homeassistant.components.recorder import get_instance
 from homeassistant.core import Context, HomeAssistant, SupportsResponse
 from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import device_registry as dr
@@ -57,6 +65,7 @@ def _history_facade(
     fetch_statistics: Callable[[Sequence[str], datetime, datetime], Awaitable[list[dict[str, object]]]] | None = None,
     fetch_short_term_statistics: Callable[[Sequence[str], datetime, datetime], Awaitable[list[dict[str, object]]]]
     | None = None,
+    fetch_logbook: Callable[[Sequence[str], datetime, datetime], Awaitable[list[dict[str, object]]]] | None = None,
     service_call_limit: int = 20,
 ) -> tuple[SandboxHass, RuntimeContext]:
     """Activate a SafeHass facade with test runtime seams."""
@@ -67,6 +76,9 @@ def _history_facade(
     async def _fetch_statistics(
         _entity_ids: Sequence[str], _start: datetime, _end: datetime
     ) -> list[dict[str, object]]:
+        return []
+
+    async def _fetch_logbook(_entity_ids: Sequence[str], _start: datetime, _end: datetime) -> list[dict[str, object]]:
         return []
 
     async def _run_blocking(fn: Callable[[], object]) -> object:
@@ -86,6 +98,7 @@ def _history_facade(
         fetch_history=fetch_history,
         fetch_statistics=fetch_statistics or _fetch_statistics,
         fetch_short_term_statistics=fetch_short_term_statistics or _fetch_statistics,
+        fetch_logbook=fetch_logbook or _fetch_logbook,
         run_blocking=_run_blocking,
     )
     clear_runtime()
@@ -259,6 +272,184 @@ async def test_hass_history_recorder_unavailable_is_helper_error(
 
     assert result["execution"]["status"] == "helper_error"
     assert result["execution"]["kind"] == "recorder_unavailable"
+
+
+@pytest.mark.parametrize(
+    ("recorder_is_available", "logbook_is_available", "expected_key"),
+    [
+        pytest.param(False, True, "recorder_unavailable", id="recorder-unavailable"),
+        pytest.param(True, False, "logbook_unavailable", id="logbook-unavailable"),
+    ],
+)
+async def test_hass_logbook_dependency_errors_are_helper_errors(
+    hass: HomeAssistant,
+    loaded_entry: MockConfigEntry,
+    monkeypatch: pytest.MonkeyPatch,
+    recorder_is_available: bool,
+    logbook_is_available: bool,
+    expected_key: str,
+) -> None:
+    """Logbook dependency failures preserve their stable helper-error keys."""
+    monkeypatch.setattr(
+        "custom_components.llm_sandbox.llm_api.tools.code.recorder_available",
+        lambda _hass: recorder_is_available,
+    )
+    monkeypatch.setattr(
+        "custom_components.llm_sandbox.llm_api.tools.code.logbook_available",
+        lambda _hass: logbook_is_available,
+    )
+
+    result = await _run_code(hass, loaded_entry, "result = await hass.logbook(entity_ids='light.bedroom')")
+
+    assert result["execution"]["status"] == "helper_error"
+    assert result["execution"]["kind"] == expected_key
+
+
+async def test_hass_logbook_returns_json_safe_entries_for_visible_entities() -> None:
+    """Logbook facade exposes copied entries from its private runtime seam."""
+    calls: list[tuple[tuple[str, ...], datetime, datetime]] = []
+
+    async def _fetch_history(_entity_ids: Sequence[str], _start: datetime, _end: datetime) -> list[dict[str, object]]:
+        return []
+
+    async def _fetch_logbook(entity_ids: Sequence[str], start: datetime, end: datetime) -> list[dict[str, object]]:
+        calls.append((tuple(entity_ids), start, end))
+        return [
+            {
+                "entity_id": "sensor.temp",
+                "when": "2026-01-01T00:00:00+00:00",
+                "message": "Temperature changed",
+            }
+        ]
+
+    hass_facade, _runtime = _history_facade(_snapshot(), _fetch_history, fetch_logbook=_fetch_logbook)
+    try:
+        result = await hass_facade.logbook(entity_ids=["sensor.temp"], hours=24)
+    finally:
+        clear_runtime()
+
+    assert result == [
+        {
+            "entity_id": "sensor.temp",
+            "when": "2026-01-01T00:00:00+00:00",
+            "message": "Temperature changed",
+        }
+    ]
+    assert calls[0][0] == ("sensor.temp",)
+    assert timedelta(hours=24) - timedelta(seconds=1) <= calls[0][2] - calls[0][1] <= timedelta(hours=24)
+
+
+async def test_hass_logbook_rejects_invisible_entities() -> None:
+    """Logbook scope uses the current snapshot as its sole visibility authority."""
+
+    async def _fetch_history(_entity_ids: Sequence[str], _start: datetime, _end: datetime) -> list[dict[str, object]]:
+        return []
+
+    hass_facade, _runtime = _history_facade(_snapshot(), _fetch_history)
+    try:
+        with pytest.raises(HelperExecutionError) as err:
+            await hass_facade.logbook(entity_ids=["sensor.temp", "light.hidden"])
+    finally:
+        clear_runtime()
+
+    assert err.value.helper == "logbook"
+    assert err.value.key == "entity_not_visible"
+    assert err.value.guidance is not None
+
+
+@pytest.mark.parametrize(
+    ("snapshot", "entity_ids"),
+    [
+        pytest.param(replace(_snapshot(), states={}), None, id="empty-default-scope"),
+        pytest.param(
+            replace(
+                _snapshot(),
+                states={
+                    f"sensor.temp_{index}": replace(
+                        _snapshot().states["sensor.temp"],
+                        entity_id=f"sensor.temp_{index}",
+                        object_id=f"temp_{index}",
+                    )
+                    for index in range(MAX_RECORDER_ENTITY_IDS + 1)
+                },
+            ),
+            None,
+            id="default-scope-over-limit",
+        ),
+    ],
+)
+async def test_hass_logbook_rejects_empty_or_wide_default_scope(
+    snapshot: HomeSnapshot,
+    entity_ids: str | list[str] | None,
+) -> None:
+    """Missing or over-broad default logbook scopes never widen a recorder read."""
+
+    async def _fetch_history(_entity_ids: Sequence[str], _start: datetime, _end: datetime) -> list[dict[str, object]]:
+        return []
+
+    hass_facade, _runtime = _history_facade(snapshot, _fetch_history)
+    try:
+        with pytest.raises(HelperExecutionError) as err:
+            await hass_facade.logbook(entity_ids=entity_ids)
+    finally:
+        clear_runtime()
+
+    assert err.value.helper == "logbook"
+    assert err.value.key == "invalid_tool_input"
+
+
+async def test_hass_logbook_rejects_window_above_24_hours() -> None:
+    """Logbook facade keeps the recorder's 24-hour maximum window."""
+
+    async def _fetch_history(_entity_ids: Sequence[str], _start: datetime, _end: datetime) -> list[dict[str, object]]:
+        return []
+
+    hass_facade, _runtime = _history_facade(_snapshot(), _fetch_history)
+    try:
+        with pytest.raises(HelperExecutionError) as err:
+            await hass_facade.logbook(entity_ids="sensor.temp", hours=24.1)
+    finally:
+        clear_runtime()
+
+    assert err.value.helper == "logbook"
+    assert err.value.key == "time_window_too_large"
+
+
+async def test_hass_logbook_keeps_newest_entries_in_chronological_order() -> None:
+    """Capped logbook output retains the newest entries without reversing activity order."""
+    entries = [
+        {
+            "entity_id": "sensor.temp",
+            "when": f"2026-01-01T{index // 60:02d}:{index % 60:02d}:00+00:00",
+            "message": f"event {index}",
+        }
+        for index in range(MAX_LOGBOOK_ENTRIES + 1)
+    ]
+
+    async def _fetch_history(_entity_ids: Sequence[str], _start: datetime, _end: datetime) -> list[dict[str, object]]:
+        return []
+
+    async def _fetch_logbook(_entity_ids: Sequence[str], _start: datetime, _end: datetime) -> list[dict[str, object]]:
+        return list(reversed(entries))
+
+    hass_facade, runtime = _history_facade(_snapshot(), _fetch_history, fetch_logbook=_fetch_logbook)
+    try:
+        result = await hass_facade.logbook(entity_ids="sensor.temp")
+    finally:
+        clear_runtime()
+
+    assert isinstance(result, dict)
+    returned_entries = cast(list[dict[str, object]], result["entries"])
+    assert len(returned_entries) == MAX_LOGBOOK_ENTRIES
+    assert returned_entries[0]["message"] == "event 1"
+    assert returned_entries[-1]["message"] == "event 200"
+    assert result["overflow"] == {
+        "truncated": True,
+        "limit": MAX_LOGBOOK_ENTRIES,
+        "returned": MAX_LOGBOOK_ENTRIES,
+        "omitted": 1,
+    }
+    assert runtime.state.notes == [f"logbook result capped at {MAX_LOGBOOK_ENTRIES} entries"]
 
 
 async def test_hass_query_loads_additional_history_scope_in_same_run() -> None:
@@ -907,6 +1098,93 @@ result = ret
     assert "frozen snapshot" in result["notes"][0]
     assert "do not reread state" in result["notes"][0]
     assert events == ["turn_on"]
+
+
+async def test_hass_logbook_can_conditionally_dispatch_action_in_one_run(
+    hass: HomeAssistant,
+    recorder_entry: MockConfigEntry,
+) -> None:
+    """One Monty run can use fresh logbook activity to decide a service action."""
+    hass.states.async_set("light.bedroom", "off", {"friendly_name": "Bedroom Light"})
+    hass.states.async_set("light.bedroom", "on", {"friendly_name": "Bedroom Light"})
+    await recorder_tools._sync_recorder_for_query(hass, get_instance(hass), time.monotonic() + 10)
+    events: list[str] = []
+    hass.bus.async_listen("call_service", lambda event: events.append(event.data.get("service", "")))
+
+    result = await _run_code(
+        hass,
+        recorder_entry,
+        """
+activity = await hass.logbook("light.bedroom", hours=24)
+entries = activity["entries"] if isinstance(activity, dict) else activity
+seen_bedroom = False
+for entry in entries:
+    if entry["entity_id"] == "light.bedroom":
+        seen_bedroom = True
+if seen_bedroom:
+    await hass.services.async_call("light", "turn_off", target={"entity_id": "light.bedroom"})
+result = {"seen_bedroom": seen_bedroom, "entry_count": len(entries)}
+""",
+    )
+    await hass.async_block_till_done()
+
+    assert result["execution"]["status"] == "ok"
+    assert result["output"]["seen_bedroom"] is True
+    assert result["output"]["entry_count"] >= 1
+    assert result["actions"] == [
+        {"service": "light.turn_off", "target": {"entity_id": ["light.bedroom"]}, "status": "ok"}
+    ]
+    assert events == ["turn_off"]
+
+
+async def test_service_write_synchronizes_same_run_logbook_fetch(
+    hass: HomeAssistant,
+    loaded_entry: MockConfigEntry,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A logbook read after a dispatched action requests the recorder sync barrier."""
+    sync_requests: list[bool] = []
+    entries: list[dict[str, object]] = [
+        {
+            "entity_id": "light.bedroom",
+            "when": "2026-01-01T00:00:00+00:00",
+            "message": "Bedroom light turned on",
+        }
+    ]
+
+    async def _fetch_logbook(
+        _hass: HomeAssistant,
+        _snapshot: HomeSnapshot,
+        _deadline: float,
+        _entity_ids: list[str],
+        _start: datetime,
+        _end: datetime,
+        *,
+        sync: bool = True,
+    ) -> list[dict[str, object]]:
+        sync_requests.append(sync)
+        return entries
+
+    monkeypatch.setattr("custom_components.llm_sandbox.llm_api.tools.code.recorder_available", lambda _hass: True)
+    monkeypatch.setattr("custom_components.llm_sandbox.llm_api.tools.code.logbook_available", lambda _hass: True)
+    monkeypatch.setattr(
+        "custom_components.llm_sandbox.llm_api.tools.code.fetch_visible_logbook_entries", _fetch_logbook
+    )
+
+    result = await _run_code(
+        hass,
+        loaded_entry,
+        """
+await hass.services.async_call("light", "turn_on", target={"entity_id": "light.bedroom"})
+result = await hass.logbook("light.bedroom")
+""",
+    )
+
+    assert result["execution"]["status"] == "ok"
+    assert result["actions"][0]["status"] == "ok"
+    assert result["output"] == entries
+    assert sync_requests
+    assert all(sync_requests)
 
 
 async def test_mapping_fourth_positional_service_target_is_normalized(
