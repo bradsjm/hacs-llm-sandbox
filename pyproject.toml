@@ -128,7 +128,7 @@ known-first-party = ["llm_sandbox"]
 convention = "google"
 
 [tool.ruff.lint.mccabe]
-max-complexity = 25
+max-complexity = 20
 
 [tool.ruff.lint.per-file-ignores]
 "**/__init__.py" = ["D104"]
