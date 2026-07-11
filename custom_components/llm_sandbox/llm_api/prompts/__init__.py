@@ -2,6 +2,7 @@
 
 from .content import (
     build_execute_home_code_description,
+    build_get_automation_description,
     build_get_camera_image_description,
     build_get_history_description,
     build_get_logbook_description,
@@ -19,6 +20,7 @@ __all__ = [
     "PromptDetail",
     "PromptProfile",
     "build_execute_home_code_description",
+    "build_get_automation_description",
     "build_get_camera_image_description",
     "build_get_history_description",
     "build_get_logbook_description",

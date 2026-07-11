@@ -5,6 +5,7 @@ from custom_components.llm_sandbox.llm_api.prompts import (
     PROFILE_OPTIONS,
     PromptProfile,
     build_execute_home_code_description,
+    build_get_automation_description,
     build_get_history_description,
     build_get_logbook_description,
     build_get_statistics_description,
@@ -12,6 +13,7 @@ from custom_components.llm_sandbox.llm_api.prompts import (
     render_tool_capabilities,
     resolve_profile,
 )
+from custom_components.llm_sandbox.llm_api.tools.automation import GetAutomationTool
 from custom_components.llm_sandbox.llm_api.tools.code import ExecuteHomeCodeTool
 from custom_components.llm_sandbox.llm_api.tools.recorder import GetHistoryTool, GetLogbookTool, GetStatisticsTool
 from custom_components.llm_sandbox.llm_api.tools.vision import GetCameraImageTool
@@ -61,6 +63,7 @@ def test_tool_capability_summary_matches_registered_tools() -> None:
     """Generated overview names exactly the registered per-request tools."""
     tools = [
         ExecuteHomeCodeTool("entry-id"),
+        GetAutomationTool("entry-id"),
         GetHistoryTool("entry-id"),
         GetStatisticsTool("entry-id"),
         GetLogbookTool("entry-id"),
@@ -75,11 +78,21 @@ def test_tool_capability_summary_matches_registered_tools() -> None:
         if line.startswith("- ") and ":" in line
     ] == [tool.name for tool in tools]
     assert "get_camera_image" in summary
+    automation_line = next(line for line in summary.splitlines() if line.startswith("- get_automation:"))
+    assert all(term in automation_line.lower() for term in ("search", "summaries", "content", "run activity"))
     assert "direct history, statistics, or logbook retrieval/summarization" in summary
     assert "one execute_home_code call" in summary
     assert "in parallel" in summary
     assert "selectors instead of discovery calls" in summary
     assert "never retrieve the same evidence twice" in summary
+
+
+def test_automation_description_states_projection_and_run_limits() -> None:
+    """The direct automation description explains its authorization and source limits."""
+    description = build_get_automation_description()
+
+    for phrase in ("entity read permission", "administrator", "non-trace", "24 hours", "16 KiB", "conditions"):
+        assert phrase in description
 
 
 @pytest.mark.parametrize("profile", PROFILE_OPTIONS, ids=[profile.id for profile in PROFILE_OPTIONS])
@@ -135,6 +148,16 @@ def test_guided_profile_includes_routes_and_compact_examples() -> None:
     assert "matching standalone tool" in prompt
     assert "Independent direct reads may run in parallel" in prompt
     assert "do not refetch it" in prompt
+
+
+@pytest.mark.parametrize("profile", PROFILE_OPTIONS, ids=[profile.id for profile in PROFILE_OPTIONS])
+def test_profiles_route_automation_inspection_to_direct_tool(profile: PromptProfile) -> None:
+    """Every profile routes automation inspection to the standalone automation tool."""
+    prompt = profile.base_prompt.lower()
+
+    assert "get_automation" in prompt
+    assert "automation" in prompt
+    assert "recorder" in prompt
 
 
 @pytest.mark.parametrize("profile_id", ["balanced", "frontier"])

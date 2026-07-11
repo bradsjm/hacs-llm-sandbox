@@ -25,6 +25,7 @@ Use a strong tool-calling model. The main tool asks the model to write short Pyt
 
 - `get_history` and `get_statistics` require Home Assistant recorder runtime support.
 - `get_logbook` requires logbook runtime data in addition to recorder support.
+- `get_automation` summaries do not require recorder or logbook; its optional `runs` projection requires both.
 - `get_camera_image` requires a visible `camera.*` or `image.*` entity and a multimodal model that can interpret the returned image.
 
 ## Before enabling actions

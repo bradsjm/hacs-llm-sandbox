@@ -20,6 +20,7 @@ from .prompts import (
     render_tool_capabilities,
     resolve_profile,
 )
+from .tools.automation import GetAutomationTool
 from .tools.code import ExecuteHomeCodeTool
 from .tools.recorder import GetHistoryTool, GetLogbookTool, GetStatisticsTool, logbook_available, recorder_available
 from .tools.vision import GetCameraImageTool
@@ -116,7 +117,7 @@ def _build_api_prompt(
 
 def _build_tools(entry_id: str, *, recorder_ok: bool, logbook_ok: bool) -> list[llm.Tool]:
     """Return the per-request tools in stable order, omitting unavailable recorder tools."""
-    tools: list[llm.Tool] = [ExecuteHomeCodeTool(entry_id)]
+    tools: list[llm.Tool] = [ExecuteHomeCodeTool(entry_id), GetAutomationTool(entry_id)]
     if recorder_ok:
         tools.append(GetHistoryTool(entry_id))
         tools.append(GetStatisticsTool(entry_id))

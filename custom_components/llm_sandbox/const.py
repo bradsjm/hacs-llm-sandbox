@@ -42,6 +42,7 @@ TOOL_EXECUTE_HOME_CODE: Final = "execute_home_code"
 TOOL_GET_HISTORY: Final = "get_history"
 TOOL_GET_STATISTICS: Final = "get_statistics"
 TOOL_GET_LOGBOOK: Final = "get_logbook"
+TOOL_GET_AUTOMATION: Final = "get_automation"
 TOOL_GET_CAMERA_IMAGE: Final = "get_camera_image"
 
 # Recorder-backed tool windowing.

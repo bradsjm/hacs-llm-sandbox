@@ -13,7 +13,7 @@ The LLM API layer lives in [`llm_api/api.py`](https://github.com/bradsjm/hacs-ll
 
 ## Tool list
 
-The API always exposes `execute_home_code` for a loaded entry. Recorder and logbook tools are added only when their runtime dependencies are available. `get_camera_image` is part of the tool set and performs its own visibility and entity-domain checks when called.
+The API always exposes `execute_home_code` and `get_automation` for a loaded entry. Recorder and logbook tools are added only when their runtime dependencies are available. `get_automation` is available without recorder support; only its optional `runs` projection requires recorder and logbook runtime data. `get_camera_image` is part of the tool set and performs its own visibility and entity-domain checks when called.
 
 ## Fresh data rule
 

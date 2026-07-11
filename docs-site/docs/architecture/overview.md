@@ -18,6 +18,7 @@ Assist Agent Sandbox is a Home Assistant custom integration with an LLM API laye
 | Executor | [`llm_api/executor.py`](https://github.com/bradsjm/hacs-llm-sandbox/blob/main/custom_components/llm_sandbox/llm_api/executor.py) | Normalize, type-check, run, and format Monty code execution. |
 | Facades | [`llm_api/facades/`](https://github.com/bradsjm/hacs-llm-sandbox/tree/main/custom_components/llm_sandbox/llm_api/facades) | Provide HA-like read APIs and gated service calls over snapshot data. |
 | Recorder tools | [`tools/recorder.py`](https://github.com/bradsjm/hacs-llm-sandbox/blob/main/custom_components/llm_sandbox/llm_api/tools/recorder.py) | Expose bounded history, statistics, and logbook helpers. |
+| Automation tool | [`tools/automation.py`](https://github.com/bradsjm/hacs-llm-sandbox/blob/main/custom_components/llm_sandbox/llm_api/tools/automation.py) | Read Home Assistant-authorized automation summaries, configuration, and trigger entries. |
 | Vision tool | [`tools/vision.py`](https://github.com/bradsjm/hacs-llm-sandbox/blob/main/custom_components/llm_sandbox/llm_api/tools/vision.py) | Capture visible camera or image entities for multimodal models. |
 
 ## Tool-call flow

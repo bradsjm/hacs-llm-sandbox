@@ -294,6 +294,13 @@ _TOOL_ERROR_MESSAGES: dict[str, _ToolErrorMessageBuilder] = {
         "Recorder-backed history/statistics/logbook queries require the recorder integration."
     ),
     "logbook_unavailable": lambda _p: "get_logbook requires the logbook integration.",
+    "authorization_denied": lambda _p: (
+        "The requesting Home Assistant user is not authorized for this automation data."
+    ),
+    "automation_unavailable": lambda _p: "The Home Assistant automation component is not available.",
+    "automation_content_unavailable": lambda _p: (
+        "Complete automation content is unavailable in this Home Assistant version."
+    ),
     "query_failed": lambda p: (
         f"Recorder query failed: {p.get('error')}." if p.get("error") else "Recorder query failed."
     ),

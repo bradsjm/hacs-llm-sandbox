@@ -20,6 +20,11 @@ import pytest
         pytest.param("time_window_too_large", {"max_hours": "168"}, ("168", "hours"), id="window-too-large"),
         pytest.param("recorder_unavailable", {}, ("recorder", "history"), id="recorder-unavailable"),
         pytest.param("logbook_unavailable", {}, ("get_logbook", "logbook"), id="logbook-unavailable"),
+        pytest.param("authorization_denied", {}, ("authorized", "automation"), id="authorization-denied"),
+        pytest.param("automation_unavailable", {}, ("automation", "available"), id="automation-unavailable"),
+        pytest.param(
+            "automation_content_unavailable", {}, ("automation", "content"), id="automation-content-unavailable"
+        ),
         pytest.param("query_failed", {"error": "TimeoutError"}, ("TimeoutError", "query"), id="query-failed"),
         pytest.param("invalid_cursor", {}, ("cursor", "restart"), id="invalid-cursor"),
         pytest.param(

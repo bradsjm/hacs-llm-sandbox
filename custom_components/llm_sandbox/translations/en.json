@@ -38,6 +38,15 @@
     "analytics_unknown_op": {
       "message": "Unsupported analytics operation {op}."
     },
+    "authorization_denied": {
+      "message": "The requesting Home Assistant user is not authorized for this automation data."
+    },
+    "automation_content_unavailable": {
+      "message": "Complete automation content is unavailable in this Home Assistant version."
+    },
+    "automation_unavailable": {
+      "message": "The Home Assistant automation component is not available."
+    },
     "capture_failed": {
       "message": "Unable to capture image from {entity_id}."
     },

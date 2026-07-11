@@ -27,6 +27,7 @@ The integration is intentionally built around snapshots and an isolated Monty Py
 | `get_history` | Reads bounded state history from recorder. |
 | `get_statistics` | Reads bounded long-term statistics. |
 | `get_logbook` | Reads bounded activity timeline entries. |
+| `get_automation` | Reads Home Assistant-authorized automation summaries, optional administrator-only configuration, and optional trigger runs. |
 | `get_camera_image` | Captures a visible camera or image entity for a multimodal model. |
 
 ## Source grounding

@@ -36,6 +36,7 @@ Once enabled, the assistant can call these tools during a conversation. Recorder
 | **`get_history`**       | Recorded **state history** — raw changes up to 24 hours, legacy summaries such as transitions and time-in-state, or declarative analytics (`aggregate`, `group_by`, `bucket`, `where`, `order_by`, `limit`) up to 30 days.                                                                                                                                                                                                                                                                        |
 | **`get_statistics`**    | Pre-aggregated **long-term statistics** (`mean`, `min`, `max`, `state`, `sum`) over a period. Up to 30 days.                                                                                                                                                                                                                                                                                                                                                                                      |
 | **`get_logbook`**       | The **activity timeline** — what happened and why (e.g. "did the front door open after midnight?"). Up to 24 hours.                                                                                                                                                                                                                                                                                                                                                                               |
+| **`get_automation`**    | Reads authorized automation summaries, optional administrator-only complete configuration, and optional recent automation-triggered Logbook runs. It is always offered; recorder and logbook are required only for runs.                                                                                                                                                                                                                                                                          |
 | **`get_camera_image`**  | Captures a **live frame** from a camera or image entity so a multimodal model can look at it ("what's on the front porch right now?"). **NOTE! This only works with the hacs-pydantic-ai component at this time.**                                                                                                                                                                                                                                                                                |
 
 For a direct history, statistics, or logbook answer, use the matching recorder tool. Independent direct reads can run in parallel. When recorder evidence depends on current state or registries, needs computation, drives a condition/action, or must be compared with another source, use one `execute_home_code` call instead. Scope direct reads with selectors rather than discovery calls, and do not retrieve the same evidence twice.
@@ -100,7 +101,14 @@ Open the integration's **Configure** dialog. Options are grouped into four secti
 | Maximum execution time            | 12 seconds | 3–30 s                                             |
 | Maximum service calls per request | 32         | 1–100 validated calls dispatched to Home Assistant |
 
-**Prompt** — the base instructions sent to the model. Ships with **Standard**, **Terse**, and **Minimal** profiles.
+**Prompt** — the base instructions sent to the model. Every profile exposes the same capabilities; choose the amount of
+guidance appropriate for your model:
+
+| Profile      | Guidance level                                                                                           |
+| ------------ | -------------------------------------------------------------------------------------------------------- |
+| **Guided**   | Explicit tool routing and compact examples for models that benefit from step-by-step direction.          |
+| **Balanced** | The default: readable routing and execution guidance without tutorial examples.                          |
+| **Frontier** | A compact outcome contract for capable models that need less coaching and benefit from a smaller prompt. |
 
 ## How it works
 

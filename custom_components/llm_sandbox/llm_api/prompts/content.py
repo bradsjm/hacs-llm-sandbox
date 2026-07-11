@@ -299,6 +299,22 @@ def build_get_logbook_description() -> str:
     )
 
 
+def build_get_automation_description() -> str:
+    """Return the get_automation tool description."""
+    return (
+        "Search Home Assistant automations and return summaries, with optional complete content and recent run activity. "
+        "Results are authorized by the requesting user's entity read permission, "
+        "sorted by entity_id. Search title, description (for administrators), IDs, aliases, assigned metadata, "
+        "and referenced entity/device/area/floor/label metadata with query, or narrow with automation entity_ids. "
+        "Optionally include complete automation content, which requires a Home Assistant administrator; it is never "
+        "partially redacted. Optionally include recent non-trace Logbook automation-triggered runs with hours or ISO "
+        "start/end; runs require recorder and logbook runtime support and default to 24 hours. "
+        "Pagination uses a cursor-only continuation and returns whole automation records within the compact 16 KiB "
+        "UTF-8 response budget, allowing one oversized first record. Runs are trigger entries only and do not prove "
+        "that conditions or actions succeeded. Errors return {status:'error', error:{key, message}}."
+    )
+
+
 def build_get_camera_image_description() -> str:
     """Return the get_camera_image tool description."""
     return (
