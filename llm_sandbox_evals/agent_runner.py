@@ -102,10 +102,14 @@ def _make_automation_tool(tool: GetAutomationTool, description: str) -> Tool[Eva
     json_schema = convert(tool.parameters)
 
     async def execute(ctx: RunContext[EvalRuntime], **kwargs: object) -> JsonObjectType:
-        validation = _validate_automation_tool(tool, kwargs)
-        if validation.error is not None:
-            return validation.error
-        return await tool.run_query(validation.data, ctx.deps.automation_source)
+        _notify_tool_boundary(ctx.deps, tool.name, started=True)
+        try:
+            validation = _validate_automation_tool(tool, kwargs)
+            if validation.error is not None:
+                return validation.error
+            return await tool.run_query(validation.data, ctx.deps.automation_source)
+        finally:
+            _notify_tool_boundary(ctx.deps, tool.name, started=False)
 
     return Tool.from_schema(
         execute,
@@ -123,10 +127,14 @@ def _make_recorder_tool(
     json_schema = convert(tool.parameters)
 
     async def execute(ctx: RunContext[EvalRuntime], **kwargs: object) -> JsonObjectType:
-        validation = _validate_recorder_tool(tool, kwargs)
-        if validation.error is not None:
-            return validation.error
-        return await tool.run_query(ctx.deps.snapshot, validation.data, ctx.deps.recorder_source)
+        _notify_tool_boundary(ctx.deps, tool.name, started=True)
+        try:
+            validation = _validate_recorder_tool(tool, kwargs)
+            if validation.error is not None:
+                return validation.error
+            return await tool.run_query(ctx.deps.snapshot, validation.data, ctx.deps.recorder_source)
+        finally:
+            _notify_tool_boundary(ctx.deps, tool.name, started=False)
 
     return Tool.from_schema(
         execute,
@@ -142,18 +150,22 @@ def _make_code_tool(tool: ExecuteHomeCodeTool, description: str) -> Tool[EvalRun
     json_schema = convert(tool.parameters)
 
     async def execute(ctx: RunContext[EvalRuntime], **kwargs: object) -> JsonObjectType:
-        validation = _validate_code_tool(tool, kwargs)
-        if validation.error is not None:
-            return validation.error
-        runtime = ctx.deps.runtime_context_factory()
-        llm_context = llm.LLMContext(
-            ctx.deps.case.llm_context.platform,
-            None,
-            ctx.deps.case.llm_context.language,
-            None,
-            ctx.deps.case.llm_context.device_id,
-        )
-        return await tool.run_execute(ctx.deps.snapshot, validation.data, llm_context, runtime)
+        _notify_tool_boundary(ctx.deps, tool.name, started=True)
+        try:
+            validation = _validate_code_tool(tool, kwargs)
+            if validation.error is not None:
+                return validation.error
+            runtime = ctx.deps.runtime_context_factory()
+            llm_context = llm.LLMContext(
+                ctx.deps.case.llm_context.platform,
+                None,
+                ctx.deps.case.llm_context.language,
+                None,
+                ctx.deps.case.llm_context.device_id,
+            )
+            return await tool.run_execute(ctx.deps.snapshot, validation.data, llm_context, runtime)
+        finally:
+            _notify_tool_boundary(ctx.deps, tool.name, started=False)
 
     return Tool.from_schema(
         execute,
@@ -170,6 +182,16 @@ class _ValidationResult:
     def __init__(self, data: dict[str, object], error: JsonObjectType | None) -> None:
         self.data = data
         self.error = error
+
+
+def _notify_tool_boundary(runtime: EvalRuntime, tool_name: str, *, started: bool) -> None:
+    """Notify the optional eval observer without affecting tool semantics."""
+    if runtime.on_tool_boundary is None:
+        return
+    try:
+        runtime.on_tool_boundary(tool_name, started)
+    except Exception:  # noqa: BLE001 - terminal observation must not change a tool result.
+        return
 
 
 def _validate_recorder_tool(tool: _EvalTool, kwargs: dict[str, object]) -> _ValidationResult:

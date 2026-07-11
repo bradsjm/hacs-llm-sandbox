@@ -20,14 +20,7 @@ from rich.console import Console
 from llm_sandbox_evals import experiment, html_report, reports
 from llm_sandbox_evals.config import EvalConfig, load_config
 from llm_sandbox_evals.harness import _select_cases
-from llm_sandbox_evals.schema import CaseTrace
-
-_STUB_NOTE = (
-    '"stub" is a keyless, deterministic pipeline-checker: great for verifying the\n'
-    "harness end to end, but low stub scores are expected and are not a quality\n"
-    "signal. Pass real model ids (e.g. openai:gpt-4o-mini) to measure prompt quality."
-)
-_MAX_PROGRESS_ERROR_CHARS = 500
+from llm_sandbox_evals.terminal import MatrixTerminalReporter
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -144,7 +137,7 @@ def _add_eval_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPar
         "--concurrency",
         type=int,
         metavar="N",
-        help="max concurrent model calls per candidate/model (default: 5).",
+        help="maximum concurrent candidate x model x case matrix cells (default: 5).",
     )
     eval_parser.add_argument(
         "--max-tool-calls",
@@ -323,22 +316,16 @@ def _run_eval(args: argparse.Namespace) -> int:
         reasoning_effort=args.reasoning,
         temperature=args.temperature,
     )
-    selected_cases = _select_cases(config.cases, config.homes)
-    _say(_eval_banner(config, len(selected_cases)))
-
     run_id = _derive_run_id()
-    report = asyncio.run(
-        experiment.run_matrix(config, run_id=run_id, logfire_enabled=args.logfire, on_complete=_progress_reporter)
-    )
-    run_dir = reports.write_report_json(report, config, run_id=run_id)
-    report_html = html_report.write_html(run_dir)
-    _say(_eval_footer(run_dir))
-    report.print(
-        console=Console(stderr=True),
-        include_output=False,
-        include_expected_output=False,
-        include_durations=True,
-    )
+    with MatrixTerminalReporter() as reporter:
+        report = asyncio.run(
+            experiment.run_matrix(config, run_id=run_id, logfire_enabled=args.logfire, on_event=reporter.handle)
+        )
+        run_dir = reports.write_report_json(report, config, run_id=run_id)
+        report_html = html_report.write_html(run_dir)
+        reporter.finish(
+            overall_mean=experiment.overall_mean(report), run_dir=str(run_dir), report_html=str(report_html)
+        )
 
     # stdout stays machine-readable: the run directory and compact native analysis facts.
     sys.stdout.write(f"run_dir: {run_dir}\n")
@@ -451,48 +438,6 @@ def _run_optimize(args: argparse.Namespace) -> int:
     return 0
 
 
-def _eval_banner(config: EvalConfig, case_count: int) -> str:
-    """Build the pre-run orientation banner for `eval`."""
-    cases_field = f"all ({case_count})" if config.cases is None else f"{', '.join(config.cases)} ({case_count})"
-    reasoning = config.reasoning_effort or "(none)"
-    temperature = f"{config.temperature:g}" if config.temperature is not None else "(unset)"
-    return (
-        "llm_sandbox evals - running the eval matrix\n\n"
-        "For every (prompt candidate x language model x test case), this harness:\n"
-        "  1. renders native tool-calling messages and function schemas,\n"
-        "  2. lets the model use available tools over one or more bounded turns, and\n"
-        "  3. scores the structured final outcome with a global tool-call cutoff.\n\n"
-        "Candidates rank by mean score; native pydantic-evals analyses include\n"
-        "candidate ranking and candidate x model means. A higher mean is better.\n\n"
-        "Config:\n"
-        f"  models      : {', '.join(config.models)}\n"
-        f"  candidates  : {', '.join(config.candidates)}\n"
-        f"  prompt profile: {config.prompt_profile}\n"
-        f"  cases       : {cases_field}\n"
-        f"  runs dir    : {config.runs_dir}\n"
-        f"  concurrency : {config.concurrency}\n"
-        f"  max tool calls: {config.max_tool_calls}\n"
-        f"  model timeout: {config.model_timeout:g}s\n"
-        f"  temperature : {temperature}\n"
-        f"  reasoning   : {reasoning}\n\n"
-        f"{_STUB_NOTE}\n"
-    )
-
-
-def _eval_footer(run_dir: Path) -> str:
-    """Build the post-run artifacts/next-steps footer for `eval`."""
-    return (
-        f"\nWrote artifacts to {run_dir}:\n"
-        "  report.json       native analyses + per-cell traces (no API keys)\n\n"
-        "  report.html       interactive dashboard for visual navigation\n\n"
-        "Re-render the saved summary later (no model calls):\n"
-        f"  python -m llm_sandbox_evals report {run_dir.name}\n\n"
-        "Regenerate the interactive HTML report later (no model calls):\n"
-        f"  python -m llm_sandbox_evals report {run_dir.name} --html\n\n"
-        "Native pydantic-evals report:\n"
-    )
-
-
 def _optimize_banner(config: EvalConfig) -> str:
     """Build the pre-run orientation + cost banner for `optimize`."""
     trainset_count = len(_select_cases(config.cases, config.homes))
@@ -569,23 +514,6 @@ def _say(text: str) -> None:
     if text:
         sys.stderr.write(text if text.endswith("\n") else text + "\n")
     sys.stderr.flush()
-
-
-def _progress_reporter(index: int, total: int, name: str, trace: CaseTrace, elapsed: float) -> None:
-    """Write one per-cell completion line to stderr; keep stdout machine-readable."""
-    # Branch boundary: error traces already carry "check_name: feedback"; keep it
-    # compact but do not hide provider/timeout details behind the reason key.
-    result = _compact_progress_error(trace.error) if trace.error is not None else f"{trace.score:.3f}"
-    sys.stderr.write(f"({index}/{total}) {name}, result: {result}, time: {elapsed:.1f}s\n")
-    sys.stderr.flush()
-
-
-def _compact_progress_error(error: str) -> str:
-    """Normalize an error for one-line concurrent progress output."""
-    compact = " ".join(error.split())
-    if len(compact) <= _MAX_PROGRESS_ERROR_CHARS:
-        return compact
-    return f"{compact[: _MAX_PROGRESS_ERROR_CHARS - 3]}..."
 
 
 def _derive_run_id() -> str:

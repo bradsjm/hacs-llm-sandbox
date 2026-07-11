@@ -82,7 +82,8 @@ The harness owns the snapshot lifecycle and builds a fresh scoped snapshot per c
 - `tools.py` — `EVAL_SCOPE`, `apply_scope`, `RecordingInvoker`, and action normalization helpers only; no tool emulators.
 - `scoring.py` — `check_case(...)`, `score_case(...)`, `mean_score(...)`, `is_incomplete(...)`. Outcome-evidence gates (`meaningful_oracle`, optional diagnostic `answer_evidence_present`, optional `provenance_evidence_present`, optional `tool_result_check_*` for `execute_home_code` / recorder tools, final-tool `execution_ok`, exact `actions_match` or structured blocked-action `blocked_outcome`, global `tool_calls_within_max`); `model_error` cells are flagged incomplete and excluded from means.
 - `harness.py` — `run_case(...) -> CaseTrace`; the bounded per-cell task body reused by native experiments and DSPy. Captures per-call `ToolEvent`s (tool name, args, return payload) from the agent conversation.
-- `experiment.py` — native `pydantic_evals` `Dataset` construction, deterministic `SandboxOutcome` evaluator, report-level candidate/model analyses, and `run_matrix(...) -> EvaluationReport`.
+- `experiment.py` — native `pydantic_evals` `Dataset` construction, deterministic `SandboxOutcome` evaluator, observer-only matrix/tool lifecycle events, report-level candidate/model analyses, and `run_matrix(...) -> EvaluationReport`.
+- `terminal.py` — the eval command's stderr-only Rich Live composition (TTY), redirected-stderr lifecycle-line fallback, and compact successful final summary. It never changes stdout, artifacts, scoring, or matrix execution.
 - `reports.py` — `write_report_json(...)` and `load_report(...)` for the single saved native `report.json` artifact.
 - `html_report.py` — `render_html(...)` / `write_html(...)` for the interactive self-contained `report.html` dashboard.
 - `logfire_config.py` — optional Pydantic Logfire configuration used only when `eval --logfire` is passed.

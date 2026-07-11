@@ -4,7 +4,7 @@ from pathlib import Path
 from custom_components.llm_sandbox.const import DEFAULT_PROMPT_PROFILE
 from freezegun.api import FrozenDateTimeFactory
 from llm_sandbox_evals.config import EvalConfig
-from llm_sandbox_evals.experiment import MatrixCellRef, build_dataset, run_matrix
+from llm_sandbox_evals.experiment import MatrixCellRef, MatrixProgressEvent, build_dataset, run_matrix
 from llm_sandbox_evals.schema import (
     CaseContext,
     CaseTrace,
@@ -61,6 +61,37 @@ async def test_run_matrix_stub_slice_writes_reloadable_report_json(tmp_path: Pat
     # The stub read the temperature entity, so one tool event with its return is persisted.
     assert len(report_case.output.tool_events) == 1
     assert report_case.output.tool_events[0].tool_name == "execute_home_code"
+
+
+async def test_run_matrix_emits_cell_and_tool_lifecycle_events(tmp_path: Path) -> None:
+    events: list[MatrixProgressEvent] = []
+
+    report = await run_matrix(
+        _config(tmp_path, cases=["state_living_temperature"]),
+        run_id="stub-lifecycle",
+        on_event=events.append,
+    )
+
+    assert [event.state for event in events] == [
+        "matrix_started",
+        "cell_started",
+        "tool_started",
+        "tool_finished",
+        "cell_finished",
+    ]
+    cell = MatrixCellRef(
+        case_id="state_living_temperature",
+        candidate_id="baseline",
+        model_id="stub",
+        home="home_minimal",
+        category="state_read",
+    )
+    assert events[0].total == 1
+    assert all(event.cell == cell for event in events[1:])
+    assert all(event.request == "What is the current temperature in the living room?" for event in events[1:])
+    assert [event.tool_name for event in events[2:4]] == ["execute_home_code", "execute_home_code"]
+    assert events[-1].trace == report.cases[0].output
+    assert events[-1].completion_index == 1
 
 
 @pytest.mark.parametrize(

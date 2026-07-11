@@ -227,13 +227,13 @@ _HTML_TEMPLATE = """<!doctype html>
     .btn-secondary:hover { border-color: var(--focus); color: var(--focus); }
     .btn-secondary:focus-visible { outline: 3px solid color-mix(in srgb, var(--focus) 35%, transparent); outline-offset: 2px; border-color: var(--focus); }
     .toolbar-actions { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
-    /* Segmented Table/Matrix switch — shown only when >1 candidate×model exists. */
+    /* Segmented Table/Matrix switch — shown only when >1 candidatexmodel exists. */
     .seg { display: inline-flex; border: 1px solid var(--control-border); border-radius: .5rem; overflow: hidden; }
     .seg-btn { inline-size: auto; margin: 0; padding: .38rem .8rem; font-size: .82rem; font-weight: 600; border: 0; background: var(--panel); color: var(--muted); cursor: pointer; }
     .seg-btn + .seg-btn { border-inline-start: 1px solid var(--control-border); }
     .seg-btn[aria-pressed="true"] { background: color-mix(in srgb, var(--focus) 16%, var(--panel)); color: var(--focus); }
     .seg-btn:focus-visible { outline: 3px solid color-mix(in srgb, var(--focus) 35%, transparent); outline-offset: -3px; }
-    /* Matrix (pivot) view: cases down, candidate×model across, colour-tinted score
+    /* Matrix (pivot) view: cases down, candidatexmodel across, colour-tinted score
        cells. Sticky header row + sticky case column keep both axes labelled while
        scrolling a large matrix. Colour is redundant to the always-visible number
        and status dot, so it stays readable for colour-vision deficiencies. */
@@ -628,7 +628,7 @@ _HTML_TEMPLATE = """<!doctype html>
         });
         quickFilter.value = initialState.get("q") || "";
         groupToggle.checked = initialState.get("group") === "1";
-        // Candidate×model combinations drive the matrix columns and decide whether
+        // Candidatexmodel combinations drive the matrix columns and decide whether
         // the Table/Matrix toggle is offered at all (a single combo has nothing to
         // pivot). Matrix is the default whenever more than one combo exists.
         const combos = [...new Set(cells.map(c => `${c.candidate_id}::${c.model_id}`))].sort();
@@ -702,7 +702,7 @@ _HTML_TEMPLATE = """<!doctype html>
         document.getElementById("export-csv").addEventListener("click", () => exportCsv(filterCells()));
         let selectedKey = null;
         // --- Matrix (pivot) view. Rows = cases grouped by category, columns =
-        // candidate×model, cells = colour-tinted score chips. Built from the same
+        // candidatexmodel, cells = colour-tinted score chips. Built from the same
         // filtered cells as the grid and routed through the same selectCell path,
         // so the inspector, deep-links, and highlight stay shared across views.
         const matrixScroll = document.querySelector("#results-matrix .matrix-scroll");
@@ -792,7 +792,7 @@ _HTML_TEMPLATE = """<!doctype html>
           });
         };
         // Table/Matrix toggle: matrix leads when there is more than one
-        // candidate×model to compare; the choice is shared via the URL hash.
+        // candidatexmodel to compare; the choice is shared via the URL hash.
         const gridEl = document.getElementById("results-grid");
         const matrixEl = document.getElementById("results-matrix");
         const viewToggle = document.getElementById("view-toggle");

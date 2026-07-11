@@ -14,7 +14,7 @@ from llm_sandbox_evals import cases
 from llm_sandbox_evals.agent_runner import build_agent, build_model_settings
 from llm_sandbox_evals.config import EvalConfig
 from llm_sandbox_evals.homes import get_home
-from llm_sandbox_evals.runtime import build_eval_runtime
+from llm_sandbox_evals.runtime import ToolBoundaryCallback, build_eval_runtime
 from llm_sandbox_evals.schema import CaseTrace, CheckResult, EvalCase, Expected, PromptCandidate, ToolEvent
 from llm_sandbox_evals.scoring import check_case, score_case
 from llm_sandbox_evals.tools import EVAL_SCOPE, _for_scoring, apply_scope
@@ -29,6 +29,7 @@ async def run_case(
     config: EvalConfig,
     *,
     profile: PromptProfile,
+    on_tool_boundary: ToolBoundaryCallback | None = None,
 ) -> CaseTrace:
     """Run one matrix cell through the production-core Pydantic AI agent."""
     # Branch boundary: setup failures occur before a model run exists, so they
@@ -38,7 +39,7 @@ async def run_case(
     try:
         fixture = get_home(case.home)
         snapshot = apply_scope(fixture.snapshot(), EVAL_SCOPE, anchor_device_id=case.llm_context.device_id)
-        runtime = build_eval_runtime(case, candidate, profile, snapshot, fixture)
+        runtime = build_eval_runtime(case, candidate, profile, snapshot, fixture, on_tool_boundary=on_tool_boundary)
         proposed_actions = runtime.invoker.calls
         agent = build_agent(runtime, model_id)
         with capture_run_messages() as captured:

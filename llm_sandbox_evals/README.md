@@ -11,16 +11,16 @@ scripts/setup-evals                      # uv sync --group dev --group evals
 uv run --group dev --group evals python -m llm_sandbox_evals eval --models stub
 ```
 
-The `stub` FunctionModel is deterministic and keyless — it validates the full pipeline (Pydantic AI agent -> production tool core -> terminal answer -> scoring -> native report) end to end. It prints the run directory and compact native analysis lines:
+The `stub` FunctionModel is deterministic and keyless — it validates the full pipeline (Pydantic AI agent -> production tool core -> terminal answer -> scoring -> native report) end to end. Stdout stays factual and machine-readable:
 
 ```text
-eval_data/runs/20260630-164326-318981
-
+run_dir: eval_data/runs/20260630-164326-318981
+report_html: eval_data/runs/20260630-164326-318981/report.html
 overall_mean: 0.858
 baseline/stub: mean=0.858 tool_calls=1.000
 ```
 
-Interactive runs also print the native `pydantic_evals` report summary on stderr. Every run writes `report.json` containing native analyses plus per-cell traces and auto-emits `report.html` for browser-based visual navigation; regenerate the HTML with `report <run_id> --html`.
+On a terminal, `eval` renders one live stderr view with overall progress, active matrix cells and tool phases, recent results, and totals, then a compact artifact summary. With redirected stderr, it emits readable lifecycle lines instead. Every run writes `report.json` containing native analyses plus per-cell traces and auto-emits `report.html` for browser-based visual navigation; regenerate the HTML with `report <run_id> --html`.
 
 ## Running real models
 
@@ -80,7 +80,7 @@ python -m llm_sandbox_evals optimize --target-model ID [--proposer-model ID] [--
 python -m llm_sandbox_evals report <run_id> [--html] [--runs-dir PATH]
 ```
 
-- `eval` builds a native `pydantic_evals.Dataset`, runs the matrix, prints the native `EvaluationReport` summary, and writes `report.json` plus interactive `report.html` artifacts under `eval_data/runs/<run_id>/`.
+- `eval` builds a native `pydantic_evals.Dataset`, runs the matrix with a stderr-only live terminal view (or line fallback when redirected), and writes `report.json` plus interactive `report.html` artifacts under `eval_data/runs/<run_id>/`.
 - `optimize` runs DSPy COPRO against one target model and cross-evaluates the winner (see _Optimizing the prompt_ above).
 - `report <run_id>` re-renders saved native analyses and cell scores from `report.json` and makes no model calls; add `--html` to regenerate `report.html` only.
 - `--cases` accepts case ids **or** category names (`state_read`, `registry_read`, `recorder_read`, `action_allowed`, `action_blocked`, `complex`, `recovery`).

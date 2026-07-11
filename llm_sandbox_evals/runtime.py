@@ -34,6 +34,8 @@ from homeassistant.util import dt as dt_util
 from llm_sandbox_evals.schema import EvalCase, PromptCandidate
 from llm_sandbox_evals.tools import EVAL_SCOPE, RecordingInvoker
 
+type ToolBoundaryCallback = Callable[[str, bool], None]
+
 
 @dataclass(frozen=True, slots=True)
 class EvalRuntime:
@@ -51,6 +53,7 @@ class EvalRuntime:
     automation_tool: GetAutomationTool
     automation_source: AutomationSource
     entry_id: str
+    on_tool_boundary: ToolBoundaryCallback | None = None
 
 
 def build_eval_runtime(
@@ -59,6 +62,8 @@ def build_eval_runtime(
     profile: PromptProfile,
     snapshot: HomeSnapshot,
     fixture: ModuleType,
+    *,
+    on_tool_boundary: ToolBoundaryCallback | None = None,
 ) -> EvalRuntime:
     """Build one production-core runtime over a fresh scoped fixture snapshot."""
     invoker = RecordingInvoker()
@@ -84,6 +89,7 @@ def build_eval_runtime(
         code_tool=ExecuteHomeCodeTool(entry_id),
         recorder_tools=(GetHistoryTool(entry_id), GetStatisticsTool(entry_id), GetLogbookTool(entry_id)),
         entry_id=entry_id,
+        on_tool_boundary=on_tool_boundary,
     )
 
 

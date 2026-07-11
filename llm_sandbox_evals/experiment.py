@@ -4,6 +4,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from time import perf_counter
+from typing import Literal
 
 from custom_components.llm_sandbox.llm_api.prompts import PromptProfile, resolve_profile
 from pydantic_evals import Case, Dataset
@@ -24,11 +25,8 @@ from llm_sandbox_evals.schema import CaseTrace, CheckResult, EvalCase, PromptCan
 from llm_sandbox_evals.scoring import is_incomplete, mean_score
 
 type MatrixCellMeta = dict[str, str | int]
-type ProgressCallback = Callable[[int, int, str, CaseTrace, float], None]
-"""Per-cell progress reporter: ``(index, total, cell_name, trace, elapsed_seconds)``.
-
-``index`` is the 1-based completion order (unique per cell) and ``elapsed_seconds``
-covers the single ``run_case`` call. Invoked synchronously from the event loop."""
+type MatrixEventCallback = Callable[[MatrixProgressEvent], None]
+type MatrixProgressState = Literal["matrix_started", "cell_started", "tool_started", "tool_finished", "cell_finished"]
 
 _SIZE_TIE_EPSILON = 0.005
 
@@ -42,6 +40,20 @@ class MatrixCellRef:
     model_id: str
     home: str
     category: str
+
+
+@dataclass(frozen=True, slots=True)
+class MatrixProgressEvent:
+    """Observer-only lifecycle fact for one matrix evaluation."""
+
+    state: MatrixProgressState
+    cell: MatrixCellRef | None = None
+    request: str | None = None
+    tool_name: str | None = None
+    trace: CaseTrace | None = None
+    elapsed: float | None = None
+    completion_index: int | None = None
+    total: int | None = None
 
 
 @dataclass(slots=True)
@@ -169,7 +181,7 @@ def make_matrix_task(
     case_by_id: dict[str, EvalCase],
     *,
     total: int,
-    on_complete: ProgressCallback | None = None,
+    on_event: MatrixEventCallback | None = None,
 ) -> Callable[[MatrixCellRef], Awaitable[CaseTrace]]:
     """Build the pydantic-evals task that preserves run_case snapshot/tool semantics."""
     completed = 0
@@ -178,15 +190,37 @@ def make_matrix_task(
         nonlocal completed
         candidate = candidate_by_id[cell.candidate_id]
         case = case_by_id[cell.case_id]
-        name = f"{candidate.id}/{cell.model_id}/{case.id}"
+        request = _presentation_request(case.user_request)
         start = perf_counter()
-        trace = await run_case(candidate, cell.model_id, case, config, profile=profile)
+        _emit_event(on_event, MatrixProgressEvent("cell_started", cell=cell, request=request, total=total))
+
+        def on_tool_boundary(tool_name: str, started: bool) -> None:
+            _emit_event(
+                on_event,
+                MatrixProgressEvent(
+                    "tool_started" if started else "tool_finished", cell=cell, request=request, tool_name=tool_name
+                ),
+            )
+
+        trace = await run_case(
+            candidate, cell.model_id, case, config, profile=profile, on_tool_boundary=on_tool_boundary
+        )
         elapsed = perf_counter() - start
         # Branch boundary: increment is synchronous (no await) so each cell gets a
         # unique completion index despite concurrent matrix evaluation.
         completed += 1
-        if on_complete is not None:
-            on_complete(completed, total, name, trace, elapsed)
+        _emit_event(
+            on_event,
+            MatrixProgressEvent(
+                "cell_finished",
+                cell=cell,
+                request=request,
+                trace=trace,
+                elapsed=elapsed,
+                completion_index=completed,
+                total=total,
+            ),
+        )
         return trace
 
     return task
@@ -197,7 +231,7 @@ async def run_matrix(
     *,
     run_id: str | None = None,
     logfire_enabled: bool = False,
-    on_complete: ProgressCallback | None = None,
+    on_event: MatrixEventCallback | None = None,
 ) -> EvaluationReport[MatrixCellRef, CaseTrace, MatrixCellMeta]:
     """Run the full matrix through one native pydantic-evals experiment."""
     # Branch boundary: direct callers may omit a run id, but each cell still gets one for Logfire/report joins.
@@ -211,13 +245,14 @@ async def run_matrix(
     candidates = prompts.load_candidates(config.candidates, config.prompt_profile)
     selected_cases = _select_cases(config.cases, config.homes)
     dataset = build_dataset(config, candidates, selected_cases, run_id)
+    _emit_event(on_event, MatrixProgressEvent("matrix_started", total=len(dataset.cases)))
     task = make_matrix_task(
         config,
         profile,
         {candidate.id: candidate for candidate in candidates},
         {case.id: case for case in selected_cases},
         total=len(dataset.cases),
-        on_complete=on_complete,
+        on_event=on_event,
     )
     return await dataset.evaluate(
         task,
@@ -226,6 +261,21 @@ async def run_matrix(
         progress=False,
         retry_task=None,
     )
+
+
+def _emit_event(callback: MatrixEventCallback | None, event: MatrixProgressEvent) -> None:
+    """Notify an optional presentation observer without affecting evaluation."""
+    if callback is None:
+        return
+    try:
+        callback(event)
+    except Exception:  # noqa: BLE001 - UI observers must not fail a matrix cell.
+        return
+
+
+def _presentation_request(request: str) -> str:
+    """Return a compact observer-only projection of a case's human request."""
+    return " ".join(request.split())[:240]
 
 
 def overall_mean(report: EvaluationReport[MatrixCellRef, CaseTrace, MatrixCellMeta]) -> float:
