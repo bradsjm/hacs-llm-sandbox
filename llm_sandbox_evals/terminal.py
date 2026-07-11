@@ -10,8 +10,9 @@ from rich.console import Console, Group
 from rich.live import Live
 from rich.markup import escape
 from rich.panel import Panel
-from rich.progress import BarColumn, Progress, ProgressColumn, SpinnerColumn, Task, TextColumn
+from rich.progress import BarColumn, Progress, ProgressColumn, SpinnerColumn, Task, TaskProgressColumn, TextColumn
 from rich.rule import Rule
+from rich.style import Style
 from rich.table import Column, Table
 from rich.text import Text
 
@@ -20,13 +21,14 @@ from llm_sandbox_evals.schema import CheckResult
 from llm_sandbox_evals.scoring import is_incomplete
 
 _ACTIVE = "#38b6ca"
-_PASS = "#55c97c"
-_FAIL = "#f2705f"
-_INCOMPLETE = "#d9a514"
+_SUCCESS = "#55c97c"
+_WARNING = "#d9a514"
+_ERROR = "#f2705f"
 _FAIL_GLYPH = "\u2717"
 _REFRESH_PER_SECOND = 4
 _RECENT_RESULTS = 5
 _MAX_DIAGNOSTIC_CHARS = 500
+_MODEL_METADATA_WIDTH = 18
 
 
 @dataclass(slots=True)
@@ -53,16 +55,17 @@ class _RecentResult:
 class _ElapsedColumn(ProgressColumn):
     """Render a monotonic task duration every time Rich refreshes a progress row."""
 
-    def __init__(self, prefix: str = "", *, table_column: Column | None = None) -> None:
+    def __init__(self, prefix: str = "", *, style: str = "dim", table_column: Column | None = None) -> None:
         """Initialize an optional neutral label before the duration."""
         super().__init__(table_column=table_column)
         self._prefix = prefix
+        self._style = style
 
     def render(self, task: Task) -> Text:
         """Return elapsed time from the stable task start rather than a stale field."""
         started_at = task.fields["started_at"]
         assert isinstance(started_at, float)
-        return Text(f"{self._prefix}{_duration(perf_counter() - started_at)}", style="dim")
+        return Text(f"{self._prefix}{_duration(perf_counter() - started_at)}", style=self._style)
 
 
 class MatrixTerminalReporter:
@@ -85,6 +88,8 @@ class MatrixTerminalReporter:
     def __enter__(self) -> Self:
         """Start exactly one Live composition when stderr is a terminal."""
         if self._console.is_terminal:
+            # State mutation point: clear stale terminal output before Live owns the screen.
+            self._console.clear(home=True)
             self._live = Live(
                 self._render(),
                 console=self._console,
@@ -139,16 +144,17 @@ class MatrixTerminalReporter:
         if self._console.is_terminal:
             self._stop_live()
             summary = Text()
-            _append_status(summary, "✓", "passed", self._passes, _PASS)
+            _append_status(summary, "✓", "passed", self._passes, _SUCCESS)
             summary.append("  ")
-            _append_status(summary, _FAIL_GLYPH, "needs attention", self._failures, _FAIL)
+            _append_status(summary, _FAIL_GLYPH, "needs attention", self._failures, _WARNING)
             summary.append("  ")
-            _append_status(summary, "!", "incomplete", self._incomplete, _INCOMPLETE)
+            _append_status(summary, "!", "incomplete", self._incomplete, _ERROR)
             summary.append(
-                f"\ncompleted {self._completed}/{self._total}  elapsed {elapsed}  overall mean {overall_mean:.3f}"
+                f"\ncompleted {self._completed}/{self._total}  tool calls {self._tool_calls}  "
+                f"elapsed {elapsed}  overall mean {overall_mean:.3f}"
             )
+            summary.append(f"\nreport.html {report_html}")
             summary.append(f"\nreport.json {run_dir}/report.json", style="dim")
-            summary.append(f"\nreport.html {report_html}", style="dim")
             self._console.print(
                 Panel(summary, title="Eval complete", border_style=_ACTIVE, box=box.ROUNDED, expand=False)
             )
@@ -176,7 +182,7 @@ class MatrixTerminalReporter:
         """Write a completed-cell error above Live without exposing tool payloads."""
         assert event.cell is not None
         line = Text()
-        line.append("error ", style=f"bold {_FAIL}")
+        line.append("error ", style=f"bold {_ERROR}")
         line.append(f"{_cell_name(event)} ({_cell_metadata(event.cell)}): ")
         line.append(diagnostic)
         # Rich's Console cooperates with Live to keep this durable diagnostic in scrollback.
@@ -209,20 +215,29 @@ class MatrixTerminalReporter:
             self._overall_progress(),
             Rule("Running now", style="dim"),
             self._lanes_progress(),
+            Text(),
             Rule("Recent", style="dim"),
             self._recent_table(),
+            Text(),
             self._totals(),
         )
 
     def _overall_progress(self) -> Progress:
         progress = Progress(
             TextColumn("Overall", table_column=Column(no_wrap=True)),
-            BarColumn(bar_width=None, complete_style=_ACTIVE, finished_style=_ACTIVE),
+            BarColumn(
+                bar_width=None,
+                style="grey37",
+                complete_style=_ACTIVE,
+                finished_style=_ACTIVE,
+            ),
+            TaskProgressColumn(style="#b8a1e8"),
             TextColumn(
                 "{task.fields[completed_display]}/{task.fields[total_display]}",
+                style="#a6d95a",
                 table_column=Column(no_wrap=True),
             ),
-            _ElapsedColumn("elapsed "),
+            _ElapsedColumn("elapsed ", style="#d9a514"),
             expand=True,
         )
         progress.add_task(
@@ -247,7 +262,7 @@ class MatrixTerminalReporter:
                 "{task.fields[metadata]}",
                 markup=True,
                 style="dim",
-                table_column=Column(ratio=1, no_wrap=True, overflow="ellipsis"),
+                table_column=Column(width=_MODEL_METADATA_WIDTH, no_wrap=True, overflow="ellipsis"),
             ),
             TextColumn(
                 "{task.fields[phase]}",
@@ -261,37 +276,43 @@ class MatrixTerminalReporter:
             progress.add_task(
                 escape(lane.request),
                 total=None,
-                metadata=escape(_cell_metadata(lane.cell)),
+                metadata=escape(_left_ellipsis(lane.cell.model_id, _MODEL_METADATA_WIDTH)),
                 phase=escape(_lane_phase(lane.active_tools)),
                 started_at=lane.started_at,
             )
         return progress
 
     def _recent_table(self) -> Table:
-        table = Table(box=None, expand=True, pad_edge=False, show_header=True, header_style="dim")
+        table = Table(
+            box=None,
+            expand=True,
+            pad_edge=False,
+            show_header=True,
+            header_style=Style(color=_ACTIVE, bold=False),
+        )
         table.add_column("", width=1, no_wrap=True)
-        table.add_column("Request", ratio=4, no_wrap=True, overflow="ellipsis")
-        table.add_column("Outcome", no_wrap=True, overflow="ellipsis")
-        table.add_column("Reason", ratio=2, no_wrap=True, overflow="ellipsis")
-        table.add_column("Tools", justify="right", no_wrap=True)
+        table.add_column("Request", ratio=3, no_wrap=True, overflow="ellipsis")
+        table.add_column("Outcome", width=18, no_wrap=True, overflow="ellipsis")
+        table.add_column("Reason", ratio=4, no_wrap=True, overflow="ellipsis")
+        table.add_column("Calls", width=5, justify="right", no_wrap=True)
         for result in reversed(self._recent):
             glyph, style = _outcome_glyph(result.outcome)
             table.add_row(
                 Text(glyph, style=style),
                 _safe_text(result.request),
-                result.outcome,
-                result.reason,
+                Text(result.outcome, style=style),
+                Text(result.reason),
                 str(result.tool_calls),
             )
         return table
 
     def _totals(self) -> Text:
         footer = Text()
-        _append_status(footer, "✓", "passed", self._passes, _PASS)
+        _append_status(footer, "✓", "passed", self._passes, _SUCCESS)
         footer.append("  ")
-        _append_status(footer, _FAIL_GLYPH, "needs attention", self._failures, _FAIL)
+        _append_status(footer, _FAIL_GLYPH, "needs attention", self._failures, _WARNING)
         footer.append("  ")
-        _append_status(footer, "!", "incomplete", self._incomplete, _INCOMPLETE)
+        _append_status(footer, "!", "incomplete", self._incomplete, _ERROR)
         footer.append(f"  completed {self._completed}/{self._total}  tool calls {self._tool_calls}", style="dim")
         return footer
 
@@ -337,6 +358,13 @@ def _cell_metadata(cell: MatrixCellRef) -> str:
     return f"{cell.candidate_id} · {cell.model_id} · {cell.case_id}"
 
 
+def _left_ellipsis(value: str, width: int) -> str:
+    """Keep the rightmost model identifier text when a bounded metadata field overflows."""
+    if len(value) <= width:
+        return value
+    return f"…{value[-(width - 1) :]}"
+
+
 def _failure_reason(checks: tuple[CheckResult, ...]) -> str:
     """Return a short friendly first-failure label without exposing raw feedback."""
     for check in checks:
@@ -369,9 +397,9 @@ def _lane_phase(active_tools: Counter[str]) -> str:
 def _outcome_glyph(outcome: str) -> tuple[str, str]:
     """Return a semantic glyph and restrained style for a completed result."""
     return {
-        "Completed": ("✓", _PASS),
-        "Needs attention": (_FAIL_GLYPH, _FAIL),
-        "Could not complete": ("!", _INCOMPLETE),
+        "Completed": ("✓", _SUCCESS),
+        "Needs attention": (_FAIL_GLYPH, _WARNING),
+        "Could not complete": ("!", _ERROR),
     }[outcome]
 
 

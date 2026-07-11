@@ -9,18 +9,101 @@ artifact explanations, and next steps — is written to ``stderr`` so piping
 
 import argparse
 import asyncio
+from collections.abc import Callable
 from datetime import UTC, datetime
+import os
 from pathlib import Path
 import sys
+import termios
+import tty
+from typing import cast
 
 from custom_components.llm_sandbox.llm_api.prompts import resolve_profile
 from dotenv import load_dotenv
+from pydantic_evals.reporting import EvaluationReport
 from rich.console import Console
 
 from llm_sandbox_evals import experiment, html_report, reports
 from llm_sandbox_evals.config import EvalConfig, load_config
+from llm_sandbox_evals.experiment import MatrixCellMeta, MatrixCellRef
 from llm_sandbox_evals.harness import _select_cases
+from llm_sandbox_evals.schema import CaseTrace
 from llm_sandbox_evals.terminal import MatrixTerminalReporter
+
+type _TermiosSettings = list[int | list[bytes | int]]
+
+_ESCAPE_DELAY_SECONDS = 0.05
+
+
+class _EvalCancelled(Exception):
+    """Signal an Escape-initiated interactive eval cancellation."""
+
+
+class _EscapeWatcher:
+    """Read Escape in cbreak mode for one interactive eval and restore the terminal."""
+
+    def __init__(self, on_escape: Callable[[], object]) -> None:
+        """Store the matrix-cancellation callback without touching terminal state yet."""
+        self._on_escape = on_escape
+        self._fd: int | None = None
+        self._settings: _TermiosSettings | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._escape_handle: asyncio.TimerHandle | None = None
+        self.cancelled = False
+
+    def __enter__(self) -> _EscapeWatcher:
+        """Enter cbreak mode and watch stdin only for the active interactive eval."""
+        self._fd = sys.stdin.fileno()
+        self._settings = cast(_TermiosSettings, termios.tcgetattr(self._fd))
+        self._loop = asyncio.get_running_loop()
+        try:
+            tty.setcbreak(self._fd)
+            self._loop.add_reader(self._fd, self._read_input)
+        except Exception:
+            termios.tcsetattr(self._fd, termios.TCSADRAIN, self._settings)
+            raise
+        return self
+
+    def __exit__(self, _exc_type: object, _exc_value: object, _traceback: object) -> None:
+        """Remove the reader and restore stdin on every completion or cancellation path."""
+        self._cancel_pending_escape()
+        if self._loop is not None and self._fd is not None:
+            self._loop.remove_reader(self._fd)
+        if self._settings is not None and self._fd is not None:
+            termios.tcsetattr(self._fd, termios.TCSADRAIN, self._settings)
+
+    def _read_input(self) -> None:
+        """Cancel the current matrix task when the user presses Escape."""
+        assert self._fd is not None
+        try:
+            pressed = os.read(self._fd, 1)
+        except OSError:
+            return
+        self._handle_input(pressed)
+
+    def _handle_input(self, pressed: bytes) -> None:
+        """Delay lone Escape cancellation so arrow and Alt sequences remain usable."""
+        if self._escape_handle is not None:
+            # Branch boundary: any following byte makes the pending Escape part of a sequence.
+            self._cancel_pending_escape()
+            return
+        if pressed != b"\x1b":
+            return
+        assert self._loop is not None
+        self._escape_handle = self._loop.call_later(_ESCAPE_DELAY_SECONDS, self._cancel_lone_escape)
+
+    def _cancel_lone_escape(self) -> None:
+        """Cancel the active matrix after Escape remained standalone for one short delay."""
+        self._escape_handle = None
+        # State mutation point: only a standalone Escape requests matrix cancellation.
+        self.cancelled = True
+        self._on_escape()
+
+    def _cancel_pending_escape(self) -> None:
+        """Discard a pending lone-Escape timer during input continuation or cleanup."""
+        if self._escape_handle is not None:
+            self._escape_handle.cancel()
+            self._escape_handle = None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -98,7 +181,8 @@ def _add_eval_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPar
             "  - --prompt-profile selects one production base prompt profile for\n"
             "    the whole run; it is separate from --candidates.\n"
             "  - A failing model call (bad key, network) scores 0.0 for that cell and\n"
-            "    never aborts the run."
+            "    never aborts the run.\n"
+            "  - Press Escape to cancel an interactive eval run."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -317,10 +401,13 @@ def _run_eval(args: argparse.Namespace) -> int:
         temperature=args.temperature,
     )
     run_id = _derive_run_id()
-    with MatrixTerminalReporter() as reporter:
-        report = asyncio.run(
-            experiment.run_matrix(config, run_id=run_id, logfire_enabled=args.logfire, on_event=reporter.handle)
-        )
+    try:
+        with MatrixTerminalReporter() as reporter:
+            report = asyncio.run(_run_eval_matrix(config, run_id, args.logfire, reporter))
+    except _EvalCancelled:
+        sys.stderr.write("eval cancelled\n")
+        return 130
+    else:
         run_dir = reports.write_report_json(report, config, run_id=run_id)
         report_html = html_report.write_html(run_dir)
         reporter.finish(
@@ -332,6 +419,30 @@ def _run_eval(args: argparse.Namespace) -> int:
     sys.stdout.write(f"report_html: {report_html}\n")
     sys.stdout.write("\n".join(experiment.matrix_summary_lines(report)) + "\n")
     return 0
+
+
+async def _run_eval_matrix(
+    config: EvalConfig, run_id: str, logfire_enabled: bool, reporter: MatrixTerminalReporter
+) -> EvaluationReport[MatrixCellRef, CaseTrace, MatrixCellMeta]:
+    """Run one matrix, allowing Escape to cancel only interactive terminal sessions."""
+    task = asyncio.create_task(
+        experiment.run_matrix(config, run_id=run_id, logfire_enabled=logfire_enabled, on_event=reporter.handle)
+    )
+    # Branch boundary: redirected streams retain their existing non-interactive behavior.
+    if not _is_interactive_eval():
+        return await task
+    with _EscapeWatcher(task.cancel) as watcher:
+        try:
+            return await task
+        except asyncio.CancelledError:
+            if watcher.cancelled:
+                raise _EvalCancelled from None
+            raise
+
+
+def _is_interactive_eval() -> bool:
+    """Return whether both streams support the cbreak Escape interaction."""
+    return sys.stdin.isatty() and sys.stderr.isatty()
 
 
 def _run_report(args: argparse.Namespace) -> int:
