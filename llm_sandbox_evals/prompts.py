@@ -1,7 +1,7 @@
 """Prompt and function-schema assembly for the dev-only eval harness."""
 
-import json
 from dataclasses import replace
+import json
 from pathlib import Path
 
 from custom_components.llm_sandbox.const import (
@@ -9,6 +9,7 @@ from custom_components.llm_sandbox.const import (
 )
 from custom_components.llm_sandbox.llm_api.prompts import (
     build_execute_home_code_description,
+    build_get_automation_description,
     build_get_history_description,
     build_get_logbook_description,
     build_get_statistics_description,
@@ -35,6 +36,7 @@ def candidate_prompt_sizes(candidate: PromptCandidate) -> tuple[int, int]:
         + len(candidate.get_history_description)
         + len(candidate.get_statistics_description)
         + len(candidate.get_logbook_description)
+        + len(candidate.get_automation_description)
     )
     return api_prompt_chars, authored_prompt_chars
 
@@ -49,6 +51,7 @@ def baseline_candidate(prompt_profile_id: str = DEFAULT_PROMPT_PROFILE) -> Promp
         get_history_description=build_get_history_description(),
         get_statistics_description=build_get_statistics_description(),
         get_logbook_description=build_get_logbook_description(),
+        get_automation_description=build_get_automation_description(),
     )
 
 
@@ -87,6 +90,7 @@ def _load_optimized(path: str) -> PromptCandidate:
         get_history_description=_string_field(decoded, "get_history_description"),
         get_statistics_description=_string_field(decoded, "get_statistics_description"),
         get_logbook_description=_string_field(decoded, "get_logbook_description"),
+        get_automation_description=_string_field(decoded, "get_automation_description"),
     )
 
 

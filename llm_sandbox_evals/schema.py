@@ -23,6 +23,7 @@ class PromptCandidate:
     get_history_description: str
     get_statistics_description: str
     get_logbook_description: str
+    get_automation_description: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,6 +55,9 @@ class ToolResultCheck:
     fields: tuple[str, ...] = ()
     period: str | None = None
     entry_values_by_entity: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    field_values_by_entity: dict[str, dict[str, object]] = field(default_factory=dict)
+    content_action_target_by_entity: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    first_run_when_by_entity: dict[str, str] = field(default_factory=dict)
     entry_values: tuple[str, ...] = ()
     min_results: int = 1
 

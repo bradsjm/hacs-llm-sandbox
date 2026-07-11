@@ -27,6 +27,7 @@ def test_load_candidates_accepts_profile_candidate() -> None:
         get_history_description="Candidate history capability. Extra detail.",
         get_statistics_description="Candidate statistics capability. Extra detail.",
         get_logbook_description="Candidate logbook capability. Extra detail.",
+        get_automation_description="Candidate automation capability. Extra detail.",
     )
     case = EvalCase(
         id="candidate-tool-descriptions",
@@ -53,6 +54,7 @@ def test_load_candidates_accepts_profile_candidate() -> None:
         "get_history": candidate.get_history_description,
         "get_statistics": candidate.get_statistics_description,
         "get_logbook": candidate.get_logbook_description,
+        "get_automation": candidate.get_automation_description,
     }
     for tool in tools:
         assert f"- {tool.name}: {tool.description.split('. ', 1)[0]}." in prompt

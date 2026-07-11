@@ -74,6 +74,15 @@ Because the sandbox forbids `timedelta`/arithmetic, "last N hours" is expressed 
 ### Errors carry actionable guidance
 Recoverable tool errors (`tool_error_envelope` in `errors.py`) and errored service actions carry a stable `key`, a single specific `message` (never the key itself), and an optional `guidance` object. The guidance payload is `{confidence, candidates, reason, next_step, cross_kind}` where candidates are bounded, ranked objects with `id`, `name`, `match`, and `detail`. Stable keys remain translated in `translations/en.json` for the human contract; `message`/`guidance` are the LLM-facing remediation that targets success on the next call. The structured `guidance` object replaces the old flat `fix` list entirely; there is no compatibility shim.
 
+### Production query cores are the eval seam
+Every tool intended for model-capability evals must expose a hass-free production entry point, following `execute_home_code.run_execute`, recorder `run_query`, and automation `run_query`. The live `async_call` owns schema validation, entry setup, Home Assistant authorization, visibility or permission filtering, and collection from live components. It then converts those sources into frozen or copied JSON-compatible records and delegates selection, projection, windowing, ordering, pagination, and stable error behavior to the same production query core used by eval fixtures.
+
+Do not implement an eval-only copy of tool behavior, construct fake live Home Assistant objects, or let fixture adapters reproduce search/projection/pagination logic. The query core accepts explicit typed source records and fetcher callables, never live `hass`, users, registries, recorder/component instances, service handles, or auth objects. Source availability and fixed time belong in that typed source so missing integrations behave identically in live and fixture-backed calls.
+
+Keep expensive projections lazy at the live boundary: broad summary queries must not copy full configuration, images, histories, or other large values unless the validated projection requests them. A refactor for evalability must preserve production authorization, performance, response envelopes, cursor semantics, and error keys.
+
+When adding a public tool, keep the eval surface aligned where model use is worth measuring: candidate descriptions, runtime adapters, registered-tool scoring, frozen fixtures, generated case schema, and a small number of natural user cases. Eval gates should require structured evidence from the intended projection, not incidental record-wide tokens, exact answer prose, tool-call argument choreography, or values available from a cheaper projection. Unit/integration tests continue to own authorization, malformed input, pagination, and other tool-contract behavior.
+
 ### Where new forgiveness lives
 New accommodation belongs as code in this package, keeping `prompts.py` to a statement of available surface — not a list of integration-specific rules the LLM must obey. The sanctioned seams are:
 - **Forgiveness pipeline** (`normalization/`): append a `RewriteRule` to the ordered registry, with its safety precondition explicit in `apply`; the engine's single scope/shadow model and framework-level fail-open gate cover every rule.
@@ -82,3 +91,4 @@ New accommodation belongs as code in this package, keeping `prompts.py` to a sta
 - **Guidance engine** (`guidance/advise()`): rank recovery candidates, apply confidence policy, and produce structured `guidance` instead of ad-hoc suggestions.
 - **Facade behavior** (`facades/`, `resolution.py`): adapt an HA call shape, or exact/unique-resolve before routing unresolved recovery through guidance.
 - **Record enrichment** (`snapshot/models.py` + `snapshot/builder.enrich_states`): add a derived join field that removes a manual join.
+- **Eval query seam** (`tools/*::run_query` / `run_execute`): keep live collection outside a shared hass-free production core so fixtures exercise the real tool behavior rather than an emulator.

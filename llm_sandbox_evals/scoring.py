@@ -1,8 +1,8 @@
 """Outcome-evidence scoring for eval case results."""
 
+from collections.abc import Iterable, Mapping, Sequence
 import json
 import re
-from collections.abc import Iterable, Mapping, Sequence
 
 from llm_sandbox_evals.schema import (
     BlockedOutcome,
@@ -20,6 +20,7 @@ _REGISTERED_TOOL_NAMES = frozenset(
         "get_history",
         "get_logbook",
         "get_statistics",
+        "get_automation",
     }
 )
 _GUIDANCE_PASSING_CONFIDENCE = frozenset({"exact", "high", "ambiguous"})
@@ -422,7 +423,65 @@ def _tool_result_failures(
         return _statistics_result_failures(expected, output)
     if expected.tool_name == "get_logbook":
         return _logbook_result_failures(expected, output, args)
+    if expected.tool_name == "get_automation":
+        return _automation_result_failures(expected, output)
     return ["unsupported_tool"]
+
+
+def _automation_result_failures(expected: ToolResultCheck, output: Mapping[str, object]) -> list[str]:
+    """Require structured evidence from returned automation records."""
+    automations = output.get("automations")
+    if not isinstance(automations, list):
+        return ["missing_automations"]
+    if expected.min_results == 0 and automations:
+        return ["unexpected_results"]
+    if len(automations) < expected.min_results:
+        return ["empty_automations"]
+    failures: list[str] = []
+    records = [record for record in automations if isinstance(record, Mapping)]
+    for entity_id in expected.entity_ids:
+        record = next((item for item in records if item.get("entity_id") == entity_id), None)
+        if record is None:
+            failures.append(f"missing_automation:{entity_id}")
+            continue
+        fields = record.keys()
+        failures.extend(f"fields:{entity_id}:{field}" for field in expected.fields if field not in fields)
+        expected_field_values = expected.field_values_by_entity.get(entity_id, {})
+        failures.extend(
+            f"field_value:{entity_id}:{field}"
+            for field, value in expected_field_values.items()
+            if record.get(field) != value
+        )
+        expected_targets = expected.content_action_target_by_entity.get(entity_id)
+        if expected_targets is not None:
+            content = record.get("content")
+            action = content.get("action") if isinstance(content, Mapping) else None
+            target = action.get("target") if isinstance(action, Mapping) else None
+            target_entity_ids = target.get("entity_id") if isinstance(target, Mapping) else None
+            actual_targets = set(strings_from_value(target_entity_ids))
+            failures.extend(
+                f"content_action_target:{entity_id}:{target_entity_id}"
+                for target_entity_id in expected_targets
+                if target_entity_id not in actual_targets
+            )
+        expected_first_run = expected.first_run_when_by_entity.get(entity_id)
+        if expected_first_run is not None:
+            runs = record.get("runs")
+            first_run = runs[0] if isinstance(runs, list) and runs else None
+            actual_when = first_run.get("when") if isinstance(first_run, Mapping) else None
+            if actual_when != expected_first_run:
+                failures.append(f"first_run_when:{entity_id}")
+        values = (*expected.entry_values, *expected.entry_values_by_entity.get(entity_id, ()))
+        blob = json.dumps(record, ensure_ascii=False, sort_keys=True, default=str).lower()
+        failures.extend(
+            f"missing_entry_value:{entity_id}:{value}" for value in values if not _token_present(value, blob)
+        )
+    if not expected.entity_ids:
+        blob = json.dumps(records, ensure_ascii=False, sort_keys=True, default=str).lower()
+        failures.extend(
+            f"missing_entry_value:{value}" for value in expected.entry_values if not _token_present(value, blob)
+        )
+    return failures
 
 
 def _combined_execute_output(events: Sequence[ToolEvent]) -> dict[str, object]:

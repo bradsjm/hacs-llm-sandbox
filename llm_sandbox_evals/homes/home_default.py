@@ -28,6 +28,7 @@ NAME: str = "home_default"
 CREATED_AT: str = "2026-06-29T12:00:00+00:00"
 
 type RecorderData = dict[str, object]
+type AutomationData = dict[str, object]
 type StateRecord = tuple[str, str, str, str, dict[str, object]]
 type EntityRecord = tuple[
     str,
@@ -387,6 +388,79 @@ def recorder() -> RecorderData:
             "switch.dehumidifier": [
                 {"when": "2026-06-29T09:15:00+00:00", "name": "Bedroom Dehumidifier", "message": "turned off"},
             ],
+        },
+    }
+
+
+def automation() -> AutomationData:
+    """Return copied direct-automation records and raw trigger rows."""
+    return {
+        "records": [
+            {
+                "entity_id": "automation.living_scene_4f7a",
+                "title": "Evening Living Room Lights",
+                "state": "on",
+                "is_on": True,
+                "available": True,
+                "mode": "single",
+                "last_triggered": "2026-06-28T22:15:00+00:00",
+                "description": "Turns on the living room light in the evening.",
+                "labels": [{"id": "label_evening", "name": "Evening"}],
+                "references": {
+                    "entities": [{"id": "light.living", "name": "Living Room Light"}],
+                    "areas": [{"id": "area_living", "name": "Living Room"}],
+                    "labels": [{"id": "label_evening", "name": "Evening"}],
+                },
+                "search_terms": (
+                    "Evening Living Room Lights",
+                    "automation.living_scene_4f7a",
+                    "Living Room Light",
+                    "Living Room",
+                    "Evening",
+                ),
+                "content": {
+                    "id": "living_scene_4f7a",
+                    "alias": "Evening Living Room Lights",
+                    "trigger": {"platform": "sun", "event": "sunset"},
+                    "action": {"service": "light.turn_on", "target": {"entity_id": "light.living"}},
+                },
+            },
+            {
+                "entity_id": "automation.morning_bedroom_lights",
+                "title": "Morning Bedroom Lights",
+                "state": "off",
+                "is_on": False,
+                "available": True,
+                "mode": "single",
+                "search_terms": ("Morning Bedroom Lights", "automation.morning_bedroom_lights", "Bedroom"),
+                "content": {"id": "morning_bedroom_lights", "trigger": {"platform": "time"}},
+            },
+            {
+                "entity_id": "automation.office_quiet_hours",
+                "title": "Office Quiet Hours",
+                "state": "on",
+                "is_on": True,
+                "available": True,
+                "mode": "restart",
+                "search_terms": ("Office Quiet Hours", "automation.office_quiet_hours", "Office"),
+                "content": {"id": "office_quiet_hours", "trigger": {"platform": "time"}},
+            },
+        ],
+        "runs": {
+            "automation.living_scene_4f7a": [
+                {
+                    "entity_id": "automation.living_scene_4f7a",
+                    "when": "2026-06-28T20:00:00+00:00",
+                    "name": "Evening Living Room Lights",
+                    "message": "triggered",
+                },
+                {
+                    "entity_id": "automation.living_scene_4f7a",
+                    "when": "2026-06-28T22:15:00+00:00",
+                    "name": "Evening Living Room Lights",
+                    "message": "triggered",
+                },
+            ]
         },
     }
 

@@ -3,15 +3,15 @@
 # mypy: disable-error-code="misc"
 
 import asyncio
-import json
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
+import json
 from pathlib import Path
 from typing import Any
 
-import dspy
 from custom_components.llm_sandbox.llm_api.prompts import PromptProfile, resolve_profile
+import dspy
 
 from llm_sandbox_evals import experiment, prompts, reports
 from llm_sandbox_evals.config import EvalConfig
@@ -242,6 +242,7 @@ def save_candidate(candidate: PromptCandidate, path: Path) -> None:
         "get_history_description": candidate.get_history_description,
         "get_statistics_description": candidate.get_statistics_description,
         "get_logbook_description": candidate.get_logbook_description,
+        "get_automation_description": candidate.get_automation_description,
     }
     path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 

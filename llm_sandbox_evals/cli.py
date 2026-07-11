@@ -9,9 +9,9 @@ artifact explanations, and next steps — is written to ``stderr`` so piping
 
 import argparse
 import asyncio
-import sys
 from datetime import UTC, datetime
 from pathlib import Path
+import sys
 
 from custom_components.llm_sandbox.llm_api.prompts import resolve_profile
 from dotenv import load_dotenv

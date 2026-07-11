@@ -1,19 +1,25 @@
 """Fixture-backed runtime assembly for production-core eval execution."""
 
 import asyncio
-import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+import time
 from types import ModuleType
 from typing import cast
 
 from custom_components.llm_sandbox.const import DEFAULT_SERVICE_CALL_LIMIT
 from custom_components.llm_sandbox.llm_api.data.history import HistoryRow, flat_history_rows
-from custom_components.llm_sandbox.llm_api.executor_support import ExecutionState
+from custom_components.llm_sandbox.llm_api.errors import RecoverableToolError
+from custom_components.llm_sandbox.llm_api.executor_support import ExecutionState, json_safe
 from custom_components.llm_sandbox.llm_api.prompts import PromptProfile
 from custom_components.llm_sandbox.llm_api.resolution_memory import ResolutionMemory
 from custom_components.llm_sandbox.llm_api.sandbox_context import RuntimeContext
+from custom_components.llm_sandbox.llm_api.tools.automation import (
+    AutomationRecord,
+    AutomationSource,
+    GetAutomationTool,
+)
 from custom_components.llm_sandbox.llm_api.tools.code import ExecuteHomeCodeTool
 from custom_components.llm_sandbox.llm_api.tools.recorder import (
     GetHistoryTool,
@@ -42,6 +48,8 @@ class EvalRuntime:
     runtime_context_factory: Callable[[], RuntimeContext]
     code_tool: ExecuteHomeCodeTool
     recorder_tools: tuple[GetHistoryTool | GetStatisticsTool | GetLogbookTool, ...]
+    automation_tool: GetAutomationTool
+    automation_source: AutomationSource
     entry_id: str
 
 
@@ -69,6 +77,8 @@ def build_eval_runtime(
         snapshot=snapshot,
         settings=settings,
         recorder_source=build_fixture_recorder_source(snapshot, fixture),
+        automation_tool=GetAutomationTool(entry_id),
+        automation_source=build_fixture_automation_source(snapshot, fixture),
         invoker=invoker,
         runtime_context_factory=_eval_runtime_context_factory(case, snapshot, settings, invoker, fixture),
         code_tool=ExecuteHomeCodeTool(entry_id),
@@ -116,6 +126,46 @@ def build_fixture_recorder_source(snapshot: HomeSnapshot, fixture: ModuleType) -
         fetch_statistics=fetch_statistics,
         fetch_logbook=fetch_logbook,
     )
+
+
+def build_fixture_automation_source(snapshot: HomeSnapshot, fixture: ModuleType) -> AutomationSource:
+    """Build the production automation source over copied fixture values."""
+    if not hasattr(fixture, "automation"):
+
+        async def unavailable(
+            _entity_ids: list[str], _start: datetime, _end: datetime
+        ) -> Mapping[str, list[dict[str, object]]]:
+            raise RecoverableToolError("automation_unavailable", {})
+
+        return AutomationSource(_parse_datetime(snapshot.created_at), False, True, (), unavailable)
+
+    data = cast(Callable[[], dict[str, object]], fixture.automation)()
+    raw_records = cast(list[dict[str, object]], data["records"])
+    records = tuple(
+        AutomationRecord(
+            entity_id=str(raw_record["entity_id"]),
+            summary=cast(
+                dict[str, object],
+                json_safe({key: value for key, value in raw_record.items() if key not in {"content", "search_terms"}}),
+            ),
+            search_terms=tuple(str(term) for term in cast(tuple[object, ...], raw_record["search_terms"])),
+            content=cast(dict[str, object] | None, json_safe(raw_record.get("content")))
+            if isinstance(raw_record.get("content"), Mapping)
+            else None,
+        )
+        for raw_record in raw_records
+    )
+    raw_runs = cast(dict[str, list[dict[str, object]]], data.get("runs", {}))
+
+    async def fetch_runs(
+        entity_ids: list[str], start: datetime, end: datetime
+    ) -> Mapping[str, list[dict[str, object]]]:
+        return {
+            entity_id: [dict(row) for row in raw_runs.get(entity_id, ()) if start <= _logbook_timestamp(row) <= end]
+            for entity_id in entity_ids
+        }
+
+    return AutomationSource(_parse_datetime(snapshot.created_at), True, True, records, fetch_runs)
 
 
 def _eval_runtime_context_factory(

@@ -26,6 +26,9 @@ cases:
         fields: []
         period: null
         entry_values_by_entity: {}
+        field_values_by_entity: {}
+        content_action_target_by_entity: {}
+        first_run_when_by_entity: {}
         entry_values:
         - '23.4'
         min_results: 1
@@ -64,6 +67,9 @@ cases:
         fields: []
         period: null
         entry_values_by_entity: {}
+        field_values_by_entity: {}
+        content_action_target_by_entity: {}
+        first_run_when_by_entity: {}
         entry_values:
         - 'off'
         min_results: 1
@@ -102,6 +108,9 @@ cases:
         fields: []
         period: null
         entry_values_by_entity: {}
+        field_values_by_entity: {}
+        content_action_target_by_entity: {}
+        first_run_when_by_entity: {}
         entry_values:
         - 'off'
         min_results: 1
@@ -236,6 +245,9 @@ cases:
         fields: []
         period: null
         entry_values_by_entity: {}
+        field_values_by_entity: {}
+        content_action_target_by_entity: {}
+        first_run_when_by_entity: {}
         entry_values:
         - '24.4'
         - '25.2'
@@ -279,6 +291,9 @@ cases:
         - mean
         period: hour
         entry_values_by_entity: {}
+        field_values_by_entity: {}
+        content_action_target_by_entity: {}
+        first_run_when_by_entity: {}
         entry_values:
         - '61.0'
         - '64.0'
@@ -319,6 +334,9 @@ cases:
         fields: []
         period: null
         entry_values_by_entity: {}
+        field_values_by_entity: {}
+        content_action_target_by_entity: {}
+        first_run_when_by_entity: {}
         entry_values:
         - turned off
         - turned on
@@ -713,6 +731,9 @@ cases:
         fields: []
         period: null
         entry_values_by_entity: {}
+        field_values_by_entity: {}
+        content_action_target_by_entity: {}
+        first_run_when_by_entity: {}
         entry_values:
         - Evening
         - 'on'
@@ -756,6 +777,9 @@ cases:
         fields: []
         period: null
         entry_values_by_entity: {}
+        field_values_by_entity: {}
+        content_action_target_by_entity: {}
+        first_run_when_by_entity: {}
         entry_values:
         - '24.4'
         - '25.2'
@@ -764,7 +788,6 @@ cases:
       answer_excludes: []
       actions: []
       guidance_candidate: null
-      # One composed execute call avoids a discovery round before recorder access.
       tool_call_par: 1
       max_tool_calls: 10
     action_domains: []
@@ -799,6 +822,9 @@ cases:
         fields: []
         period: null
         entry_values_by_entity: {}
+        field_values_by_entity: {}
+        content_action_target_by_entity: {}
+        first_run_when_by_entity: {}
         entry_values:
         - '25.2'
         min_results: 1
@@ -812,7 +838,6 @@ cases:
         service_data:
           percentage: 50
       guidance_candidate: null
-      # History-derived actions must complete inside one execute_home_code call.
       tool_call_par: 1
       max_tool_calls: 10
     action_domains: []
@@ -845,6 +870,9 @@ cases:
         fields: []
         period: null
         entry_values_by_entity: {}
+        field_values_by_entity: {}
+        content_action_target_by_entity: {}
+        first_run_when_by_entity: {}
         entry_values:
         - turned on
         min_results: 1
@@ -857,7 +885,6 @@ cases:
         - light.living
         service_data: null
       guidance_candidate: null
-      # Logbook-derived actions must complete inside one execute_home_code call.
       tool_call_par: 1
       max_tool_calls: 10
     action_domains: []
@@ -890,6 +917,9 @@ cases:
         fields: []
         period: null
         entry_values_by_entity: {}
+        field_values_by_entity: {}
+        content_action_target_by_entity: {}
+        first_run_when_by_entity: {}
         entry_values:
         - 'on'
         min_results: 1
@@ -902,7 +932,6 @@ cases:
         - light.living
         service_data: null
       guidance_candidate: null
-      # History-derived actions must complete inside one execute_home_code call.
       tool_call_par: 1
       max_tool_calls: 10
     action_domains: []
@@ -936,6 +965,9 @@ cases:
         fields: []
         period: null
         entry_values_by_entity: {}
+        field_values_by_entity: {}
+        content_action_target_by_entity: {}
+        first_run_when_by_entity: {}
         entry_values:
         - 'on'
         - turned on
@@ -944,7 +976,6 @@ cases:
       answer_excludes: []
       actions: []
       guidance_candidate: null
-      # Current state and logbook activity are dependent evidence in one call.
       tool_call_par: 1
       max_tool_calls: 10
     action_domains: []
@@ -978,6 +1009,9 @@ cases:
         fields: []
         period: null
         entry_values_by_entity: {}
+        field_values_by_entity: {}
+        content_action_target_by_entity: {}
+        first_run_when_by_entity: {}
         entry_values:
         - 'on'
         - '2026-06-29T12:00:00+00:00'
@@ -1020,6 +1054,9 @@ cases:
         fields: []
         period: null
         entry_values_by_entity: {}
+        field_values_by_entity: {}
+        content_action_target_by_entity: {}
+        first_run_when_by_entity: {}
         entry_values:
         - '25.2'
         min_results: 3
@@ -1031,6 +1068,9 @@ cases:
         - mean
         period: hour
         entry_values_by_entity: {}
+        field_values_by_entity: {}
+        content_action_target_by_entity: {}
+        first_run_when_by_entity: {}
         entry_values:
         - '64.0'
         min_results: 2
@@ -1038,7 +1078,6 @@ cases:
       answer_excludes: []
       actions: []
       guidance_candidate: null
-      # Independent history and statistics calls may share one parallel round.
       tool_call_par: 2
       max_tool_calls: 10
     action_domains: []
@@ -1071,6 +1110,9 @@ cases:
         fields: []
         period: null
         entry_values_by_entity: {}
+        field_values_by_entity: {}
+        content_action_target_by_entity: {}
+        first_run_when_by_entity: {}
         entry_values:
         - turned off
         - turned on
@@ -1079,7 +1121,6 @@ cases:
       answer_excludes: []
       actions: []
       guidance_candidate: null
-      # This is direct activity retrieval; location scope is already available to the model.
       tool_call_par: 1
       max_tool_calls: 10
     action_domains: []
@@ -1167,6 +1208,9 @@ cases:
         fields: []
         period: null
         entry_values_by_entity: {}
+        field_values_by_entity: {}
+        content_action_target_by_entity: {}
+        first_run_when_by_entity: {}
         entry_values:
         - '24.4'
         - '25.2'
@@ -1206,6 +1250,9 @@ cases:
         fields: []
         period: null
         entry_values_by_entity: {}
+        field_values_by_entity: {}
+        content_action_target_by_entity: {}
+        first_run_when_by_entity: {}
         entry_values:
         - '77'
         min_results: 1
@@ -1215,6 +1262,9 @@ cases:
         fields: []
         period: null
         entry_values_by_entity: {}
+        field_values_by_entity: {}
+        content_action_target_by_entity: {}
+        first_run_when_by_entity: {}
         entry_values:
         - °F
         min_results: 1
@@ -1253,6 +1303,9 @@ cases:
         fields: []
         period: null
         entry_values_by_entity: {}
+        field_values_by_entity: {}
+        content_action_target_by_entity: {}
+        first_run_when_by_entity: {}
         entry_values:
         - '73'
         min_results: 1
@@ -1291,6 +1344,9 @@ cases:
         fields: []
         period: null
         entry_values_by_entity: {}
+        field_values_by_entity: {}
+        content_action_target_by_entity: {}
+        first_run_when_by_entity: {}
         entry_values:
         - closed
         min_results: 1
@@ -1416,6 +1472,9 @@ cases:
         fields: []
         period: null
         entry_values_by_entity: {}
+        field_values_by_entity: {}
+        content_action_target_by_entity: {}
+        first_run_when_by_entity: {}
         entry_values:
         - '78.1'
         - '77'
@@ -1458,6 +1517,9 @@ cases:
         - mean
         period: hour
         entry_values_by_entity: {}
+        field_values_by_entity: {}
+        content_action_target_by_entity: {}
+        first_run_when_by_entity: {}
         entry_values:
         - '92.5'
         min_results: 1
@@ -1496,6 +1558,9 @@ cases:
         fields: []
         period: null
         entry_values_by_entity: {}
+        field_values_by_entity: {}
+        content_action_target_by_entity: {}
+        first_run_when_by_entity: {}
         entry_values:
         - turned off
         min_results: 1
@@ -1734,6 +1799,9 @@ cases:
         fields: []
         period: null
         entry_values_by_entity: {}
+        field_values_by_entity: {}
+        content_action_target_by_entity: {}
+        first_run_when_by_entity: {}
         entry_values:
         - '78.1'
         - '77'
@@ -1747,7 +1815,6 @@ cases:
         - cover.office_blinds
         service_data: null
       guidance_candidate: null
-      # History-derived actions must complete inside one execute_home_code call.
       tool_call_par: 1
       max_tool_calls: 10
     action_domains: []
@@ -1846,6 +1913,9 @@ cases:
         fields: []
         period: null
         entry_values_by_entity: {}
+        field_values_by_entity: {}
+        content_action_target_by_entity: {}
+        first_run_when_by_entity: {}
         entry_values: []
         min_results: 0
       blocked_outcome: null
@@ -1885,6 +1955,9 @@ cases:
         fields: []
         period: null
         entry_values_by_entity: {}
+        field_values_by_entity: {}
+        content_action_target_by_entity: {}
+        first_run_when_by_entity: {}
         entry_values:
         - '1004'
         min_results: 1
@@ -1925,6 +1998,9 @@ cases:
         fields: []
         period: null
         entry_values_by_entity: {}
+        field_values_by_entity: {}
+        content_action_target_by_entity: {}
+        first_run_when_by_entity: {}
         entry_values:
         - '43228'
         min_results: 1
@@ -1964,6 +2040,9 @@ cases:
         fields: []
         period: null
         entry_values_by_entity: {}
+        field_values_by_entity: {}
+        content_action_target_by_entity: {}
+        first_run_when_by_entity: {}
         entry_values:
         - 'on'
         - '2026-06-29T11:59:04+00:00'
@@ -2007,6 +2086,9 @@ cases:
         fields: []
         period: null
         entry_values_by_entity: {}
+        field_values_by_entity: {}
+        content_action_target_by_entity: {}
+        first_run_when_by_entity: {}
         entry_values:
         - 'on'
         - 'off'
@@ -2050,6 +2132,9 @@ cases:
         fields: []
         period: null
         entry_values_by_entity: {}
+        field_values_by_entity: {}
+        content_action_target_by_entity: {}
+        first_run_when_by_entity: {}
         entry_values:
         - °C
         min_results: 3
@@ -2090,6 +2175,9 @@ cases:
         - mean
         period: day
         entry_values_by_entity: {}
+        field_values_by_entity: {}
+        content_action_target_by_entity: {}
+        first_run_when_by_entity: {}
         entry_values:
         - '64.0'
         min_results: 1
@@ -2134,6 +2222,9 @@ cases:
         - max
         period: hour
         entry_values_by_entity: {}
+        field_values_by_entity: {}
+        content_action_target_by_entity: {}
+        first_run_when_by_entity: {}
         entry_values:
         - '60.0'
         - '65.0'
@@ -2174,6 +2265,9 @@ cases:
         fields: []
         period: null
         entry_values_by_entity: {}
+        field_values_by_entity: {}
+        content_action_target_by_entity: {}
+        first_run_when_by_entity: {}
         entry_values:
         - 'on'
         - 'off'
@@ -2213,6 +2307,9 @@ cases:
         fields: []
         period: null
         entry_values_by_entity: {}
+        field_values_by_entity: {}
+        content_action_target_by_entity: {}
+        first_run_when_by_entity: {}
         entry_values: []
         min_results: 0
       blocked_outcome: null
@@ -2252,6 +2349,9 @@ cases:
         fields: []
         period: null
         entry_values_by_entity: {}
+        field_values_by_entity: {}
+        content_action_target_by_entity: {}
+        first_run_when_by_entity: {}
         entry_values:
         - '24.4'
         - '25.2'
@@ -2291,6 +2391,9 @@ cases:
         fields: []
         period: null
         entry_values_by_entity: {}
+        field_values_by_entity: {}
+        content_action_target_by_entity: {}
+        first_run_when_by_entity: {}
         entry_values: []
         min_results: 0
       blocked_outcome: null
@@ -2386,6 +2489,9 @@ cases:
         fields: []
         period: null
         entry_values_by_entity: {}
+        field_values_by_entity: {}
+        content_action_target_by_entity: {}
+        first_run_when_by_entity: {}
         entry_values:
         - '0.0'
         - '2026-06-29T12:00:00+00:00'
@@ -2483,6 +2589,9 @@ cases:
         fields: []
         period: null
         entry_values_by_entity: {}
+        field_values_by_entity: {}
+        content_action_target_by_entity: {}
+        first_run_when_by_entity: {}
         entry_values: []
         min_results: 1
       - tool_name: execute_home_code
@@ -2491,6 +2600,9 @@ cases:
         fields: []
         period: null
         entry_values_by_entity: {}
+        field_values_by_entity: {}
+        content_action_target_by_entity: {}
+        first_run_when_by_entity: {}
         entry_values:
         - '210'
         min_results: 1
@@ -2529,6 +2641,9 @@ cases:
         fields: []
         period: null
         entry_values_by_entity: {}
+        field_values_by_entity: {}
+        content_action_target_by_entity: {}
+        first_run_when_by_entity: {}
         entry_values:
         - '77'
         min_results: 1
@@ -2538,6 +2653,9 @@ cases:
         fields: []
         period: null
         entry_values_by_entity: {}
+        field_values_by_entity: {}
+        content_action_target_by_entity: {}
+        first_run_when_by_entity: {}
         entry_values:
         - °F
         min_results: 1
@@ -2547,6 +2665,9 @@ cases:
         fields: []
         period: null
         entry_values_by_entity: {}
+        field_values_by_entity: {}
+        content_action_target_by_entity: {}
+        first_run_when_by_entity: {}
         entry_values:
         - '25'
         min_results: 1
@@ -2615,6 +2736,9 @@ cases:
         fields: []
         period: null
         entry_values_by_entity: {}
+        field_values_by_entity: {}
+        content_action_target_by_entity: {}
+        first_run_when_by_entity: {}
         entry_values: []
         min_results: 1
       - tool_name: execute_home_code
@@ -2623,6 +2747,9 @@ cases:
         fields: []
         period: null
         entry_values_by_entity: {}
+        field_values_by_entity: {}
+        content_action_target_by_entity: {}
+        first_run_when_by_entity: {}
         entry_values:
         - set_temperature
         min_results: 1
@@ -3036,8 +3163,8 @@ cases:
     id: depth_active_repairs
     category: complex
     home: home_default
-    user_request: Are there any active Home Assistant repairs right now? Include
-      any referenced entity IDs from the repair details.
+    user_request: Are there any active Home Assistant repairs right now? Include any
+      referenced entity IDs from the repair details.
     actions_enabled: false
     llm_context:
       platform: test
@@ -3086,6 +3213,9 @@ cases:
         fields: []
         period: null
         entry_values_by_entity: {}
+        field_values_by_entity: {}
+        content_action_target_by_entity: {}
+        first_run_when_by_entity: {}
         entry_values:
         - Low battery
         - Update available
@@ -3125,6 +3255,9 @@ cases:
         fields: []
         period: null
         entry_values_by_entity: {}
+        field_values_by_entity: {}
+        content_action_target_by_entity: {}
+        first_run_when_by_entity: {}
         entry_values:
         - '25.2'
         min_results: 1
@@ -3171,6 +3304,149 @@ cases:
           - '25.2'
           sensor.bedroom_humidity:
           - '64'
+        field_values_by_entity: {}
+        content_action_target_by_entity: {}
+        first_run_when_by_entity: {}
+        entry_values: []
+        min_results: 1
+      blocked_outcome: null
+      answer_excludes: []
+      actions: []
+      guidance_candidate: null
+      tool_call_par: null
+      max_tool_calls: 10
+    action_domains: []
+  metadata: null
+  expected_output: null
+  evaluators: []
+- name: automation_discover_evening_living_lights
+  inputs:
+    id: automation_discover_evening_living_lights
+    category: automation_read
+    home: home_default
+    user_request: Which of my evening automations controls the living room light,
+      and is it enabled?
+    actions_enabled: false
+    llm_context:
+      platform: test
+      device_id: null
+      language: en
+    expected:
+      expected_values: []
+      answer_values: []
+      provenance_values: []
+      tool_result_checks:
+      - tool_name: get_automation
+        entity_ids:
+        - automation.living_scene_4f7a
+        statistic_ids: []
+        fields:
+        - state
+        - is_on
+        - available
+        - mode
+        - last_triggered
+        period: null
+        entry_values_by_entity:
+          automation.living_scene_4f7a:
+          - Evening Living Room Lights
+          - Living Room Light
+          - 'on'
+        field_values_by_entity:
+          automation.living_scene_4f7a:
+            state: 'on'
+            is_on: true
+        content_action_target_by_entity: {}
+        first_run_when_by_entity: {}
+        entry_values: []
+        min_results: 1
+      blocked_outcome: null
+      answer_excludes: []
+      actions: []
+      guidance_candidate: null
+      tool_call_par: null
+      max_tool_calls: 10
+    action_domains: []
+  metadata: null
+  expected_output: null
+  evaluators: []
+- name: automation_explain_evening_living_lights
+  inputs:
+    id: automation_explain_evening_living_lights
+    category: automation_read
+    home: home_default
+    user_request: What does the automation called Evening Living Room Lights do, and
+      what starts it?
+    actions_enabled: false
+    llm_context:
+      platform: test
+      device_id: null
+      language: en
+    expected:
+      expected_values: []
+      answer_values: []
+      provenance_values: []
+      tool_result_checks:
+      - tool_name: get_automation
+        entity_ids:
+        - automation.living_scene_4f7a
+        statistic_ids: []
+        fields:
+        - content
+        period: null
+        entry_values_by_entity:
+          automation.living_scene_4f7a:
+          - sunset
+          - light.turn_on
+          - light.living
+        field_values_by_entity: {}
+        content_action_target_by_entity:
+          automation.living_scene_4f7a:
+          - light.living
+        first_run_when_by_entity: {}
+        entry_values: []
+        min_results: 1
+      blocked_outcome: null
+      answer_excludes: []
+      actions: []
+      guidance_candidate: null
+      tool_call_par: null
+      max_tool_calls: 10
+    action_domains: []
+  metadata: null
+  expected_output: null
+  evaluators: []
+- name: automation_recent_evening_living_lights_run
+  inputs:
+    id: automation_recent_evening_living_lights_run
+    category: automation_read
+    home: home_default
+    user_request: When did the Evening Living Room Lights automation most recently
+      run?
+    actions_enabled: false
+    llm_context:
+      platform: test
+      device_id: null
+      language: en
+    expected:
+      expected_values: []
+      answer_values:
+      - '2026-06-28T22:15:00+00:00'
+      provenance_values: []
+      tool_result_checks:
+      - tool_name: get_automation
+        entity_ids:
+        - automation.living_scene_4f7a
+        statistic_ids: []
+        fields:
+        - runs
+        period: null
+        entry_values_by_entity:
+          automation.living_scene_4f7a: []
+        field_values_by_entity: {}
+        content_action_target_by_entity: {}
+        first_run_when_by_entity:
+          automation.living_scene_4f7a: '2026-06-28T22:15:00+00:00'
         entry_values: []
         min_results: 1
       blocked_outcome: null

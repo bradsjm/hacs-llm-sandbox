@@ -1211,7 +1211,7 @@
       "type": "object"
     },
     "ToolResultCheck": {
-      "description": "Structured evidence expected in a successful recorder tool result.",
+      "description": "Structured evidence expected in a successful tool result.",
       "properties": {
         "tool_name": {
           "title": "Tool Name",
@@ -1261,6 +1261,31 @@
             "type": "array"
           },
           "title": "Entry Values By Entity",
+          "type": "object"
+        },
+        "field_values_by_entity": {
+          "additionalProperties": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Field Values By Entity",
+          "type": "object"
+        },
+        "content_action_target_by_entity": {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "title": "Content Action Target By Entity",
+          "type": "object"
+        },
+        "first_run_when_by_entity": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "First Run When By Entity",
           "type": "object"
         },
         "entry_values": {

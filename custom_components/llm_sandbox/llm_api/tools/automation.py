@@ -2,7 +2,8 @@
 
 import asyncio
 import base64
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 import functools
 import json
@@ -12,6 +13,7 @@ from typing import cast, final, override
 from homeassistant.auth.permissions.const import POLICY_READ
 from homeassistant.components import automation
 from homeassistant.components.automation.logbook import EVENT_AUTOMATION_TRIGGERED
+from homeassistant.components.logbook import DOMAIN as LOGBOOK_DOMAIN
 from homeassistant.components.logbook.processor import EventProcessor
 from homeassistant.components.recorder import get_instance
 from homeassistant.core import HomeAssistant
@@ -46,6 +48,31 @@ _NULL_KEYS = frozenset({"query", "entity_ids", "include", "hours", "start", "end
 _EMPTY_STRINGS = frozenset({"query", "start", "end", "cursor"})
 _EMPTY_LISTS = frozenset({"entity_ids", "include"})
 _INCLUDE = ("content", "runs")
+
+type AutomationRunsFetcher = Callable[
+    [list[str], datetime, datetime], Awaitable[Mapping[str, list[dict[str, object]]]]
+]
+
+
+@dataclass(frozen=True, slots=True)
+class AutomationRecord:
+    """Copied, hass-free automation data used by the query core."""
+
+    entity_id: str
+    summary: Mapping[str, object]
+    search_terms: tuple[str, ...]
+    content: Mapping[str, object] | None
+
+
+@dataclass(frozen=True, slots=True)
+class AutomationSource:
+    """The host-owned, copied data and fetch seam for one automation query."""
+
+    now: datetime
+    available: bool
+    content_authorized: bool
+    records: tuple[AutomationRecord, ...]
+    fetch_runs: AutomationRunsFetcher
 
 
 def _iso_datetime(value: object) -> datetime:
@@ -204,31 +231,22 @@ class GetAutomationTool(llm.Tool):
         self.entry_id = entry_id
 
     @override
-    async def async_call(  # noqa: C901 - one direct-tool boundary owns validation, authorization, and paging
+    async def async_call(
         self, hass: HomeAssistant, tool_input: llm.ToolInput, llm_context: llm.LLMContext
     ) -> JsonObjectType:
         """Validate, authorize, and return automation records."""
         try:
-            normalized_args = _omit_empty_optional_args(
-                tool_input.tool_args,
-                null_keys=_NULL_KEYS,
-                empty_string_keys=_EMPTY_STRINGS,
-                empty_list_keys=_EMPTY_LISTS,
-            )
+            normalized_args = self._normalize_args(tool_input.tool_args)
             if "cursor" in normalized_args and len(normalized_args) != 1:
                 raise vol.Invalid("cursor must be the only non-empty argument")
-            data = cast(
-                dict[str, object],
-                self.parameters(normalized_args),
-            )
-            cursor = _decode_cursor(cast(str, data["cursor"])) if "cursor" in data else None
-            include = tuple(cast(list[str], cursor["p"] if cursor else data.get("include", [])))
-            if ("hours" in data or "start" in data or "end" in data) and "runs" not in include:
-                raise vol.Invalid("hours, start, and end require include=runs")
-        except RecoverableToolError as err:
-            return tool_error_envelope(err.key, err.placeholders)
+            data = cast(dict[str, object], self.parameters(normalized_args))
+            self._validate_query_data(data)
         except Exception as err:
-            mapped = tool_error_from_exception(err)
+            mapped = (
+                (err.key, err.placeholders)
+                if isinstance(err, RecoverableToolError)
+                else tool_error_from_exception(err)
+            )
             if mapped is None:
                 raise
             return tool_error_envelope(*mapped)
@@ -236,6 +254,8 @@ class GetAutomationTool(llm.Tool):
         setup_error = _require_loaded_entry_error(hass, self.entry_id)
         if setup_error is not None:
             return tool_error_envelope(*setup_error)
+        cursor = _decode_cursor(cast(str, data["cursor"])) if "cursor" in data else None
+        include = tuple(cast(list[str], cursor["p"] if cursor else data.get("include", [])))
         user_id = llm_context.context.user_id if llm_context.context is not None else None
         user = await hass.auth.async_get_user(user_id) if user_id else None
         if user is None or not user.is_active or ("content" in include and not user.is_admin):
@@ -246,64 +266,120 @@ class GetAutomationTool(llm.Tool):
         entities = [
             entity for entity in component.entities if user.permissions.check_entity(entity.entity_id, POLICY_READ)
         ]
+        cursor = _decode_cursor(cast(str, data["cursor"])) if "cursor" in data else None
+        include = tuple(cast(list[str], cursor["p"] if cursor else data.get("include", [])))
         if cursor:
-            query = cast(str, cursor["q"])
             explicit_ids = cast(list[str], cursor["e"])
-            limit = cast(int, cursor["l"])
-            after = cast(str, cursor["after"])
         else:
-            query = cast(str, data.get("query", ""))
             explicit_ids = sorted(set(cast(list[str], data.get("entity_ids", []))))
-            limit = cast(int, data["limit"])
-            after = ""
         if explicit_ids:
             entities = [entity for entity in entities if entity.entity_id in explicit_ids]
+        if "runs" in include:
+            if DATA_INSTANCE not in hass.data:
+                return tool_error_envelope("recorder_unavailable", {})
+            if LOGBOOK_DOMAIN not in hass.data:
+                return tool_error_envelope("logbook_unavailable", {})
         try:
-            records = [
-                record
-                for entity in entities
-                if (record := self._record(entity, hass, user.is_admin, include, query)) is not None
-            ]
+            candidates = tuple(self._record(entity, hass, user.is_admin, "content" in include) for entity in entities)
         except RecoverableToolError as err:
             return tool_error_envelope(err.key, err.placeholders)
-        records.sort(key=lambda record: cast(str, record["entity_id"]))
-        records = [record for record in records if cast(str, record["entity_id"]) > after]
-        window: dict[str, str] | None = None
-        try:
-            if "runs" in include:
-                if DATA_INSTANCE not in hass.data:
-                    return tool_error_envelope("recorder_unavailable", {})
-                from homeassistant.components.logbook import DOMAIN as LOGBOOK_DOMAIN
 
-                if LOGBOOK_DOMAIN not in hass.data:
-                    return tool_error_envelope("logbook_unavailable", {})
-                if cursor:
-                    raw_window = cast(dict[str, str], cursor["w"])
-                    start, end = _iso_datetime(raw_window["s"]), _iso_datetime(raw_window["e"])
-                else:
-                    start, end = _clamp_window(
-                        dt_util.utcnow(),
-                        cast(datetime | None, data.get("start")),
-                        cast(datetime | None, data.get("end")),
-                        hours=cast(float | None, data.get("hours")),
-                        default_hours=DEFAULT_LOGBOOK_WINDOW_HOURS,
-                        max_hours=MAX_RECORDER_LOOKBACK_HOURS,
-                    )
-                window = {"start": start.isoformat(), "end": end.isoformat()}
-                await self._add_runs(
-                    hass,
-                    records[:limit],
-                    start,
-                    end,
-                    _require_sandbox_runtime(hass, self.entry_id).settings.execution_timeout_seconds,
-                )
+        settings = _require_sandbox_runtime(hass, self.entry_id).settings
+
+        async def fetch_runs(
+            entity_ids: list[str], start: datetime, end: datetime
+        ) -> Mapping[str, list[dict[str, object]]]:
+            run_records: list[dict[str, object]] = [{"entity_id": entity_id} for entity_id in entity_ids]
+            await self._add_runs(hass, run_records, start, end, settings.execution_timeout_seconds)
+            return {
+                entity_id: cast(list[dict[str, object]], record.get("runs", []))
+                for entity_id, record in zip(entity_ids, run_records, strict=True)
+            }
+
+        source = AutomationSource(
+            now=dt_util.utcnow(),
+            available=True,
+            content_authorized=True,
+            records=candidates,
+            fetch_runs=fetch_runs,
+        )
+        return await self.run_query(data, source)
+
+    @staticmethod
+    def _validate_query_data(data: Mapping[str, object]) -> None:
+        """Validate cross-field query rules shared by live and eval callers."""
+        cursor = _decode_cursor(cast(str, data["cursor"])) if "cursor" in data else None
+        include = tuple(cast(list[str], cursor["p"] if cursor else data.get("include", [])))
+        if ("hours" in data or "start" in data or "end" in data) and "runs" not in include:
+            raise vol.Invalid("hours, start, and end require include=runs")
+
+    def _normalize_args(self, args: Mapping[str, object]) -> dict[str, object]:
+        """Normalize optional values before schema validation."""
+        return _omit_empty_optional_args(
+            args, null_keys=_NULL_KEYS, empty_string_keys=_EMPTY_STRINGS, empty_list_keys=_EMPTY_LISTS
+        )
+
+    async def run_query(self, data: dict[str, object], source: AutomationSource) -> JsonObjectType:
+        """Run the hass-free automation query and preserve stable envelopes."""
+        try:
+            return await self._query(data, source)
         except RecoverableToolError as err:
             return tool_error_envelope(err.key, err.placeholders)
-        except Exception as err:  # noqa: BLE001 - direct recorder failures use the stable query envelope
+        except Exception as err:  # noqa: BLE001 - direct query failures use the stable query envelope
             mapped = tool_error_from_exception(err)
-            if mapped is None:
-                return tool_error_envelope("query_failed", {"error": type(err).__name__})
-            return tool_error_envelope(*mapped)
+            return tool_error_envelope(*(mapped or ("query_failed", {"error": type(err).__name__})))
+
+    async def _query(self, data: dict[str, object], source: AutomationSource) -> JsonObjectType:
+        """Apply search, projection, runs, and pagination to copied source records."""
+        cursor = _decode_cursor(cast(str, data["cursor"])) if "cursor" in data else None
+        include = tuple(cast(list[str], cursor["p"] if cursor else data.get("include", [])))
+        if not source.available:
+            raise RecoverableToolError("automation_unavailable", {})
+        if "content" in include and not source.content_authorized:
+            raise RecoverableToolError("authorization_denied", {})
+        query = cast(str, cursor["q"] if cursor else data.get("query", ""))
+        explicit_ids = cast(
+            list[str], cursor["e"] if cursor else sorted(set(cast(list[str], data.get("entity_ids", []))))
+        )
+        limit = cast(int, cursor["l"] if cursor else data["limit"])
+        after = cast(str, cursor["after"] if cursor else "")
+        records = [record for record in source.records if not explicit_ids or record.entity_id in explicit_ids]
+        records = [
+            record
+            for record in records
+            if not query
+            or all(token.casefold() in " ".join(record.search_terms).casefold() for token in query.split())
+        ]
+        records = sorted((record for record in records if record.entity_id > after), key=lambda item: item.entity_id)
+        window: dict[str, str] | None = None
+        runs: Mapping[str, list[dict[str, object]]] = {}
+        if "runs" in include:
+            if cursor:
+                raw_window = cast(dict[str, str], cursor["w"])
+                start, end = _iso_datetime(raw_window["s"]), _iso_datetime(raw_window["e"])
+            else:
+                start, end = _clamp_window(
+                    source.now,
+                    cast(datetime | None, data.get("start")),
+                    cast(datetime | None, data.get("end")),
+                    hours=cast(float | None, data.get("hours")),
+                    default_hours=DEFAULT_LOGBOOK_WINDOW_HOURS,
+                    max_hours=MAX_RECORDER_LOOKBACK_HOURS,
+                )
+            window = {"start": start.isoformat(), "end": end.isoformat()}
+            runs = await source.fetch_runs([record.entity_id for record in records[:limit]], start, end)
+        output: list[dict[str, object]] = []
+        for record in records:
+            value = dict(record.summary)
+            if "content" in include:
+                if record.content is None:
+                    raise RecoverableToolError("automation_content_unavailable", {})
+                value["content"] = json_safe(dict(record.content))
+            if "runs" in include:
+                value["runs"] = json_safe(
+                    sorted(runs.get(record.entity_id, []), key=lambda entry: str(entry.get("when", "")), reverse=True)
+                )
+            output.append(cast(dict[str, object], json_safe(value)))
         cursor_data: dict[str, object] = {
             "v": 1,
             "k": "automation",
@@ -314,7 +390,7 @@ class GetAutomationTool(llm.Tool):
         }
         if window is not None:
             cursor_data["w"] = {"s": window["start"], "e": window["end"]}
-        selected, next_cursor = _fit_automation_page(records, limit, cursor_data, window)
+        selected, next_cursor = _fit_automation_page(output, limit, cursor_data, window)
         payload: dict[str, object] = {"automations": selected, "returned": len(selected), "limit": limit}
         if window is not None:
             payload["window"] = window
@@ -327,9 +403,8 @@ class GetAutomationTool(llm.Tool):
         entity: automation.BaseAutomationEntity,
         hass: HomeAssistant,
         is_admin: bool,
-        include: tuple[str, ...],
-        query: str,
-    ) -> dict[str, object] | None:
+        include_content: bool,
+    ) -> AutomationRecord:
         """Build one copied summary and apply normalized metadata search."""
         automation_entity = entity
         entity_id = automation_entity.entity_id
@@ -433,14 +508,14 @@ class GetAutomationTool(llm.Tool):
                 references[ref_name] = values
         if references:
             record["references"] = references
-        if "content" in include:
-            if not isinstance(raw_config, Mapping):
-                raise RecoverableToolError("automation_content_unavailable", {})
-            record["content"] = json_safe(dict(raw_config))
-        corpus = " ".join(search_terms)
-        if query and not all(token.casefold() in corpus.casefold() for token in query.split()):
-            return None
-        return cast(dict[str, object], json_safe(record))
+        return AutomationRecord(
+            entity_id=entity_id,
+            summary=cast(dict[str, object], json_safe(record)),
+            search_terms=tuple(str(term) for term in search_terms),
+            content=cast(dict[str, object] | None, json_safe(dict(raw_config)))
+            if include_content and is_admin and isinstance(raw_config, Mapping)
+            else None,
+        )
 
     @staticmethod
     async def _add_runs(

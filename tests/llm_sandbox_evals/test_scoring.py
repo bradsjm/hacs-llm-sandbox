@@ -402,6 +402,156 @@ def test_structured_recorder_evidence_passes(tool_event: ToolEvent, tool_check: 
     assert score_case(checks) == pytest.approx(1.0)
 
 
+@pytest.mark.parametrize(
+    "record",
+    [
+        pytest.param(
+            {"entity_id": "automation.living_scene_4f7a", "state": "on", "content": {"trigger": "sunset"}},
+            id="present",
+        ),
+        pytest.param({"entity_id": "automation.other", "state": "on"}, id="missing-record"),
+    ],
+)
+def test_automation_structured_result_checks_require_the_expected_record(record: dict[str, object]) -> None:
+    check = ToolResultCheck(
+        tool_name="get_automation",
+        entity_ids=("automation.living_scene_4f7a",),
+        fields=("content",),
+        entry_values_by_entity={"automation.living_scene_4f7a": ("sunset",)},
+    )
+    events = (
+        ToolEvent(
+            tool_name="get_automation",
+            args={"query": "ignored"},
+            output={"automations": [record], "returned": 1, "limit": 10},
+        ),
+    )
+    checks = check_case(_case(Expected(tool_result_checks=(check,))), "ignored", (), 1, events)
+
+    result = next(item for item in checks if item.name == "tool_result_check_0")
+    assert result.passed is (record.get("entity_id") == "automation.living_scene_4f7a" and "content" in record)
+
+
+def test_automation_discovery_scoring_requires_keyed_enabled_state() -> None:
+    check = ToolResultCheck(
+        tool_name="get_automation",
+        entity_ids=("automation.living_scene_4f7a",),
+        fields=("state", "is_on"),
+        field_values_by_entity={"automation.living_scene_4f7a": {"state": "on", "is_on": True}},
+    )
+    event = ToolEvent(
+        tool_name="get_automation",
+        args={},
+        output={
+            "automations": [
+                {
+                    "entity_id": "automation.living_scene_4f7a",
+                    "title": "Turns on the living room light",
+                    "state": "off",
+                    "is_on": False,
+                }
+            ],
+            "returned": 1,
+            "limit": 10,
+        },
+    )
+
+    checks = check_case(_case(Expected(tool_result_checks=(check,))), "ignored", (), 1, (event,))
+
+    result = next(item for item in checks if item.name == "tool_result_check_0")
+    assert result.passed is False
+    assert "field_value:automation.living_scene_4f7a:state" in result.feedback
+
+
+def test_automation_content_target_is_not_satisfied_by_summary_reference() -> None:
+    check = ToolResultCheck(
+        tool_name="get_automation",
+        entity_ids=("automation.living_scene_4f7a",),
+        fields=("content",),
+        content_action_target_by_entity={"automation.living_scene_4f7a": ("light.living",)},
+    )
+    summary_only = ToolEvent(
+        tool_name="get_automation",
+        args={},
+        output={
+            "automations": [
+                {
+                    "entity_id": "automation.living_scene_4f7a",
+                    "references": {"entities": [{"id": "light.living"}]},
+                }
+            ],
+            "returned": 1,
+            "limit": 10,
+        },
+    )
+    correct = ToolEvent(
+        tool_name="get_automation",
+        args={},
+        output={
+            "automations": [
+                {
+                    "entity_id": "automation.living_scene_4f7a",
+                    "content": {"action": {"target": {"entity_id": "light.living"}}},
+                }
+            ],
+            "returned": 1,
+            "limit": 10,
+        },
+    )
+
+    summary_result = check_case(_case(Expected(tool_result_checks=(check,))), "ignored", (), 1, (summary_only,))
+    correct_result = check_case(_case(Expected(tool_result_checks=(check,))), "ignored", (), 1, (correct,))
+
+    assert next(item for item in summary_result if item.name == "tool_result_check_0").passed is False
+    assert next(item for item in correct_result if item.name == "tool_result_check_0").passed is True
+
+
+def test_automation_runs_require_newest_first_timestamp_not_summary_timestamp() -> None:
+    check = ToolResultCheck(
+        tool_name="get_automation",
+        entity_ids=("automation.living_scene_4f7a",),
+        fields=("runs",),
+        first_run_when_by_entity={"automation.living_scene_4f7a": "2026-06-28T22:15:00+00:00"},
+    )
+    summary_timestamp_only = ToolEvent(
+        tool_name="get_automation",
+        args={},
+        output={
+            "automations": [
+                {
+                    "entity_id": "automation.living_scene_4f7a",
+                    "last_triggered": "2026-06-28T22:15:00+00:00",
+                    "runs": [{"when": "2026-06-28T20:00:00+00:00", "message": "triggered"}],
+                }
+            ],
+            "returned": 1,
+            "limit": 10,
+        },
+    )
+    correct = ToolEvent(
+        tool_name="get_automation",
+        args={},
+        output={
+            "automations": [
+                {
+                    "entity_id": "automation.living_scene_4f7a",
+                    "runs": [{"when": "2026-06-28T22:15:00+00:00", "message": "triggered"}],
+                }
+            ],
+            "returned": 1,
+            "limit": 10,
+        },
+    )
+
+    summary_result = check_case(
+        _case(Expected(tool_result_checks=(check,))), "ignored", (), 1, (summary_timestamp_only,)
+    )
+    correct_result = check_case(_case(Expected(tool_result_checks=(check,))), "ignored", (), 1, (correct,))
+
+    assert next(item for item in summary_result if item.name == "tool_result_check_0").passed is False
+    assert next(item for item in correct_result if item.name == "tool_result_check_0").passed is True
+
+
 def test_history_per_entity_entry_values_do_not_cross_match() -> None:
     checks = check_case(
         _case(

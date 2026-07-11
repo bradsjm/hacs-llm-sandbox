@@ -130,6 +130,24 @@ def test_direct_recorder_cases_retain_standalone_tools_and_parallel_policy() -> 
     assert parallel_case.expected.tool_call_par == 2
 
 
+def test_automation_cases_are_exactly_the_three_direct_read_cases() -> None:
+    automation_cases = [case for case in CASES if case.category == "automation_read"]
+
+    assert {case.id for case in automation_cases} == {
+        "automation_discover_evening_living_lights",
+        "automation_explain_evening_living_lights",
+        "automation_recent_evening_living_lights_run",
+    }
+    assert all(
+        [check.tool_name for check in case.expected.tool_result_checks] == ["get_automation"]
+        for case in automation_cases
+    )
+    assert all(
+        len(case.expected.tool_result_checks) == 1 and case.expected.tool_call_par is None for case in automation_cases
+    )
+    assert all(case.expected.blocked_outcome is None for case in automation_cases)
+
+
 def _native_dataset() -> Dataset[EvalCase, object, object]:
     dataset_path = Path(__file__).parents[2] / "llm_sandbox_evals" / "data" / "cases.yaml"
     return Dataset[EvalCase, object, object].from_file(dataset_path)

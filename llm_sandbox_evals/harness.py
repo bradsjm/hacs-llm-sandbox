@@ -1,8 +1,8 @@
 """Eval task body backed by a real Pydantic AI Agent."""
 
 import asyncio
-import json
 from collections.abc import Sequence
+import json
 
 from custom_components.llm_sandbox.llm_api.prompts import PromptProfile
 from pydantic_ai import capture_run_messages

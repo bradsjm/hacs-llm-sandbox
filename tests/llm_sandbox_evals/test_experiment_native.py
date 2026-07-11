@@ -215,6 +215,7 @@ def _candidate(candidate_id: str, *, api_prompt: str = "prompt") -> PromptCandid
         get_history_description="history",
         get_statistics_description="statistics",
         get_logbook_description="logbook",
+        get_automation_description="automation",
     )
 
 

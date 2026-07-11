@@ -1,23 +1,29 @@
 """Pydantic AI agent wiring for evals over production tool cores."""
 
+from collections.abc import Mapping
 import json
 import re
-from collections.abc import Mapping
 from typing import Literal, Protocol, cast
 
 from custom_components.llm_sandbox.const import (
     TOOL_EXECUTE_HOME_CODE,
+    TOOL_GET_AUTOMATION,
     TOOL_GET_HISTORY,
     TOOL_GET_LOGBOOK,
     TOOL_GET_STATISTICS,
 )
-from custom_components.llm_sandbox.llm_api.errors import setup_error_payload, tool_error_from_exception
+from custom_components.llm_sandbox.llm_api.errors import (
+    setup_error_payload,
+    tool_error_envelope,
+    tool_error_from_exception,
+)
 from custom_components.llm_sandbox.llm_api.prompts import (
     compose_system_prompt,
     render_home_inventory,
     render_request_location,
     render_tool_capabilities,
 )
+from custom_components.llm_sandbox.llm_api.tools.automation import GetAutomationTool
 from custom_components.llm_sandbox.llm_api.tools.code import ExecuteHomeCodeTool
 from custom_components.llm_sandbox.llm_api.tools.recorder import (
     GetHistoryTool,
@@ -77,16 +83,37 @@ def build_agent_tools(runtime: EvalRuntime) -> list[Tool[EvalRuntime]]:
         TOOL_GET_HISTORY: runtime.candidate.get_history_description,
         TOOL_GET_STATISTICS: runtime.candidate.get_statistics_description,
         TOOL_GET_LOGBOOK: runtime.candidate.get_logbook_description,
+        TOOL_GET_AUTOMATION: runtime.candidate.get_automation_description,
     }
     tools: list[Tool[EvalRuntime]] = [
         _make_code_tool(runtime.code_tool, runtime.candidate.execute_home_code_description)
     ]
+    tools.append(_make_automation_tool(runtime.automation_tool, descriptions[TOOL_GET_AUTOMATION]))
     for tool in runtime.recorder_tools:
         # Branch boundary: production omits get_logbook when logbook is unavailable.
         if isinstance(tool, GetLogbookTool) and not runtime.recorder_source.logbook_available:
             continue
         tools.append(_make_recorder_tool(tool, descriptions[tool.name]))
     return tools
+
+
+def _make_automation_tool(tool: GetAutomationTool, description: str) -> Tool[EvalRuntime]:
+    """Return a Pydantic AI tool backed by the production automation query core."""
+    json_schema = convert(tool.parameters)
+
+    async def execute(ctx: RunContext[EvalRuntime], **kwargs: object) -> JsonObjectType:
+        validation = _validate_automation_tool(tool, kwargs)
+        if validation.error is not None:
+            return validation.error
+        return await tool.run_query(validation.data, ctx.deps.automation_source)
+
+    return Tool.from_schema(
+        execute,
+        name=tool.name,
+        description=description,
+        json_schema=json_schema,
+        takes_ctx=True,
+    )
 
 
 def _make_recorder_tool(
@@ -154,6 +181,22 @@ def _validate_recorder_tool(tool: _EvalTool, kwargs: dict[str, object]) -> _Vali
         if mapped is None:
             raise
         return _ValidationResult({}, recorder_error_envelope(*mapped))
+
+
+def _validate_automation_tool(tool: GetAutomationTool, kwargs: dict[str, object]) -> _ValidationResult:
+    """Validate automation args using the direct tool's normalizer and envelope."""
+    try:
+        normalized = tool._normalize_args(kwargs)
+        if "cursor" in normalized and len(normalized) != 1:
+            raise ValueError("cursor must be the only non-empty argument")
+        data = cast(dict[str, object], tool.parameters(normalized))
+        tool._validate_query_data(data)
+        return _ValidationResult(data, None)
+    except Exception as err:
+        mapped = tool_error_from_exception(err)
+        if mapped is None:
+            raise
+        return _ValidationResult({}, tool_error_envelope(*mapped))
 
 
 def _validate_code_tool(tool: ExecuteHomeCodeTool, kwargs: dict[str, object]) -> _ValidationResult:
@@ -249,6 +292,22 @@ def _tool_call_part(tool_name: str, tool_args: dict[str, object], index: int) ->
 def _stub_initial_calls(user_request: str) -> tuple[tuple[str, dict[str, object]], ...]:
     """Return the first deterministic tool call(s) for the stub model."""
     lowered = user_request.lower()
+    if "which of my evening automations controls the living room light" in lowered:
+        return ((TOOL_GET_AUTOMATION, {"query": "evening living room light"}),)
+    if "what does the automation called evening living room lights do" in lowered:
+        return (
+            (
+                TOOL_GET_AUTOMATION,
+                {"entity_ids": ["automation.living_scene_4f7a"], "include": ["content"]},
+            ),
+        )
+    if "when did the evening living room lights automation most recently run" in lowered:
+        return (
+            (
+                TOOL_GET_AUTOMATION,
+                {"entity_ids": ["automation.living_scene_4f7a"], "include": ["runs"]},
+            ),
+        )
     if "sensor.living_room_temperature" in lowered:
         return ((TOOL_GET_HISTORY, {"entity_ids": ["sensor.living_room_temperature"], **_last_day_window()}),)
     if "summarize the living room temperature history" in lowered and "humidity hourly statistics" in lowered:

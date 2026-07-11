@@ -1,7 +1,7 @@
 """Interactive HTML rendering for native eval report artifacts."""
 
-import json
 from datetime import UTC, datetime
+import json
 from pathlib import Path
 
 

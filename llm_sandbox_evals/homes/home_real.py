@@ -1,8 +1,8 @@
 """Frozen real-home fixture built from the committed home-assistant-prod dataset."""
 
-import json
 from collections.abc import Mapping
 from datetime import datetime
+import json
 from pathlib import Path
 from typing import NotRequired, TypedDict, cast
 
