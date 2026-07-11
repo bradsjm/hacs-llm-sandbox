@@ -1,13 +1,13 @@
 """Execution state and helper-call support for the Monty executor."""
 
-import inspect
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
+import inspect
 from typing import Protocol, cast
 
-import pydantic_monty  # Required manifest dependency; do not convert to a dynamic import.
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.util.json import JsonValueType
+import pydantic_monty  # Required manifest dependency; do not convert to a dynamic import.
 
 from ...const import DEFAULT_SERVICE_CALL_LIMIT
 from ...types import ActionRecord

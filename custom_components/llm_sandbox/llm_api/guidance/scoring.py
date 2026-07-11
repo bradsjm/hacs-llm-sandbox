@@ -6,9 +6,9 @@ hand-maintained allowlists. Abbreviation near-misses (``temp``/``temperature``,
 unit vocabulary is read from each candidate's own snapshot attributes.
 """
 
-import re
 from collections.abc import Mapping
 from dataclasses import dataclass
+import re
 
 from ...snapshot.models import HomeSnapshot
 from ..data.selectors import expand_aggregate_selector

@@ -14,12 +14,125 @@
           "name": "Name"
         },
         "data_description": {
-          "name": "A friendly name for this Assist Sandbox entry.",
-          "assistant": "The Assist exposure scope this sandbox runs under."
+          "assistant": "The Assist exposure scope this sandbox runs under.",
+          "name": "A friendly name for this Assist Sandbox entry."
         },
         "description": "Expose a Monty-sandboxed Home Assistant code execution tool for one Assist exposure scope.",
         "title": "Assist Sandbox"
       }
+    }
+  },
+  "exceptions": {
+    "action_domain_not_allowed": {
+      "message": "Service domain {domain} is not allowed for this assistant."
+    },
+    "actions_disabled": {
+      "message": "Service calls are disabled for this assistant."
+    },
+    "analytics_bad_bucket": {
+      "message": "Invalid analytics bucket {bucket}."
+    },
+    "analytics_unknown_group_key": {
+      "message": "Unsupported analytics group key {group_key}."
+    },
+    "analytics_unknown_op": {
+      "message": "Unsupported analytics operation {op}."
+    },
+    "capture_failed": {
+      "message": "Unable to capture image from {entity_id}."
+    },
+    "config_entry_not_loaded": {
+      "message": "Assist Sandbox config entry {config_entry_id} is not loaded."
+    },
+    "entity_not_visible": {
+      "message": "Entity {entity_id} is not available."
+    },
+    "image_too_large": {
+      "message": "Captured image from {entity_id} exceeds the size budget."
+    },
+    "invalid_cursor": {
+      "message": "The pagination cursor is invalid or expired."
+    },
+    "invalid_tool_input": {
+      "message": "Invalid tool input: {error}."
+    },
+    "logbook_unavailable": {
+      "message": "The logbook integration is not available."
+    },
+    "monty_code_required": {
+      "message": "Code is required."
+    },
+    "monty_code_too_long": {
+      "message": "Code must not exceed {max_length} characters."
+    },
+    "monty_execution_failed": {
+      "message": "Code execution could not start: {error}."
+    },
+    "query_failed": {
+      "message": "The query failed: {error}"
+    },
+    "recorder_unavailable": {
+      "message": "The recorder integration is not available."
+    },
+    "selector_no_match": {
+      "message": "Selector(s) {selectors} matched no visible entities."
+    },
+    "service_call_failed": {
+      "message": "Service call to {domain}.{service} failed: {reason}."
+    },
+    "service_call_limit_exceeded": {
+      "message": "The maximum of {limit} dispatched service calls for this request was reached."
+    },
+    "service_call_timeout": {
+      "message": "Service call to {domain}.{service} timed out."
+    },
+    "service_data_invalid": {
+      "message": "Service data for {domain}.{service} is invalid: {reason}."
+    },
+    "service_data_not_supported": {
+      "message": "Service data field {field} is not supported by {domain}.{service} for the requested target."
+    },
+    "service_not_found": {
+      "message": "Service {domain}.{service} is not available."
+    },
+    "service_response_not_supported": {
+      "message": "This service does not support {return_response}."
+    },
+    "service_response_requires_blocking": {
+      "message": "Service responses require {blocking}."
+    },
+    "service_target_not_supported": {
+      "message": "Service {domain}.{service} does not target the requested entities."
+    },
+    "service_target_not_visible": {
+      "message": "Entity {entity_id} is not available to control."
+    },
+    "sql_read_only": {
+      "message": "Only read-only SQL is allowed: {reason}."
+    },
+    "sql_syntax_error": {
+      "message": "SQL syntax error: {reason}."
+    },
+    "sql_timeout": {
+      "message": "SQL query timed out."
+    },
+    "sql_too_long": {
+      "message": "SQL must not exceed {max_length} characters."
+    },
+    "sql_unknown_column": {
+      "message": "Unknown SQL column: {reason}."
+    },
+    "sql_unknown_table": {
+      "message": "Unknown SQL table: {reason}."
+    },
+    "time_window_too_large": {
+      "message": "The requested time window exceeds the maximum of {max_hours} hours."
+    },
+    "unknown_config_entry": {
+      "message": "Unknown or unloaded Assist Sandbox config entry: {config_entry_id}."
+    },
+    "unsupported_image_domain": {
+      "message": "Entity {entity_id} is not a camera or image entity."
     }
   },
   "options": {
@@ -28,7 +141,6 @@
     },
     "step": {
       "init": {
-        "title": "Assist Sandbox options",
         "description": "Adjust code execution limits, visibility, and action permissions for this assistant.",
         "sections": {
           "section_actions": {
@@ -77,121 +189,9 @@
             },
             "name": "Visibility restrictions"
           }
-        }
+        },
+        "title": "Assist Sandbox options"
       }
-    }
-  },
-  "exceptions": {
-    "monty_code_required": {
-      "message": "Code is required."
-    },
-    "monty_code_too_long": {
-      "message": "Code must not exceed {max_length} characters."
-    },
-    "monty_execution_failed": {
-      "message": "Code execution could not start: {error}."
-    },
-    "service_not_found": {
-      "message": "Service {domain}.{service} is not available."
-    },
-    "service_target_not_visible": {
-      "message": "Entity {entity_id} is not available to control."
-    },
-    "service_target_not_supported": {
-      "message": "Service {domain}.{service} does not target the requested entities."
-    },
-    "service_call_timeout": {
-      "message": "Service call to {domain}.{service} timed out."
-    },
-    "service_call_failed": {
-      "message": "Service call to {domain}.{service} failed: {reason}."
-    },
-    "service_data_invalid": {
-      "message": "Service data for {domain}.{service} is invalid: {reason}."
-    },
-    "service_data_not_supported": {
-      "message": "Service data field {field} is not supported by {domain}.{service} for the requested target."
-    },
-    "service_response_requires_blocking": {
-      "message": "Service responses require {blocking}."
-    },
-    "service_response_not_supported": {
-      "message": "This service does not support {return_response}."
-    },
-    "actions_disabled": {
-      "message": "Service calls are disabled for this assistant."
-    },
-    "action_domain_not_allowed": {
-      "message": "Service domain {domain} is not allowed for this assistant."
-    },
-    "service_call_limit_exceeded": {
-      "message": "The maximum of {limit} dispatched service calls for this request was reached."
-    },
-    "config_entry_not_loaded": {
-      "message": "Assist Sandbox config entry {config_entry_id} is not loaded."
-    },
-    "unknown_config_entry": {
-      "message": "Unknown or unloaded Assist Sandbox config entry: {config_entry_id}."
-    },
-    "invalid_tool_input": {
-      "message": "Invalid tool input: {error}."
-    },
-    "recorder_unavailable": {
-      "message": "The recorder integration is not available."
-    },
-    "entity_not_visible": {
-      "message": "Entity {entity_id} is not available."
-    },
-    "selector_no_match": {
-      "message": "Selector(s) {selectors} matched no visible entities."
-    },
-    "capture_failed": {
-      "message": "Unable to capture image from {entity_id}."
-    },
-    "image_too_large": {
-      "message": "Captured image from {entity_id} exceeds the size budget."
-    },
-    "unsupported_image_domain": {
-      "message": "Entity {entity_id} is not a camera or image entity."
-    },
-    "time_window_too_large": {
-      "message": "The requested time window exceeds the maximum of {max_hours} hours."
-    },
-    "logbook_unavailable": {
-      "message": "The logbook integration is not available."
-    },
-    "query_failed": {
-      "message": "The query failed: {error}"
-    },
-    "invalid_cursor": {
-      "message": "The pagination cursor is invalid or expired."
-    },
-    "analytics_unknown_op": {
-      "message": "Unsupported analytics operation {op}."
-    },
-    "analytics_unknown_group_key": {
-      "message": "Unsupported analytics group key {group_key}."
-    },
-    "analytics_bad_bucket": {
-      "message": "Invalid analytics bucket {bucket}."
-    },
-    "sql_too_long": {
-      "message": "SQL must not exceed {max_length} characters."
-    },
-    "sql_unknown_table": {
-      "message": "Unknown SQL table: {reason}."
-    },
-    "sql_unknown_column": {
-      "message": "Unknown SQL column: {reason}."
-    },
-    "sql_read_only": {
-      "message": "Only read-only SQL is allowed: {reason}."
-    },
-    "sql_syntax_error": {
-      "message": "SQL syntax error: {reason}."
-    },
-    "sql_timeout": {
-      "message": "SQL query timed out."
     }
   }
 }

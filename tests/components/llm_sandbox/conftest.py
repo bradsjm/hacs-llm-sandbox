@@ -1,6 +1,5 @@
 """Shared fixtures for LLM Sandbox component tests."""
 
-import pytest
 from custom_components.llm_sandbox.const import (
     CONF_ACTIONS_ENABLED,
     CONF_ASSISTANT,
@@ -12,6 +11,7 @@ from custom_components.llm_sandbox.const import (
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
+import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 

@@ -2,7 +2,6 @@
 
 from collections.abc import Sequence
 
-import pytest
 from custom_components.llm_sandbox.llm_api.resolution import resolve_target_entity
 from custom_components.llm_sandbox.snapshot.models import (
     HomeSnapshot,
@@ -12,6 +11,7 @@ from custom_components.llm_sandbox.snapshot.models import (
     SafeUnitSystem,
     SnapshotIndexes,
 )
+import pytest
 
 _TIMESTAMP = 1782691200.0
 

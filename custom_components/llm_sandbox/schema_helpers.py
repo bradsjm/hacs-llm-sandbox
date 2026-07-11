@@ -3,8 +3,8 @@
 from collections.abc import Mapping
 from typing import Any
 
-import voluptuous as vol
 from homeassistant.helpers.typing import VolDictType
+import voluptuous as vol
 
 
 def section_defaults(section_schema: VolDictType) -> dict[str, Any]:

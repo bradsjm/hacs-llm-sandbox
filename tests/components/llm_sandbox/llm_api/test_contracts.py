@@ -4,8 +4,8 @@ import re
 import subprocess
 import sys
 
-import pytest
 from custom_components.llm_sandbox.llm_api.contracts import MONTY_TYPE_STUBS
+import pytest
 
 
 def test_facades_and_executor_import_in_fresh_process() -> None:

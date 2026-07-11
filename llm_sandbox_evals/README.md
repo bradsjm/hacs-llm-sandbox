@@ -13,7 +13,7 @@ uv run --group dev --group evals python -m llm_sandbox_evals eval --models stub
 
 The `stub` FunctionModel is deterministic and keyless — it validates the full pipeline (Pydantic AI agent -> production tool core -> terminal answer -> scoring -> native report) end to end. It prints the run directory and compact native analysis lines:
 
-```
+```text
 eval_data/runs/20260630-164326-318981
 
 overall_mean: 0.858
@@ -51,6 +51,7 @@ uv run --group dev --group evals python -m llm_sandbox_evals optimize \
 ```
 
 Flags:
+
 - `--target-model` — model to optimize against (required; must be a real model, not `stub`).
 - `--proposer-model` — model COPRO uses to propose rewrites (defaults to the target model).
 - `--breadth` / `--depth` — COPRO search breadth/depth (defaults 5/2). COPRO requires breadth greater than 1. Cost scales as `breadth × depth × trainset`.
@@ -73,14 +74,14 @@ uv run --group dev --group evals python -m llm_sandbox_evals eval \
 
 ## Commands
 
-```
+```text
 python -m llm_sandbox_evals eval [--models id,...] [--candidates id,...] [--prompt-profile ID] [--cases id,...|category,...] [--concurrency N] [--max-tool-calls N] [--model-timeout SECONDS] [--reasoning LEVEL] [--logfire] [--runs-dir PATH]
 python -m llm_sandbox_evals optimize --target-model ID [--proposer-model ID] [--prompt-profile ID] [--breadth N] [--depth N] [--length-penalty COEFF] [--cases ...] [--cross-eval-models ...] [--target-reasoning LEVEL] [--proposer-reasoning LEVEL] [--reasoning LEVEL] [--runs-dir PATH]
 python -m llm_sandbox_evals report <run_id> [--html] [--runs-dir PATH]
 ```
 
 - `eval` builds a native `pydantic_evals.Dataset`, runs the matrix, prints the native `EvaluationReport` summary, and writes `report.json` plus interactive `report.html` artifacts under `eval_data/runs/<run_id>/`.
-- `optimize` runs DSPy COPRO against one target model and cross-evaluates the winner (see *Optimizing the prompt* above).
+- `optimize` runs DSPy COPRO against one target model and cross-evaluates the winner (see _Optimizing the prompt_ above).
 - `report <run_id>` re-renders saved native analyses and cell scores from `report.json` and makes no model calls; add `--html` to regenerate `report.html` only.
 - `--cases` accepts case ids **or** category names (`state_read`, `registry_read`, `recorder_read`, `action_allowed`, `action_blocked`, `complex`, `recovery`).
 - `--candidates` accepts `baseline`, `profile:<id>` production profiles, and `optimized:<path>` (a saved `optimized_candidate.json`).
@@ -120,31 +121,31 @@ Edit `data/cases.yaml`. It is a native `pydantic_evals.Dataset` file with one au
 ```yaml
 name: llm_sandbox_cases
 cases:
-- name: my_case
-  inputs:
-    id: my_case
-    category: state_read
-    home: home_default
-    user_request: What is the living room temperature?
-    actions_enabled: false
-    llm_context:
-      platform: test
-      device_id: null
-      language: en
-    expected:
-      answer_values:
-      - '25.2'
-      provenance_values:
-      - sensor.living_temp
-      tool_result_checks:
-      - tool_name: execute_home_code
-        entity_ids:
-        - sensor.living_temp
-        entry_values:
-        - '25.2'
-      answer_excludes: []
-      actions: []
-      max_tool_calls: 10
+  - name: my_case
+    inputs:
+      id: my_case
+      category: state_read
+      home: home_default
+      user_request: What is the living room temperature?
+      actions_enabled: false
+      llm_context:
+        platform: test
+        device_id: null
+        language: en
+      expected:
+        answer_values:
+          - "25.2"
+        provenance_values:
+          - sensor.living_temp
+        tool_result_checks:
+          - tool_name: execute_home_code
+            entity_ids:
+              - sensor.living_temp
+            entry_values:
+              - "25.2"
+        answer_excludes: []
+        actions: []
+        max_tool_calls: 10
 ```
 
 Categories: `state_read`, `registry_read`, `recorder_read`, `action_allowed`, `action_blocked`, `complex`, `recovery`. New cases should use the current outcome fields:

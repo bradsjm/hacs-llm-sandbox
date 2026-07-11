@@ -1,6 +1,5 @@
 from dataclasses import replace
 
-import pytest
 from custom_components.llm_sandbox.const import DEFAULT_PROMPT_PROFILE
 from custom_components.llm_sandbox.llm_api.data.history import AGGREGATORS
 from custom_components.llm_sandbox.llm_api.prompts import resolve_profile
@@ -11,6 +10,7 @@ from llm_sandbox_evals.prompts import candidate_prompt_sizes, load_candidates
 from llm_sandbox_evals.runtime import build_eval_runtime
 from llm_sandbox_evals.schema import CaseContext, EvalCase, Expected
 from llm_sandbox_evals.tools import EVAL_SCOPE, apply_scope
+import pytest
 from voluptuous_openapi import convert
 
 

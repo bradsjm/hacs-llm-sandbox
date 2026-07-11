@@ -8,8 +8,8 @@ self-describe available targets. This module never touches live Home Assistant
 objects and performs no I/O.
 """
 
-import re
 from dataclasses import dataclass
+import re
 
 from ..snapshot.models import HomeSnapshot
 

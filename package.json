@@ -1,0 +1,9 @@
+{
+  "name": "hacs-llm-sandbox",
+  "private": true,
+  "devDependencies": {
+    "markdownlint-cli2": "^0.22.1",
+    "prettier": "^3.6.2",
+    "prettier-plugin-sort-json": "^4.2.0"
+  }
+}

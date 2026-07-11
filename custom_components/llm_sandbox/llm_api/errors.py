@@ -5,9 +5,9 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, NotRequired, TypedDict, cast
 from uuid import uuid4
 
-import voluptuous as vol
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.util.json import JsonObjectType
+import voluptuous as vol
 
 from ..types import ActionRecord, TranslationPlaceholders
 

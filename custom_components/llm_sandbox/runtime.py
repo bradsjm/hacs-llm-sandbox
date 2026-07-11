@@ -1,8 +1,8 @@
 """Typed runtime data for LLM Sandbox config entries."""
 
-import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
+import re
 from typing import cast
 
 from homeassistant.config_entries import ConfigEntry

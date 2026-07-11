@@ -3,7 +3,6 @@
 from collections.abc import Iterable
 from typing import Any, cast, final, override
 
-import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlow
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.data_entry_flow import section
@@ -19,6 +18,7 @@ from homeassistant.helpers.selector import (
     SelectSelectorMode,
 )
 from homeassistant.helpers.typing import VolDictType
+import voluptuous as vol
 
 from .const import (
     CONF_ACTION_DOMAINS,

@@ -1,13 +1,12 @@
 """Behavior tests for recorder-backed LLM tools."""
 
 import base64
-import json
-import time
 from collections.abc import Mapping
 from datetime import timedelta
+import json
+import time
 from typing import cast
 
-import pytest
 from custom_components.llm_sandbox.const import TOOL_GET_HISTORY, TOOL_GET_LOGBOOK, TOOL_GET_STATISTICS
 from custom_components.llm_sandbox.llm_api.tools import recorder
 from custom_components.llm_sandbox.llm_api.tools.recorder import GetHistoryTool, GetLogbookTool, GetStatisticsTool
@@ -19,6 +18,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import llm
 from homeassistant.util import dt as dt_util
 from homeassistant.util.json import JsonObjectType
+import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 

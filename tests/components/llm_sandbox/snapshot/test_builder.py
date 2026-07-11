@@ -3,8 +3,6 @@
 from datetime import UTC, datetime
 from typing import cast
 
-import pytest
-import voluptuous as vol
 from custom_components.llm_sandbox.snapshot import (
     DEFAULT_SCOPE,
     SnapshotScope,
@@ -22,7 +20,9 @@ from homeassistant.helpers import floor_registry as fr
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers import label_registry as lr
 from homeassistant.helpers.service import async_set_service_schema
+import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
+import voluptuous as vol
 
 DEFAULT_PRODUCT_SCOPE = SnapshotScope(
     assistant="conversation",

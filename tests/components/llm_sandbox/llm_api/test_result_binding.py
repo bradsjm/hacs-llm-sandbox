@@ -1,12 +1,12 @@
 """Tests for Monty result binding helpers."""
 
-import pytest
 from custom_components.llm_sandbox.llm_api.normalization.result_binding import (
     PROMOTED_LAST_EXPRESSION,
     RESULT_NONE_DEFAULT,
     append_result_expression,
     promote_last_expression_to_result,
 )
+import pytest
 
 
 @pytest.mark.parametrize(

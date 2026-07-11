@@ -29,7 +29,7 @@ On success, return the useful result directly. On failure, return actionable fee
 
 Do not require the LLM to learn integration-specific details when normal Home Assistant knowledge can be adapted safely inside the tool.
 
-Prioritize improving accomdating reasonable intent over increasing prompting length.
+Prioritize accommodating reasonable intent over increasing prompting length.
 
 ## Non-Negotiables
 
@@ -56,7 +56,7 @@ Note: eval runs need **both** groups (`dev` provides `homeassistant`, `evals` pr
 
 The native experiment builds a `pydantic_evals.Dataset` with one case per `(candidate, model, case)` matrix cell, then evaluates each cell through `harness.run_case`:
 
-```
+```text
 profile  = resolve_profile(config.prompt_profile)         # selected production prompt profile
 snapshot = apply_scope(homes.get_home(case.home).snapshot(), EVAL_SCOPE)
 runtime  = build_eval_runtime(case, candidate, profile, snapshot, fixture)

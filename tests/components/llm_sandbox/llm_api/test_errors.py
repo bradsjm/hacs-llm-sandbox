@@ -1,12 +1,12 @@
 """Tests for shared LLM-facing recoverable error messages."""
 
-import pytest
 from custom_components.llm_sandbox.llm_api.errors import (
     setup_error_payload,
     tool_error_envelope,
     tool_error_message,
 )
 from custom_components.llm_sandbox.types import TranslationPlaceholders
+import pytest
 
 
 @pytest.mark.parametrize(

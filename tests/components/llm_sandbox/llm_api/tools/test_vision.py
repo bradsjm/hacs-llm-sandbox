@@ -1,12 +1,11 @@
 """Behavior tests for the get_camera_image LLM tool."""
 
 import base64
-import io
 from collections.abc import Mapping
+import io
 from typing import cast
 from unittest.mock import patch
 
-import pytest
 from custom_components.llm_sandbox.const import TOOL_GET_CAMERA_IMAGE
 from custom_components.llm_sandbox.llm_api.tools import vision
 from custom_components.llm_sandbox.llm_api.tools.vision import GetCameraImageTool
@@ -16,6 +15,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import llm
 from homeassistant.util.json import JsonObjectType
 from PIL import Image as PILImage
+import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 

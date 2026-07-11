@@ -1,6 +1,5 @@
 """Tests for the prompt profile registry."""
 
-import pytest
 from custom_components.llm_sandbox.const import DEFAULT_PROMPT_PROFILE
 from custom_components.llm_sandbox.llm_api.prompts import (
     PROFILE_OPTIONS,
@@ -16,6 +15,7 @@ from custom_components.llm_sandbox.llm_api.prompts import (
 from custom_components.llm_sandbox.llm_api.tools.code import ExecuteHomeCodeTool
 from custom_components.llm_sandbox.llm_api.tools.recorder import GetHistoryTool, GetLogbookTool, GetStatisticsTool
 from custom_components.llm_sandbox.llm_api.tools.vision import GetCameraImageTool
+import pytest
 
 
 def test_registry_has_expected_profiles() -> None:

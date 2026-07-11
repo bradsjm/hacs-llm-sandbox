@@ -1,13 +1,12 @@
 """End-to-end tests for the Monty executor with HA-native facades."""
 
-import json
-import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import replace
 from datetime import datetime, timedelta
+import json
+import time
 from typing import Any, cast
 
-import pytest
 from custom_components.llm_sandbox.const import (
     CONF_ACTIONS_ENABLED,
     DEFAULT_PROMPT_PROFILE,
@@ -36,6 +35,7 @@ from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import llm
+import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from .test_analytics import _snapshot

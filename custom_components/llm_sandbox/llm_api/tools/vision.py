@@ -9,7 +9,6 @@ import io
 import logging
 from typing import cast, final, override
 
-import voluptuous as vol
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
@@ -18,6 +17,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.network import get_url
 from homeassistant.util.json import JsonObjectType
 from PIL import Image
+import voluptuous as vol
 
 from ...const import (
     DEFAULT_IMAGE_TARGET_WIDTH,

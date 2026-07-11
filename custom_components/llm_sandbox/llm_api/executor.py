@@ -1,11 +1,12 @@
 """Monty-backed code executor for the LLM Sandbox facade runtime."""
 
 import asyncio
-import re
 from collections.abc import Sequence
+from dataclasses import dataclass
+import re
 
-import pydantic_monty  # Required manifest dependency; do not convert to a dynamic import.
 from homeassistant.exceptions import HomeAssistantError
+import pydantic_monty  # Required manifest dependency; do not convert to a dynamic import.
 
 from ..const import DOMAIN
 from ..snapshot.models import HomeSnapshot
@@ -33,7 +34,7 @@ from .legacy_notes import (
     _referenced_visible_state_id,
     compute_legacy_note,
 )
-from .literal_resolution import substitute_remembered_literals
+from .literal_resolution import ResolvedLiteral, substitute_remembered_literals
 from .normalization import result_binding, rewrite
 from .sandbox_context import RuntimeContext, activate_runtime, clear_runtime
 
@@ -53,6 +54,19 @@ MAX_PRINTED_LINES = 200
 # dataclass binding. The rewrite engine derives async/sync method names
 # from MONTY_DATACLASS_REGISTRY directly.
 DATACLASS_REGISTRY = MONTY_DATACLASS_REGISTRY
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedExecution:
+    """Inputs prepared before activating the per-run Monty context."""
+
+    factory: MontyFactory
+    resolved_code: str
+    executable_code: str
+    resolutions: list[ResolvedLiteral]
+    facade_inputs: dict[str, object]
+    input_names: list[str]
+    print_collector: pydantic_monty.CollectString
 
 
 def _build_monty(
@@ -198,11 +212,24 @@ async def async_execute_home_code(
     runtime: RuntimeContext,
 ) -> dict[str, object] | HelperErrorPayload | CodeErrorPayload:
     """Run bounded Monty code against the LLM Sandbox facade runtime."""
+    prepared = _prepare_execution(code, snapshot, llm_context, runtime)
+    output, error_payload = await _execute_monty(prepared, snapshot, runtime)
+    if error_payload is not None:
+        return error_payload
+    return _success_payload(output, prepared, snapshot, runtime)
+
+
+def _prepare_execution(
+    code: str,
+    snapshot: HomeSnapshot,
+    llm_context: SafeLLMContext,
+    runtime: RuntimeContext,
+) -> _PreparedExecution:
+    """Validate, normalize, and assemble the isolated Monty inputs."""
     if not code.strip():
         raise validation_error("monty_code_required", {})
     if len(code) > MAX_MONTY_CODE_CHARS:
         raise validation_error("monty_code_too_long", {"max_length": str(MAX_MONTY_CODE_CHARS)})
-
     try:
         monty_factory = load_monty_factory()
     except ImportError as err:
@@ -212,40 +239,49 @@ async def async_execute_home_code(
             translation_placeholders={"error": err.__class__.__name__},
         ) from err
 
-    # Forgiveness pipeline (Postel's law): memory substitution runs first
-    # (snapshot-validated), then the unified shadow-safe AST rewrite engine
-    # (datetime → builtin → state sugar → await, one parse/one unparse,
-    # framework-level fail-open), then last-expression promotion before
-    # append_result_expression checks explicit ``result``.
+    # Forgiveness pipeline: memory substitution precedes the unified rewrite
+    # engine, then result binding checks the explicit ``result`` contract.
     resolved_code, resolutions = substitute_remembered_literals(code, snapshot, runtime.memory)
     normalized_code, rewrite_labels = rewrite(resolved_code)
     promoted_code, promote_labels = result_binding.promote_last_expression_to_result(normalized_code)
     executable_code, append_labels = result_binding.append_result_expression(promoted_code)
+    # State mutation point: retain only machine-readable normalization labels.
     runtime.state.normalizations = [*rewrite_labels, *promote_labels, *append_labels]
 
-    # Build facade globals from the snapshot.
+    # Facade globals are built solely from the fresh, visibility-filtered snapshot.
     facade_inputs = build_facades(snapshot)
     facade_inputs["llm_context"] = llm_context
-    input_names = list(facade_inputs.keys())
+    return _PreparedExecution(
+        factory=monty_factory,
+        resolved_code=resolved_code,
+        executable_code=executable_code,
+        resolutions=resolutions,
+        facade_inputs=facade_inputs,
+        input_names=list(facade_inputs),
+        print_collector=pydantic_monty.CollectString(),
+    )
 
-    # CollectString exposes one entry per print() call via .output (concatenated).
-    # We split on newlines to give the LLM one printable line per list entry.
-    print_collector = pydantic_monty.CollectString()
 
-    def _capture_printed() -> None:
-        """Persist captured print() lines before building any response payload."""
-        lines = [line for line in print_collector.output.splitlines() if line]
-        runtime.state.printed = lines[:MAX_PRINTED_LINES]
-        # State mutation point: print output is model-visible and can be large, so
-        # cap it with machine-readable overflow metadata instead of prose only.
-        if len(lines) > MAX_PRINTED_LINES:
-            runtime.state.overflow["printed"] = overflow_metadata(
-                truncated=True,
-                limit=MAX_PRINTED_LINES,
-                returned=len(runtime.state.printed),
-                omitted=len(lines) - MAX_PRINTED_LINES,
-            )
+def _capture_printed(print_collector: pydantic_monty.CollectString, runtime: RuntimeContext) -> None:
+    """Persist bounded print output before building any response payload."""
+    lines = [line for line in print_collector.output.splitlines() if line]
+    runtime.state.printed = lines[:MAX_PRINTED_LINES]
+    # State mutation point: cap model-visible output with machine-readable metadata.
+    if len(lines) > MAX_PRINTED_LINES:
+        runtime.state.overflow["printed"] = overflow_metadata(
+            truncated=True,
+            limit=MAX_PRINTED_LINES,
+            returned=len(runtime.state.printed),
+            omitted=len(lines) - MAX_PRINTED_LINES,
+        )
 
+
+async def _execute_monty(
+    prepared: _PreparedExecution,
+    snapshot: HomeSnapshot,
+    runtime: RuntimeContext,
+) -> tuple[object | None, HelperErrorPayload | CodeErrorPayload | None]:
+    """Run Monty and always close per-run resources and context."""
     try:
         activate_runtime(runtime, snapshot)
         limits: pydantic_monty.ResourceLimits = {
@@ -255,73 +291,91 @@ async def async_execute_home_code(
             "gc_interval": MONTY_GC_INTERVAL,
             "max_recursion_depth": MONTY_MAX_RECURSION_DEPTH,
         }
-        monty = _build_monty(monty_factory, executable_code, input_names, runtime.state)
+        monty = _build_monty(prepared.factory, prepared.executable_code, prepared.input_names, runtime.state)
         output = await asyncio.wait_for(
             monty.run_async(
-                inputs=facade_inputs,
+                inputs=prepared.facade_inputs,
                 limits=limits,
                 external_functions={},
-                print_callback=print_collector,
+                print_callback=prepared.print_collector,
             ),
             timeout=runtime.settings.execution_timeout_seconds,
         )
+        return output, None
     except TimeoutError:
-        _capture_printed()
-        return code_error_payload_for_state(
-            kind="TimeoutError",
-            message=f"Code execution timed out after {runtime.settings.execution_timeout_seconds} seconds.",
-            state=runtime.state,
+        _capture_printed(prepared.print_collector, runtime)
+        return (
+            None,
+            code_error_payload_for_state(
+                kind="TimeoutError",
+                message=f"Code execution timed out after {runtime.settings.execution_timeout_seconds} seconds.",
+                state=runtime.state,
+            ),
         )
     except HelperExecutionError as err:
-        _capture_printed()
-        return helper_error_payload_for_state(err, runtime.state)
+        _capture_printed(prepared.print_collector, runtime)
+        return None, helper_error_payload_for_state(err, runtime.state)
     except Exception as err:  # noqa: BLE001
-        # Monty wraps input-object method exceptions into MontyRuntimeError
-        # without preserving __cause__, so helper_error_from_exception cannot
-        # recover the structured error from the exception chain. Fall back to
-        # the per-run state where helper_response stored the last error, but
-        # only when Monty's generic wrapper carries that exact opaque marker.
-        _capture_printed()
-        if helper_error := helper_error_from_exception(err):
-            return helper_error_payload_for_state(helper_error, runtime.state)
-        if (candidate := runtime.state.last_helper_error) is not None:
-            specific = underlying_exception(err)
-            if specific.__class__ is Exception and specific.args == (candidate.marker,):
-                return helper_error_payload_for_state(candidate, runtime.state)
-        specific = underlying_exception(err)
-        refined_kind, refined_message, guidance = refine_code_error(
-            specific.__class__.__name__, str(specific) or str(err), resolved_code, snapshot
-        )
-        clean_message = _strip_monty_diagnostic(refined_message)
-        refined_kind, clean_message, guidance = _read_path_fix(
-            refined_kind, clean_message, resolved_code, snapshot, guidance
-        )
-        return code_error_payload_for_state(
-            kind=refined_kind,
-            message=clean_message,
-            state=runtime.state,
-            guidance=guidance,
-        )
+        _capture_printed(prepared.print_collector, runtime)
+        return None, _exception_payload(err, prepared, snapshot, runtime)
     finally:
-        # Capture print output even on success; CollectString.output is a
-        # concatenation, so we strip the trailing newline of each print() call.
-        _capture_printed()
+        # Capture output on success too, then close the database before context reset.
+        _capture_printed(prepared.print_collector, runtime)
         if runtime.state.home_db is not None:
-            # Close per-run SQLite state before clearing contextvars so no
-            # snapshot-derived database survives past this execute_home_code call.
+            # State mutation point: no snapshot-derived database survives this call.
             runtime.state.home_db.close()
             runtime.state.home_db = None
         clear_runtime()
 
+
+def _exception_payload(
+    err: Exception,
+    prepared: _PreparedExecution,
+    snapshot: HomeSnapshot,
+    runtime: RuntimeContext,
+) -> HelperErrorPayload | CodeErrorPayload:
+    """Translate Monty and facade exceptions into the established payloads."""
+    # Monty's wrapper can hide the original helper exception; recover its marker from run state.
+    if helper_error := helper_error_from_exception(err):
+        return helper_error_payload_for_state(helper_error, runtime.state)
+    if (candidate := runtime.state.last_helper_error) is not None:
+        specific = underlying_exception(err)
+        if specific.__class__ is Exception and specific.args == (candidate.marker,):
+            return helper_error_payload_for_state(candidate, runtime.state)
+    specific = underlying_exception(err)
+    refined_kind, refined_message, guidance = refine_code_error(
+        specific.__class__.__name__, str(specific) or str(err), prepared.resolved_code, snapshot
+    )
+    clean_message = _strip_monty_diagnostic(refined_message)
+    refined_kind, clean_message, guidance = _read_path_fix(
+        refined_kind, clean_message, prepared.resolved_code, snapshot, guidance
+    )
+    return code_error_payload_for_state(
+        kind=refined_kind,
+        message=clean_message,
+        state=runtime.state,
+        guidance=guidance,
+    )
+
+
+def _success_payload(
+    output: object,
+    prepared: _PreparedExecution,
+    snapshot: HomeSnapshot,
+    runtime: RuntimeContext,
+) -> dict[str, object]:
+    """Assemble the success payload from execution output and per-run state."""
     result = json_safe(output)
     execution_payload: dict[str, object] = {"status": "ok"}
     payload: dict[str, object] = {"execution": execution_payload, "output": result}
-    if resolutions:
-        payload["resolutions"] = [{"requested": item.requested, "applied": item.applied} for item in resolutions]
+    if prepared.resolutions:
+        payload["resolutions"] = [
+            {"requested": item.requested, "applied": item.applied} for item in prepared.resolutions
+        ]
     # Success-side notes are selected by an ordered static-analysis registry so
     # future legacy HA patterns can be added without growing executor branches.
     if note := compute_legacy_note(
-        LegacyNoteContext(code=resolved_code, snapshot=snapshot, result=result, memory=runtime.memory)
+        LegacyNoteContext(code=prepared.resolved_code, snapshot=snapshot, result=result, memory=runtime.memory)
     ):
         payload["note"] = note
     if runtime.state.printed:

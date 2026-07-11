@@ -1,8 +1,8 @@
 import json
 from pathlib import Path
 
-import pytest
 from llm_sandbox_evals.html_report import render_html, write_html
+import pytest
 
 
 def test_render_html_embeds_data_island() -> None:

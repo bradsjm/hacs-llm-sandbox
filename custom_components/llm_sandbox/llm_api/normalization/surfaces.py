@@ -4,8 +4,8 @@ Consumed by error refinement and tests; kept independent of the rewrite
 engine so the surface description survives normalization-layer changes.
 """
 
-import inspect
 from dataclasses import fields
+import inspect
 
 from ..facade_registry import ATTRIBUTE_REACHABLE_RECORDS, FACADE_CLASSES
 

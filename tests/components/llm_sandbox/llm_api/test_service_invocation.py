@@ -1,14 +1,12 @@
 """Behavior tests for live service invocation through the safe facade."""
 
 import asyncio
-import math
-import time
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field, replace
+import math
+import time
 from typing import cast
 
-import pytest
-import voluptuous as vol
 from custom_components.llm_sandbox.const import DEFAULT_PROMPT_PROFILE
 from custom_components.llm_sandbox.llm_api.errors import (
     CodeErrorPayload,
@@ -51,6 +49,8 @@ from custom_components.llm_sandbox.snapshot.models import (
 from custom_components.llm_sandbox.types import ActionRecord, ProposedAction
 from homeassistant.core import Context, SupportsResponse
 from homeassistant.exceptions import ServiceNotSupported
+import pytest
+import voluptuous as vol
 
 LIGHT_TURN_ON_BRIEF: ServiceSchemaBrief = {
     "fields": (

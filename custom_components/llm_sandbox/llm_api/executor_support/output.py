@@ -1,7 +1,7 @@
 """JSON-safe output and executor payload builders."""
 
-import math
 from collections.abc import Mapping, Sequence
+import math
 from typing import cast
 
 from homeassistant.util.json import JsonValueType

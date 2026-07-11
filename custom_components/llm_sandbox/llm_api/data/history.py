@@ -1,12 +1,12 @@
 """History analytics for recorder-backed LLM tools."""
 
-import math
-import statistics
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from itertools import pairwise
+import math
+import statistics
 from typing import Literal, cast
 
 from homeassistant.core import State

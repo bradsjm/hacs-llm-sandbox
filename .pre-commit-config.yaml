@@ -1,26 +1,55 @@
 repos:
-  - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v5.0.0
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.20
     hooks:
+      - id: ruff-check
+        args:
+          - --fix
+        files: ^(custom_components|tests)/.+\.(py|pyi)$
+      - id: ruff-format
+        files: ^(custom_components|tests)/.+\.(py|pyi)$
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-added-large-files
+      - id: check-executables-have-shebangs
+        stages: [manual]
+        exclude: ^\.agents/
       - id: check-json
+      - id: check-merge-conflict
       - id: check-toml
       - id: check-yaml
       - id: end-of-file-fixer
+        exclude: ^(\.agents/|docs-site/\.docusaurus/)
       - id: trailing-whitespace
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.15.17
-    hooks:
-      - id: ruff-check
-      - id: ruff-format
+        exclude: ^(\.agents/|docs-site/\.docusaurus/)
   - repo: https://github.com/codespell-project/codespell
-    rev: v2.4.1
+    rev: v2.3.0
     hooks:
       - id: codespell
-        args: ["-L", "hass"]
+        additional_dependencies: ["tomli"]
+        args: ["--toml", "pyproject.toml"]
+  - repo: https://github.com/adrienverge/yamllint.git
+    rev: v1.38.0
+    hooks:
+      - id: yamllint
+        files: ^(\.github/.*|\.pre-commit-config\.yaml|\.yamllint|custom_components/.+\.ya?ml)$
   - repo: local
     hooks:
-      - id: mypy
-        name: mypy
-        entry: uv run mypy
+      - id: format
+        name: format
+        entry: scripts/format
         language: system
         pass_filenames: false
+      - id: test-smoke
+        name: test-smoke
+        entry: scripts/test-smoke
+        language: system
+        pass_filenames: false
+      - id: check
+        name: check
+        entry: scripts/check
+        language: system
+        pass_filenames: false
+        stages: [manual]

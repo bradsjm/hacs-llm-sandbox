@@ -1,0 +1,10 @@
+package-lock.json
+uv.lock
+.agents/
+.venv/
+.ruff_cache/
+node_modules/
+**/AGENTS.md
+docs-site/
+llm_sandbox_evals/data/
+llm_sandbox_evals/homes/

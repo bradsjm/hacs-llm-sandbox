@@ -1,7 +1,6 @@
 from collections.abc import Sequence
 from pathlib import Path
 
-import pytest
 from custom_components.llm_sandbox.const import DEFAULT_PROMPT_PROFILE
 from freezegun.api import FrozenDateTimeFactory
 from llm_sandbox_evals.config import EvalConfig
@@ -18,6 +17,7 @@ from pydantic_ai.messages import ModelMessage, ModelResponse
 from pydantic_ai.models import Model
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_evals.reporting.analyses import ScalarResult, TableResult
+import pytest
 
 from llm_sandbox_evals import agent_runner, reports
 

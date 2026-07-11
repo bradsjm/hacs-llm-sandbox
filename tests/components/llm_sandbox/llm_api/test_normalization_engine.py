@@ -1,6 +1,5 @@
 """Tests for unified AST normalization."""
 
-import pytest
 from custom_components.llm_sandbox.llm_api.normalization import rewrite
 from custom_components.llm_sandbox.llm_api.normalization.rules.await_rules import (
     AWAITED_ASYNC_CALLS,
@@ -22,6 +21,7 @@ from custom_components.llm_sandbox.llm_api.normalization.rules.service_target_ru
 from custom_components.llm_sandbox.llm_api.normalization.rules.state_sugar_rules import (
     REWROTE_SYNC_SUBSCRIPT,
 )
+import pytest
 
 
 @pytest.mark.parametrize(

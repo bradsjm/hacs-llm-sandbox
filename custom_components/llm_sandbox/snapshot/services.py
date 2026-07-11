@@ -2,9 +2,9 @@
 
 from collections.abc import Mapping
 
-import voluptuous as vol
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.service import async_get_cached_service_description
+import voluptuous as vol
 
 from .models import (
     ServiceFieldBrief,

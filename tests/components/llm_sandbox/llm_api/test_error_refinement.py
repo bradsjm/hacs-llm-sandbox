@@ -1,8 +1,8 @@
 """Tests for Monty error-forgiveness refinement."""
 
-import pytest
 from custom_components.llm_sandbox.llm_api.executor_support import refine_code_error
 from custom_components.llm_sandbox.snapshot.models import HomeSnapshot, SafeConfig, SafeUnitSystem, SnapshotIndexes
+import pytest
 
 
 @pytest.fixture(name="snapshot")

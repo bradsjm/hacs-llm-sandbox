@@ -2,7 +2,6 @@
 
 from typing import cast
 
-import pytest
 from custom_components.llm_sandbox.llm_api.errors import HelperExecutionError
 from custom_components.llm_sandbox.llm_api.executor_support import (
     ExecutionState,
@@ -14,6 +13,7 @@ from custom_components.llm_sandbox.llm_api.executor_support import (
     underlying_exception,
     validation_error,
 )
+import pytest
 
 
 class JsonHookObject:

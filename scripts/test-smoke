@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+uv run pytest \
+  --timeout=10 \
+  -n 0 \
+  -q \
+  tests/components/llm_sandbox/test_setup.py::test_setup_assigns_runtime_data \
+  tests/components/llm_sandbox/test_config_flow.py::test_user_step_shows_form \
+  tests/components/llm_sandbox/llm_api/test_contracts.py::test_facades_and_executor_import_in_fresh_process \
+  tests/components/llm_sandbox/llm_api/test_normalization_engine.py::test_rewrite_noop_purity \
+  tests/components/llm_sandbox/snapshot/test_builder.py::test_snapshot_captures_states_and_registry_entries \
+  "$@"

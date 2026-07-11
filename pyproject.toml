@@ -13,6 +13,7 @@ package = false
 
 [dependency-groups]
 dev = [
+  "codespell>=2.4.2",
   "home-assistant-intents>=2026.6.24",
   "homeassistant>=2026.6.4",
   "mypy>=2.1.0",
@@ -113,6 +114,10 @@ ignore = [
     "TC006",
 ]
 
+[tool.ruff.lint.isort]
+force-sort-within-sections = true
+known-first-party = ["llm_sandbox"]
+
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "__future__.annotations".msg = "not needed because this project requires Python 3.14+"
 "async_timeout".msg = "use asyncio.timeout instead"
@@ -156,7 +161,7 @@ enable_error_code = ["deprecated", "ignore-without-code", "redundant-self", "tru
 disable_error_code = ["annotation-unchecked", "import-not-found", "import-untyped"]
 
 [[tool.mypy.overrides]]
-module = ["tests.*"]
+module = "tests.*"
 disallow_incomplete_defs = false
 disallow_untyped_calls = false
 disallow_untyped_decorators = false
@@ -174,3 +179,20 @@ disable_error_code = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests/components/llm_sandbox", "tests/llm_sandbox_evals"]
+
+[tool.codespell]
+ignore-words-list = ["hass", "nam", "iac", "sht", "hel", "iif", "NotIn", "temperture"]
+skip = "./.git,./.agents,./.mex,./.opencode,./.venv,./node_modules,docs-site/**,./uv.lock,./pnpm-lock.yaml,./package-lock.json,*.min.js,*.lock"
+
+[tool.pydoclint]
+style = "google"
+check-return-types = true
+skip-checking-short-docstrings = false
+skip-checking-private-functions = true
+skip-checking-raises = true
+arg-type-hints-in-docstring = false
+arg-type-hints-in-signature = true
+allow-init-docstring = true
+check-class-attributes = false
+require-return-section-when-returning-nothing = false
+should-document-star-arguments = false

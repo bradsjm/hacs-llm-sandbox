@@ -1,0 +1,21 @@
+{
+  "config": {
+    "MD013": false,
+    "MD024": false,
+    "MD033": false,
+  },
+  "globs": ["**/*.md"],
+  "ignores": [
+    "**/node_modules/**",
+    ".venv/**",
+    ".agents/**",
+    ".mex/**",
+    ".opencode/**",
+    "**/AGENTS.md",
+    ".git/**",
+    "docs-site/**",
+    "uv.lock",
+    "pnpm-lock.yaml",
+    "package-lock.json",
+  ],
+}

@@ -1,12 +1,12 @@
 """Bounded in-memory SQLite database over the frozen home snapshot."""
 
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from datetime import datetime
 import json
 import re
 import sqlite3
 import time
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
-from datetime import datetime
 from typing import cast
 
 from homeassistant.util import dt as dt_util

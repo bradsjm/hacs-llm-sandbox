@@ -1,5 +1,5 @@
-import pytest
 from llm_sandbox_evals.tools import _for_scoring
+import pytest
 
 
 @pytest.mark.parametrize(

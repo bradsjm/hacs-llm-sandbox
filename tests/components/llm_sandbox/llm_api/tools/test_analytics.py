@@ -4,7 +4,6 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from typing import cast
 
-import pytest
 from custom_components.llm_sandbox.llm_api.data.history import analytics_spec_from_data, run_analytics
 from custom_components.llm_sandbox.llm_api.errors import RecoverableToolError
 from custom_components.llm_sandbox.snapshot.models import (
@@ -15,6 +14,7 @@ from custom_components.llm_sandbox.snapshot.models import (
     SafeUnitSystem,
     SnapshotIndexes,
 )
+import pytest
 
 
 def test_run_analytics_groups_buckets_and_counts_non_numeric_skips() -> None:

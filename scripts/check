@@ -4,4 +4,7 @@ set -euo pipefail
 scripts/lint-check
 scripts/type-check
 scripts/yaml-check
+scripts/markdown-check
+uv run pre-commit run codespell --all-files
+pnpm exec prettier --check .
 scripts/test

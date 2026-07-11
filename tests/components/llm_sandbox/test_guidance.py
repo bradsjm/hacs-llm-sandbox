@@ -1,11 +1,10 @@
 """Behavior tests for the pure guidance recovery engine."""
 
-import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime
+import json
 
-import pytest
 from custom_components.llm_sandbox.llm_api.guidance import advise, score
 from custom_components.llm_sandbox.llm_api.guidance.context import FailureContext, Intent
 from custom_components.llm_sandbox.llm_api.guidance.payload import Candidate
@@ -42,6 +41,7 @@ from custom_components.llm_sandbox.snapshot.models import (
     SnapshotIndexes,
 )
 from homeassistant.core import SupportsResponse
+import pytest
 
 _CREATED_AT = "2026-06-29T12:00:00+00:00"
 type CandidateMapping = dict[str, object]

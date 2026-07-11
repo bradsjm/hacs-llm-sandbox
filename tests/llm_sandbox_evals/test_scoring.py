@@ -1,4 +1,3 @@
-import pytest
 from llm_sandbox_evals.harness import _recorded_actions_from_tool_events
 from llm_sandbox_evals.schema import (
     BlockedOutcome,
@@ -10,6 +9,7 @@ from llm_sandbox_evals.schema import (
     ToolResultCheck,
 )
 from llm_sandbox_evals.scoring import check_case, is_incomplete, score_case
+import pytest
 
 
 def test_structured_action_outcome_scores_with_tool_call_efficiency() -> None:
@@ -889,7 +889,7 @@ def test_intermediate_errored_action_does_not_fail_allowed_action_case() -> None
 @pytest.mark.parametrize(
     ("output", "acknowledgement_values"),
     [
-        pytest.param("I can't turn that on from here.", ("cannot", "can't", "unable"), id="cant"),
+        pytest.param("I can't turn that on from here.", ("cannot", "can't", "unable"), id="cannot"),
         pytest.param("I'm unable to turn that on from here.", ("cannot", "can't", "unable"), id="unable"),
     ],
 )

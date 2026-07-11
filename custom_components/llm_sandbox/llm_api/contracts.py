@@ -36,8 +36,8 @@ _RECORD_MAPPING_READ_STUBS = (
 
 
 def _format_type(annotation: object) -> str:
-    import inspect
     from collections.abc import Mapping as AbcMapping
+    import inspect
     from types import UnionType
     from typing import get_args, get_origin
 
