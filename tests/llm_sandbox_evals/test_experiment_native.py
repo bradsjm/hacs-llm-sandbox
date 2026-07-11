@@ -13,6 +13,8 @@ from llm_sandbox_evals.schema import (
     Expected,
     PromptCandidate,
 )
+from llm_sandbox_evals.scoring import tool_call_par
+from llm_sandbox_evals.terminal import _call_text, _cell_duration, _gate_text, _outcome_detail
 from pydantic_ai.messages import ModelMessage, ModelResponse
 from pydantic_ai.models import Model
 from pydantic_ai.models.function import AgentInfo, FunctionModel
@@ -77,6 +79,7 @@ async def test_run_matrix_emits_cell_and_tool_lifecycle_events(tmp_path: Path) -
         "cell_started",
         "tool_started",
         "tool_finished",
+        "response_received",
         "cell_finished",
     ]
     cell = MatrixCellRef(
@@ -90,8 +93,118 @@ async def test_run_matrix_emits_cell_and_tool_lifecycle_events(tmp_path: Path) -
     assert all(event.cell == cell for event in events[1:])
     assert all(event.request == "What is the current temperature in the living room?" for event in events[1:])
     assert [event.tool_name for event in events[2:4]] == ["execute_home_code", "execute_home_code"]
+    assert events[-2].response == report.cases[0].output.output
     assert events[-1].trace == report.cases[0].output
     assert events[-1].completion_index == 1
+
+
+async def test_run_matrix_assigns_stable_completion_indexes_to_multiple_cells(tmp_path: Path) -> None:
+    events: list[MatrixProgressEvent] = []
+
+    await run_matrix(
+        _config(tmp_path, cases=["state_living_temperature", "multi_history_then_living_fan"]),
+        run_id="stub-completion-indexes",
+        on_event=events.append,
+    )
+
+    completed = [event for event in events if event.state == "cell_finished"]
+
+    assert [event.completion_index for event in completed] == [1, 2]
+    assert [event.total for event in completed] == [2, 2]
+
+
+def test_gate_text_encodes_requiredness_and_result() -> None:
+    gates = _gate_text(
+        (
+            CheckResult("required_pass", True, True, ""),
+            CheckResult("optional_pass", True, False, ""),
+            CheckResult("required_fail", False, True, ""),
+            CheckResult("optional_fail", False, False, ""),
+        )
+    )
+
+    assert gates.plain == "■□■□"
+    assert [span.style for span in gates.spans] == ["#55c97c", "#55c97c", "#f2705f", "#f2705f"]
+
+
+def test_call_text_uses_scoring_par_for_efficiency_color() -> None:
+    par = tool_call_par(Expected(tool_call_par=2))
+    at_par = _call_text(2, par)
+    above_par = _call_text(3, par)
+
+    assert at_par.plain == "2"
+    assert at_par.style == "#55c97c"
+    assert above_par.plain == "3"
+    assert above_par.style == "#d9a514"
+
+
+@pytest.mark.parametrize(
+    ("check", "expected_parts"),
+    [
+        pytest.param(
+            CheckResult("provenance_evidence_present", False, True, "missing=sensor.living_temp"),
+            ("No", "sensor.living_temp"),
+            id="missing-evidence",
+        ),
+        pytest.param(
+            CheckResult(
+                "tool_result_check_0",
+                False,
+                True,
+                "tool=get_history failures=missing_entity:sensor.living_temp",
+            ),
+            ("get_history", "missing entity", "sensor.living_temp"),
+            id="tool-result",
+        ),
+        pytest.param(
+            CheckResult("actions_match", False, True, "unmatched=light.turn_on"),
+            ("Missing action", "light.turn_on"),
+            id="action-mismatch",
+        ),
+        pytest.param(
+            CheckResult("model_error", False, True, "RuntimeError: provider unavailable"),
+            ("Provider/model issue",),
+            id="provider-error",
+        ),
+        pytest.param(
+            CheckResult("unfamiliar_gate", False, True, "status=bad detail"),
+            ("unfamiliar gate", "status=bad detail"),
+            id="unknown-fallback",
+        ),
+    ],
+)
+def test_outcome_detail_humanizes_required_failure(check: CheckResult, expected_parts: tuple[str, ...]) -> None:
+    detail = _outcome_detail((check,))
+
+    assert all(part in detail for part in expected_parts)
+
+
+@pytest.mark.parametrize(
+    ("seconds", "expected"),
+    [
+        pytest.param(0.4, "0.4s", id="subsecond"),
+        pytest.param(10.4, "10s", id="seconds"),
+        pytest.param(61.0, "1:01", id="minute"),
+    ],
+)
+def test_cell_duration_is_compact(seconds: float, expected: str) -> None:
+    assert _cell_duration(seconds) == expected
+
+
+@pytest.mark.parametrize(
+    ("count", "expected_plain"),
+    [
+        pytest.param(10, "■" * 10, id="fits-width"),
+        pytest.param(12, "■" * 8 + "+4", id="single-digit-omitted"),
+        pytest.param(123, "■" * 6 + "+117", id="multi-digit-omitted"),
+    ],
+)
+def test_gate_text_reports_actual_omitted_count(count: int, expected_plain: str) -> None:
+    checks = tuple(CheckResult(f"check_{index}", True, True, "") for index in range(count))
+
+    gates = _gate_text(checks)
+
+    assert gates.plain == expected_plain
 
 
 @pytest.mark.parametrize(

@@ -6,7 +6,7 @@ from time import perf_counter
 from typing import Self
 
 from rich import box
-from rich.console import Console, Group
+from rich.console import Console, ConsoleOptions, Group, RenderableType, RenderResult
 from rich.live import Live
 from rich.markup import escape
 from rich.panel import Panel
@@ -26,9 +26,14 @@ _WARNING = "#d9a514"
 _ERROR = "#f2705f"
 _FAIL_GLYPH = "\u2717"
 _REFRESH_PER_SECOND = 4
-_RECENT_RESULTS = 5
+_RECENT_RESULTS = 10
 _MAX_DIAGNOSTIC_CHARS = 500
 _MODEL_METADATA_WIDTH = 18
+_RECENT_MODEL_WIDTH = 11
+_PHASE_WIDTH = 32
+_GATE_WIDTH = 10
+_NARROW_GATE_WIDTH = 8
+_RECENT_RESPONSE_MIN_WIDTH = 100
 
 
 @dataclass(slots=True)
@@ -39,6 +44,7 @@ class _Lane:
     request: str
     started_at: float
     active_tools: Counter[str] = field(default_factory=Counter)
+    response: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,6 +56,50 @@ class _RecentResult:
     outcome: str
     reason: str
     tool_calls: int
+    completion_index: int
+    response: str
+    checks: tuple[CheckResult, ...]
+    tool_call_par: int | None
+    elapsed: float
+
+
+@dataclass(frozen=True, slots=True)
+class _LeftEllipsisText:
+    """Render terminal text with its most useful suffix retained at any column width."""
+
+    value: str
+    style: str = ""
+
+    def __rich_console__(self, _console: Console, options: ConsoleOptions) -> RenderResult:
+        """Yield Rich text left-truncated to the column's actual render width."""
+        yield Text(_left_ellipsis(self.value, options.max_width), style=self.style)
+
+
+class _PhaseColumn(ProgressColumn):
+    """Render normal lane phases or a dim, suffix-preserving final response tail."""
+
+    def __init__(self, *, table_column: Column) -> None:
+        """Configure the shared phase/response column width."""
+        super().__init__(table_column=table_column)
+
+    def render(self, task: Task) -> RenderableType:
+        """Return the response tail for response rows, otherwise the current phase."""
+        response = task.fields.get("response")
+        if isinstance(response, str):
+            return _LeftEllipsisText(response, style="dim")
+        phase = task.fields["phase"]
+        assert isinstance(phase, str)
+        return Text.from_markup(phase)
+
+
+class _LaneSpinnerColumn(SpinnerColumn):
+    """Render the active-lane spinner while reserving its cell for response rows."""
+
+    def render(self, task: Task) -> RenderableType:
+        """Return a blank cell for final responses and the cyan spinner otherwise."""
+        if task.fields.get("show_spinner") is False:
+            return Text(" ")
+        return super().render(task)
 
 
 class _ElapsedColumn(ProgressColumn):
@@ -63,6 +113,8 @@ class _ElapsedColumn(ProgressColumn):
 
     def render(self, task: Task) -> Text:
         """Return elapsed time from the stable task start rather than a stale field."""
+        if task.fields.get("show_elapsed") is False:
+            return Text()
         started_at = task.fields["started_at"]
         assert isinstance(started_at, float)
         return Text(f"{self._prefix}{_duration(perf_counter() - started_at)}", style=self._style)
@@ -127,6 +179,11 @@ class MatrixTerminalReporter:
                     lane.active_tools[event.tool_name] -= 1
                 else:
                     lane.active_tools.pop(event.tool_name, None)
+        elif event.state == "response_received" and event.cell is not None:
+            lane = self._lanes.get(event.cell)
+            if lane is not None:
+                # State mutation point: retain only the final assistant response for presentation.
+                lane.response = _response_display(event.response)
         elif event.state == "cell_finished" and event.cell is not None and event.trace is not None:
             self._finish_cell(event)
             diagnostic = _compact_diagnostic(event.trace.error)
@@ -199,20 +256,34 @@ class MatrixTerminalReporter:
         request = event.request or (lane.request if lane is not None else cell.case_id)
         self._tool_calls += trace.tool_call_count
         if is_incomplete(trace.checks):
-            outcome, reason = "Could not complete", _failure_reason(trace.checks)
+            outcome = "Could not complete"
             self._incomplete += 1
         elif trace.score > 0:
-            outcome, reason = "Completed", "All required checks passed"
+            outcome = "Completed"
             self._passes += 1
         else:
-            outcome, reason = "Needs attention", _failure_reason(trace.checks)
+            outcome = "Needs attention"
             self._failures += 1
-        self._recent.append(_RecentResult(cell, request, outcome, reason, trace.tool_call_count))
+        self._recent.append(
+            _RecentResult(
+                cell,
+                request,
+                outcome,
+                _outcome_detail(trace.checks),
+                trace.tool_call_count,
+                event.completion_index or self._completed,
+                lane.response if lane is not None and lane.response is not None else "—",
+                trace.checks,
+                event.tool_call_par,
+                event.elapsed or 0.0,
+            )
+        )
 
     def _render(self) -> Group:
         return Group(
             Text("LLM Sandbox evaluation", style="bold"),
             self._overall_progress(),
+            Text(),
             Rule("Running now", style="dim"),
             self._lanes_progress(),
             Text(),
@@ -220,6 +291,7 @@ class MatrixTerminalReporter:
             self._recent_table(),
             Text(),
             self._totals(),
+            _gate_legend(),
         )
 
     def _overall_progress(self) -> Progress:
@@ -252,7 +324,7 @@ class MatrixTerminalReporter:
 
     def _lanes_progress(self) -> Progress:
         progress = Progress(
-            SpinnerColumn(style=_ACTIVE),
+            _LaneSpinnerColumn(style=_ACTIVE),
             TextColumn(
                 "{task.description}",
                 markup=True,
@@ -264,11 +336,7 @@ class MatrixTerminalReporter:
                 style="dim",
                 table_column=Column(width=_MODEL_METADATA_WIDTH, no_wrap=True, overflow="ellipsis"),
             ),
-            TextColumn(
-                "{task.fields[phase]}",
-                markup=True,
-                table_column=Column(ratio=2, no_wrap=True, overflow="ellipsis"),
-            ),
+            _PhaseColumn(table_column=Column(width=_PHASE_WIDTH, justify="right", no_wrap=True, overflow="ellipsis")),
             _ElapsedColumn(table_column=Column(width=6, no_wrap=True)),
             expand=True,
         )
@@ -280,9 +348,26 @@ class MatrixTerminalReporter:
                 phase=escape(_lane_phase(lane.active_tools)),
                 started_at=lane.started_at,
             )
+            if lane.response is not None:
+                progress.add_task(
+                    "[dim]Response[/]",
+                    total=1,
+                    completed=1,
+                    metadata="",
+                    phase="",
+                    response=lane.response,
+                    show_spinner=False,
+                    show_elapsed=False,
+                    started_at=lane.started_at,
+                )
         return progress
 
     def _recent_table(self) -> Table:
+        show_response = self._console.width >= _RECENT_RESPONSE_MIN_WIDTH
+        request_ratio = 3 if show_response else 1
+        response_ratio = 4
+        outcome_ratio = 4 if show_response else 8
+        gate_width = _GATE_WIDTH if show_response else _NARROW_GATE_WIDTH
         table = Table(
             box=None,
             expand=True,
@@ -291,18 +376,35 @@ class MatrixTerminalReporter:
             header_style=Style(color=_ACTIVE, bold=False),
         )
         table.add_column("", width=1, no_wrap=True)
-        table.add_column("Request", ratio=3, no_wrap=True, overflow="ellipsis")
-        table.add_column("Outcome", width=18, no_wrap=True, overflow="ellipsis")
-        table.add_column("Reason", ratio=4, no_wrap=True, overflow="ellipsis")
+        table.add_column("Eval", width=4, justify="right", no_wrap=True)
+        table.add_column("Model", width=_RECENT_MODEL_WIDTH, no_wrap=True, overflow="ellipsis")
+        table.add_column("Request", ratio=request_ratio, no_wrap=True, overflow="ellipsis")
+        if show_response:
+            table.add_column("Response", ratio=response_ratio, no_wrap=True, overflow="ellipsis")
+        table.add_column("Outcome", ratio=outcome_ratio, min_width=18, no_wrap=True, overflow="ellipsis")
+        table.add_column("Gates", width=gate_width, no_wrap=True)
         table.add_column("Calls", width=5, justify="right", no_wrap=True)
+        table.add_column("Elapsed", width=7, justify="right", no_wrap=True)
         for result in reversed(self._recent):
             glyph, style = _outcome_glyph(result.outcome)
-            table.add_row(
+            row: list[RenderableType] = [
                 Text(glyph, style=style),
+                str(result.completion_index),
+                _LeftEllipsisText(result.cell.model_id, style="dim"),
                 _safe_text(result.request),
-                Text(result.outcome, style=style),
-                Text(result.reason),
-                str(result.tool_calls),
+            ]
+            if show_response:
+                row.append(_LeftEllipsisText(result.response, style="dim"))
+            row.extend(
+                [
+                    _outcome_text(result.outcome, result.reason, style),
+                    _gate_text(result.checks, width=gate_width),
+                    _call_text(result.tool_calls, result.tool_call_par),
+                    _cell_duration(result.elapsed),
+                ]
+            )
+            table.add_row(
+                *row,
             )
         return table
 
@@ -343,6 +445,20 @@ def _append_status(text: Text, glyph: str, label: str, count: int, style: str) -
     text.append(f" {label} {count}")
 
 
+def _gate_legend() -> Text:
+    """Render a compact dim key for the Recent-table scoring gate glyphs."""
+    legend = Text("Gates: ", style="dim")
+    legend.append("■", style="dim")
+    legend.append(" required, ", style="dim")
+    legend.append("□", style="dim")
+    legend.append(" optional; ", style="dim")
+    legend.append("■", style=_SUCCESS)
+    legend.append(" passed, ", style="dim")
+    legend.append("■", style=_ERROR)
+    legend.append(" failed", style="dim")
+    return legend
+
+
 def _compact_diagnostic(error: str | None) -> str | None:
     """Normalize and bound a trace error for durable terminal diagnostics."""
     if error is None:
@@ -365,25 +481,183 @@ def _left_ellipsis(value: str, width: int) -> str:
     return f"…{value[-(width - 1) :]}"
 
 
-def _failure_reason(checks: tuple[CheckResult, ...]) -> str:
-    """Return a short friendly first-failure label without exposing raw feedback."""
+def _gate_text(checks: tuple[CheckResult, ...], *, width: int = _GATE_WIDTH) -> Text:
+    """Render ordered scoring gates as compact requiredness/result glyphs."""
+    gates = Text()
+    visible_count = _visible_gate_count(len(checks), width)
+    overflow = len(checks) - visible_count
+    for check in checks[:visible_count]:
+        glyph = "■" if check.required else "□"
+        gates.append(glyph, style=_SUCCESS if check.passed else _ERROR)
+    if overflow > 0:
+        gates.append(f"+{overflow}", style="dim")
+    return gates
+
+
+def _call_text(tool_calls: int, par: int | None) -> Text:
+    """Render tool-call efficiency relative to the scorer's supplied par."""
+    if par is None:
+        return Text(str(tool_calls))
+    return Text(str(tool_calls), style=_SUCCESS if tool_calls <= par else _WARNING)
+
+
+def _outcome_text(outcome: str, detail: str, style: str) -> Text:
+    """Render a semantic outcome label followed by an optional neutral explanation."""
+    rendered = Text()
+    rendered.append(outcome, style=style)
+    if detail:
+        rendered.append(" — ")
+        rendered.append(detail, style="not bold")
+    return rendered
+
+
+def _cell_duration(seconds: float) -> str:
+    """Format one completed-cell duration compactly for the Recent table."""
+    if seconds < 1:
+        return f"{seconds:.1f}s"
+    if seconds < 60:
+        return f"{seconds:.0f}s"
+    return _duration(seconds)
+
+
+def _visible_gate_count(total: int, width: int = _GATE_WIDTH) -> int:
+    """Return the maximum glyph count whose actual omitted-count suffix still fits."""
+    if total <= width:
+        return total
+    for visible_count in range(width, -1, -1):
+        omitted = total - visible_count
+        if visible_count + len(str(omitted)) + 1 <= width:
+            return visible_count
+    raise AssertionError("gate overflow suffix must fit the configured width")
+
+
+def _response_display(response: str | None) -> str:
+    """Normalize final assistant text while keeping empty provider failures visually quiet."""
+    if response is None:
+        return "—"
+    normalized = " ".join(response.split())
+    return normalized or "—"
+
+
+def _outcome_detail(checks: tuple[CheckResult, ...]) -> str:
+    """Project the first failed required gate into a compact Recent-table explanation."""
     for check in checks:
         if check.required and not check.passed:
-            return {
-                "model_error": "Model or provider unavailable",
-                "tool_calls_exceeded": "Tool-call limit reached",
-                "execution_ok": "Last tool call did not succeed",
-                "actions_match": "Requested action did not match",
-                "blocked_outcome": "Action safety check did not pass",
-                "tool_calls_within_max": "Too many tool calls",
-            }.get(check.name, "Missing required result")
-    return "Missing required result"
+            return _humanize_required_failure(check)
+    return ""
+
+
+def _humanize_required_failure(check: CheckResult) -> str:
+    """Translate known scoring feedback tokens without exposing raw tool payloads."""
+    base = check.name.rsplit("_", 1)[0] if check.name.rsplit("_", 1)[-1].isdigit() else check.name
+    if base == "model_error":
+        return "Provider/model issue"
+    if base == "meaningful_oracle":
+        return "No scoring evidence defined"
+    if base == "provenance_evidence_present":
+        return _missing_feedback(check.feedback, "Missing evidence")
+    if base == "tool_result_check":
+        tool = _feedback_value(check.feedback, "tool") or "Tool"
+        failures = _feedback_value(check.feedback, "failures")
+        failure = failures.split(",")[0] if failures else "result_mismatch"
+        return f"{tool}: {_humanize_tool_failure(failure)}"
+    if base == "execution_ok":
+        error = _feedback_value(check.feedback, "error")
+        return f"Final tool failed ({_clean_token(error)})" if error else "Final tool failed"
+    if base == "actions_match":
+        return _humanize_action_failure(check.feedback)
+    if base == "blocked_outcome":
+        return _humanize_blocked_failure(check.feedback)
+    if base == "guidance_quality":
+        missing = _feedback_value(check.feedback, "missing")
+        return f"Missing failure guidance for {missing}" if missing else "Missing failure guidance"
+    if base == "tool_calls_within_max":
+        calls = _feedback_value(check.feedback, "calls")
+        maximum = _feedback_value(check.feedback, "max")
+        return f"Tool-call limit exceeded ({calls}/{maximum})" if calls and maximum else "Tool-call limit exceeded"
+    return f"{_clean_token(base)}: {_compact_feedback(check.feedback)}"
+
+
+def _missing_feedback(feedback: str, prefix: str) -> str:
+    """Return a missing-value projection from stable ``missing=`` scoring feedback."""
+    missing = _feedback_value(feedback, "missing")
+    return f"No {missing}" if missing else prefix
+
+
+def _humanize_tool_failure(code: str) -> str:
+    """Map one structured tool-result failure code using the HTML report vocabulary."""
+    kind, separator, detail = code.partition(":")
+    label = {
+        "missing_entry_value": "missing expected value",
+        "missing_entry_entity": "missing entity",
+        "missing_entity": "missing entity",
+        "missing_statistic": "missing statistic",
+        "missing_automation": "missing automation",
+        "empty_entity": "no rows for",
+        "empty_statistic": "no rows for",
+        "missing_successful_tool_result": "no successful result",
+        "empty_output": "empty result",
+        "empty_rows": "too few rows",
+        "empty_entries": "too few logbook entries",
+        "missing_entries": "no logbook entries",
+        "missing_statistics": "no statistics",
+        "missing_automations": "no automations",
+        "unexpected_results": "unexpected results",
+        "unverified_query_scope": "unverified query scope",
+    }.get(kind, _clean_token(kind))
+    return f"{label} {detail}" if separator and detail else label
+
+
+def _humanize_action_failure(feedback: str) -> str:
+    """Return the first stable action mismatch without surfacing raw action payloads."""
+    key, _, value = feedback.partition("=")
+    labels = {
+        "unmatched": "Missing action",
+        "extra": "Unexpected action",
+        "duplicates": "Repeated action",
+        "target_mismatch": "Wrong action target",
+        "unexpected": "Unexpected actions",
+    }
+    label = labels.get(key, "Action mismatch")
+    return f"{label}: {value}" if value else label
+
+
+def _humanize_blocked_failure(feedback: str) -> str:
+    """Summarize structured blocked-action failures without action payload details."""
+    key, _, value = feedback.partition("=")
+    if key == "successful_actions":
+        return "Disallowed action succeeded"
+    if key == "attempts":
+        return f"Too many blocked attempts ({value.replace(' max=', '/')})"
+    if key == "error_keys":
+        return f"Unexpected block error: {value}"
+    return "Blocked-action mismatch"
+
+
+def _feedback_value(feedback: str, key: str) -> str | None:
+    """Extract one stable ``key=value`` token from scoring feedback."""
+    prefix = f"{key}="
+    for token in feedback.replace(";", " ").split():
+        if token.startswith(prefix):
+            return token.removeprefix(prefix)
+    return None
+
+
+def _clean_token(value: str | None) -> str:
+    """Convert one internal token into compact human-readable text."""
+    return "unknown issue" if not value else value.replace("_", " ").replace(":", ": ")
+
+
+def _compact_feedback(feedback: str) -> str:
+    """Keep an unknown structured feedback contract brief enough for one table cell."""
+    compact = " ".join(feedback.split())
+    return compact[:80] if compact else "failed"
 
 
 def _lane_phase(active_tools: Counter[str]) -> str:
     """Return the current human-readable phase for an active matrix lane."""
     if not active_tools:
-        return "Waiting for the assistant"
+        return "Waiting"
     phases = {
         "execute_home_code": "Using the Home Assistant sandbox",
         "get_history": "Reading history",

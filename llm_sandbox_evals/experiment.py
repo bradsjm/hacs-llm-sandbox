@@ -22,11 +22,13 @@ from llm_sandbox_evals import prompts
 from llm_sandbox_evals.config import EvalConfig
 from llm_sandbox_evals.harness import _select_cases, run_case
 from llm_sandbox_evals.schema import CaseTrace, CheckResult, EvalCase, PromptCandidate
-from llm_sandbox_evals.scoring import is_incomplete, mean_score
+from llm_sandbox_evals.scoring import is_incomplete, mean_score, tool_call_par
 
 type MatrixCellMeta = dict[str, str | int]
 type MatrixEventCallback = Callable[[MatrixProgressEvent], None]
-type MatrixProgressState = Literal["matrix_started", "cell_started", "tool_started", "tool_finished", "cell_finished"]
+type MatrixProgressState = Literal[
+    "matrix_started", "cell_started", "tool_started", "tool_finished", "response_received", "cell_finished"
+]
 
 _SIZE_TIE_EPSILON = 0.005
 
@@ -50,10 +52,12 @@ class MatrixProgressEvent:
     cell: MatrixCellRef | None = None
     request: str | None = None
     tool_name: str | None = None
+    response: str | None = None
     trace: CaseTrace | None = None
     elapsed: float | None = None
     completion_index: int | None = None
     total: int | None = None
+    tool_call_par: int | None = None
 
 
 @dataclass(slots=True)
@@ -202,8 +206,19 @@ def make_matrix_task(
                 ),
             )
 
+        def on_response(response: str) -> None:
+            _emit_event(
+                on_event, MatrixProgressEvent("response_received", cell=cell, request=request, response=response)
+            )
+
         trace = await run_case(
-            candidate, cell.model_id, case, config, profile=profile, on_tool_boundary=on_tool_boundary
+            candidate,
+            cell.model_id,
+            case,
+            config,
+            profile=profile,
+            on_tool_boundary=on_tool_boundary,
+            on_response=on_response,
         )
         elapsed = perf_counter() - start
         # Branch boundary: increment is synchronous (no await) so each cell gets a
@@ -219,6 +234,7 @@ def make_matrix_task(
                 elapsed=elapsed,
                 completion_index=completed,
                 total=total,
+                tool_call_par=tool_call_par(case.expected),
             ),
         )
         return trace

@@ -20,7 +20,7 @@ overall_mean: 0.858
 baseline/stub: mean=0.858 tool_calls=1.000
 ```
 
-On a terminal, `eval` clears the prior screen and renders one live stderr view with overall progress, active matrix cells and tool phases, recent results, and totals, then a compact artifact summary. Press **Escape** to cancel an interactive run; it writes no artifacts or stdout summary. With redirected stderr, it emits readable lifecycle lines instead. Every completed run writes `report.json` containing native analyses plus per-cell traces and auto-emits `report.html` for browser-based visual navigation; regenerate the HTML with `report <run_id> --html`.
+On a terminal, `eval` clears the prior screen and renders one live stderr view with overall progress, active matrix cells and tool phases, recent results, and totals, then a compact artifact summary. Recent `Gates` squares are filled when required and hollow when optional; green means passed and red means failed. Calls are green at or below the scoring par and amber above it. Press **Escape** to cancel an interactive run; it writes no artifacts or stdout summary. With redirected stderr, it emits readable lifecycle lines instead. Every completed run writes `report.json` containing native analyses plus per-cell traces and auto-emits `report.html` for browser-based visual navigation; regenerate the HTML with `report <run_id> --html`.
 
 ## Running real models
 

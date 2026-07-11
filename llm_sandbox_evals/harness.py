@@ -1,7 +1,8 @@
 """Eval task body backed by a real Pydantic AI Agent."""
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from contextlib import suppress
 import json
 
 from custom_components.llm_sandbox.llm_api.prompts import PromptProfile
@@ -30,6 +31,7 @@ async def run_case(
     *,
     profile: PromptProfile,
     on_tool_boundary: ToolBoundaryCallback | None = None,
+    on_response: Callable[[str], None] | None = None,
 ) -> CaseTrace:
     """Run one matrix cell through the production-core Pydantic AI agent."""
     # Branch boundary: setup failures occur before a model run exists, so they
@@ -57,6 +59,10 @@ async def run_case(
                 timeout=config.model_timeout,
             )
         output = result.output
+        if on_response is not None:
+            # Safety constraint: an observer cannot alter a completed model result or scoring.
+            with suppress(Exception):
+                on_response(output)
         messages = result.all_messages()
         tool_call_count = _tool_call_count(messages)
         tool_events = _tool_events(messages)

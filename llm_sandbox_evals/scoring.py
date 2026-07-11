@@ -150,7 +150,7 @@ def _meaningful_oracle_check(case: EvalCase) -> CheckResult:
 
 def _tool_call_efficiency_check(expected: Expected, tool_call_count: int) -> CheckResult:
     """Return the successful-outcome score from tool-call quantity."""
-    par = _tool_call_par(expected)
+    par = tool_call_par(expected)
     value = _tool_call_efficiency_value(tool_call_count, par)
     return CheckResult(
         name="tool_call_efficiency",
@@ -161,7 +161,7 @@ def _tool_call_efficiency_check(expected: Expected, tool_call_count: int) -> Che
     )
 
 
-def _tool_call_par(expected: Expected) -> int:
+def tool_call_par(expected: Expected) -> int:
     """Return explicit par or derive one from required structured work.
 
     The harness counts tool calls, not provider turn boundaries. Dependent cases
