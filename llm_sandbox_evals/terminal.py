@@ -26,6 +26,7 @@ _INCOMPLETE = "#d9a514"
 _FAIL_GLYPH = "\u2717"
 _REFRESH_PER_SECOND = 4
 _RECENT_RESULTS = 5
+_MAX_DIAGNOSTIC_CHARS = 500
 
 
 @dataclass(slots=True)
@@ -103,6 +104,7 @@ class MatrixTerminalReporter:
 
     def handle(self, event: MatrixProgressEvent) -> None:
         """Consume one observer event, retaining only presentation-safe metadata."""
+        diagnostic: str | None = None
         if event.state == "matrix_started":
             self._total = event.total or 0
         elif event.state == "cell_started" and event.cell is not None:
@@ -122,11 +124,14 @@ class MatrixTerminalReporter:
                     lane.active_tools.pop(event.tool_name, None)
         elif event.state == "cell_finished" and event.cell is not None and event.trace is not None:
             self._finish_cell(event)
+            diagnostic = _compact_diagnostic(event.trace.error)
 
         if self._live is not None:
+            if diagnostic is not None:
+                self._print_live_diagnostic(event, diagnostic)
             self._live.update(self._render())
         elif not self._console.is_terminal:
-            self._print_line(event)
+            self._print_line(event, diagnostic=diagnostic)
 
     def finish(self, *, overall_mean: float, run_dir: str, report_html: str) -> None:
         """Print the successful post-artifact summary after the Live display ends."""
@@ -166,6 +171,16 @@ class MatrixTerminalReporter:
             self._live.stop()
         finally:
             self._live = None
+
+    def _print_live_diagnostic(self, event: MatrixProgressEvent, diagnostic: str) -> None:
+        """Write a completed-cell error above Live without exposing tool payloads."""
+        assert event.cell is not None
+        line = Text()
+        line.append("error ", style=f"bold {_FAIL}")
+        line.append(f"{_cell_name(event)} ({_cell_metadata(event.cell)}): ")
+        line.append(diagnostic)
+        # Rich's Console cooperates with Live to keep this durable diagnostic in scrollback.
+        self._console.print(line, soft_wrap=True)
 
     def _finish_cell(self, event: MatrixProgressEvent) -> None:
         trace = event.trace
@@ -280,7 +295,7 @@ class MatrixTerminalReporter:
         footer.append(f"  completed {self._completed}/{self._total}  tool calls {self._tool_calls}", style="dim")
         return footer
 
-    def _print_line(self, event: MatrixProgressEvent) -> None:
+    def _print_line(self, event: MatrixProgressEvent, *, diagnostic: str | None = None) -> None:
         if event.state == "matrix_started":
             line = f"matrix started total={event.total or 0}"
         elif event.cell is None:
@@ -294,6 +309,8 @@ class MatrixTerminalReporter:
                 f"cell finished {event.completion_index}/{event.total} {_cell_name(event)} "
                 f"score={event.trace.score:.3f} tools={event.trace.tool_call_count} elapsed={_duration(event.elapsed or 0)}"
             )
+            if diagnostic is not None:
+                line = f"{line} error={diagnostic}"
         else:
             return
         self._console.print(line, markup=False, highlight=False, soft_wrap=True)
@@ -303,6 +320,16 @@ def _append_status(text: Text, glyph: str, label: str, count: int, style: str) -
     """Append a colored status glyph while leaving surrounding text neutral."""
     text.append(glyph, style=style)
     text.append(f" {label} {count}")
+
+
+def _compact_diagnostic(error: str | None) -> str | None:
+    """Normalize and bound a trace error for durable terminal diagnostics."""
+    if error is None:
+        return None
+    compact = " ".join(error.split())
+    if len(compact) <= _MAX_DIAGNOSTIC_CHARS:
+        return compact
+    return f"{compact[: _MAX_DIAGNOSTIC_CHARS - 3]}..."
 
 
 def _cell_metadata(cell: MatrixCellRef) -> str:
