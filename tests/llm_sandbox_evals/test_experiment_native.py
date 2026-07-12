@@ -2,440 +2,95 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from custom_components.llm_sandbox.const import DEFAULT_PROMPT_PROFILE
-from freezegun.api import FrozenDateTimeFactory
 from llm_sandbox_evals.config import EvalConfig
-from llm_sandbox_evals.experiment import MatrixCellRef, MatrixProgressEvent, build_dataset, run_matrix
+from llm_sandbox_evals.experiment import MatrixCellRef, build_dataset, run_matrix
 from llm_sandbox_evals.schema import (
-    CaseContext,
+    ActionLedger,
+    BlockedOutcome,
+    CaseOutcome,
     CaseTrace,
-    CheckResult,
     EvalCase,
+    EvalDiagnostics,
     Expected,
     PromptCandidate,
 )
-from llm_sandbox_evals.scoring import tool_call_par
-from llm_sandbox_evals.terminal import _call_text, _cell_duration, _gate_text, _outcome_detail
-from pydantic_ai.messages import ModelMessage, ModelResponse
-from pydantic_ai.models import Model
-from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_evals.reporting.analyses import ScalarResult, TableResult
 import pytest
 
-from llm_sandbox_evals import agent_runner, logfire_config, reports
+from llm_sandbox_evals import reports
 
 
-async def test_run_matrix_stub_slice_writes_reloadable_report_json(tmp_path: Path) -> None:
-    config = _config(tmp_path, cases=["state_living_temperature"])
-
-    report = await run_matrix(config, run_id="stub-slice")
-    run_dir = reports.write_report_json(
-        report,
-        config,
-        run_id="stub-slice",
-    )
+async def test_run_matrix_stub_persists_v2_trace_and_binary_rate(tmp_path: Path) -> None:
+    report = await run_matrix(_config(tmp_path, cases=["state_living_temperature"]), run_id="stub-v2")
+    run_dir = reports.write_report_json(report, _config(tmp_path, cases=["state_living_temperature"]), run_id="stub-v2")
     reloaded = reports.load_report(run_dir)
+    trace = reloaded.cases[0].output
 
-    assert len(report.cases) == 1
-    assert len(reloaded.cases) == 1
-    report_case = reloaded.cases[0]
-
-    assert isinstance(report_case.inputs, MatrixCellRef)
-    assert report_case.inputs == MatrixCellRef(
-        case_id="state_living_temperature",
-        candidate_id="baseline",
-        model_id="stub",
-        home="home_minimal",
-        category="state",
-    )
-    assert report_case.metadata == {
-        "run_id": "stub-slice",
-        "case_id": "state_living_temperature",
-        "candidate_id": "baseline",
-        "model_id": "stub",
-        "home": "home_minimal",
-        "category": "state",
-    }
-    assert isinstance(report_case.output, CaseTrace)
-    assert report_case.output.score == pytest.approx(1.0)
-    assert report_case.scores["score"].value == pytest.approx(1.0)
-    assert _scalar(reloaded.analyses, "Overall mean score").value == pytest.approx(1.0)
-    assert _scalar(reloaded.analyses, "Incomplete cells").value == 0
-    # The stub read the temperature entity, so one tool event with its return is persisted.
-    assert len(report_case.output.tool_events) == 1
-    assert report_case.output.tool_events[0].tool_name == "execute_home_code"
+    assert trace.outcome.state in {"correct", "incorrect"}
+    assert trace.outcome.score in {0.0, 1.0}
+    assert trace.answer is not None
+    assert isinstance(trace.diagnostics.tool_calls, int)
+    assert _scalar(reloaded.analyses, "Overall correct rate").value in {0.0, 1.0}
 
 
-async def test_run_matrix_does_not_configure_logfire_without_token(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    configured: list[None] = []
-    monkeypatch.setattr(logfire_config, "configure_logfire", lambda: configured.append(None))
+async def test_run_matrix_emits_v2_lifecycle_events(tmp_path: Path) -> None:
+    events = []
+    report = await run_matrix(_config(tmp_path, cases=["state_living_temperature"]), run_id="lifecycle-v2", on_event=events.append)
 
-    await run_matrix(_config(tmp_path, cases=["state_living_temperature"]), run_id="no-logfire-token")
-
-    assert configured == []
-
-
-async def test_run_matrix_configures_logfire_with_token(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    configured: list[None] = []
-    monkeypatch.setenv("LOGFIRE_TOKEN", "test-token")
-    monkeypatch.setattr(logfire_config, "configure_logfire", lambda: configured.append(None))
-
-    await run_matrix(_config(tmp_path, cases=["state_living_temperature"]), run_id="with-logfire-token")
-
-    assert configured == [None]
-
-
-async def test_run_matrix_emits_cell_and_tool_lifecycle_events(tmp_path: Path) -> None:
-    events: list[MatrixProgressEvent] = []
-
-    report = await run_matrix(
-        _config(tmp_path, cases=["state_living_temperature"]),
-        run_id="stub-lifecycle",
-        on_event=events.append,
-    )
-
-    assert [event.state for event in events] == [
-        "matrix_started",
-        "cell_started",
-        "tool_started",
-        "tool_finished",
-        "response_received",
-        "cell_finished",
-    ]
-    cell = MatrixCellRef(
-        case_id="state_living_temperature",
-        candidate_id="baseline",
-        model_id="stub",
-        home="home_minimal",
-        category="state",
-    )
-    assert events[0].total == 1
-    assert all(event.cell == cell for event in events[1:])
-    assert all(event.request == "What is the current temperature in the living room?" for event in events[1:])
-    assert [event.tool_name for event in events[2:4]] == ["execute_home_code", "execute_home_code"]
-    assert events[-2].response == report.cases[0].output.output
+    assert [event.state for event in events] == ["matrix_started", "cell_started", "tool_started", "tool_finished", "response_received", "cell_finished"]
     assert events[-1].trace == report.cases[0].output
-    assert events[-1].completion_index == 1
+    assert not hasattr(events[-1], "tool_call_par")
 
 
-async def test_run_matrix_assigns_stable_completion_indexes_to_multiple_cells(tmp_path: Path) -> None:
-    events: list[MatrixProgressEvent] = []
-
-    await run_matrix(
-        _config(tmp_path, cases=["state_living_temperature", "multi_history_then_living_fan"]),
-        run_id="stub-completion-indexes",
-        on_event=events.append,
-    )
-
-    completed = [event for event in events if event.state == "cell_finished"]
-
-    assert [event.completion_index for event in completed] == [1, 2]
-    assert [event.total for event in completed] == [2, 2]
-
-
-def test_gate_text_encodes_requiredness_and_result() -> None:
-    gates = _gate_text(
-        (
-            CheckResult("required_pass", True, True, ""),
-            CheckResult("optional_pass", True, False, ""),
-            CheckResult("required_fail", False, True, ""),
-            CheckResult("optional_fail", False, False, ""),
-        )
-    )
-
-    assert gates.plain == "■□■□"
-    assert [span.style for span in gates.spans] == ["#55c97c", "#55c97c", "#f2705f", "#f2705f"]
-
-
-def test_call_text_uses_scoring_par_for_efficiency_color() -> None:
-    par = tool_call_par(Expected(tool_call_par=2))
-    at_par = _call_text(2, par)
-    above_par = _call_text(3, par)
-
-    assert at_par.plain == "2"
-    assert at_par.style == "#55c97c"
-    assert above_par.plain == "3"
-    assert above_par.style == "#d9a514"
-
-
-@pytest.mark.parametrize(
-    ("check", "expected_parts"),
-    [
-        pytest.param(
-            CheckResult("provenance_evidence_present", False, True, "missing=sensor.living_temp"),
-            ("No", "sensor.living_temp"),
-            id="missing-evidence",
-        ),
-        pytest.param(
-            CheckResult(
-                "tool_result_check_0",
-                False,
-                True,
-                "tool=get_history failures=missing_entity:sensor.living_temp",
-            ),
-            ("get_history", "missing entity", "sensor.living_temp"),
-            id="tool-result",
-        ),
-        pytest.param(
-            CheckResult("actions_match", False, True, "unmatched=light.turn_on"),
-            ("Missing action", "light.turn_on"),
-            id="action-mismatch",
-        ),
-        pytest.param(
-            CheckResult("model_error", False, True, "RuntimeError: provider unavailable"),
-            ("Provider/model issue",),
-            id="provider-error",
-        ),
-        pytest.param(
-            CheckResult("unfamiliar_gate", False, True, "status=bad detail"),
-            ("unfamiliar gate", "status=bad detail"),
-            id="unknown-fallback",
-        ),
-    ],
-)
-def test_outcome_detail_humanizes_required_failure(check: CheckResult, expected_parts: tuple[str, ...]) -> None:
-    detail = _outcome_detail((check,))
-
-    assert all(part in detail for part in expected_parts)
-
-
-@pytest.mark.parametrize(
-    ("seconds", "expected"),
-    [
-        pytest.param(0.4, "0.4s", id="subsecond"),
-        pytest.param(10.4, "10s", id="seconds"),
-        pytest.param(61.0, "1:01", id="minute"),
-    ],
-)
-def test_cell_duration_is_compact(seconds: float, expected: str) -> None:
-    assert _cell_duration(seconds) == expected
-
-
-@pytest.mark.parametrize(
-    ("count", "expected_plain"),
-    [
-        pytest.param(10, "■" * 10, id="fits-width"),
-        pytest.param(12, "■" * 8 + "+4", id="single-digit-omitted"),
-        pytest.param(123, "■" * 6 + "+117", id="multi-digit-omitted"),
-    ],
-)
-def test_gate_text_reports_actual_omitted_count(count: int, expected_plain: str) -> None:
-    checks = tuple(CheckResult(f"check_{index}", True, True, "") for index in range(count))
-
-    gates = _gate_text(checks)
-
-    assert gates.plain == expected_plain
-
-
-@pytest.mark.parametrize(
-    ("case_id", "expected_domain", "expected_service"),
-    [
-        pytest.param("multi_history_then_living_fan", "fan", "set_percentage", id="history-action"),
-        pytest.param("multi_logbook_then_living_light_off", "light", "turn_off", id="logbook-action"),
-    ],
-)
-async def test_stub_completes_dependent_recorder_actions_in_one_execute_call(
-    tmp_path: Path,
-    freezer: FrozenDateTimeFactory,
-    case_id: str,
-    expected_domain: str,
-    expected_service: str,
-) -> None:
-    freezer.move_to("2026-06-29T12:00:00+00:00")
-    report = await run_matrix(_config(tmp_path, cases=[case_id]), run_id=f"stub-{case_id}")
-    trace = report.cases[0].output
-
-    assert isinstance(trace, CaseTrace)
-    assert trace.score == pytest.approx(1.0)
-    assert trace.tool_call_count == 1
-    assert [event.tool_name for event in trace.tool_events] == ["execute_home_code"]
-    assert trace.recorded_actions[0]["domain"] == expected_domain
-    assert trace.recorded_actions[0]["service"] == expected_service
-
-
-async def test_sandbox_outcome_reports_score_required_gate_and_model_error_label(tmp_path: Path) -> None:
-    config = _config(tmp_path, cases=None)
-    dataset = build_dataset(config, [_candidate("candidate-a")], [_case("case-a", "state_read")], "test-run")
-
-    async def task(cell: MatrixCellRef) -> CaseTrace:
-        return _trace(
-            cell,
-            score=0.25,
-            checks=(
-                CheckResult("tool_used", True, True, ""),
-                CheckResult("domain_goal", False, True, "missing required outcome"),
-                CheckResult("model_error", False, True, "provider failed"),
-            ),
-        )
-
-    report = await dataset.evaluate(task, name="sandbox-outcome", progress=False, retry_task=None)
-    report_case = report.cases[0]
-
-    assert report_case.scores["score"].value == pytest.approx(0.25)
-    assert report_case.scores["score"].reason == "failed: domain_goal, model_error"
-    assert report_case.assertions["required_gates_passed"].value is False
-    assert report_case.assertions["required_gates_passed"].reason == "domain_goal, model_error"
-    assert report_case.labels["model_error"].value == "true"
-
-
-async def test_sandbox_outcome_reports_tool_call_limit_as_scored_failure(tmp_path: Path) -> None:
-    config = _config(tmp_path, cases=None)
-    dataset = build_dataset(config, [_candidate("candidate-a")], [_case("case-a", "state_read")], "test-run")
-
-    async def task(cell: MatrixCellRef) -> CaseTrace:
-        return _trace(
-            cell,
-            score=0.0,
-            checks=(CheckResult("tool_calls_exceeded", False, True, "limit reached"),),
-        )
-
-    report = await dataset.evaluate(task, name="sandbox-outcome", progress=False, retry_task=None)
-    report_case = report.cases[0]
-
-    assert report_case.scores["score"].value == 0.0
-    assert report_case.labels["model_error"].value == "false"
-    assert report_case.labels["error_type"].value == "none"
-    assert _scalar(report.analyses, "Overall mean score").value == 0.0
-    assert _scalar(report.analyses, "Incomplete cells").value == 0
-
-
-async def test_candidate_matrix_report_aggregates_candidate_model_and_category_means(tmp_path: Path) -> None:
-    config = _config(tmp_path, models=["model-a", "model-b"], cases=None)
-    candidates = [_candidate("baseline", api_prompt="baseline prompt"), _candidate("compact", api_prompt="short")]
-    selected_cases = [_case("case-state", "state_read"), _case("case-recorder", "recorder_read")]
-    dataset = build_dataset(config, candidates, selected_cases, "test-run")
-    outcomes = {
-        ("baseline", "model-a", "case-state"): (0.8, 1),
-        ("baseline", "model-a", "case-recorder"): (0.6, 3),
-        ("baseline", "model-b", "case-state"): (0.4, 1),
-        ("baseline", "model-b", "case-recorder"): (0.2, 1),
-        ("compact", "model-a", "case-state"): (0.9, 1),
-        ("compact", "model-a", "case-recorder"): (0.7, 1),
-        ("compact", "model-b", "case-state"): (0.8, 2),
-        ("compact", "model-b", "case-recorder"): (0.8, 2),
+async def test_report_excludes_incomplete_from_correct_rate_and_keeps_coverage(tmp_path: Path) -> None:
+    config = _config(tmp_path, models=["model-a", "model-b"])
+    candidates = [_candidate("baseline", api_prompt="long authored prompt"), _candidate("compact", api_prompt="short")]
+    selected_cases = [_case("case-a", "state"), _case("case-b", "state")]
+    dataset = build_dataset(config, candidates, selected_cases, "aggregation-v2")
+    states = {
+        ("baseline", "model-a", "case-a"): "correct",
+        ("baseline", "model-a", "case-b"): "incorrect",
+        ("baseline", "model-b", "case-a"): "incomplete",
+        ("baseline", "model-b", "case-b"): "incomplete",
+        ("compact", "model-a", "case-a"): "correct",
+        ("compact", "model-a", "case-b"): "incorrect",
+        ("compact", "model-b", "case-a"): "correct",
+        ("compact", "model-b", "case-b"): "incorrect",
     }
 
     async def task(cell: MatrixCellRef) -> CaseTrace:
-        score, tool_calls = outcomes[(cell.candidate_id, cell.model_id, cell.case_id)]
-        return _trace(cell, score=score, tool_call_count=tool_calls)
+        return _trace(cell, states[(cell.candidate_id, cell.model_id, cell.case_id)])
 
-    report = await dataset.evaluate(task, name="candidate-matrix", progress=False, retry_task=None)
+    report = await dataset.evaluate(task, name="aggregation-v2", progress=False, retry_task=None)
     ranking = _table(report.analyses, "Candidate ranking")
-    pair_means = _table(report.analyses, "Candidate x model means")
-    overall = _scalar(report.analyses, "Overall mean score")
+    pairs = _table(report.analyses, "Candidate x model outcomes")
 
-    assert ranking.columns == [
-        "Candidate",
-        "Mean",
-        "MinModel",
-        "ToolCalls",
-        "PromptChars",
-        "SizeRatio",
-        "state_read",
-        "recorder_read",
-    ]
-    assert ranking.rows[0][:4] == ["compact", 0.8, 0.8, 1.5]
-    assert ranking.rows[1][:4] == ["baseline", 0.5, 0.3, 1.5]
-    assert pair_means.rows == [
-        ["baseline", "model-a", 0.7, 2.0],
-        ["baseline", "model-b", 0.3, 1.0],
-        ["compact", "model-a", 0.8, 1.0],
-        ["compact", "model-b", 0.8, 2.0],
-    ]
-    assert overall.value == pytest.approx(0.65)
+    assert _scalar(report.analyses, "Overall correct rate").value == pytest.approx(0.5)
+    assert _scalar(report.analyses, "Completed cells").value == 6
+    assert ranking.rows[0][0] == "compact"
+    assert ranking.rows[0][5] == pytest.approx(0.5)
+    baseline_ranking = next(row for row in ranking.rows if row[0] == "baseline")
+    assert baseline_ranking[1:7] == [1, 1, 2, 2, 0.5, 0.5]
+    baseline_model_a = next(row for row in pairs.rows if row[:2] == ["baseline", "model-a"])
+    assert baseline_model_a[2:8] == [1, 1, 0, 2, 0.5, 1.0]
+    baseline_model_b = next(row for row in pairs.rows if row[:2] == ["baseline", "model-b"])
+    assert baseline_model_b[2:8] == [0, 0, 2, 0, None, 0.0]
 
 
-async def test_run_matrix_keeps_scoring_other_models_when_one_model_errors(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    original_make_model = agent_runner.make_model
-
-    def make_model(model_id: str) -> Model:
-        if model_id == "bad-model":
-            return FunctionModel(_raiseing_model, model_name="bad-model")
-        return original_make_model(model_id)
-
-    monkeypatch.setattr(
-        agent_runner,
-        "make_model",
-        make_model,
-    )
-    config = _config(tmp_path, models=["bad-model", "stub"], cases=["state_living_temperature"])
-
-    report = await run_matrix(config)
-    traces_by_model = {case.output.model_id: case.output for case in report.cases}
-
-    assert set(traces_by_model) == {"bad-model", "stub"}
-    assert traces_by_model["bad-model"].score == 0.0
-    assert [check.name for check in traces_by_model["bad-model"].checks] == ["model_error"]
-    assert traces_by_model["stub"].score == pytest.approx(1.0)
-
-
-async def _raiseing_model(_messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
-    raise RuntimeError("provider rejected model")
-
-
-def _config(
-    runs_dir: Path,
-    *,
-    models: list[str] | None = None,
-    cases: list[str] | None = None,
-) -> EvalConfig:
-    return EvalConfig(
-        models=models or ["stub"],
-        candidates=["baseline"],
-        prompt_profile=DEFAULT_PROMPT_PROFILE,
-        cases=cases,
-        homes=None,
-        runs_dir=runs_dir,
-        concurrency=1,
-    )
+def _config(runs_dir: Path, *, models: list[str] | None = None, cases: list[str] | None = None) -> EvalConfig:
+    return EvalConfig(models=models or ["stub"], candidates=["baseline"], prompt_profile=DEFAULT_PROMPT_PROFILE, cases=cases, homes=None, runs_dir=runs_dir, concurrency=1)
 
 
 def _candidate(candidate_id: str, *, api_prompt: str = "prompt") -> PromptCandidate:
-    return PromptCandidate(
-        id=candidate_id,
-        api_prompt=api_prompt,
-        execute_home_code_description="execute",
-        get_history_description="history",
-        get_statistics_description="statistics",
-        get_logbook_description="logbook",
-        get_automation_description="automation",
-    )
+    return PromptCandidate(candidate_id, api_prompt, "execute", "history", "statistics", "logbook", "automation")
 
 
 def _case(case_id: str, category: str) -> EvalCase:
-    return EvalCase(
-        id=case_id,
-        category=category,
-        home="home_default",
-        user_request="exercise native experiment aggregation",
-        actions_enabled=False,
-        llm_context=CaseContext(),
-        expected=Expected(),
-    )
+    return EvalCase(case_id, category, "home_default", "exercise native aggregation", False, Expected(blocked_outcome=BlockedOutcome()))
 
 
-def _trace(
-    cell: MatrixCellRef,
-    *,
-    score: float,
-    checks: tuple[CheckResult, ...] = (CheckResult("tool_used", True, True, ""),),
-    tool_call_count: int = 1,
-) -> CaseTrace:
-    return CaseTrace(
-        case_id=cell.case_id,
-        category=cell.category,
-        candidate_id=cell.candidate_id,
-        model_id=cell.model_id,
-        score=score,
-        output="done",
-        tool_call_count=tool_call_count,
-        recorded_actions=(),
-        checks=checks,
-        error=None,
-    )
+def _trace(cell: MatrixCellRef, state: str) -> CaseTrace:
+    return CaseTrace(cell.case_id, cell.category, cell.candidate_id, cell.model_id, None, Expected(blocked_outcome=BlockedOutcome()), CaseOutcome(state, state), (), (), ActionLedger(), (), EvalDiagnostics(), None)
 
 
 def _table(analyses: Sequence[object], title: str) -> TableResult:

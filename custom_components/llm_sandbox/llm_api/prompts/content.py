@@ -256,7 +256,8 @@ def build_get_history_description() -> str:
         "larger than raw history. count_transitions may include from_state/to_state filters; "
         "first_seen/last_seen may include to_state to find when a specific state first or last appeared. "
         "For declarative analytics, pass aggregate={field:[ops]}, group_by=[...], bucket='1h', where=[...], "
-        "order_by, or limit to return {window, rows} as list[dict] with no cursor. "
+        "order_by, or limit to return {window, scope:{entity_ids}, rows} as list[dict] with the resolved visible "
+        "entity IDs (including when rows is empty), with no cursor. "
         "Errors return {status:'error', error:{key, message, guidance?}}."
     )
 
@@ -291,8 +292,9 @@ def build_get_logbook_description() -> str:
         "Prefer this standalone tool for direct retrieval; use one execute_home_code call for dependent composition or actions. "
         "Scope with entity_ids or HA-native selectors (area_id/device_id/floor_id/label_id/domain); "
         "size the window with hours=<n> or ISO start/end. "
-        "Success returns {window, entries}, where entries is a flat list of timeline records each carrying "
-        "its entity_id. The first page returns the newest entries; when more remain, next_cursor and overflow appear — "
+        "Success returns {window, scope:{entity_ids}, entries}, where scope contains the resolved visible entity IDs "
+        "and entries is a flat list of timeline records each carrying its entity_id. The first page returns the newest "
+        "entries; when more remain, next_cursor and overflow appear — "
         "pass next_cursor back as cursor to the same tool with the same resolved scope "
         "(omit start, end, and hours) to fetch the next older page. "
         "Errors return {status:'error', error:{key, message, guidance?}}."

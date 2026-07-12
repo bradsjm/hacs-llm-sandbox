@@ -9,7 +9,15 @@ from llm_sandbox_evals.agent_runner import _validate_recorder_tool
 from llm_sandbox_evals.homes import get_home
 from llm_sandbox_evals.prompts import baseline_candidate
 from llm_sandbox_evals.runtime import build_eval_runtime, build_fixture_recorder_source
-from llm_sandbox_evals.schema import CaseContext, EvalCase, Expected
+from llm_sandbox_evals.schema import (
+    BlockedOutcome,
+    CaseContext,
+    EvalCase,
+    Expected,
+    ExpectedAction,
+    ExpectedConclusion,
+    ValueClaim,
+)
 from llm_sandbox_evals.tools import EVAL_SCOPE, apply_scope
 
 
@@ -77,7 +85,15 @@ async def test_recorder_window_too_large_returns_stable_error_key() -> None:
 
 async def test_eval_runtime_records_actions_disabled_without_invoking() -> None:
     result, invoker_calls = await _run_execute(
-        _case(actions_enabled=False),
+        _case(
+            actions_enabled=False,
+            expected=Expected(
+                blocked_outcome=BlockedOutcome(
+                    error_keys=("actions_disabled",),
+                    actions=(ExpectedAction("light", "turn_on", ("light.living",)),),
+                )
+            ),
+        ),
         'await hass.services.async_call("light", "turn_on", target={"entity_id": "light.living"})\nresult = "done"',
     )
 
@@ -93,7 +109,15 @@ async def test_eval_runtime_records_actions_disabled_without_invoking() -> None:
 
 async def test_eval_runtime_records_service_target_not_visible_without_invoking() -> None:
     result, invoker_calls = await _run_execute(
-        _case(actions_enabled=True),
+        _case(
+            actions_enabled=True,
+            expected=Expected(
+                blocked_outcome=BlockedOutcome(
+                    error_keys=("service_target_not_visible",),
+                    actions=(ExpectedAction("switch", "toggle", ("switch.garage_opener",)),),
+                )
+            ),
+        ),
         'await hass.services.async_call("switch", "toggle", target={"entity_id": "switch.garage_opener"})\n'
         'result = "done"',
     )
@@ -110,7 +134,15 @@ async def test_eval_runtime_records_service_target_not_visible_without_invoking(
 
 async def test_eval_runtime_records_service_not_found_without_invoking() -> None:
     result, invoker_calls = await _run_execute(
-        _case(actions_enabled=True),
+        _case(
+            actions_enabled=True,
+            expected=Expected(
+                blocked_outcome=BlockedOutcome(
+                    error_keys=("service_not_found",),
+                    actions=(ExpectedAction("light", "missing", ("light.living",)),),
+                )
+            ),
+        ),
         'await hass.services.async_call("light", "missing", target={"entity_id": "light.living"})\nresult = "done"',
     )
 
@@ -161,7 +193,7 @@ async def _run_execute(case: EvalCase, code: str) -> tuple[dict[str, object], li
     return result, runtime.invoker.calls
 
 
-def _case(*, actions_enabled: bool) -> EvalCase:
+def _case(*, actions_enabled: bool, expected: Expected | None = None) -> EvalCase:
     return EvalCase(
         id="tool-contract-unit",
         category="unit",
@@ -169,7 +201,15 @@ def _case(*, actions_enabled: bool) -> EvalCase:
         user_request="exercise production tool contract",
         actions_enabled=actions_enabled,
         llm_context=CaseContext(device_id="device_assist_living"),
-        expected=Expected(),
+        expected=expected
+        or Expected(
+            conclusions=(
+                ExpectedConclusion(
+                    claim=ValueClaim(subject_kind="entity", subject_id="light.living", field="state", value="on"),
+                    assertion="equals",
+                ),
+            )
+        ),
     )
 
 

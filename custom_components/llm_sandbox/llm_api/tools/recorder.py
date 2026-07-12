@@ -1,7 +1,7 @@
 """Recorder-backed read-only LLM tools."""
 
 from collections.abc import Callable, Mapping
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 import time
 from typing import Literal, cast, final, override
@@ -169,8 +169,23 @@ def _compute_next_cutoffs[T](
         elif (current_cutoff := current_cutoffs.get(stream_id)) is not None:
             # Preserve an exhausted-stream sentinel while another stream advances.
             next_cutoffs[stream_id] = current_cutoff
+        elif full_page:
+            # A byte-rejected initial stream has no prior boundary. Resume just
+            # after its newest candidate so the strict next-page filter includes
+            # every withheld row; normal fitting then advances the stream.
+            next_cutoffs[stream_id] = _cutoff_after(ts_of(full_page[-1]))
     # Match the existing cursor contract: all exhausted sentinels end paging.
     return {} if next_cutoffs and all(cutoff == "" for cutoff in next_cutoffs.values()) else next_cutoffs
+
+
+def _cutoff_after(timestamp: str) -> str:
+    """Return an ISO boundary that includes the row at ``timestamp`` next time."""
+    parsed = dt_util.parse_datetime(timestamp)
+    if parsed is None:
+        # Recorder rows use ISO timestamps; retain a conservative boundary if a
+        # custom source violates that contract rather than raising during paging.
+        return timestamp
+    return (dt_util.as_utc(parsed) + timedelta(microseconds=1)).isoformat()
 
 
 def _paged_recorder_response(
@@ -803,7 +818,9 @@ class GetLogbookTool(_RecorderTool):
             return _windowed_payload(
                 start,
                 end,
-                {"entries": page_entries},
+                # Build scope before byte fitting so every candidate includes the
+                # authorized resolved identity, including empty and oversized pages.
+                {"scope": {"entity_ids": list(cursor.scope_ids)}, "entries": page_entries},
                 Cursor(
                     kind="logbook",
                     scope_ids=cursor.scope_ids,

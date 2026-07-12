@@ -25,8 +25,9 @@ from homeassistant.helpers import llm
 from llm_sandbox_evals.homes import get_home
 from llm_sandbox_evals.prompts import baseline_candidate
 from llm_sandbox_evals.runtime import build_eval_runtime, build_fixture_recorder_source
-from llm_sandbox_evals.schema import CaseContext, EvalCase, Expected
+from llm_sandbox_evals.schema import CaseContext, EvalCase, Expected, ExpectedConclusion, ValueClaim
 from llm_sandbox_evals.tools import EVAL_SCOPE, apply_scope
+import pytest
 
 _CREATED_AT = datetime(2026, 6, 29, 12, tzinfo=UTC)
 _LIVING_TEMP = "sensor.living_temp"
@@ -99,6 +100,7 @@ async def test_logbook_source_injects_entity_id_and_production_paginates() -> No
     result = await tool.run_query(snapshot, data, source)
 
     entries = cast(list[dict[str, object]], result["entries"])
+    assert result["scope"] == {"entity_ids": [_LIVING_LIGHT]}
     assert entries
     assert len(entries) <= MAX_LOGBOOK_ENTRIES
     assert _compact_json_bytes(result) <= MAX_RECORDER_PAGE_BYTES
@@ -110,10 +112,122 @@ async def test_logbook_source_injects_entity_id_and_production_paginates() -> No
     )
     second = await tool.run_query(snapshot, second_data, source)
     second_entries = cast(list[dict[str, object]], second["entries"])
+    assert second["scope"] == {"entity_ids": [_LIVING_LIGHT]}
     assert second_entries
     assert _compact_json_bytes(second) <= MAX_RECORDER_PAGE_BYTES
     assert str(second_entries[-1]["when"]) < str(entries[0]["when"])
     assert {entry["when"] for entry in entries}.isdisjoint(entry["when"] for entry in second_entries)
+
+
+async def test_history_declarative_empty_rows_include_resolved_scope() -> None:
+    """Flat analytics retain resolved entity identity when no rows match."""
+    snapshot = _snapshot()
+    source = build_fixture_recorder_source(
+        snapshot,
+        _fixture({"history": {}, "statistics": {}, "logbook": {}}),
+    )
+    tool = GetHistoryTool("eval")
+    data = cast(
+        dict[str, object],
+        tool.parameters(
+            {
+                "entity_ids": [_LIVING_TEMP],
+                "start": "2000-01-01T00:00:00+00:00",
+                "end": "2000-01-02T00:00:00+00:00",
+                "group_by": ["entity_id"],
+            }
+        ),
+    )
+
+    result = await tool.run_query(snapshot, data, source)
+
+    assert result["scope"] == {"entity_ids": [_LIVING_TEMP]}
+    assert result["rows"] == []
+    assert _compact_json_bytes(result) <= MAX_RECORDER_PAGE_BYTES
+
+
+async def test_history_byte_rejected_fixture_stream_continues(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fixture-backed production pagination resumes a sibling withheld for bytes."""
+    monkeypatch.setattr(recorder, "MAX_RECORDER_PAGE_BYTES", 8 * 1024)
+    timestamps = _ascending_timestamps(4)
+    large_states = [f"oversized-{index}" + "x" * 9_000 for index in range(3)]
+    fixture = _fixture(
+        {
+            "history": {
+                _LIVING_TEMP: [
+                    {
+                        "state": large_states[index],
+                        "attributes": {},
+                        "last_changed": timestamps[index],
+                        "last_updated": timestamps[index],
+                    }
+                    for index in range(3)
+                ],
+                _LIVING_LIGHT: [
+                    {
+                        "state": "small",
+                        "attributes": {},
+                        "last_changed": timestamps[3],
+                        "last_updated": timestamps[3],
+                    }
+                ],
+            },
+            "statistics": {},
+            "logbook": {},
+        }
+    )
+    snapshot = _snapshot()
+    source = build_fixture_recorder_source(snapshot, fixture)
+    tool = GetHistoryTool("eval")
+    entity_ids = [_LIVING_TEMP, _LIVING_LIGHT]
+    first_data = cast(
+        dict[str, object],
+        tool.parameters(
+            {
+                "entity_ids": entity_ids,
+                "start": timestamps[0],
+                "end": timestamps[-1],
+            }
+        ),
+    )
+
+    first = await tool.run_query(snapshot, first_data, source)
+    second_data = cast(
+        dict[str, object],
+        tool.parameters({"entity_ids": entity_ids, "cursor": first["next_cursor"]}),
+    )
+    second = await tool.run_query(snapshot, second_data, source)
+    third_data = cast(
+        dict[str, object],
+        tool.parameters({"entity_ids": entity_ids, "cursor": second["next_cursor"]}),
+    )
+    third = await tool.run_query(snapshot, third_data, source)
+    fourth_data = cast(
+        dict[str, object],
+        tool.parameters({"entity_ids": entity_ids, "cursor": third["next_cursor"]}),
+    )
+    fourth = await tool.run_query(snapshot, fourth_data, source)
+
+    assert _history_result_rows(first, _LIVING_TEMP) == []
+    assert _history_result_rows(first, _LIVING_LIGHT) == [[timestamps[3], "small"]]
+    assert decode_cursor(
+        first["next_cursor"], expected_kind="history", expected_scope_ids=tuple(sorted(entity_ids))
+    ).scope_ids == tuple(sorted(entity_ids))
+    assert _history_result_rows(second, _LIVING_TEMP) == [[timestamps[2], large_states[2]]]
+    assert _history_result_rows(second, _LIVING_LIGHT) == []
+    assert decode_cursor(
+        second["next_cursor"], expected_kind="history", expected_scope_ids=tuple(sorted(entity_ids))
+    ).scope_ids == tuple(sorted(entity_ids))
+    assert _history_result_rows(third, _LIVING_TEMP) == [[timestamps[1], large_states[1]]]
+    assert _history_result_rows(fourth, _LIVING_TEMP) == [[timestamps[0], large_states[0]]]
+    assert "next_cursor" not in fourth
+    assert [
+        row[1]
+        for page in (first, second, third, fourth)
+        for row in _history_result_rows(page, _LIVING_TEMP)
+    ] == [large_states[2], large_states[1], large_states[0]]
 
 
 async def test_statistics_pagination_fits_utf8_rows_and_advances() -> None:
@@ -534,7 +648,14 @@ def _case() -> EvalCase:
         user_request="exercise production core",
         actions_enabled=False,
         llm_context=CaseContext(),
-        expected=Expected(),
+        expected=Expected(
+            conclusions=(
+                ExpectedConclusion(
+                    claim=ValueClaim(subject_kind="entity", subject_id="light.living", field="state", value="on"),
+                    assertion="equals",
+                ),
+            )
+        ),
     )
 
 

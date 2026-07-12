@@ -1,120 +1,175 @@
 # LLM Sandbox Evals
 
-## Project Identity
+## Project identity
 
-`llm_sandbox_evals/` is a **development-only** package at repo root that evaluates the `llm_sandbox` LLM tools (`execute_home_code`, `get_history`, `get_statistics`, `get_logbook`). It runs a real `pydantic_ai.Agent` against **frozen** `HomeSnapshot` fixtures (hand-built in Python — no JSON deserializer exists), executes the production `run_execute` / `run_query` tool cores, scores structured final outcomes with a global tool-call cutoff plus successful-call efficiency, and ranks prompt candidates across a matrix of language models through native `pydantic_evals` `Dataset` / `EvaluationReport` reporting.
+`llm_sandbox_evals/` is a **development-only** package. It evaluates the
+`llm_sandbox` LLM tools (`execute_home_code`, `get_history`,
+`get_statistics`, `get_logbook`, and `get_automation`) with a real
+`pydantic_ai.Agent` over fresh, frozen Home Assistant fixtures. It calls the
+production, Home-Assistant-free tool cores and ranks prompt candidates through
+native `pydantic_evals` reports. It is not part of the integration runtime and
+never connects to a live Home Assistant instance.
 
-It is **not** part of the integration runtime. See `README.md` for usage.
+## Authoring rules
 
-## Eval Authoring Rules
+Cases are realistic human Home Assistant requests, not tool-contract,
+sandbox-enforcement, malformed-input, or unit/integration-test cases.
 
-Eval cases are realistic human Home Assistant tasks. They are **not** tool-contract, sandbox-enforcement, malformed-input, or unit/integration-test cases.
+- Every case is oracle version 2 (`oracle_version: 2`). Preserve the existing
+  nine categories and their 80-case distribution.
+- The final model result is an `EvalAnswer`: display-only `answer` text plus a
+  typed `claims` list. The answer text is never parsed or scored.
+- Every read/answer case declares one or more typed `ExpectedConclusion`s.
+  Action-only cases may have no conclusions. A case must otherwise declare an
+  allowed action ledger or a blocked-action outcome.
+- Claims must describe facts, not predicates or free-form paths. Use only the
+  finite claim fields and assertion vocabulary documented in the README.
+- Evidence must come from successful production-tool result envelopes. Tool
+  arguments, model prose, `printed`, notes, error metadata, and unrelated
+  records are not evidence. The scorer preserves call/turn/batch metadata for
+  diagnostics and unions facts independently of the path used to obtain them.
+- Allowed actions are checked from the successful ledger. Blocked actions are
+  checked from the rejected ledger and require the expected policy effect,
+  allowed error key, and no successful effect. Failed exploratory attempts are
+  diagnostics unless a blocked-action oracle explicitly requires them.
+- Direct logbook and flat declarative-history no-data conclusions must name the
+  exact resolved entity scope. The production response supplies
+  `scope.entity_ids`; do not infer scope from raw selectors or call arguments.
+- Keep production query behavior and fixture behavior aligned. Do not add an
+  eval-only tool emulator or pass a live Home Assistant object, registry,
+  recorder, service callable, filesystem, network, or OS/process API to the
+  model.
 
-- Write `user_request` prompts the way a real person would ask Assist. Do not ask for entity IDs, tool names, raw service names, selectors, or implementation details unless that is natural user language for the scenario.
-- Final-answer wording is displayed in reports but never scored. Use structured tool outputs, recorded actions, and observed policy rejections as score evidence; `expected.provenance_values` are supplemental and never a standalone oracle.
-- Recorder/history/statistics/logbook cases must include `expected.tool_result_checks` that prove one successful, non-empty, relevant result shape for the production recorder tool output. State and registry cases that would otherwise be answer-only must use structured `execute_home_code` checks, which may combine evidence across successful snippets, or be removed/replaced with a more valuable case.
-- Allowed-action cases score exact successful side effects. Split service calls may satisfy the expected target union for the same domain/service/service-data effect, but supersets, duplicate successful calls, and unrelated successful side effects fail. Failed intermediate action attempts do not fail scoring by themselves; they only count against the global tool-call cap.
-- Blocked-action cases measure structured side effects: an observed rejected action matching the requested domain, service, target, and service data; no successful action; bounded attempts; and an expected error key. Wording, acknowledgement phrasing, and prose leakage checks belong in targeted tests or diagnostics, not core LLM eval scoring.
-- Removed tool-contract, recovery, and malformed-input cases belong in unit/integration tests. Do not reintroduce them as LLM eval cases.
+## Outcome and diagnostics contract
 
-## Tool Purpose and Alignment
+Each completed cell has exactly one state: `correct`, `incorrect`, or
+`incomplete`. Correctness requires every expected conclusion to be both
+semantically matched and grounded in normalized successful evidence; all
+submitted claims must also be grounded. Action effects are checked separately.
+The derived native score is binary: `1.0` for correct and `0.0` otherwise.
 
-`execute_home_code` should help an LLM complete the user's Home Assistant task, not force the LLM to write perfect Python.
+Provider, transport, timeout, model-protocol, and unexpected harness failures
+are `incomplete` and are excluded from quality denominators. Tool calls,
+failed calls, repairs, model turns, parallel batches, elapsed time, token
+usage, cost, and cap exhaustion are diagnostics only. The hard tool-call cap
+remains a runaway safety stop; exhausting it without a valid final
+`EvalAnswer` is `incorrect`, not an efficiency penalty.
 
-Treat the submitted code as short-lived task glue: interpret reasonable intent, accept common LLM coding patterns, and prefer "do what the user likely meant" over strict rejection when it is safe to do so.
+## Non-negotiables
 
-Design for success in one call, and recovery in no more than one follow-up call. The eval harness uses a hard 10-tool-call cutoff to prevent lengthy runs. Successful cases score `1.0` at or below par and decay toward `0.5` at the cap; leave `tool_call_par` unset unless a case has a concrete calibrated reason to override the derived par.
-
-On success, return the useful result directly. On failure, return actionable feedback that tells the next LLM call exactly what went wrong, what names or APIs are available, and what concrete change is likely to work.
-
-Do not require the LLM to learn integration-specific details when normal Home Assistant knowledge can be adapted safely inside the tool.
-
-Prioritize accommodating reasonable intent over increasing prompting length.
-
-## Non-Negotiables
-
-- **Never** pass a live `HomeAssistant` object, live registries, event bus, auth, config, filesystem, network, or OS/process API into the tool runner. The only service seam is `RecordingInvoker` (`tools.py`), which records the `ProposedAction` and returns `None` — it never calls `hass.services.async_call`.
-- Build a **fresh** `HomeSnapshot` per case evaluation; never cache or mutate fixtures.
-- The recorder tools run production `run_query(...)` cores against fixture-backed `RecorderSource` data, never a live database.
-- Keep eval dependencies **isolated**: `pydantic-ai-slim[...]`, `pydantic-evals[logfire]`, `dspy`, and `rich` live only in `[dependency-groups] evals`. `litellm` remains only as a transitive dep of `dspy`; the eval-matrix adapter never imports it. Never add them to `[project] dependencies`, `manifest.json`, or any `custom_components/**` import. `custom_components/**` is read-only.
-- Keep `scripts/check` (the integration check) untouched; this package has its own `scripts/*-evals`.
-- The DSPy optimizer is dev-only. Keep `dspy` imports inside `optimize_dspy.py` and the lazy CLI optimize handler so eval/report/stub paths import without DSPy.
-- No fallbacks unless explicitly approved.
+- Build a fresh `HomeSnapshot` for every cell; never cache or mutate fixtures.
+- Run production `run_execute` / `run_query` cores against fixture-backed data.
+- Keep eval dependencies in the `evals` dependency group. Never add them to
+  `[project].dependencies`, `manifest.json`, or `custom_components/**`.
+- Keep `scripts/check` unchanged. The eval package has its own eval checks.
+- Keep DSPy imports in `optimize_dspy.py` and the lazy CLI optimize path so
+  offline eval and report commands do not require DSPy at import time.
 
 ## Commands
 
-- Setup: `scripts/setup-evals` (`uv sync --group dev --group evals`)
-- Check: `scripts/check-evals` (ruff + mypy + offline stub eval)
-- Format: `scripts/format-evals`
-- Run: `uv run --group dev --group evals python -m llm_sandbox_evals eval --models stub --prompt-profile balanced`
-- Optimize: `uv run --group dev --group evals python -m llm_sandbox_evals optimize --target-model <real-model>`
-- Report: `uv run --group dev --group evals python -m llm_sandbox_evals report <run_id>`
-
-Note: eval runs need **both** groups (`dev` provides `homeassistant`, `evals` provides `pydantic-ai-slim` and `pydantic-evals`). Artifacts go to the gitignored `eval_data/runs/`; each native eval run writes `report.json`. A non-empty `LOGFIRE_TOKEN` automatically enables Pydantic Logfire export; telemetry console output is disabled to preserve Rich Live and stdout/stderr contracts.
-
-## Architecture And Data Flow
-
-The native experiment builds a `pydantic_evals.Dataset` with one case per `(candidate, model, case)` matrix cell, then evaluates each cell through `harness.run_case`:
-
 ```text
-profile  = resolve_profile(config.prompt_profile)         # selected production prompt profile
-snapshot = apply_scope(homes.get_home(case.home).snapshot(), EVAL_SCOPE)
-runtime  = build_eval_runtime(case, candidate, profile, snapshot, fixture)
-agent    = build_agent(runtime, model_id)                 # production schemas via convert(tool.parameters)
-result   = await agent.run(case.user_request, deps=runtime, usage_limits=UsageLimits(tool_calls_limit=...))
-checks   = scoring.check_case(case, recorded_actions, tool_call_count, tool_events)
-score    = scoring.score_case(checks)
-report = dataset.evaluate(task, name="matrix", max_concurrency=config.concurrency)
+scripts/setup-evals
+scripts/check-evals
+scripts/format-evals
+uv run --group dev --group evals python -m llm_sandbox_evals eval --models stub --prompt-profile balanced
+uv run --group dev --group evals python -m llm_sandbox_evals optimize --target-model <real-model>
+uv run --group dev --group evals python -m llm_sandbox_evals report <run_id>
 ```
 
-The harness owns the snapshot lifecycle and builds a fresh scoped snapshot per case. Failed required outcome gates score `0.0`; successful outcomes score from `1.0` at or below par down to `0.5` at the global 10-tool-call cutoff. The native `EvaluationReport` carries the per-cell scores, deterministic check labels, candidate ranking, candidate x model means, and overall mean. The real executor activates/clears its own runtime contextvars internally — the harness does **not** call `activate_runtime`/`clear_runtime`.
+`check-evals` runs Ruff, mypy, the eval tests, and an offline stub matrix.
+`format-evals` runs Ruff format. Eval runs need both `dev` (Home Assistant)
+and `evals` (Pydantic AI/Evals) groups. Artifacts are written to the ignored
+`eval_data/runs/`; a non-empty `LOGFIRE_TOKEN` enables Logfire export while
+console telemetry remains disabled.
+
+Repository-wide documentation and YAML checks are `scripts/markdown-check` and
+`scripts/yaml-check`; `scripts/check` runs both in addition to the integration
+checks.
+
+## Architecture and data flow
+
+```text
+case YAML + fixture
+        |
+        v
+fresh scoped HomeSnapshot -> EvalRuntime -> production tool cores
+        |                                      |
+        |                                      v
+        |                         successful tool envelopes + action records
+        v                                      |
+Pydantic AI Agent -> EvalAnswer(answer, claims)
+        |                                      |
+        +--------------------+-----------------+
+                             v
+          normalize evidence / score claims / score action ledgers
+                             |
+                             v
+                 CaseTrace -> native report + HTML
+                             |
+                             v
+                  correct / incorrect / incomplete
+```
 
 ### Module map
 
-- `schema.py` — **stable shared contracts** (`PromptCandidate`, `EvalCase`, `Expected`, `ExpectedAction`, `CaseContext`, `CheckResult`, `ToolEvent`, `CaseTrace`). Do not rename fields without updating all consumers.
-- `config.py` — `EvalConfig` + `load_config()` (defaults: `models=["stub"]`, `candidates=["baseline"]`, `max_tool_calls=10`).
-- `data/cases.yaml` — native `pydantic_evals.Dataset` authoring file for the predefined suite (simple -> multi-step, all categories), with a focused `data/cases_schema.json` authoring sidecar. The sidecar deliberately rejects unsupported generic wrapper and context fields; it is not a full `Dataset.from_file()` schema.
-- `cases.py` — loads `data/cases.yaml` with `Dataset.from_file()` and exposes stable `CASES: list[EvalCase]`.
-- `homes/` — frozen fixture modules (`snapshot() -> HomeSnapshot`, `recorder() -> dict`) + `get_home(name)` registry.
-- `prompts.py` — `baseline_candidate()` (from production builders), `load_candidates(ids, prompt_profile_id)`, and prompt-size helpers. `guided`/`balanced`/`frontier` are production profiles for guidance-and-density evals.
-- `agent_runner.py` — Pydantic AI `Agent`/`Tool.from_schema` wiring, production schema conversion, real-model inference, reasoning settings, and the offline `FunctionModel` stub.
-- `runtime.py` — `EvalRuntime`, fixture-backed `RecorderSource`, runtime context factory, and SQL/history/statistics fixture seams for `execute_home_code`.
-- `tools.py` — `EVAL_SCOPE`, `apply_scope`, `RecordingInvoker`, and action normalization helpers only; no tool emulators.
-- `scoring.py` — `check_case(...)`, `score_case(...)`, `mean_score(...)`, `is_incomplete(...)`. Outcome-evidence gates (`meaningful_oracle`, optional `provenance_evidence_present`, `tool_result_check_*` for `execute_home_code` / recorder tools, final-tool `execution_ok`, exact `actions_match` or observed structured `blocked_outcome`, global `tool_calls_within_max`); `model_error` cells are flagged incomplete and excluded from means.
-- `harness.py` — `run_case(...) -> CaseTrace`; the bounded per-cell task body reused by native experiments and DSPy. Captures per-call `ToolEvent`s (tool name, args, return payload) from the agent conversation.
-- `experiment.py` — native `pydantic_evals` `Dataset` construction, deterministic `SandboxOutcome` evaluator, observer-only matrix/tool lifecycle events, report-level candidate/model analyses, and `run_matrix(...) -> EvaluationReport`.
-- `terminal.py` — the eval command's stderr-only Rich Live composition (TTY), redirected-stderr lifecycle-line fallback, and compact successful final summary. It never changes stdout, artifacts, scoring, or matrix execution.
-- `reports.py` — `write_report_json(...)` and `load_report(...)` for the single saved native `report.json` artifact.
-- `html_report.py` — `render_html(...)` / `write_html(...)` for the interactive self-contained `report.html` dashboard.
-- `logfire_config.py` — token-enabled Pydantic Logfire configuration with console output disabled.
-- `optimize_dspy.py` — DSPy COPRO prompt optimizer that exports optimized `PromptCandidate` artifacts and reuses the real harness metric path.
-- `cli.py` / `__main__.py` — `eval`, `report`, and `optimize` subcommands.
+- `schema.py` — versioned `EvalAnswer`/claim models, v2 case oracles,
+  `CaseOutcome`, `ConclusionResult`, action ledgers, diagnostics, and
+  self-contained `CaseTrace` records.
+- `cases.py` and `data/cases.yaml` — native Dataset loading and the 80 authored
+  cases; `data/cases_schema.json` is the focused v2 authoring schema.
+- `homes/` — frozen Python fixture modules and the `get_home()` registry.
+- `prompts.py` — production-profile candidates and prompt-size helpers.
+- `agent_runner.py` — Pydantic AI agent, production tool schemas, and offline
+  `FunctionModel` stub; the agent output type is `EvalAnswer`.
+- `runtime.py` — fixture-backed recorder source and eval runtime construction.
+- `tools.py` — evaluation scope, fixture scoping, recording action seam, and
+  action normalization; it contains no tool emulators.
+- `scoring/contracts.py` — immutable normalized fact records and call metadata.
+- `scoring/evidence.py` — selects successful envelopes and unions normalized
+  facts from execute, history, statistics, logbook, and automation results.
+- `scoring/assertions.py` — finite equality, tolerance, set, and empty-scope
+  comparisons.
+- `scoring/actions.py` — canonical successful/rejected action-ledger checks.
+- `scoring/{execute,history,statistics,logbook,automation}.py` — payload
+  normalizers and source-specific grounding logic.
+- `scoring/evaluate.py` — composes conclusion and action results into the
+  binary/incomplete outcome and native score.
+- `harness.py` — fresh snapshot lifecycle, structured agent run, chronological
+  tool events, action ledgers, diagnostics, and failure classification.
+- `experiment.py` — native Dataset matrix, outcome/coverage aggregation, and
+  quality ranking by correct rate rather than operational diagnostics.
+- `terminal.py` — stderr-only live progress and correct/incorrect/incomplete
+  summaries.
+- `reports.py` — v2 `report.json` persistence and strict artifact loading.
+- `html_report.py` — self-contained report dashboard with claims, grounding,
+  ledgers, evidence, diagnostics, and answer details.
+- `optimize_dspy.py` — DSPy COPRO prompt export and binary harness metric.
+- `cli.py` / `__main__.py` — `eval`, `report`, and `optimize` commands.
 
-### Key contracts
+## Production result contracts used by scoring
 
-- Tool schemas are `convert(tool.parameters)` from production tool instances. Tool execution returns production result envelopes directly; recoverable errors are not raised as `ModelRetry`.
-- `execute_home_code` `tool_args` = `{"code": str}`; the result dict carries `execution.status` (`ok|code_error|helper_error|setup_error`), `output`, and optional `printed`, `actions`, `note`, and `fix` fields on the relevant success/error payloads.
-- Recorder `ToolOutcome.result` matches production: history `{"window": {...}, "entities": {id: {"unit"?: str, "rows": [[t, state]]}}}`, statistics `{"window": {...}, "period": str, "statistics": {id: {"fields": [field], "rows": [[t, {field: value}]]}}}` with optional `types` selecting statistic fields, and logbook `{"window": {...}, "entries": [{"entity_id", "when", "name", "message", ...}]}`. Success omits `status`; `next_cursor` appears only when more rows remain. Errors are `{"status":"error","error":{"key": str, "message": str, "fix"?: list[str]}}`, including `entity_not_visible` with concrete visible candidates when available.
-- `ToolOutcome.recorded_actions` for the execute path comes from `result["actions"]` (the facade's `ActionRecord` list), not the invoker's captured calls.
+- Successful `execute_home_code` results have `execution.status == "ok"`.
+  Facts are extracted only from JSON-safe `output` records, never from
+  `printed`, notes, metadata, arguments, or answer text.
+- Successful recorder/automation envelopes do not have top-level
+  `status: "error"`. History and statistics keyed records retain their IDs
+  even when rows are empty.
+- Flat declarative history returns `{window, scope: {entity_ids}, rows}`.
+- Logbook returns `{window, scope: {entity_ids}, entries}`. The scope is the
+  resolved, sorted visible scope and is present on empty and continuation
+  pages. It grants no access and must not expose raw hidden IDs.
 
-## How To Extend
+## Safety verification
 
-- **Add a case:** append one native Dataset `Case` to `data/cases.yaml` with `name` matching `inputs.id`; do not hand-parse the file in code. Reference a real fixture `home`; every read/find case needs a relevant `tool_result_checks` oracle, actions need exact recorded effects, and blocked cases need an observed exact rejected effect with an expected key. Use realistic human `user_request` text and keep removed tool-contract/recovery/malformed-input coverage in unit/integration tests.
-- **Add a fixture:** add `homes/<name>.py` with `snapshot()`/`recorder()` and `NAME`, then register in `homes/__init__.py`. Mirror `home_default.py`'s helpers (effective-area rule, sorted tuple `SnapshotIndexes`, nested `SafeContext`).
-- **Add a candidate:** add a `PromptCandidate` and expose via `prompts.load_candidates`. `baseline` is auto-built; unknown ids currently raise.
-- **Add a model:** no code needed — pass any Pydantic AI provider-prefixed id (`openai:...`, `anthropic:...`, `openrouter:...`) to `--models`.
+When changing fixtures or runtime seams, confirm that no live Home Assistant
+object, recorder database, service dispatcher, subprocess, network, or OS API
+can reach the model. `RecordingInvoker` is the only action seam. Run
+`scripts/check-evals` and `scripts/check`; the latter must remain free of
+`custom_components/` changes for eval-only work.
 
-## The Stub Adapter
+## Style
 
-The `stub` FunctionModel is a **pipeline validator**, not a scoring benchmark. It keyword-detects the tool from the **user request only** (not the whole prompt, which lists every tool name), emits runnable Pydantic AI `ToolCallPart`s, then returns a terminal answer echoing the latest tool result. Recorder cases without explicit ids use broad selectors to exercise resolver support. A low stub score in a category is expected and honest; use real models for prompt-quality signal.
-
-## Safety Verification
-
-When changing `tools.py` or `homes/`, confirm: no `HomeAssistant` instantiation, no `hass.services.async_call`, no recorder DB imports, no `subprocess`/network/OS APIs. The only live seam must be `RecordingInvoker`. Run `scripts/check-evals` and the integration `scripts/check` (must stay green and must show no `custom_components/` changes).
-
-## Code Style
-
-- Python >=3.14.2, ruff `py314`, `line-length=119`, mypy strict. Concrete annotations; `from datetime import UTC, datetime` (use `UTC`, not `timezone.utc`).
-- Comments at branch boundaries and safety constraints. Type-annotate all helper params.
-- Keep `__init__.py` a stable surface. KISS/YAGNI.
-- Do not write tests that pass only because mocks return expected values; assert observable behavior. No regression tests unless requested.
+Use Python >=3.14.2, Ruff `py314`, line length 119, strict mypy, concrete
+annotations, and comments at branch boundaries or safety constraints. Keep
+`__init__.py` a stable public surface. Tests should assert observable
+behavior, use typed parameters, and avoid brittle presentation-copy checks.

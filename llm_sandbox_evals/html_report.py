@@ -101,7 +101,7 @@ _HTML_TEMPLATE = """<!doctype html>
     h1, h2, h3 { text-wrap: balance; }
     h2 { color: var(--heading); font-size: 1.15rem; font-weight: 600; margin-block: 0 .6rem; }
     .panel h3, .analysis-card h3, #detail-panel h3, #detail-panel h4, .tool-card h5 { color: var(--heading); margin-block-start: 0; font-size: .95rem; font-weight: 600; }
-    /* Sticky section navigation: the report is long, keep orientation cheap. */
+     /* Sticky section navigation: the report is long, keep orientation cheap. */
     .report-nav { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; gap: 1rem; padding: .45rem .9rem; margin-block-start: .5rem; border: 1px solid var(--panel-border); border-radius: var(--radius); background: color-mix(in srgb, var(--panel) 82%, transparent); backdrop-filter: blur(8px); }
     .report-nav strong { color: var(--heading); font-size: .85rem; margin-inline-end: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .report-nav a { color: var(--muted); font-size: .85rem; font-weight: 600; text-decoration: none; }
@@ -126,7 +126,7 @@ _HTML_TEMPLATE = """<!doctype html>
     .chart { min-block-size: 280px; inline-size: 100%; }
     #heatmap { min-block-size: clamp(200px, 22vw, 300px); }
     .analysis-grid { display: flex; flex-direction: column; gap: var(--gap); }
-    .analysis-card p, #detail-panel p, .gate p { color: var(--muted); }
+     .analysis-card p, #detail-panel p { color: var(--muted); }
     .kpi-row { display: flex; flex-wrap: wrap; gap: var(--gap); }
     .kpi-chip { background: var(--panel-soft); border: 1px solid var(--panel-border); border-radius: var(--radius); padding: .5rem .8rem; min-inline-size: 0; }
     .kpi-chip span { display: block; color: var(--muted); font-size: .78rem; font-weight: 600; }
@@ -142,8 +142,8 @@ _HTML_TEMPLATE = """<!doctype html>
     #filters :is(select, input[type="search"]):focus-visible, #filters input[type="checkbox"]:focus-visible, pre:focus-visible, summary:focus-visible, .report-nav a:focus-visible { outline: 3px solid color-mix(in srgb, var(--focus) 35%, transparent); outline-offset: 2px; border-color: var(--focus); }
     #filters input[type="search"]::placeholder { color: var(--muted); opacity: 1; }
     #filters input[role="switch"] { accent-color: var(--focus); }
-    /* Master-detail: grid and detail side by side on wide viewports so the
-       core loop (pick a cell, read its gate ladder) needs no scrolling. */
+     /* Master-detail: grid and detail side by side on wide viewports so the
+        core inspection loop needs no scrolling. */
     .results-layout { grid-template-columns: minmax(0, 1fr); align-items: start; margin-block-start: var(--gap); }
     #detail h3 { margin-block: 0 .5rem; }
     @media (min-width: 1200px) {
@@ -174,22 +174,7 @@ _HTML_TEMPLATE = """<!doctype html>
     #results-grid .ag-header-cell-label { font-weight: 700; }
     #results-grid .ag-full-width-row { background: var(--panel-soft); border-block: 1px solid var(--panel-border); padding-inline: .75rem; }
     .badge { display: inline-flex; align-items: center; border-radius: 999px; padding: .12rem .42rem; font-weight: 700; font-size: .7rem; line-height: 1; color: #fff; text-transform: uppercase; letter-spacing: .03em; vertical-align: middle; }
-    .badge.pass { background: var(--pass-fill); } .badge.fail { background: var(--fail-fill); } .badge.incomplete { background: var(--incomplete-fill); }
-    /* Gate ladder: a plain-language scoring checklist. Each rung is a status chip
-       plus a body that leads with a friendly title and a human result sentence,
-       with the raw machine name/feedback kept as a muted caption for power users. */
-    .gate-ladder { display: flex; flex-direction: column; gap: .4rem; margin-block: .35rem 0; }
-    .gate { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: .6rem; background: var(--panel-soft); border: 1px solid var(--panel-border); border-inline-start: .3rem solid var(--muted-border); border-radius: .55rem; padding: .55rem .7rem; }
-    .gate.pass { border-inline-start-color: var(--pass); } .gate.fail { border-inline-start-color: var(--fail); }
-    .gate-status { display: inline-flex; align-items: center; justify-content: center; inline-size: 1.35rem; block-size: 1.35rem; border-radius: .4rem; color: #fff; font-size: .78rem; font-weight: 700; }
-    .gate.pass .gate-status { background: var(--pass-fill); } .gate.fail .gate-status { background: var(--fail-fill); }
-    .gate-body { min-inline-size: 0; display: flex; flex-direction: column; gap: .1rem; }
-    .gate-title-row { display: flex; align-items: center; gap: .5rem; min-inline-size: 0; }
-    .gate-title { font-size: .85rem; font-weight: 600; color: var(--heading); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .gate-flag { margin-inline-start: auto; flex: none; font-size: .64rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; padding: .06rem .4rem; border-radius: 999px; color: var(--muted); border: 1px solid var(--panel-border); }
-    .gate-flag.required { color: var(--incomplete); border-color: color-mix(in srgb, var(--incomplete) 45%, transparent); }
-    .gate-result { margin: 0; font-size: .82rem; line-height: 1.4; color: var(--text); overflow-wrap: anywhere; }
-    .gate-raw { margin: .15rem 0 0; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .68rem; line-height: 1.35; color: var(--muted); opacity: .85; overflow-wrap: anywhere; }
+     .badge.correct { background: var(--pass-fill); } .badge.incorrect { background: var(--fail-fill); } .badge.incomplete { background: var(--incomplete-fill); }
     .card-title { display: flex; justify-content: space-between; gap: 1rem; align-items: baseline; }
     /* Sub-section headings inside the inspector, with an inline count/meta note. */
     .detail-sub { display: flex; align-items: baseline; gap: .5rem; margin-block: 1.15rem .15rem; flex-wrap: wrap; }
@@ -219,7 +204,6 @@ _HTML_TEMPLATE = """<!doctype html>
     .code-wrap .copy-btn { position: absolute; inset-block-start: .4rem; inset-inline-end: .4rem; z-index: 1; opacity: 0; transition: opacity .12s ease; font-size: .68rem; font-weight: 600; padding: .16rem .5rem; inline-size: auto; block-size: auto; border-radius: .4rem; border: 1px solid var(--control-border); background: var(--panel); color: var(--muted); cursor: pointer; }
     .code-wrap:hover .copy-btn, .code-wrap .copy-btn:focus-visible { opacity: 1; }
     .code-wrap .copy-btn:hover { color: var(--focus); border-color: var(--focus); }
-    .gate .code-wrap { grid-column: 1 / -1; grid-row: 3; margin-block: .25rem 0; }
     /* Toolbar above the grid: live filtered count on the left, CSV export right. */
     .results-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 1rem; margin-block: var(--gap) .4rem; }
     #row-count { color: var(--muted); font-size: .82rem; font-weight: 600; font-variant-numeric: tabular-nums; }
@@ -248,7 +232,7 @@ _HTML_TEMPLATE = """<!doctype html>
     table.matrix tr.mx-cat th { position: sticky; inset-inline-start: 0; background: var(--panel-soft); color: var(--muted); font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; text-align: start; padding: .3rem .55rem; }
     .mx-cell { inline-size: 100%; min-inline-size: 3.6rem; block-size: 100%; margin: 0; border: 0; border-radius: 0; padding: .32rem .3rem; display: flex; align-items: center; justify-content: center; gap: .32rem; font-variant-numeric: tabular-nums; font-weight: 700; color: var(--heading); cursor: pointer; }
     .mx-cell .dot { inline-size: .5rem; block-size: .5rem; border-radius: 999px; flex: none; }
-    .mx-cell.pass .dot { background: var(--pass-fill); } .mx-cell.fail .dot { background: var(--fail-fill); } .mx-cell.incomplete .dot { background: var(--incomplete-fill); }
+     .mx-cell.correct .dot { background: var(--pass-fill); } .mx-cell.incorrect .dot { background: var(--fail-fill); } .mx-cell.incomplete .dot { background: var(--incomplete-fill); }
     .mx-cell:hover { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--focus) 45%, transparent); }
     .mx-cell:focus-visible { outline: 3px solid color-mix(in srgb, var(--focus) 40%, transparent); outline-offset: -3px; }
     td.mx-selected { box-shadow: inset 0 0 0 2px var(--focus); }
@@ -256,8 +240,8 @@ _HTML_TEMPLATE = """<!doctype html>
     .matrix-legend { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem 1rem; margin-block: .5rem 0; font-size: .76rem; color: var(--muted); }
     .matrix-legend .lg { display: inline-flex; align-items: center; gap: .35rem; }
     .matrix-legend .lg::before { content: ""; inline-size: .7rem; block-size: .7rem; border-radius: .25rem; }
-    .matrix-legend .lg.pass::before { background: color-mix(in srgb, var(--pass) 32%, var(--panel)); }
-    .matrix-legend .lg.fail::before { background: color-mix(in srgb, var(--fail) 22%, var(--panel)); }
+     .matrix-legend .lg.correct::before { background: color-mix(in srgb, var(--pass) 32%, var(--panel)); }
+     .matrix-legend .lg.incorrect::before { background: color-mix(in srgb, var(--fail) 22%, var(--panel)); }
     .matrix-legend .lg.incomplete::before { background: color-mix(in srgb, var(--incomplete) 24%, var(--panel)); }
     .matrix-legend .lg-note { color: var(--muted); }
     .error-card { border-color: var(--fail); background: light-dark(#fff5f5, #2a1512); color: light-dark(#7a271a, #ffb4a3); }
@@ -312,7 +296,7 @@ _HTML_TEMPLATE = """<!doctype html>
           <label>Candidate<select id="candidate-filter" data-state="candidate"><option value="">All</option></select></label>
           <label>Model<select id="model-filter" data-state="model"><option value="">All</option></select></label>
           <label>Category<select id="category-filter" data-state="category"><option value="">All</option></select></label>
-          <label>Status<select id="status-filter" data-state="status"><option value="">All</option><option value="pass">Pass</option><option value="fail">Fail</option><option value="incomplete">Incomplete</option></select></label>
+           <label>Outcome<select id="status-filter" data-state="status"><option value="">All</option><option value="correct">Correct</option><option value="incorrect">Incorrect</option><option value="incomplete">Incomplete</option></select></label>
           <label>Search<input id="quick-filter" type="search" placeholder="Case name or id"></label>
           <label><input id="group-case" type="checkbox" role="switch"> Group by case</label>
         </form>
@@ -332,12 +316,12 @@ _HTML_TEMPLATE = """<!doctype html>
           <div id="results-grid" class="ag-theme-alpine"></div>
           <div id="results-matrix" hidden>
             <div class="matrix-scroll" role="region" aria-label="Case by model score matrix" tabindex="0"></div>
-            <p class="matrix-legend" aria-hidden="true"><span class="lg pass">pass</span><span class="lg fail">fail</span><span class="lg incomplete">incomplete</span><span class="lg-note">cell = score; darker green = more efficient · click a cell to inspect it</span></p>
+             <p class="matrix-legend" aria-hidden="true"><span class="lg correct">correct</span><span class="lg incorrect">incorrect</span><span class="lg incomplete">incomplete</span><span class="lg-note">cell = binary score; click a cell to inspect it</span></p>
           </div>
         </div>
         <aside id="detail" aria-labelledby="detail-heading">
           <h3 id="detail-heading">Results Inspector</h3>
-          <div id="detail-panel" class="empty-state">Select a result row to inspect its gate ladder, tool &amp; action trace, and final answer for that candidate / model / case cell.</div>
+        <div id="detail-panel" class="empty-state">Select a result row to inspect its outcome, evidence, ledgers, diagnostics, and answer.</div>
         </aside>
       </div>
     </section>
@@ -350,7 +334,7 @@ _HTML_TEMPLATE = """<!doctype html>
   <script type="application/json" id="report-data">__REPORT_DATA__</script>
   <script>
     (() => {
-      const fmtNumber = value => typeof value === "number" ? value.toFixed(3) : value;
+       const fmtNumber = value => typeof value === "number" ? value.toFixed(3) : value;
       // Durations are seconds (pydantic_evals task_duration); show ms below 1s.
       const fmtDuration = seconds => (typeof seconds !== "number" || Number.isNaN(seconds)) ? "—" : (seconds < 1 ? `${Math.round(seconds * 1000)} ms` : `${seconds.toFixed(2)} s`);
       const text = value => String(value ?? "—");
@@ -400,24 +384,30 @@ _HTML_TEMPLATE = """<!doctype html>
       const app = () => {
         const DATA = JSON.parse(document.getElementById("report-data")?.textContent || "{}");
         const CELLS = (DATA.cases || []).map(c => {
-          const t = c.output || {};
-          const checks = Array.isArray(t.checks) ? t.checks : [];
-          const reqFail = checks.find(ch => ch.required && !ch.passed);
-          const incomplete = checks.some(ch => ch.name === "model_error");
+           const t = c.output;
+           const outcome = t.outcome.state;
+           const diagnostics = t.diagnostics;
           return {
-            case_id: c.inputs?.case_id ?? t.case_id,
-            category: c.inputs?.category ?? t.category,
-            candidate_id: c.inputs?.candidate_id ?? t.candidate_id,
-            model_id: c.inputs?.model_id ?? t.model_id,
-            score: (typeof t.score === "number") ? t.score : (c.scores?.score?.value ?? 0),
-            tool_calls: t.tool_call_count ?? 0,
-            duration: (typeof c.task_duration === "number") ? c.task_duration : null,
-            user_request: t.user_request || "",
-            expected_summary: Array.isArray(t.expected_summary) ? t.expected_summary : [],
-            checks, trace: t, name: c.name, raw: c,
-            _status: incomplete ? "incomplete" : (reqFail ? "fail" : "pass"),
-            _firstFail: reqFail ? reqFail.name : "—",
-            _firstFailFeedback: reqFail?.feedback || "",
+             case_id: c.inputs.case_id,
+             category: c.inputs.category,
+             candidate_id: c.inputs.candidate_id,
+             model_id: c.inputs.model_id,
+             score: c.scores.score.value,
+             tool_calls: diagnostics.tool_calls,
+             failed_calls: diagnostics.failed_tool_calls,
+             turns: diagnostics.model_turns,
+             duration: diagnostics.elapsed_seconds,
+             tokens: diagnostics.usage?.total_tokens ?? null,
+             cost: diagnostics.usage?.cost ?? null,
+             user_request: t.user_request,
+             expected: t.expected,
+             conclusions: t.conclusions,
+             actions: t.actions,
+             ledger: t.action_ledger,
+             tool_events: t.tool_events,
+             diagnostics, answer: t.answer, trace: t, name: c.name, raw: c,
+            _status: outcome,
+             _reason: t.outcome.reason,
           };
         });
         const unique = values => [...new Set(values.filter(v => v !== undefined && v !== null && v !== ""))].sort();
@@ -468,14 +458,14 @@ _HTML_TEMPLATE = """<!doctype html>
         document.getElementById("nav-run-id").textContent = runTitle;
         const created = DATA._meta?.created_at ? new Date(DATA._meta.created_at) : null;
         document.getElementById("created-at").textContent = `Created: ${created && !Number.isNaN(created.valueOf()) ? created.toLocaleString() : "—"}`;
-        document.getElementById("overall-mean").textContent = fmt(byTitle("Overall mean score")?.value);
+         document.getElementById("overall-mean").textContent = fmt(byTitle("Overall correct rate")?.value);
         // Pass/fail counts answer "how bad is it?" directly in the hero band.
-        const passCount = CELLS.filter(c => c._status === "pass").length;
-        const failCount = CELLS.filter(c => c._status === "fail").length;
+         const passCount = CELLS.filter(c => c._status === "correct").length;
+         const failCount = CELLS.filter(c => c._status === "incorrect").length;
         const incompleteCount = CELLS.filter(c => c._status === "incomplete").length;
         const complete = CELLS.length - incompleteCount;
         document.getElementById("pass-count").textContent = String(passCount);
-        document.getElementById("pass-label").textContent = complete > 0 ? `Pass · ${(passCount / complete * 100).toFixed(1)}%` : "Pass";
+         document.getElementById("pass-label").textContent = complete > 0 ? `Correct · ${(passCount / complete * 100).toFixed(1)}%` : "Correct";
         document.getElementById("fail-count").textContent = String(failCount);
         document.getElementById("incomplete-count").textContent = String(incompleteCount);
         document.getElementById("case-count").textContent = String(CELLS.length);
@@ -561,8 +551,8 @@ _HTML_TEMPLATE = """<!doctype html>
           document.getElementById("heatmap").setAttribute("aria-label", `Mean score heatmap across ${candidates.length} candidates and ${models.length} models.`);
           charts.push(heatmap);
         }
-        const statusNames = ["pass", "fail", "incomplete"];
-        const statusColors = { pass: cssToken("--pass"), fail: cssToken("--fail"), incomplete: cssToken("--incomplete") };
+         const statusNames = ["correct", "incorrect", "incomplete"];
+         const statusColors = { correct: cssToken("--pass"), incorrect: cssToken("--fail"), incomplete: cssToken("--incomplete") };
         const outcomeCounts = categories.map(cat => statusNames.map(status => cells.filter(c => c.category === cat && c._status === status).length));
         const outcomes = initChart("outcomes");
         outcomes.setOption({ textStyle: chartText, tooltip: { trigger: "axis", axisPointer: { type: "shadow" } }, legend: { textStyle: { color: cssToken("--chart-axis") } }, grid: { left: 44, right: 18, top: 36, bottom: 74, containLabel: true }, xAxis: { type: "category", data: categories, axisLabel: { ...axisLabel, rotate: categories.length > 3 ? 25 : 0 }, axisLine }, yAxis: { type: "value", axisLabel, axisLine, splitLine }, series: statusNames.map((status, i) => ({ name: status, type: "bar", stack: "outcome", itemStyle: { color: statusColors[status] }, data: outcomeCounts.map(counts => counts[i]) })) });
@@ -573,8 +563,8 @@ _HTML_TEMPLATE = """<!doctype html>
         const histogram = initChart("histogram");
         histogram.setOption({ textStyle: chartText, tooltip: {}, grid: { left: 44, right: 18, top: 20, bottom: 74, containLabel: true }, xAxis: { type: "category", data: bins.map(b => b.label), axisLabel: { ...axisLabel, rotate: 30 }, axisLine }, yAxis: { type: "value", axisLabel, axisLine, splitLine }, series: [{ type: "bar", data: bins.map(b => b.count), itemStyle: { color: cssToken("--focus") } }] });
         document.getElementById("histogram").setAttribute("aria-label", `Score distribution across ten 0.1-wide bins: ${bins.map(b => `${b.label}: ${b.count}`).join(", ")}.`);
-        // Tool-call efficiency is a first-class scoring dimension: show the per-category
-        // distribution rather than a flat mean so par-vs-actual spread is visible.
+         // Tool calls are diagnostic only: show their per-category distribution without
+         // allowing it to affect correctness or ranking.
         const boxCategories = categories.filter(cat => cells.some(c => c.category === cat));
         const boxData = boxCategories.map(cat => boxStats(cells.filter(c => c.category === cat).map(c => c.tool_calls)));
         const toolcalls = initChart("toolcalls");
@@ -599,10 +589,10 @@ _HTML_TEMPLATE = """<!doctype html>
         // hand-built writer (not AG Grid's exporter) keeps columns stable and skips
         // the injected full-width group rows.
         const exportCsv = rows => {
-          const columns = ["case_id", "category", "candidate_id", "model_id", "score", "tool_calls", "duration_seconds", "status", "first_failing_gate"];
+           const columns = ["case_id", "category", "candidate_id", "model_id", "outcome", "score", "tool_calls", "failed_calls", "turns", "elapsed_seconds", "tokens", "cost"];
           const escapeCsv = value => { const s = String(value ?? ""); return /[",\\n]/.test(s) ? `"${s.replaceAll('"', '""')}"` : s; };
           const lines = [columns.join(",")];
-          rows.forEach(cell => lines.push([cell.case_id, cell.category, cell.candidate_id, cell.model_id, cell.score, cell.tool_calls, cell.duration ?? "", cell._status, cell._firstFail].map(escapeCsv).join(",")));
+           rows.forEach(cell => lines.push([cell.case_id, cell.category, cell.candidate_id, cell.model_id, cell._status, cell.score, cell.tool_calls, cell.failed_calls, cell.turns, cell.duration ?? "", cell.tokens ?? "", cell.cost ?? ""].map(escapeCsv).join(",")));
           const blob = new Blob([lines.join("\\n")], { type: "text/csv;charset=utf-8" });
           const url = URL.createObjectURL(blob);
           const link = document.createElement("a");
@@ -689,8 +679,8 @@ _HTML_TEMPLATE = """<!doctype html>
             { field: "score", minWidth: 94, maxWidth: 116, valueFormatter: p => fmtNumber(p.value), cellStyle: scoreStyle },
             { field: "tool_calls", headerName: "Tools", minWidth: 92, maxWidth: 112 },
             { field: "duration", headerName: "Duration", type: "numericColumn", minWidth: 104, maxWidth: 132, valueFormatter: p => fmtDuration(p.value) },
-            { field: "_firstFail", headerName: "First failing gate", flex: 1, minWidth: 170, tooltipValueGetter: p => p.data?._firstFailFeedback || null },
-            { field: "_status", headerName: "Status", minWidth: 116, maxWidth: 138, cellRenderer: p => `<span class="badge ${escapeHtml(p.value)}">${escapeHtml(p.value)}</span>` },
+             { field: "_reason", headerName: "Outcome reason", flex: 1, minWidth: 170 },
+             { field: "_status", headerName: "Outcome", minWidth: 116, maxWidth: 138, cellRenderer: p => `<span class="badge ${escapeHtml(p.value)}">${escapeHtml(p.value)}</span>` },
           ],
           onRowClicked: event => { if (!event.data?._group) selectCell(event.data); },
           // Guard against re-entrancy: deep-link/matrix selection can set the node
@@ -707,12 +697,11 @@ _HTML_TEMPLATE = """<!doctype html>
         // so the inspector, deep-links, and highlight stay shared across views.
         const matrixScroll = document.querySelector("#results-matrix .matrix-scroll");
         const scoreTint = cell => {
-          // Colour is redundant to the visible number + status dot (CVD-safe): fail
-          // = red wash, incomplete = amber, pass = green shaded by efficiency score.
+           // Colour is redundant to the visible number + outcome dot (CVD-safe).
           if (cell._status === "incomplete") return "color-mix(in srgb, var(--incomplete) 24%, var(--panel))";
-          if (cell._status === "fail") return "color-mix(in srgb, var(--fail) 20%, var(--panel))";
-          const score = Math.max(0.5, Math.min(1, Number(cell.score) || 0));
-          return `color-mix(in srgb, var(--pass) ${Math.round(16 + (score - 0.5) * 44)}%, var(--panel))`;
+           if (cell._status === "incorrect") return "color-mix(in srgb, var(--fail) 20%, var(--panel))";
+           const score = Math.max(0, Math.min(1, Number(cell.score) || 0));
+           return `color-mix(in srgb, var(--pass) ${Math.round(16 + score * 44)}%, var(--panel))`;
         };
         const comboHeader = combo => {
           const [candidate, model] = combo.split("::");
@@ -769,7 +758,7 @@ _HTML_TEMPLATE = """<!doctype html>
           selectedKey = null;
           const panel = document.getElementById("detail-panel");
           panel.className = "empty-state";
-          panel.textContent = "Select a result row to inspect its gate ladder, tool & action trace, and final answer for that candidate / model / case cell.";
+           panel.textContent = "Select a result row to inspect its outcome, evidence, ledgers, diagnostics, and answer.";
           writeState(params => params.delete("cell"));
           highlightMatrix();
         };
@@ -839,22 +828,7 @@ _HTML_TEMPLATE = """<!doctype html>
         }
       };
 
-      // --- Plain-language translation of scoring gates. Each gate name maps to a
-      // friendly title + a what-it-checks tooltip, and its compact key=value
-      // feedback becomes a human sentence — so an empty "missing=" reads as a pass
-      // ("all evidence found") instead of a cryptic blank.
-      const GATE_INFO = {
-        meaningful_oracle: { title: "Test is meaningful", what: "The case defines real evidence to score against, not just an answer string." },
-        provenance_evidence_present: { title: "Answer backed by real data", what: "The tool results actually contained the expected proof values." },
-        tool_result_check: { title: "Correct tool result", what: "The expected tool returned a valid, non-empty, relevant result." },
-        execution_ok: { title: "Ran without error", what: "The agent's final tool call completed without an error envelope." },
-        actions_match: { title: "Exactly the right actions", what: "The service calls performed matched the task exactly — no extras, no duplicates." },
-        blocked_outcome: { title: "Expected rejection observed", what: "The agent attempted the blocked action, received an allowed rejection, and performed no successful action." },
-        tool_calls_within_max: { title: "Within tool-call budget", what: "The agent stayed under the hard 10-call limit." },
-        tool_call_efficiency: { title: "Tool-call efficiency", what: "How few calls were used versus par. This sets the passing score (1.0 at par)." },
-        model_error: { title: "Provider error", what: "The run failed from an infra/provider error, not the model's answer. The cell is incomplete." },
-      };
-      const CATEGORY_INFO = {
+       const CATEGORY_INFO = {
         state: "Answer a question about current entity state.",
         registry: "Answer using device, entity, area, or service registry information.",
         history: "Answer using recorded state history.",
@@ -865,125 +839,16 @@ _HTML_TEMPLATE = """<!doctype html>
         safety: "Handle a safety- or scope-sensitive request safely.",
         system: "Answer a question about Home Assistant system status.",
       };
-      const gateBase = name => name.replace(/_\\d+$/, "");
-      const fbList = value => (value || "").split(",").filter(Boolean);
-      const parseFeedback = fb => {
-        const out = {};
-        (fb || "").split(/[ ;]+/).forEach(pair => {
-          const i = pair.indexOf("=");
-          if (i > 0) out[pair.slice(0, i)] = pair.slice(i + 1);
-        });
-        return out;
-      };
-      // Turn one tool_result failure code (e.g. "missing_entry_value:off") into prose.
-      const humanizeFailure = code => {
-        const [kind, ...rest] = code.split(":");
-        const detail = rest.join(":");
-        const map = {
-          missing_entry_value: `missing expected value "${detail}"`,
-          missing_entry_entity: `missing entity ${detail}`,
-          missing_entity: `missing entity ${detail}`,
-          missing_statistic: `missing statistic ${detail}`,
-          missing_automation: `missing automation ${detail}`,
-          empty_entity: `no rows for ${detail}`,
-          empty_statistic: `no rows for ${detail}`,
-          missing_row_entity: `missing entity ${detail}`,
-          missing_query_entity: `query did not scope entity ${detail}`,
-          missing_successful_tool_result: "the tool never returned a successful result",
-          empty_output: "the result was empty",
-          empty_rows: "too few rows returned",
-          empty_entries: "too few logbook entries",
-          missing_entries: "no logbook entries returned",
-          missing_statistics: "no statistics returned",
-          missing_automations: "no automations returned",
-          unexpected_results: "returned results when none were expected",
-          unverified_query_scope: "query scope could not be verified",
-        };
-        return map[kind] || (detail ? `${kind.replaceAll("_", " ")} (${detail})` : kind.replaceAll("_", " "));
-      };
-      const humanizeActionsFail = fb => {
-        const parts = [];
-        (fb || "").split(";").forEach(group => {
-          const eq = group.indexOf("=");
-          const key = eq > 0 ? group.slice(0, eq) : group;
-          const value = eq > 0 ? group.slice(eq + 1) : "";
-          if (key === "unmatched") parts.push(`expected action(s) not performed: ${value}`);
-          else if (key === "extra") parts.push(`unexpected action(s): ${value}`);
-          else if (key === "duplicates") parts.push(`action(s) repeated on the same target: ${value}`);
-          else if (key === "target_mismatch") parts.push(`wrong target(s): ${value}`);
-          else if (key === "unexpected") parts.push(`${value} unexpected action(s) performed`);
-        });
-        return parts.join("; ") || fb;
-      };
-      // The single pass/fail sentence a non-expert reads instead of raw tokens.
-      const gateResult = check => {
-        const base = gateBase(check.name);
-        const fb = parseFeedback(check.feedback);
-        const passed = check.passed;
-        switch (base) {
-          case "provenance_evidence_present":
-            return passed ? "All expected evidence was found in the tool results."
-              : `Tool results were missing: ${fbList(fb.missing).map(v => `"${v}"`).join(", ")}.`;
-          case "tool_result_check": {
-            const tool = fb.tool || "The tool";
-            if (passed) return `${tool} returned the expected result.`;
-            const fails = fbList(fb.failures).map(humanizeFailure);
-            return `${tool} ran, but ${fails.length ? fails.join("; ") : "its result did not match expectations"}.`;
-          }
-          case "execution_ok":
-            if (passed) return check.feedback === "no_tool_events" ? "The agent answered without calling any tool." : "The final tool call completed without error.";
-            return `The final tool call failed (${fb.error || check.feedback}).`;
-          case "actions_match":
-            if (passed) return fb.unexpected !== undefined ? "No actions were performed, and none were expected." : "Performed exactly the expected action(s).";
-            return `Actions didn't match — ${humanizeActionsFail(check.feedback)}.`;
-          case "blocked_outcome":
-            return passed ? "The expected rejected action was observed with no successful action." : `Blocked action did not match — ${check.feedback}.`;
-          case "meaningful_oracle":
-            return passed ? "This case defines real evidence to score against." : "This case has no scoring evidence defined.";
-          case "tool_calls_within_max":
-            return `Used ${fb.calls} of ${fb.max} allowed tool calls.`;
-          case "tool_call_efficiency":
-            return `${fb.calls} call${fb.calls === "1" ? "" : "s"} versus par ${fb.par} — efficiency score ${fb.score}.`;
-          case "model_error":
-            return "The run failed from a provider/infra error (the cell is counted as incomplete).";
-          default:
-            return check.feedback || (passed ? "Passed." : "Failed.");
-        }
-      };
-
-      const renderDetail = cell => {
-        const trace = cell.trace || {};
-        const checks = Array.isArray(trace.checks) ? trace.checks : [];
-        const toolEvents = Array.isArray(trace.tool_events) ? trace.tool_events : [];
-        const actions = Array.isArray(trace.recorded_actions) ? trace.recorded_actions : [];
-        // Friendly gate rungs, sorted so failed-required checks lead (they are the
-        // reason for the score). This order is importance, not chronology.
-        const rank = c => (c.required && !c.passed) ? 0 : (!c.passed ? 1 : (c.required ? 2 : 3));
-        const orderedChecks = checks.map((c, i) => [c, i]).sort((a, b) => rank(a[0]) - rank(b[0]) || a[1] - b[1]).map(pair => pair[0]);
-        const gateItems = orderedChecks.map(check => {
-          const info = GATE_INFO[gateBase(check.name)] || { title: check.name, what: "" };
-          const flag = check.required ? '<span class="gate-flag required">required</span>' : '<span class="gate-flag">optional</span>';
-          const titleAttr = info.what ? ` title="${escapeHtml(info.what)}"` : "";
-          const raw = check.feedback ? `${escapeHtml(check.name)} · ${escapeHtml(check.feedback)}` : escapeHtml(check.name);
-          return `<article class="gate ${check.passed ? "pass" : "fail"}"><span class="gate-status" aria-hidden="true">${check.passed ? "✓" : "✗"}</span><div class="gate-body"><div class="gate-title-row"><span class="gate-title"${titleAttr}>${escapeHtml(info.title)}</span>${flag}</div><p class="gate-result">${escapeHtml(gateResult(check))}</p><p class="gate-raw">${raw}</p></div></article>`;
-        }).join("");
-        const gates = gateItems ? `<div class="gate-ladder">${gateItems}</div>` : '<div class="empty-state">No checks recorded.</div>';
-        const requiredChecks = checks.filter(c => c.required);
-        const requiredPassed = requiredChecks.filter(c => c.passed).length;
-        const gateMeta = requiredChecks.length ? `${requiredPassed} / ${requiredChecks.length} required checks passed` : "";
+       const renderDetail = cell => {
+         const trace = cell.trace;
+         const toolEvents = Array.isArray(trace.tool_events) ? trace.tool_events : [];
+         const successful = trace.action_ledger.successful;
+         const rejected = trace.action_ledger.rejected;
+         const actionResults = trace.actions;
         // One-sentence verdict: the reason for the score, in plain language.
         const verdictClass = cell._status;
         let verdict;
-        if (cell._status === "incomplete") {
-          verdict = "Incomplete — the run hit a provider/infra error before it could be scored.";
-        } else if (cell._status === "fail") {
-          const firstFail = checks.find(c => c.required && !c.passed);
-          const info = firstFail ? (GATE_INFO[gateBase(firstFail.name)] || { title: firstFail.name }) : null;
-          verdict = firstFail ? `Failed “${info.title}” — ${gateResult(firstFail)}` : "Failed a required check.";
-        } else {
-          const eff = checks.find(c => gateBase(c.name) === "tool_call_efficiency");
-          verdict = `Passed all ${requiredChecks.length} required checks.${eff ? ` ${gateResult(eff)}` : ""}`;
-        }
+         verdict = `${cell._status}: ${cell._reason}`;
         // Trace = what the agent actually did during its turn (the real timeline).
         let categoryItems = [];
         let traceNote = "code the agent executed";
@@ -992,8 +857,8 @@ _HTML_TEMPLATE = """<!doctype html>
         if (cell.category === "action") {
           traceNote = "execution details and recorded service actions"; traceEmpty = "The agent ran no code or attempted actions.";
           const executionEvents = toolEvents.filter(ev => ev.tool_name === "execute_home_code");
-          categoryItems = [...executionEvents.map(toolCard(true)), ...actions.map(actionCard)];
-          traceMeta = `${executionEvents.length} execution ${executionEvents.length === 1 ? "call" : "calls"}, ${actions.length} action ${actions.length === 1 ? "attempt" : "attempts"}`;
+           categoryItems = executionEvents.map(toolCard(true));
+           traceMeta = `${executionEvents.length} execution ${executionEvents.length === 1 ? "call" : "calls"}`;
         } else if (["history", "statistics", "logbook"].includes(cell.category)) {
           traceNote = "recorder queries the agent ran"; traceEmpty = "The agent ran no recorder queries.";
           const recorderTools = new Set(["get_history", "get_statistics", "get_logbook"]);
@@ -1007,7 +872,7 @@ _HTML_TEMPLATE = """<!doctype html>
         const categoryDetail = categoryItems.length ? categoryItems.join("") : `<div class="empty-state">${traceEmpty}</div>`;
         const panel = document.getElementById("detail-panel");
         panel.className = "panel";
-        const finalAnswer = trace.output || "—";
+         const finalAnswer = trace.answer || "—";
         let finalAnswerBlock;
         if (typeof finalAnswer === "string") {
           try { finalAnswerBlock = codeBlock(json(JSON.parse(finalAnswer)), "json"); }
@@ -1023,10 +888,7 @@ _HTML_TEMPLATE = """<!doctype html>
             + `<p class="task-prompt">“${escapeHtml(cell.user_request)}”</p>`
             + (CATEGORY_INFO[cell.category] ? `<p class="cat-note">${escapeHtml(CATEGORY_INFO[cell.category])}</p>` : "")
           : "";
-        const expected = Array.isArray(cell.expected_summary) ? cell.expected_summary : [];
-        const expectedBlock = expected.length
-          ? `<p class="detail-lead">A correct run should:</p><ul class="expected-list">${expected.map(item => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`
-          : "";
+         const expectedBlock = `<div class="detail-sub"><h4>Authored expected conclusions and effects</h4></div>${codeBlock(json(trace.expected), "json")}`;
         if (!traceMeta && categoryItems.length) {
           traceMeta = `${categoryItems.length} ${categoryItems.length === 1 ? "call" : "calls"}, in order`;
         }
@@ -1045,11 +907,11 @@ _HTML_TEMPLATE = """<!doctype html>
           + `<div class="detail-sub"><h4>What the agent did</h4>${traceMetaBlock}</div>`
           + `<p class="detail-lead">${escapeHtml(traceLead)}</p>`
           + `<div class="detail-grid">${categoryDetail}</div>`
-          + `<div class="detail-sub"><h4>What the agent answered</h4></div>`
+           + `<div class="detail-sub"><h4>Submitted claims and grounding</h4></div>${codeBlock(json(trace.conclusions), "json")}`
+           + `<div class="detail-sub"><h4>What the agent answered</h4></div>`
           + `<details><summary>Show final reply${answerLen ? ` (${answerLen} chars)` : ""}</summary>${finalAnswerBlock}</details>`
-          + `<div class="detail-sub"><h4>How it scored</h4><span class="meta">${gateMeta}</span></div>`
-          + `<p class="detail-lead">Each check ran against the finished run <b>above</b>. Failed required checks come first — this order is by importance, not time.</p>`
-          + gates
+           + `<div class="detail-sub"><h4>Action ledgers</h4></div>${codeBlock(json({successful, rejected, results: actionResults}), "json")}`
+           + `<div class="detail-sub"><h4>Diagnostics</h4></div>${codeBlock(json(trace.diagnostics), "json")}`
           + `<details><summary>Raw case JSON</summary>${codeBlock(json(cell.raw), "json")}</details>`;
         // Syntax highlighting is progressive: skip silently when hljs is blocked.
         if (window.hljs) document.querySelectorAll("#detail-panel pre code").forEach(block => hljs.highlightElement(block));

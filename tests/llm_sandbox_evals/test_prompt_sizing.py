@@ -8,7 +8,7 @@ from llm_sandbox_evals.agent_runner import build_agent_tools, render_eval_system
 from llm_sandbox_evals.homes import get_home
 from llm_sandbox_evals.prompts import candidate_prompt_sizes, load_candidates
 from llm_sandbox_evals.runtime import build_eval_runtime
-from llm_sandbox_evals.schema import CaseContext, EvalCase, Expected
+from llm_sandbox_evals.schema import CaseContext, EvalCase, Expected, ExpectedConclusion, ValueClaim
 from llm_sandbox_evals.tools import EVAL_SCOPE, apply_scope
 import pytest
 from voluptuous_openapi import convert
@@ -36,7 +36,14 @@ def test_load_candidates_accepts_profile_candidate() -> None:
         user_request="Describe the available tools.",
         actions_enabled=False,
         llm_context=CaseContext(),
-        expected=Expected(),
+        expected=Expected(
+            conclusions=(
+                ExpectedConclusion(
+                    claim=ValueClaim(subject_kind="entity", subject_id="light.living", field="state", value="on"),
+                    assertion="equals",
+                ),
+            )
+        ),
     )
     fixture = get_home(case.home)
     runtime = build_eval_runtime(

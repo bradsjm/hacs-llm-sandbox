@@ -38,7 +38,6 @@ from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
     ModelResponse,
-    TextPart,
     ToolCallPart,
     ToolReturnPart,
     UserPromptPart,
@@ -49,6 +48,7 @@ from pydantic_ai.settings import ModelSettings
 from voluptuous_openapi import convert
 
 from llm_sandbox_evals.runtime import EvalRuntime
+from llm_sandbox_evals.schema import AnswerClaim, EvalAnswer, EventClaim, ValueClaim
 
 _ENTITY_ID_RE = re.compile(r"\b[a-z_]+\.[a-z0-9_]+\b")
 _FIXED_END = "2026-06-29T12:00:00+00:00"
@@ -64,14 +64,14 @@ class _EvalTool(Protocol):
     def _normalize_args(self, args: Mapping[str, object]) -> dict[str, object]: ...
 
 
-def build_agent(runtime: EvalRuntime, model_id: str) -> Agent[EvalRuntime, str]:
+def build_agent(runtime: EvalRuntime, model_id: str) -> Agent[EvalRuntime, EvalAnswer]:
     """Build a Pydantic AI agent with production schemas and eval deps."""
     tools = build_agent_tools(runtime)
     return Agent(
         model=make_model(model_id),
         tools=tools,
         system_prompt=render_eval_system_prompt(runtime, tools),
-        output_type=str,
+        output_type=EvalAnswer,
         deps_type=EvalRuntime,
         name="llm_sandbox_eval",
     )
@@ -284,8 +284,7 @@ def stub_function_model() -> FunctionModel:
 
 
 async def _stub_respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
-    """Deterministically route the first user request to tool calls or terminal text."""
-    _ = info
+    """Deterministically route requests and finish through the registered output tool."""
     user_request = _first_user_content(messages)
     tool_count = _tool_return_count(messages)
     if _last_tool_content(messages) is not None:
@@ -297,13 +296,92 @@ async def _stub_respond(messages: list[ModelMessage], info: AgentInfo) -> ModelR
                     for index, (name, args) in enumerate(followup_calls, start=1)
                 ]
             )
-        return ModelResponse(parts=[TextPart(content=_all_tool_content(messages) or "")])
+        return _stub_output_response(messages, info)
     return ModelResponse(
         parts=[
             _tool_call_part(name, args, index)
             for index, (name, args) in enumerate(_stub_initial_calls(user_request), start=1)
         ]
     )
+
+
+def _stub_output_response(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+    """Emit the same structured output-tool call that a provider must emit."""
+    if not info.output_tools:
+        raise RuntimeError("structured eval output tool was not registered")
+    answer = EvalAnswer(answer=_all_tool_content(messages) or "", claims=_stub_claims(messages))
+    output_tool = info.output_tools[0]
+    return ModelResponse(
+        parts=[
+            ToolCallPart(
+                tool_name=output_tool.name,
+                args=answer.model_dump(mode="json"),
+                tool_call_id=f"stub-output-{_tool_return_count(messages)}",
+            )
+        ]
+    )
+
+
+def _stub_claims(messages: list[ModelMessage]) -> list[AnswerClaim]:
+    """Derive a small set of claims from copied production result records."""
+    claims: list[AnswerClaim] = []
+    for message in messages:
+        if not isinstance(message, ModelRequest):
+            continue
+        for part in message.parts:
+            if not isinstance(part, ToolReturnPart) or not isinstance(part.content, dict):
+                continue
+            _claims_from_value(part.content.get("output"), claims)
+            entries = part.content.get("entries")
+            if isinstance(entries, list):
+                for entry in entries:
+                    if isinstance(entry, dict) and isinstance(entry.get("entity_id"), str):
+                        claims.append(  # noqa: PERF401 - constructing validated Pydantic claims is clearer here.
+                            EventClaim(
+                                source="logbook",
+                                entity_id=entry["entity_id"],
+                                event_kind="logbook_message",
+                                value=str(entry.get("message", "")),
+                                when=entry.get("when") if isinstance(entry.get("when"), str) else None,
+                            )
+                        )
+    return claims
+
+
+def _claims_from_value(value: object, claims: list[AnswerClaim]) -> None:
+    if isinstance(value, list):
+        for item in value:
+            _claims_from_value(item, claims)
+        return
+    if not isinstance(value, dict):
+        return
+    entity_id = value.get("entity_id")
+    if isinstance(entity_id, str) and "state" in value:
+        claims.append(ValueClaim(subject_kind="entity", subject_id=entity_id, field="state", value=value["state"]))
+    attributes = value.get("attributes")
+    if isinstance(entity_id, str) and isinstance(attributes, dict):
+        for name, item in attributes.items():
+            if isinstance(name, str) and (isinstance(item, str | int | float | bool) or item is None):
+                claims.append(
+                    ValueClaim(
+                        subject_kind="entity",
+                        subject_id=entity_id,
+                        field="attribute",
+                        attribute_name=name,
+                        value=item,
+                    )
+                )
+    for row in value.get("rows", ()) if isinstance(value.get("rows"), list) else ():
+        if isinstance(row, list) and len(row) >= 2 and isinstance(entity_id, str):
+            claims.append(  # noqa: PERF401 - constructing validated Pydantic claims is clearer here.
+                EventClaim(
+                    source="history",
+                    entity_id=entity_id,
+                    event_kind="state_transition",
+                    value=str(row[1]),
+                    when=row[0] if isinstance(row[0], str) else None,
+                )
+            )
 
 
 def _tool_call_part(tool_name: str, tool_args: dict[str, object], index: int) -> ToolCallPart:

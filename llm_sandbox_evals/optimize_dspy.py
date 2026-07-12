@@ -203,9 +203,11 @@ class _PromptInstructionStudent(dspy.Module):
                 profile=self.profile,
             )
         )
-        ratio = len(instruction) / max(1, len(self.baseline.api_prompt))
-        # Penalize COPRO's internal candidate selection only; reported means stay raw quality scores.
-        return dspy.Prediction(score=size_penalized_utility(trace.score, ratio, self.config.length_penalty))
+        _, baseline_authored_chars = prompts.candidate_prompt_sizes(self.baseline)
+        _, optimized_authored_chars = prompts.candidate_prompt_sizes(candidate)
+        ratio = optimized_authored_chars / max(1, baseline_authored_chars)
+        # Penalize COPRO's internal authored-prompt selection only; reported means stay raw binary quality scores.
+        return dspy.Prediction(score=size_penalized_utility(trace.outcome.score, ratio, self.config.length_penalty))
 
 
 def _make_metric() -> Callable[..., float]:

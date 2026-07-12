@@ -637,5 +637,11 @@ async def _declarative_history(
     rows = await source.run_in_executor(_analyze)
     return cast(
         JsonObjectType,
-        json_safe({"window": {"start": start.isoformat(), "end": end.isoformat()}, "rows": rows}),
+        json_safe(
+            {
+                "window": {"start": start.isoformat(), "end": end.isoformat()},
+                "scope": {"entity_ids": sorted(entity_ids)},
+                "rows": rows,
+            }
+        ),
     )

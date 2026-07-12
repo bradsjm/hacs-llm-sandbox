@@ -17,8 +17,6 @@ from rich.table import Column, Table
 from rich.text import Text
 
 from llm_sandbox_evals.experiment import MatrixCellRef, MatrixProgressEvent
-from llm_sandbox_evals.schema import CheckResult
-from llm_sandbox_evals.scoring import is_incomplete
 
 _ACTIVE = "#38b6ca"
 _SUCCESS = "#55c97c"
@@ -33,8 +31,6 @@ _RECENT_MODEL_WIDTH = 11
 _CATEGORY_WIDTH = 11
 # Rich adds two cells of padding to each Progress column, so phase also funds Category's padding.
 _PHASE_WIDTH = 32 - _CATEGORY_WIDTH - 2
-_GATE_WIDTH = 10
-_NARROW_GATE_WIDTH = 8
 _RECENT_RESPONSE_MIN_WIDTH = 100
 _RECENT_NARROW_OUTCOME_WIDTH = 15
 _RECENT_WIDE_OUTCOME_WIDTH = 3
@@ -63,8 +59,7 @@ class _RecentResult:
     tool_calls: int
     completion_index: int
     response: str
-    checks: tuple[CheckResult, ...]
-    tool_call_par: int | None
+    cap_exhausted: bool
     elapsed: float
 
 
@@ -191,7 +186,7 @@ class MatrixTerminalReporter:
                 lane.response = _response_display(event.response)
         elif event.state == "cell_finished" and event.cell is not None and event.trace is not None:
             self._finish_cell(event)
-            diagnostic = _compact_diagnostic(event.trace.error)
+            diagnostic = _compact_diagnostic(event.trace.provider_error or event.trace.diagnostics.failure)
 
         if self._live is not None:
             # Refresh the replacement state before a durable write can make Live redraw stale lanes.
@@ -207,13 +202,13 @@ class MatrixTerminalReporter:
         if self._console.is_terminal:
             self._stop_live()
             summary = Text()
-            _append_status(summary, "✓", "passed", self._passes, _SUCCESS)
+            _append_status(summary, "✓", "correct", self._passes, _SUCCESS)
             summary.append("  ")
-            _append_status(summary, _FAIL_GLYPH, "needs attention", self._failures, _WARNING)
+            _append_status(summary, _FAIL_GLYPH, "incorrect", self._failures, _WARNING)
             summary.append("  ")
             _append_status(summary, "!", "incomplete", self._incomplete, _ERROR)
             summary.append(
-                f"\ncompleted {self._completed}/{self._total}  tool calls {self._tool_calls}  "
+                f"\ncompleted {self._completed}/{self._total}  diagnostic tool calls {self._tool_calls}  "
                 f"elapsed {elapsed}  overall mean {overall_mean:.3f}"
             )
             summary.append(f"\nreport.html {report_html}")
@@ -223,8 +218,8 @@ class MatrixTerminalReporter:
             )
         else:
             self._console.print(
-                f"matrix complete completed={self._completed}/{self._total} pass={self._passes} "
-                f"failed={self._failures} incomplete={self._incomplete} tool_calls={self._tool_calls} "
+                f"matrix complete completed={self._completed}/{self._total} correct={self._passes} "
+                f"incorrect={self._failures} incomplete={self._incomplete} tool_calls={self._tool_calls} "
                 f"elapsed={elapsed} overall_mean={overall_mean:.3f} run_dir={run_dir} report_html={report_html}",
                 markup=False,
                 highlight=False,
@@ -260,28 +255,29 @@ class MatrixTerminalReporter:
         self._completed = event.completion_index or self._completed + 1
         lane = self._lanes.pop(cell, None)
         request = event.request or (lane.request if lane is not None else cell.case_id)
-        self._tool_calls += trace.tool_call_count
-        if is_incomplete(trace.checks):
-            outcome = "Could not complete"
+        self._tool_calls += trace.diagnostics.tool_calls
+        if trace.outcome.state == "incomplete":
+            outcome = "incomplete"
             self._incomplete += 1
-        elif trace.score > 0:
-            outcome = "Completed"
+        elif trace.outcome.state == "correct":
+            outcome = "correct"
             self._passes += 1
         else:
-            outcome = "Needs attention"
+            outcome = "incorrect"
             self._failures += 1
         self._recent.append(
             _RecentResult(
                 cell,
                 request,
                 outcome,
-                _outcome_detail(trace.checks),
-                trace.tool_call_count,
+                trace.outcome.reason or trace.outcome.state,
+                trace.diagnostics.tool_calls,
                 event.completion_index or self._completed,
                 lane.response if lane is not None and lane.response is not None else "—",
-                trace.checks,
-                event.tool_call_par,
-                event.elapsed or 0.0,
+                trace.diagnostics.cap_exhausted,
+                trace.diagnostics.elapsed_seconds
+                if trace.diagnostics.elapsed_seconds is not None
+                else event.elapsed or 0.0,
             )
         )
 
@@ -297,7 +293,6 @@ class MatrixTerminalReporter:
             self._recent_table(),
             Text(),
             self._totals(),
-            _gate_legend(),
         )
 
     def _overall_progress(self) -> Progress:
@@ -389,7 +384,6 @@ class MatrixTerminalReporter:
             if show_response
             else _RECENT_NARROW_OUTCOME_WIDTH
         )
-        gate_width = _GATE_WIDTH if show_response else _NARROW_GATE_WIDTH
         table = Table(
             box=None,
             expand=True,
@@ -405,7 +399,7 @@ class MatrixTerminalReporter:
         if show_response:
             table.add_column("Response", ratio=response_ratio, no_wrap=True, overflow="ellipsis")
         table.add_column("Outcome", width=outcome_width, no_wrap=True, overflow="ellipsis")
-        table.add_column("Gates", width=gate_width, no_wrap=True)
+        table.add_column("Reason", width=16, no_wrap=True, overflow="ellipsis")
         table.add_column("Calls", width=5, justify="right", no_wrap=True)
         table.add_column("Elapsed", width=7, justify="right", no_wrap=True)
         for result in reversed(self._recent):
@@ -422,8 +416,8 @@ class MatrixTerminalReporter:
             row.extend(
                 [
                     _outcome_text(result.outcome, result.reason, style),
-                    _gate_text(result.checks, width=gate_width),
-                    _call_text(result.tool_calls, result.tool_call_par),
+                    _safe_text(result.reason),
+                    str(result.tool_calls),
                     _cell_duration(result.elapsed),
                 ]
             )
@@ -434,9 +428,9 @@ class MatrixTerminalReporter:
 
     def _totals(self) -> Text:
         footer = Text()
-        _append_status(footer, "✓", "passed", self._passes, _SUCCESS)
+        _append_status(footer, "✓", "correct", self._passes, _SUCCESS)
         footer.append("  ")
-        _append_status(footer, _FAIL_GLYPH, "needs attention", self._failures, _WARNING)
+        _append_status(footer, _FAIL_GLYPH, "incorrect", self._failures, _WARNING)
         footer.append("  ")
         _append_status(footer, "!", "incomplete", self._incomplete, _ERROR)
         footer.append(f"  completed {self._completed}/{self._total}  tool calls {self._tool_calls}", style="dim")
@@ -452,9 +446,14 @@ class MatrixTerminalReporter:
         elif event.state in {"tool_started", "tool_finished"}:
             line = f"tool {'started' if event.state == 'tool_started' else 'finished'} {_cell_name(event)} {event.tool_name}"
         elif event.trace is not None:
+            elapsed = (
+                event.trace.diagnostics.elapsed_seconds
+                if event.trace.diagnostics.elapsed_seconds is not None
+                else event.elapsed or 0
+            )
             line = (
                 f"cell finished {event.completion_index}/{event.total} {_cell_name(event)} "
-                f"score={event.trace.score:.3f} tools={event.trace.tool_call_count} elapsed={_duration(event.elapsed or 0)}"
+                f"outcome={event.trace.outcome.state} tools={event.trace.diagnostics.tool_calls} elapsed={_duration(elapsed)}"
             )
             if diagnostic is not None:
                 line = f"{line} error={diagnostic}"
@@ -467,20 +466,6 @@ def _append_status(text: Text, glyph: str, label: str, count: int, style: str) -
     """Append a colored status glyph while leaving surrounding text neutral."""
     text.append(glyph, style=style)
     text.append(f" {label} {count}")
-
-
-def _gate_legend() -> Text:
-    """Render a compact dim key for the Recent-table scoring gate glyphs."""
-    legend = Text("Gates: ", style="dim")
-    legend.append("■", style="dim")
-    legend.append(" required, ", style="dim")
-    legend.append("□", style="dim")
-    legend.append(" optional; ", style="dim")
-    legend.append("■", style=_SUCCESS)
-    legend.append(" passed, ", style="dim")
-    legend.append("■", style=_ERROR)
-    legend.append(" failed", style="dim")
-    return legend
 
 
 def _compact_diagnostic(error: str | None) -> str | None:
@@ -505,29 +490,9 @@ def _left_ellipsis(value: str, width: int) -> str:
     return f"…{value[-(width - 1) :]}"
 
 
-def _gate_text(checks: tuple[CheckResult, ...], *, width: int = _GATE_WIDTH) -> Text:
-    """Render ordered scoring gates as compact requiredness/result glyphs."""
-    gates = Text()
-    visible_count = _visible_gate_count(len(checks), width)
-    overflow = len(checks) - visible_count
-    for check in checks[:visible_count]:
-        glyph = "■" if check.required else "□"
-        gates.append(glyph, style=_SUCCESS if check.passed else _ERROR)
-    if overflow > 0:
-        gates.append(f"+{overflow}", style="dim")
-    return gates
-
-
-def _call_text(tool_calls: int, par: int | None) -> Text:
-    """Render tool-call efficiency relative to the scorer's supplied par."""
-    if par is None:
-        return Text(str(tool_calls))
-    return Text(str(tool_calls), style=_SUCCESS if tool_calls <= par else _WARNING)
-
-
 def _outcome_text(outcome: str, detail: str, style: str) -> Text:
     """Render failure detail directly, otherwise a semantic outcome label and explanation."""
-    if outcome == "Needs attention":
+    if outcome == "incorrect":
         return Text(detail or outcome, style=style)
     rendered = Text()
     rendered.append(outcome, style=style)
@@ -546,137 +511,12 @@ def _cell_duration(seconds: float) -> str:
     return _duration(seconds)
 
 
-def _visible_gate_count(total: int, width: int = _GATE_WIDTH) -> int:
-    """Return the maximum glyph count whose actual omitted-count suffix still fits."""
-    if total <= width:
-        return total
-    for visible_count in range(width, -1, -1):
-        omitted = total - visible_count
-        if visible_count + len(str(omitted)) + 1 <= width:
-            return visible_count
-    raise AssertionError("gate overflow suffix must fit the configured width")
-
-
 def _response_display(response: str | None) -> str:
     """Normalize final assistant text while keeping empty provider failures visually quiet."""
     if response is None:
         return "—"
     normalized = " ".join(response.split())
     return normalized or "—"
-
-
-def _outcome_detail(checks: tuple[CheckResult, ...]) -> str:
-    """Project the first failed required gate into a compact Recent-table explanation."""
-    for check in checks:
-        if check.required and not check.passed:
-            return _humanize_required_failure(check)
-    return ""
-
-
-def _humanize_required_failure(check: CheckResult) -> str:
-    """Translate known scoring feedback tokens without exposing raw tool payloads."""
-    base = check.name.rsplit("_", 1)[0] if check.name.rsplit("_", 1)[-1].isdigit() else check.name
-    if base == "model_error":
-        return "Provider/model issue"
-    if base == "meaningful_oracle":
-        return "No scoring evidence defined"
-    if base == "provenance_evidence_present":
-        return _missing_feedback(check.feedback, "Missing evidence")
-    if base == "tool_result_check":
-        tool = _feedback_value(check.feedback, "tool") or "Tool"
-        failures = _feedback_value(check.feedback, "failures")
-        failure = failures.split(",")[0] if failures else "result_mismatch"
-        return f"{tool}: {_humanize_tool_failure(failure)}"
-    if base == "execution_ok":
-        error = _feedback_value(check.feedback, "error")
-        return f"Final tool failed ({_clean_token(error)})" if error else "Final tool failed"
-    if base == "actions_match":
-        return _humanize_action_failure(check.feedback)
-    if base == "blocked_outcome":
-        return _humanize_blocked_failure(check.feedback)
-    if base == "tool_calls_within_max":
-        calls = _feedback_value(check.feedback, "calls")
-        maximum = _feedback_value(check.feedback, "max")
-        return f"Tool-call limit exceeded ({calls}/{maximum})" if calls and maximum else "Tool-call limit exceeded"
-    return f"{_clean_token(base)}: {_compact_feedback(check.feedback)}"
-
-
-def _missing_feedback(feedback: str, prefix: str) -> str:
-    """Return a missing-value projection from stable ``missing=`` scoring feedback."""
-    missing = _feedback_value(feedback, "missing")
-    return f"No {missing}" if missing else prefix
-
-
-def _humanize_tool_failure(code: str) -> str:
-    """Map one structured tool-result failure code using the HTML report vocabulary."""
-    kind, separator, detail = code.partition(":")
-    label = {
-        "missing_entry_value": "missing expected value",
-        "missing_entry_entity": "missing entity",
-        "missing_entity": "missing entity",
-        "missing_statistic": "missing statistic",
-        "missing_automation": "missing automation",
-        "empty_entity": "no rows for",
-        "empty_statistic": "no rows for",
-        "missing_successful_tool_result": "no successful result",
-        "empty_output": "empty result",
-        "empty_rows": "too few rows",
-        "empty_entries": "too few logbook entries",
-        "missing_entries": "no logbook entries",
-        "missing_statistics": "no statistics",
-        "missing_automations": "no automations",
-        "unexpected_results": "unexpected results",
-        "unverified_query_scope": "unverified query scope",
-    }.get(kind, _clean_token(kind))
-    return f"{label} {detail}" if separator and detail else label
-
-
-def _humanize_action_failure(feedback: str) -> str:
-    """Return the first stable action mismatch without surfacing raw action payloads."""
-    key, _, value = feedback.partition("=")
-    labels = {
-        "unmatched": "Missing action",
-        "extra": "Unexpected action",
-        "duplicates": "Repeated action",
-        "target_mismatch": "Wrong action target",
-        "unexpected": "Unexpected actions",
-    }
-    label = labels.get(key, "Action mismatch")
-    return f"{label}: {value}" if value else label
-
-
-def _humanize_blocked_failure(feedback: str) -> str:
-    """Summarize structured blocked-action failures without action payload details."""
-    key, _, value = feedback.partition("=")
-    if key == "successful_actions":
-        return "Disallowed action succeeded"
-    if key == "missing_rejected_action":
-        return "No rejected action was observed"
-    if key == "attempts":
-        return f"Too many blocked attempts ({value.replace(' max=', '/')})"
-    if key == "error_keys":
-        return f"Unexpected block error: {value}"
-    return "Blocked-action mismatch"
-
-
-def _feedback_value(feedback: str, key: str) -> str | None:
-    """Extract one stable ``key=value`` token from scoring feedback."""
-    prefix = f"{key}="
-    for token in feedback.replace(";", " ").split():
-        if token.startswith(prefix):
-            return token.removeprefix(prefix)
-    return None
-
-
-def _clean_token(value: str | None) -> str:
-    """Convert one internal token into compact human-readable text."""
-    return "unknown issue" if not value else value.replace("_", " ").replace(":", ": ")
-
-
-def _compact_feedback(feedback: str) -> str:
-    """Keep an unknown structured feedback contract brief enough for one table cell."""
-    compact = " ".join(feedback.split())
-    return compact[:80] if compact else "failed"
 
 
 def _lane_phase(active_tools: Counter[str]) -> str:
@@ -696,9 +536,9 @@ def _lane_phase(active_tools: Counter[str]) -> str:
 def _outcome_glyph(outcome: str) -> tuple[str, str]:
     """Return a semantic glyph and restrained style for a completed result."""
     return {
-        "Completed": ("✓", _SUCCESS),
-        "Needs attention": (_FAIL_GLYPH, _WARNING),
-        "Could not complete": ("!", _ERROR),
+        "correct": ("✓", _SUCCESS),
+        "incorrect": (_FAIL_GLYPH, _WARNING),
+        "incomplete": ("!", _ERROR),
     }[outcome]
 
 

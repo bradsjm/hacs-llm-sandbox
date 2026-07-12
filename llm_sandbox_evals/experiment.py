@@ -22,16 +22,13 @@ from pydantic_evals.reporting.analyses import ReportAnalysis, ScalarResult, Tabl
 from llm_sandbox_evals import prompts
 from llm_sandbox_evals.config import EvalConfig
 from llm_sandbox_evals.harness import _select_cases, run_case
-from llm_sandbox_evals.schema import CaseTrace, CheckResult, EvalCase, PromptCandidate
-from llm_sandbox_evals.scoring import is_incomplete, mean_score, tool_call_par
+from llm_sandbox_evals.schema import CaseTrace, EvalCase, PromptCandidate
 
 type MatrixCellMeta = dict[str, str | int]
 type MatrixEventCallback = Callable[[MatrixProgressEvent], None]
 type MatrixProgressState = Literal[
     "matrix_started", "cell_started", "tool_started", "tool_finished", "response_received", "cell_finished"
 ]
-
-_SIZE_TIE_EPSILON = 0.005
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,65 +55,101 @@ class MatrixProgressEvent:
     elapsed: float | None = None
     completion_index: int | None = None
     total: int | None = None
-    tool_call_par: int | None = None
 
 
 @dataclass(slots=True)
 class SandboxOutcome(Evaluator[MatrixCellRef, CaseTrace, MatrixCellMeta]):
-    """Expose deterministic sandbox scoring as native pydantic-evals results."""
+    """Expose the v2 binary outcome as native pydantic-evals results."""
 
     def evaluate(
         self, ctx: EvaluatorContext[MatrixCellRef, CaseTrace, MatrixCellMeta]
     ) -> dict[str, bool | str | EvaluationReason]:
-        """Return the score plus stable labels/assertions for one matrix cell."""
+        """Publish binary quality and provider classification labels."""
         trace = ctx.output
-        required_passed = all(not (check.required and not check.passed) for check in trace.checks)
-        failure_kind = _failure_kind(trace.checks)
         return {
-            "score": EvaluationReason(value=trace.score, reason=_summarize(trace.checks)),
-            "required_gates_passed": EvaluationReason(
-                value=required_passed,
-                reason=_failed_names(trace.checks),
-            ),
-            "model_error": str(any(check.name == "model_error" for check in trace.checks)).lower(),
-            "outcome": "passed" if required_passed else "failed",
-            "failure_kind": failure_kind,
-            "error_type": _error_type(trace.error),
+            "score": EvaluationReason(value=trace.outcome.score, reason=trace.outcome.reason),
+            "outcome": trace.outcome.state,
+            "incomplete": trace.outcome.state == "incomplete",
+            "failure_classification": trace.diagnostics.failure or "none",
         }
 
 
 @dataclass(slots=True)
 class CandidateMatrixReport(ReportEvaluator[MatrixCellRef, CaseTrace, MatrixCellMeta]):
-    """Aggregate native case reports into candidate/model leaderboard analyses."""
+    """Aggregate outcomes while keeping operational diagnostics out of ranking."""
 
     candidate_ids: list[str]
     model_ids: list[str]
     prompt_sizes: dict[str, tuple[int, int]]
 
     def evaluate(self, ctx: ReportEvaluatorContext[MatrixCellRef, CaseTrace, MatrixCellMeta]) -> list[ReportAnalysis]:
-        """Return native analysis tables for the full experiment report."""
-        complete_cases = _complete_cases(ctx.report.cases)
-        categories = _categories(ctx.report.cases)
-        pair_rows = _pair_rows(complete_cases, self.candidate_ids, self.model_ids, categories, self.prompt_sizes)
-        ranking_rows = _ranking_rows(pair_rows, self.candidate_ids, self.model_ids, categories)
-        overall = mean_score([_case_score(case) for case in complete_cases])
-        incomplete_count = sum(1 for case in ctx.report.cases if is_incomplete(case.output.checks))
+        """Return outcome rates, coverage, and non-ranking diagnostics."""
+        cases = list(ctx.report.cases)
+        categories = _categories(cases)
+        pairs = _pair_rows(cases, self.candidate_ids, self.model_ids, categories, self.prompt_sizes)
+        ranking = _ranking_rows(pairs, self.candidate_ids, self.model_ids, categories)
+        counts = _counts([case.output for case in cases])
         return [
             TableResult(
                 title="Candidate ranking",
-                columns=["Candidate", "Mean", "MinModel", "ToolCalls", "PromptChars", "SizeRatio", *categories],
-                rows=ranking_rows,
+                columns=[
+                    "Candidate",
+                    "Correct",
+                    "Incorrect",
+                    "Incomplete",
+                    "Completed",
+                    "Correct rate",
+                    "Coverage",
+                    "PromptChars",
+                    "SizeRatio",
+                    *categories,
+                ],
+                rows=ranking,
             ),
             TableResult(
-                title="Candidate x model means",
-                columns=["Candidate", "Model", "Mean", "ToolCalls"],
+                title="Candidate x model outcomes",
+                columns=[
+                    "Candidate",
+                    "Model",
+                    "Correct",
+                    "Incorrect",
+                    "Incomplete",
+                    "Completed",
+                    "Correct rate",
+                    "Coverage",
+                    "Calls",
+                    "FailedCalls",
+                    "Turns",
+                    "Elapsed",
+                    "Tokens",
+                    "Cost",
+                ],
                 rows=[
-                    [row.candidate_id, row.model_id, _round(row.mean), _round(row.mean_tool_calls)]
-                    for row in pair_rows
+                    [
+                        row.candidate_id,
+                        row.model_id,
+                        row.correct,
+                        row.incorrect,
+                        row.incomplete,
+                        row.completed,
+                        _optional_round(row.correct_rate),
+                        _round(row.coverage),
+                        _round(row.mean_calls),
+                        _round(row.mean_failed_calls),
+                        _round(row.mean_turns),
+                        _round(row.mean_elapsed),
+                        _optional_round(row.mean_tokens),
+                        _optional_round(row.mean_cost),
+                    ]
+                    for row in pairs
                 ],
             ),
-            ScalarResult(title="Overall mean score", value=_round(overall)),
-            ScalarResult(title="Incomplete cells", value=incomplete_count),
+            ScalarResult(title="Overall correct rate", value=_round(_rate(counts["correct"], counts["completed"]))),
+            ScalarResult(title="Correct cells", value=counts["correct"]),
+            ScalarResult(title="Incorrect cells", value=counts["incorrect"]),
+            ScalarResult(title="Incomplete cells", value=counts["incomplete"]),
+            ScalarResult(title="Completed cells", value=counts["completed"]),
+            ScalarResult(title="Coverage", value=_round(_rate(counts["completed"], len(cases)))),
         ]
 
 
@@ -124,31 +157,32 @@ class CandidateMatrixReport(ReportEvaluator[MatrixCellRef, CaseTrace, MatrixCell
 class _PairRow:
     candidate_id: str
     model_id: str
-    mean: float
-    mean_tool_calls: float
-    category_means: dict[str, float]
+    correct: int
+    incorrect: int
+    incomplete: int
+    completed: int
+    correct_rate: float | None
+    coverage: float
+    mean_calls: float
+    mean_failed_calls: float
+    mean_turns: float
+    mean_elapsed: float
+    mean_tokens: float | None
+    mean_cost: float | None
+    category_rates: dict[str, float | None]
     api_prompt_chars: int
     prompt_chars: int
 
 
 def build_dataset(
-    config: EvalConfig,
-    candidates: Sequence[PromptCandidate],
-    selected_cases: Sequence[EvalCase],
-    run_id: str,
+    config: EvalConfig, candidates: Sequence[PromptCandidate], selected_cases: Sequence[EvalCase], run_id: str
 ) -> Dataset[MatrixCellRef, CaseTrace, MatrixCellMeta]:
     """Build one native dataset containing every candidate/model/case matrix cell."""
     cases: list[Case[MatrixCellRef, CaseTrace, MatrixCellMeta]] = []
     for candidate in candidates:
         for model_id in config.models:
             for case in selected_cases:
-                ref = MatrixCellRef(
-                    case_id=case.id,
-                    candidate_id=candidate.id,
-                    model_id=model_id,
-                    home=case.home,
-                    category=case.category,
-                )
+                ref = MatrixCellRef(case.id, candidate.id, model_id, case.home, case.category)
                 metadata: MatrixCellMeta = {
                     "run_id": run_id,
                     "case_id": ref.case_id,
@@ -171,9 +205,9 @@ def build_dataset(
         evaluators=(),
         report_evaluators=(
             CandidateMatrixReport(
-                candidate_ids=[candidate.id for candidate in candidates],
-                model_ids=list(config.models),
-                prompt_sizes={candidate.id: prompts.candidate_prompt_sizes(candidate) for candidate in candidates},
+                [c.id for c in candidates],
+                list(config.models),
+                {c.id: prompts.candidate_prompt_sizes(c) for c in candidates},
             ),
         ),
     )
@@ -193,7 +227,6 @@ def make_matrix_task(
 
     async def task(cell: MatrixCellRef) -> CaseTrace:
         nonlocal completed
-        candidate = candidate_by_id[cell.candidate_id]
         case = case_by_id[cell.case_id]
         request = _presentation_request(case.user_request)
         start = perf_counter()
@@ -213,7 +246,7 @@ def make_matrix_task(
             )
 
         trace = await run_case(
-            candidate,
+            candidate_by_id[cell.candidate_id],
             cell.model_id,
             case,
             config,
@@ -221,9 +254,6 @@ def make_matrix_task(
             on_tool_boundary=on_tool_boundary,
             on_response=on_response,
         )
-        elapsed = perf_counter() - start
-        # Branch boundary: increment is synchronous (no await) so each cell gets a
-        # unique completion index despite concurrent matrix evaluation.
         completed += 1
         _emit_event(
             on_event,
@@ -232,10 +262,9 @@ def make_matrix_task(
                 cell=cell,
                 request=request,
                 trace=trace,
-                elapsed=elapsed,
+                elapsed=perf_counter() - start,
                 completion_index=completed,
                 total=total,
-                tool_call_par=tool_call_par(case.expected),
             ),
         )
         return trace
@@ -244,16 +273,11 @@ def make_matrix_task(
 
 
 async def run_matrix(
-    config: EvalConfig,
-    *,
-    run_id: str | None = None,
-    on_event: MatrixEventCallback | None = None,
+    config: EvalConfig, *, run_id: str | None = None, on_event: MatrixEventCallback | None = None
 ) -> EvaluationReport[MatrixCellRef, CaseTrace, MatrixCellMeta]:
     """Run the full matrix through one native pydantic-evals experiment."""
-    # Branch boundary: direct callers may omit a run id, but each cell still gets one for Logfire/report joins.
     if run_id is None:
         run_id = datetime.now(UTC).strftime("%Y%m%d-%H%M%S-%f")
-    # Branch boundary: retain a zero-import, zero-export path when telemetry is not configured.
     if os.environ.get("LOGFIRE_TOKEN"):
         from llm_sandbox_evals.logfire_config import configure_logfire
 
@@ -263,16 +287,15 @@ async def run_matrix(
     selected_cases = _select_cases(config.cases, config.homes)
     dataset = build_dataset(config, candidates, selected_cases, run_id)
     _emit_event(on_event, MatrixProgressEvent("matrix_started", total=len(dataset.cases)))
-    task = make_matrix_task(
-        config,
-        profile,
-        {candidate.id: candidate for candidate in candidates},
-        {case.id: case for case in selected_cases},
-        total=len(dataset.cases),
-        on_event=on_event,
-    )
     return await dataset.evaluate(
-        task,
+        make_matrix_task(
+            config,
+            profile,
+            {c.id: c for c in candidates},
+            {c.id: c for c in selected_cases},
+            total=len(dataset.cases),
+            on_event=on_event,
+        ),
         name="matrix",
         max_concurrency=max(1, config.concurrency),
         progress=False,
@@ -281,42 +304,35 @@ async def run_matrix(
 
 
 def _emit_event(callback: MatrixEventCallback | None, event: MatrixProgressEvent) -> None:
-    """Notify an optional presentation observer without affecting evaluation."""
     if callback is None:
         return
     try:
         callback(event)
-    except Exception:  # noqa: BLE001 - UI observers must not fail a matrix cell.
+    except Exception:  # noqa: BLE001 - presentation observers must not fail evaluation.
         return
 
 
 def _presentation_request(request: str) -> str:
-    """Return a compact observer-only projection of a case's human request."""
     return " ".join(request.split())[:240]
 
 
 def overall_mean(report: EvaluationReport[MatrixCellRef, CaseTrace, MatrixCellMeta]) -> float:
-    """Read the native scalar analysis.
-
-    Provider/infra failures (``model_error``) are excluded so an outage does not
-    read as a candidate scoring near zero.
-    """
+    """Return the completed-cell correct rate (the public legacy name remains native API)."""
     for analysis in report.analyses:
-        if isinstance(analysis, ScalarResult) and analysis.title == "Overall mean score":
+        if isinstance(analysis, ScalarResult) and analysis.title == "Overall correct rate":
             return float(analysis.value)
-    raise ValueError("report is missing the Overall mean score analysis")
+    raise ValueError("report is missing the Overall correct rate analysis")
 
 
 def matrix_summary_lines(report: EvaluationReport[MatrixCellRef, CaseTrace, MatrixCellMeta]) -> list[str]:
-    """Return machine-readable per-candidate/model summary lines from native analyses."""
-    lines = [f"overall_mean: {overall_mean(report):.3f}"]
+    """Return concise machine-readable outcome summaries."""
+    lines = [f"correct_rate: {overall_mean(report):.3f}"]
     for analysis in report.analyses:
-        if isinstance(analysis, TableResult) and analysis.title == "Candidate x model means":
-            for row in analysis.rows:
-                mean = row[2]
-                turns = row[3]
-                if isinstance(mean, int | float) and isinstance(turns, int | float):
-                    lines.append(f"{row[0]}/{row[1]}: mean={mean:.3f} tool_calls={turns:.3f}")
+        if isinstance(analysis, TableResult) and analysis.title == "Candidate x model outcomes":
+            lines.extend(
+                f"{row[0]}/{row[1]}: correct_rate={row[6]} completed={row[5]} coverage={row[7]}"
+                for row in analysis.rows
+            )
     return lines
 
 
@@ -330,23 +346,42 @@ def _pair_rows(
     rows: list[_PairRow] = []
     for candidate_id in candidate_ids:
         for model_id in model_ids:
-            cases = [case for case in report_cases if _metadata_str(case, "candidate_id") == candidate_id]
-            cases = [case for case in cases if _metadata_str(case, "model_id") == model_id]
-            api_prompt_chars, prompt_chars = prompt_sizes.get(candidate_id, (0, 0))
+            selected = [
+                c.output
+                for c in report_cases
+                if _metadata_str(c, "candidate_id") == candidate_id and _metadata_str(c, "model_id") == model_id
+            ]
+            counts = _counts(selected)
+            diagnostics = [trace.diagnostics for trace in selected]
+            category_rates = {
+                category: _rate(
+                    sum(t.outcome.state == "correct" for t in selected if t.category == category),
+                    sum(t.outcome.state != "incomplete" for t in selected if t.category == category),
+                )
+                if any(t.category == category for t in selected)
+                else None
+                for category in categories
+            }
+            api_chars, authored_chars = prompt_sizes.get(candidate_id, (0, 0))
             rows.append(
                 _PairRow(
-                    candidate_id=candidate_id,
-                    model_id=model_id,
-                    mean=mean_score([_case_score(case) for case in cases]),
-                    mean_tool_calls=mean_score([float(case.output.tool_call_count) for case in cases]),
-                    category_means={
-                        category: mean_score(
-                            [_case_score(case) for case in cases if _metadata_str(case, "category") == category]
-                        )
-                        for category in categories
-                    },
-                    api_prompt_chars=api_prompt_chars,
-                    prompt_chars=prompt_chars,
+                    candidate_id,
+                    model_id,
+                    counts["correct"],
+                    counts["incorrect"],
+                    counts["incomplete"],
+                    counts["completed"],
+                    _nullable_rate(counts["correct"], counts["completed"]),
+                    _rate(counts["completed"], len(selected)),
+                    _mean([d.tool_calls for d in diagnostics]),
+                    _mean([d.failed_tool_calls for d in diagnostics]),
+                    _mean([d.model_turns for d in diagnostics]),
+                    _mean([d.elapsed_seconds for d in diagnostics]),
+                    _optional_mean([_usage_value(d, "total_tokens") for d in diagnostics]),
+                    _optional_mean([_usage_value(d, "cost") for d in diagnostics]),
+                    category_rates,
+                    api_chars,
+                    authored_chars,
                 )
             )
     return rows
@@ -355,94 +390,99 @@ def _pair_rows(
 def _ranking_rows(
     pair_rows: list[_PairRow], candidate_ids: Sequence[str], model_ids: Sequence[str], categories: Sequence[str]
 ) -> list[list[str | int | float | bool | None]]:
-    baseline_prompt_chars = next(
-        (row.prompt_chars for row in pair_rows if row.candidate_id == "baseline" and row.prompt_chars),
-        max((row.prompt_chars for row in pair_rows), default=1),
+    baseline = max(
+        1,
+        next(
+            (r.prompt_chars for r in pair_rows if r.candidate_id == "baseline" and r.prompt_chars),
+            max((r.prompt_chars for r in pair_rows), default=1),
+        ),
     )
-    baseline_prompt_chars = max(1, baseline_prompt_chars)
-    rows: list[tuple[float, int, float, list[str | int | float | bool | None]]] = []
+    rendered: list[tuple[float, float, int, list[str | int | float | bool | None]]] = []
     for candidate_id in candidate_ids:
-        candidate_rows = [row for row in pair_rows if row.candidate_id == candidate_id and row.model_id in model_ids]
-        mean = mean_score([row.mean for row in candidate_rows])
-        min_model = min((row.mean for row in candidate_rows), default=0.0)
-        mean_tool_calls = mean_score([row.mean_tool_calls for row in candidate_rows])
-        prompt_chars = candidate_rows[0].prompt_chars if candidate_rows else 0
-        api_prompt_chars = candidate_rows[0].api_prompt_chars if candidate_rows else 0
-        category_means = {
-            category: mean_score([row.category_means[category] for row in candidate_rows]) for category in categories
-        }
-        rendered: list[str | int | float | bool | None] = [
-            candidate_id,
-            _round(mean),
-            _round(min_model),
-            _round(mean_tool_calls),
-            prompt_chars,
-            _round(prompt_chars / baseline_prompt_chars),
-            *[_round(category_means[category]) for category in categories],
-        ]
-        rows.append((mean, api_prompt_chars, min_model, rendered))
-    rows.sort(key=lambda row: (-round(row[0] / _SIZE_TIE_EPSILON), row[1], -row[2]))
-    return [row[3] for row in rows]
-
-
-def _complete_cases(
-    report_cases: Sequence[ReportCase[MatrixCellRef, CaseTrace, MatrixCellMeta]],
-) -> list[ReportCase[MatrixCellRef, CaseTrace, MatrixCellMeta]]:
-    """Return report cases that are not provider/infra failures.
-
-    Incomplete cells (``model_error``) are excluded from candidate/model mean
-    denominators so an outage does not distort quality scores.
-    """
-    return [case for case in report_cases if not is_incomplete(case.output.checks)]
+        rows = [r for r in pair_rows if r.candidate_id == candidate_id and r.model_id in model_ids]
+        completed = sum(r.completed for r in rows)
+        correct = sum(r.correct for r in rows)
+        rate = _nullable_rate(correct, completed)
+        model_rates = [r.correct_rate for r in rows if r.correct_rate is not None]
+        min_model = min(model_rates, default=-1.0)
+        prompt_chars = rows[0].prompt_chars if rows else 0
+        categories_rate = [_nullable_mean([r.category_rates[c] for r in rows]) for c in categories]
+        total_cells = sum(r.correct + r.incorrect + r.incomplete for r in rows)
+        rendered.append(
+            (
+                rate if rate is not None else -1.0,
+                min_model,
+                prompt_chars,
+                [
+                    candidate_id,
+                    correct,
+                    sum(r.incorrect for r in rows),
+                    sum(r.incomplete for r in rows),
+                    completed,
+                    _optional_round(rate),
+                    _round(_rate(completed, total_cells)),
+                    prompt_chars,
+                    _round(prompt_chars / baseline),
+                    *[_optional_round(v) for v in categories_rate],
+                ],
+            )
+        )
+    rendered.sort(key=lambda row: (-row[0], -row[1], row[2], str(row[3][0])))
+    return [row[3] for row in rendered if row[0] >= 0]
 
 
 def _categories(report_cases: Sequence[ReportCase[MatrixCellRef, CaseTrace, MatrixCellMeta]]) -> list[str]:
-    categories: list[str] = []
-    for case in report_cases:
-        category = _metadata_str(case, "category")
-        if category not in categories:
-            categories.append(category)
-    return categories
+    return list(dict.fromkeys(_metadata_str(case, "category") for case in report_cases))
+
+
+def _counts(traces: Sequence[CaseTrace]) -> dict[str, int]:
+    return {
+        "correct": sum(t.outcome.state == "correct" for t in traces),
+        "incorrect": sum(t.outcome.state == "incorrect" for t in traces),
+        "incomplete": sum(t.outcome.state == "incomplete" for t in traces),
+        "completed": sum(t.outcome.state != "incomplete" for t in traces),
+    }
 
 
 def _case_score(report_case: ReportCase[MatrixCellRef, CaseTrace, MatrixCellMeta]) -> float:
-    score = report_case.scores.get("score")
-    return 0.0 if score is None else float(score.value)
+    return report_case.output.outcome.score
 
 
 def _metadata_str(report_case: ReportCase[MatrixCellRef, CaseTrace, MatrixCellMeta], key: str) -> str:
-    metadata = report_case.metadata or {}
-    value = metadata[key]
-    return str(value)
+    return str((report_case.metadata or {})[key])
+
+
+def _rate(numerator: int, denominator: int) -> float:
+    return numerator / denominator if denominator else 0.0
+
+
+def _nullable_rate(numerator: int, denominator: int) -> float | None:
+    return numerator / denominator if denominator else None
+
+
+def _mean(values: Sequence[float | int | None]) -> float:
+    present = [float(value) for value in values if value is not None]
+    return sum(present) / len(present) if present else 0.0
+
+
+def _optional_mean(values: Sequence[float | int | None]) -> float | None:
+    present = [float(value) for value in values if value is not None]
+    return sum(present) / len(present) if present else None
+
+
+def _nullable_mean(values: Sequence[float | None]) -> float | None:
+    return _optional_mean(values)
+
+
+def _usage_value(trace_diagnostics: object, key: str) -> float | None:
+    usage = getattr(trace_diagnostics, "usage", None)
+    value = usage.get(key) if isinstance(usage, dict) else None
+    return float(value) if isinstance(value, int | float) and not isinstance(value, bool) else None
+
+
+def _optional_round(value: float | None) -> float | None:
+    return None if value is None else _round(value)
 
 
 def _round(value: float) -> float:
     return round(value, 3)
-
-
-def _summarize(checks: Sequence[CheckResult]) -> str:
-    failed = _failed_names(checks)
-    return "passed" if not failed else f"failed: {failed}"
-
-
-def _failed_names(checks: Sequence[CheckResult]) -> str:
-    return ", ".join(check.name for check in checks if check.required and not check.passed)
-
-
-def _failure_kind(checks: Sequence[CheckResult]) -> str:
-    """Return a low-cardinality first failing required check label."""
-    for check in checks:
-        if check.required and not check.passed:
-            return check.name
-    return "none"
-
-
-def _error_type(error: str | None) -> str:
-    """Extract the exception class from ``check_name: Type: detail`` trace errors."""
-    if error is None:
-        return "none"
-    parts = error.split(":", 2)
-    if len(parts) < 2:
-        return "unknown"
-    candidate = parts[1].strip()
-    return candidate or "unknown"

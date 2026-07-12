@@ -4,6 +4,7 @@ import asyncio
 from collections.abc import Callable, Sequence
 from contextlib import suppress
 import json
+from time import perf_counter
 
 from custom_components.llm_sandbox.llm_api.prompts import PromptProfile
 from pydantic_ai import capture_run_messages
@@ -16,11 +17,20 @@ from llm_sandbox_evals.agent_runner import build_agent, build_model_settings
 from llm_sandbox_evals.config import EvalConfig
 from llm_sandbox_evals.homes import get_home
 from llm_sandbox_evals.runtime import ToolBoundaryCallback, build_eval_runtime
-from llm_sandbox_evals.schema import CaseTrace, CheckResult, EvalCase, Expected, PromptCandidate, ToolEvent
-from llm_sandbox_evals.scoring import check_case, score_case
+from llm_sandbox_evals.schema import (
+    CaseOutcome,
+    CaseTrace,
+    EvalCase,
+    EvalDiagnostics,
+    PromptCandidate,
+    ToolEvent,
+)
+from llm_sandbox_evals.scoring import evaluate_case, successful_events
+from llm_sandbox_evals.scoring.actions import build_action_ledger
 from llm_sandbox_evals.tools import EVAL_SCOPE, _for_scoring, apply_scope
 
 _TOOL_EXECUTE_HOME_CODE = "execute_home_code"
+_OUTPUT_TOOL = "final_result"
 
 
 async def run_case(
@@ -34,8 +44,7 @@ async def run_case(
     on_response: Callable[[str], None] | None = None,
 ) -> CaseTrace:
     """Run one matrix cell through the production-core Pydantic AI agent."""
-    # Branch boundary: setup failures occur before a model run exists, so they
-    # retain the prior empty diagnostic evidence while model-run failures recover captured messages.
+    started = perf_counter()
     captured: Sequence[object] = ()
     proposed_actions: Sequence[dict[str, object]] = ()
     try:
@@ -62,28 +71,34 @@ async def run_case(
         if on_response is not None:
             # Safety constraint: an observer cannot alter a completed model result or scoring.
             with suppress(Exception):
-                on_response(output)
+                on_response(output.answer)
         messages = result.all_messages()
-        tool_call_count = _tool_call_count(messages)
         tool_events = _tool_events(messages)
         recorded_actions = _recorded_actions_from_tool_events(tool_events, runtime.invoker.calls)
         conversation_id = _conversation_id(messages)
-        checks = check_case(case, recorded_actions, tool_call_count, tool_events)
+        outcome, conclusions, action_results = evaluate_case(case, output, tool_events, recorded_actions)
         return CaseTrace(
             case_id=case.id,
             category=case.category,
             candidate_id=candidate.id,
             model_id=model_id,
-            score=score_case(checks),
-            output=output,
-            tool_call_count=tool_call_count,
-            recorded_actions=recorded_actions,
-            checks=tuple(checks),
-            error=None,
+            answer=output,
+            expected=case.expected,
+            outcome=outcome,
+            conclusions=conclusions,
+            actions=action_results,
+            action_ledger=build_action_ledger(recorded_actions),
             tool_events=tool_events,
+            diagnostics=_diagnostics(
+                tool_events,
+                messages,
+                elapsed=perf_counter() - started,
+                usage=_usage(result),
+                failure=None,
+            ),
+            provider_error=None,
             conversation_id=conversation_id,
             user_request=case.user_request,
-            expected_summary=_expected_summary(case.expected),
         )
     except UsageLimitExceeded as err:
         # Branch boundary: the model exhausted its allowed tool calls, which is scored behavior rather than a harness error.
@@ -92,10 +107,10 @@ async def run_case(
             candidate,
             model_id,
             case,
-            "tool_calls_exceeded",
+            "cap_exhausted",
             _format_exception(err),
             diagnostic=False,
-            tool_call_count=_tool_call_count(captured),
+            elapsed=perf_counter() - started,
             tool_events=tool_events,
             recorded_actions=_recorded_actions_from_tool_events(tool_events, proposed_actions),
             conversation_id=_conversation_id(captured),
@@ -106,10 +121,10 @@ async def run_case(
             candidate,
             model_id,
             case,
-            "model_error",
+            "timeout",
             _format_exception(err, timeout=config.model_timeout),
             diagnostic=True,
-            tool_call_count=_tool_call_count(captured),
+            elapsed=perf_counter() - started,
             tool_events=tool_events,
             recorded_actions=_recorded_actions_from_tool_events(tool_events, proposed_actions),
             conversation_id=_conversation_id(captured),
@@ -120,10 +135,10 @@ async def run_case(
             candidate,
             model_id,
             case,
-            "model_error",
+            "model_protocol_error",
             _format_exception(err),
             diagnostic=True,
-            tool_call_count=_tool_call_count(captured),
+            elapsed=perf_counter() - started,
             tool_events=tool_events,
             recorded_actions=_recorded_actions_from_tool_events(tool_events, proposed_actions),
             conversation_id=_conversation_id(captured),
@@ -134,10 +149,10 @@ async def run_case(
             candidate,
             model_id,
             case,
-            "model_error",
+            "provider_error",
             _format_exception(err),
             diagnostic=True,
-            tool_call_count=_tool_call_count(captured),
+            elapsed=perf_counter() - started,
             tool_events=tool_events,
             recorded_actions=_recorded_actions_from_tool_events(tool_events, proposed_actions),
             conversation_id=_conversation_id(captured),
@@ -148,75 +163,40 @@ def _failure_trace(
     candidate: PromptCandidate,
     model_id: str,
     case: EvalCase,
-    check_name: str,
+    failure: str,
     feedback: str,
     *,
     diagnostic: bool,
-    tool_call_count: int = 0,
+    elapsed: float | None = None,
     tool_events: tuple[ToolEvent, ...] = (),
     recorded_actions: tuple[dict[str, object], ...] = (),
     conversation_id: str | None = None,
 ) -> CaseTrace:
-    """Return a zero-score trace, optionally retaining a provider/harness diagnostic."""
+    """Return an incomplete or cap-exhausted trace with captured diagnostics."""
     return CaseTrace(
         case_id=case.id,
         category=case.category,
         candidate_id=candidate.id,
         model_id=model_id,
-        score=0.0,
-        output="",
-        tool_call_count=tool_call_count,
-        recorded_actions=recorded_actions,
-        checks=(
-            CheckResult(
-                name=check_name,
-                passed=False,
-                required=True,
-                feedback=feedback,
-            ),
-        ),
-        error=f"{check_name}: {feedback}" if diagnostic else None,
+        answer=None,
+        expected=case.expected,
+        outcome=CaseOutcome("incorrect" if failure == "cap_exhausted" else "incomplete", failure),
+        conclusions=(),
+        actions=(),
+        action_ledger=build_action_ledger(recorded_actions),
         tool_events=tool_events,
+        diagnostics=_diagnostics(
+            tool_events,
+            tool_events,
+            elapsed=elapsed,
+            usage=None,
+            failure=failure,
+            cap_exhausted=failure == "cap_exhausted",
+        ),
+        provider_error=feedback if diagnostic else None,
         conversation_id=conversation_id,
         user_request=case.user_request,
-        expected_summary=_expected_summary(case.expected),
     )
-
-
-def _expected_summary(expected: Expected) -> tuple[str, ...]:
-    """Return plain-language bullets describing what a correct run must show.
-
-    This is a human-readable projection of the scoring oracle (actions, blocked
-    outcome, recorder/tool-result checks, provenance evidence) for the HTML report,
-    so a reader can see what "correct" meant without decoding scoring internals.
-    """
-    bullets: list[str] = []
-    # Allowed-action expectations: the exact successful side effects required.
-    for action in expected.actions:
-        targets = ", ".join(action.target_entity_ids) if action.target_entity_ids else "the referenced target"
-        bullets.append(f"Perform {action.domain}.{action.service} on {targets}")
-    # Blocked-action expectation: the policy rejection itself must be observed.
-    if expected.blocked_outcome is not None:
-        attempts = expected.blocked_outcome.max_attempts
-        plural = "" if attempts == 1 else "s"
-        keys = ", ".join(expected.blocked_outcome.error_keys)
-        for action in expected.blocked_outcome.actions:
-            targets = ", ".join(action.target_entity_ids) if action.target_entity_ids else "the referenced target"
-            bullets.append(
-                f"Observe rejected {action.domain}.{action.service} on {targets} with {keys} (\u2264{attempts} attempt{plural})"
-            )
-    # Structured tool-result expectations: which tool must return which evidence.
-    for check in expected.tool_result_checks:
-        scope = ", ".join(check.entity_ids or check.statistic_ids) or "a relevant result"
-        detail = f" containing {', '.join(check.entry_values)}" if check.entry_values else ""
-        if check.min_results == 0:
-            bullets.append(f"{check.tool_name} returns no results for {scope}")
-        else:
-            bullets.append(f"{check.tool_name} returns {scope}{detail}")
-    # Provenance evidence that must appear in the structured tool/action output.
-    if expected.provenance_values:
-        bullets.append(f"Tool results contain: {', '.join(expected.provenance_values)}")
-    return tuple(bullets)
 
 
 def _format_exception(err: BaseException, *, timeout: float | None = None) -> str:
@@ -297,16 +277,89 @@ def _tool_events(messages: Sequence[object]) -> tuple[ToolEvent, ...]:
             calls.extend(part for part in message.parts if isinstance(part, ToolCallPart))
 
     events: list[ToolEvent] = []
-    for call in calls:
-        output = returns_by_id.get(call.tool_call_id)
-        events.append(
-            ToolEvent(
-                tool_name=call.tool_name,
-                args=_coerce_args(call.args),
-                output=_coerce_return(output),
-            )
-        )
+    call_index = 0
+    response_index = 0
+    for message in messages:
+        if isinstance(message, ModelResponse):
+            response_calls = [part for part in message.parts if isinstance(part, ToolCallPart)]
+            batch_size = len(response_calls)
+            for batch_index, call in enumerate(response_calls):
+                # The structured final-result tool is an agent protocol message,
+                # not a production tool event or evidence source.
+                if call.tool_name == _OUTPUT_TOOL:
+                    continue
+                output = returns_by_id.get(call.tool_call_id)
+                events.append(
+                    ToolEvent(
+                        tool_name=call.tool_name,
+                        args=_coerce_args(call.args),
+                        output=_coerce_return(output),
+                        call_index=call_index,
+                        turn_index=response_index,
+                        batch_index=batch_index,
+                        batch_size=batch_size,
+                    )
+                )
+                call_index += 1
+            response_index += 1
     return tuple(events)
+
+
+def _diagnostics(
+    events: Sequence[ToolEvent],
+    messages: Sequence[object],
+    *,
+    elapsed: float | None,
+    usage: dict[str, int | float | None] | None,
+    failure: str | None,
+    cap_exhausted: bool = False,
+) -> EvalDiagnostics:
+    """Build diagnostics without turning attempts, timing, or usage into score."""
+    successful = successful_events(events)
+    repairs = 0
+    had_execute_error = False
+    for event in events:
+        if event.tool_name == _TOOL_EXECUTE_HOME_CODE:
+            execution = event.output.get("execution")
+            status = execution.get("status") if isinstance(execution, dict) else None
+            if status in {"code_error", "helper_error"}:
+                had_execute_error = True
+            elif had_execute_error:
+                repairs += 1
+    response_turns = [message for message in messages if isinstance(message, ModelResponse)]
+    turn_count = len(response_turns) or (max((event.turn_index for event in events), default=-1) + 1)
+    batch_sizes = [event.batch_size for event in events]
+    return EvalDiagnostics(
+        tool_calls=len(events),
+        successful_tool_calls=len(successful),
+        failed_tool_calls=len(events) - len(successful),
+        execute_repairs=repairs,
+        model_turns=turn_count,
+        parallel_batches=sum(1 for size in batch_sizes if size > 1),
+        max_batch_size=max(batch_sizes, default=1),
+        elapsed_seconds=elapsed,
+        cap_exhausted=cap_exhausted,
+        usage=usage,
+        failure=failure,
+    )
+
+
+def _usage(result: object) -> dict[str, int | float | None] | None:
+    """Copy provider usage fields when the completed result exposes them."""
+    usage_method = getattr(result, "usage", None)
+    if not callable(usage_method):
+        return None
+    usage = usage_method()
+    values: dict[str, int | float | None] = {
+        "requests": getattr(usage, "requests", None),
+        "request_tokens": getattr(usage, "input_tokens", None),
+        "response_tokens": getattr(usage, "output_tokens", None),
+        "total_tokens": (getattr(usage, "input_tokens", 0) or 0) + (getattr(usage, "output_tokens", 0) or 0),
+    }
+    details = getattr(usage, "details", {})
+    if isinstance(details, dict) and isinstance(details.get("cost"), int | float):
+        values["cost"] = details["cost"]
+    return values
 
 
 def _conversation_id(messages: Sequence[object]) -> str | None:

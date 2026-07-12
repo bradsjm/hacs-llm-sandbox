@@ -1,5 +1,6 @@
 """Single-artifact persistence for native pydantic-evals reports."""
 
+import json
 from pathlib import Path
 
 from pydantic import TypeAdapter
@@ -7,11 +8,32 @@ from pydantic_evals.reporting import EvaluationReport
 
 from llm_sandbox_evals.config import EvalConfig
 from llm_sandbox_evals.experiment import MatrixCellMeta, MatrixCellRef
-from llm_sandbox_evals.schema import CaseTrace
+from llm_sandbox_evals.schema import CaseOutcome, CaseTrace, EvalCase
+from llm_sandbox_evals.scoring import evaluate_case
 
 type MatrixReport = EvaluationReport[MatrixCellRef, CaseTrace, MatrixCellMeta]
 
 _REPORT_ADAPTER: TypeAdapter[MatrixReport] = TypeAdapter(MatrixReport)
+_SCORING_VERSION = 2
+_CASE_TRACE_FIELDS = frozenset(
+    {
+        "case_id",
+        "category",
+        "candidate_id",
+        "model_id",
+        "answer",
+        "expected",
+        "outcome",
+        "conclusions",
+        "actions",
+        "action_ledger",
+        "tool_events",
+        "diagnostics",
+        "provider_error",
+        "user_request",
+        "conversation_id",
+    }
+)
 
 
 def write_report_json(
@@ -23,10 +45,55 @@ def write_report_json(
     """Write the native pydantic-evals report artifact and return its run directory."""
     run_dir = config.runs_dir / run_id
     run_dir.mkdir(parents=True, exist_ok=False)
-    (run_dir / "report.json").write_bytes(_REPORT_ADAPTER.dump_json(report, indent=2) + b"\n")
+    payload = json.loads(_REPORT_ADAPTER.dump_json(report))
+    payload["scoring_version"] = _SCORING_VERSION
+    (run_dir / "report.json").write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     return run_dir
 
 
 def load_report(run_dir: Path) -> MatrixReport:
     """Load a saved native pydantic-evals report artifact."""
-    return _REPORT_ADAPTER.validate_json((run_dir / "report.json").read_bytes())
+    payload = json.loads((run_dir / "report.json").read_bytes())
+    if not _contains_v2_trace(payload):
+        # Deliberately reject before Pydantic validation so legacy artifacts cannot
+        # be silently reinterpreted by a future schema-compatible decoder.
+        raise ValueError("legacy scoring artifact; rerun evaluation")
+    return _REPORT_ADAPTER.validate_python(payload)
+
+
+def rescore_trace(trace: CaseTrace) -> CaseOutcome:
+    """Rescore a v2 trace using only its persisted oracle, answer, evidence, and ledger."""
+    if trace.answer is None:
+        raise ValueError("cannot rescore a trace without an answer")
+    recorded_actions = trace.action_ledger.successful + trace.action_ledger.rejected
+    case = EvalCase(
+        id=trace.case_id,
+        category=trace.category,
+        home="stored-trace",
+        user_request=trace.user_request,
+        actions_enabled=True,
+        expected=trace.expected,
+    )
+    outcome, _, _ = evaluate_case(case, trace.answer, trace.tool_events, recorded_actions)
+    return outcome
+
+
+def _contains_v2_trace(payload: object) -> bool:
+    """Check the serialized report envelope for the self-contained v2 trace shape."""
+    if (
+        not isinstance(payload, dict)
+        or payload.get("scoring_version") != _SCORING_VERSION
+        or not isinstance(payload.get("cases"), list)
+        or not payload["cases"]
+    ):
+        return False
+    for report_case in payload["cases"]:
+        if not isinstance(report_case, dict) or not isinstance(report_case.get("output"), dict):
+            return False
+        output = report_case["output"]
+        if not _CASE_TRACE_FIELDS.issubset(output):
+            return False
+        outcome = output["outcome"]
+        if not isinstance(outcome, dict) or outcome.get("state") not in {"correct", "incorrect", "incomplete"}:
+            return False
+    return True

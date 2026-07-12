@@ -1,16 +1,25 @@
 import json
 from pathlib import Path
+from typing import cast
 
 from llm_sandbox_evals.html_report import render_html, write_html
 import pytest
 
 
-def test_render_html_embeds_data_island() -> None:
-    rendered = render_html(_report(_case("a", "state_read")))
+def test_render_html_embeds_v2_trace_data_island() -> None:
+    report = _report(_case())
+    rendered = render_html(report, run_id="v2-run", created_at="2026-07-12T00:00:00+00:00")
 
     assert rendered.startswith("<!doctype html>")
-    assert '<script type="application/json" id="report-data">' in rendered
-    assert "__REPORT_DATA__" not in rendered
+    island = _data_island(rendered)
+    assert island["cases"][0]["output"]["outcome"]["state"] == "correct"
+    assert island["cases"][0]["output"]["expected"]["conclusions"][0]["assertion"] == "equals"
+    assert island["cases"][0]["output"]["conclusions"][0]["semantic_status"] == "matched"
+    assert island["cases"][0]["output"]["conclusions"][0]["grounding_status"] == "grounded"
+    assert island["cases"][0]["output"]["action_ledger"]["successful"][0]["domain"] == "light"
+    assert island["cases"][0]["output"]["tool_events"][0]["output"]["execution"]["status"] == "ok"
+    assert island["cases"][0]["output"]["diagnostics"]["tool_calls"] == 2
+    assert island["cases"][0]["output"]["answer"]["answer"] == "The light is on."
 
 
 @pytest.mark.parametrize(
@@ -23,39 +32,41 @@ def test_render_html_embeds_data_island() -> None:
     ],
     ids=["img-breakout", "script-breakout", "uppercase-breakout", "mixedcase-breakout"],
 )
-def test_render_html_escapes_script_breakout(dangerous: str) -> None:
-    rendered = render_html(_report(_case("a", "state_read", output=dangerous)))
+def test_render_html_escapes_v2_answer_script_breakout(dangerous: str) -> None:
+    report = _report(_case(answer_text=dangerous))
+    rendered = render_html(report)
 
-    # The inlined JSON island must contain no `</` delimiter that an HTML parser
-    # could read as a closing tag, regardless of tag-name casing in the payload.
-    island = rendered.split('id="report-data">', 1)[1].split("</script>", 1)[0]
-    assert "</" not in island
+    assert "</" not in rendered.split('id="report-data">', 1)[1].split("</script>", 1)[0]
 
 
-def test_write_html_round_trip(tmp_path: Path) -> None:
+def test_render_html_keeps_v2_detail_projection_and_raw_trace_fields() -> None:
+    rendered = render_html(_report(_case()))
+
+    for marker in (
+        "trace.expected",
+        "trace.conclusions",
+        "trace.action_ledger",
+        "trace.diagnostics",
+        "trace.answer",
+        "Raw case JSON",
+    ):
+        assert marker in rendered
+    for value in ("grounded", "light", "turn_on", "sensor.living_temp", "normal", "provider-token"):
+        assert value in rendered
+
+
+def test_write_html_round_trip_preserves_v2_trace(tmp_path: Path) -> None:
     run_dir = tmp_path / "20260709-120102-123456"
     run_dir.mkdir()
-    (run_dir / "report.json").write_text(_json_report(_report(_case("case-a", "state_read"))), encoding="utf-8")
+    (run_dir / "report.json").write_text(json.dumps(_report(_case())), encoding="utf-8")
 
     report_html = write_html(run_dir)
     rendered = report_html.read_text(encoding="utf-8")
 
     assert report_html == run_dir / "report.html"
     assert report_html.exists()
-    assert rendered.startswith("<!doctype html>")
     assert "20260709-120102-123456" in rendered
-    assert "case-a" in rendered
-
-
-def test_write_html_derives_run_id_and_created_at(tmp_path: Path) -> None:
-    run_dir = tmp_path / "20260709-120102-123456"
-    run_dir.mkdir()
-    (run_dir / "report.json").write_text(_json_report(_report(_case("case-a", "state_read"))), encoding="utf-8")
-
-    rendered = write_html(run_dir).read_text(encoding="utf-8")
-
-    assert "20260709-120102-123456" in rendered
-    assert "2026-07-09T12:01:02.123456+00:00" in rendered
+    assert "provider-token" in rendered
 
 
 def test_render_html_tolerates_minimal_empty_report() -> None:
@@ -64,88 +75,57 @@ def test_render_html_tolerates_minimal_empty_report() -> None:
     assert rendered.startswith("<!doctype html>")
 
 
-def test_render_html_keeps_empty_cells_document_renderable() -> None:
-    rendered = render_html(_report(analyses=[]))
-
-    assert rendered.startswith("<!doctype html>")
-    assert '<section id="analyses"' in rendered
-
-
-def _case(
-    case_id: str,
-    category: str,
-    *,
-    candidate: str = "baseline",
-    model: str = "stub",
-    score: float = 1.0,
-    checks: list[dict[str, object]] | None = None,
-    tool_events: list[dict[str, object]] | None = None,
-    recorded_actions: list[dict[str, object]] | None = None,
-    error: str | None = None,
-    passed: bool = True,
-    output: str = "done",
-) -> dict[str, object]:
-    if checks is None:
-        checks = [{"name": "meaningful_oracle", "passed": passed, "required": True, "feedback": "ok"}]
-    inputs: dict[str, object] = {
-        "case_id": case_id,
-        "candidate_id": candidate,
-        "model_id": model,
-        "home": "home_minimal",
-        "category": category,
+def _case(*, answer_text: str = "The light is on.") -> dict[str, object]:
+    value_claim = {
+        "kind": "value",
+        "subject_kind": "entity",
+        "subject_id": "sensor.living_temp",
+        "field": "state",
+        "attribute_name": None,
+        "value": "on",
     }
-    first_fail = next((check["name"] for check in checks if check["required"] and not check["passed"]), "none")
+    expected = {
+        "conclusions": [{"claim": value_claim, "assertion": "equals", "tolerance": None}],
+        "actions": [{"domain": "light", "service": "turn_on", "target_entity_ids": ["light.living"], "service_data": None}],
+        "blocked_outcome": None,
+    }
     return {
-        "name": f"{candidate}/{model}/{case_id}",
-        "inputs": inputs,
-        "metadata": inputs,
+        "name": "baseline/stub/case-v2",
+        "inputs": {"case_id": "case-v2", "candidate_id": "baseline", "model_id": "stub", "home": "home_minimal", "category": "state"},
+        "metadata": {"case_id": "case-v2", "candidate_id": "baseline", "model_id": "stub", "home": "home_minimal", "category": "state"},
         "output": {
-            "case_id": case_id,
-            "category": category,
-            "candidate_id": candidate,
-            "model_id": model,
-            "score": score,
-            "output": output,
-            "tool_call_count": len(tool_events or []),
-            "recorded_actions": recorded_actions or [],
-            "checks": checks,
-            "error": error,
-            "tool_events": tool_events or [],
+            "case_id": "case-v2",
+            "category": "state",
+            "candidate_id": "baseline",
+            "model_id": "stub",
+            "answer": {"answer": answer_text, "claims": [value_claim]},
+            "expected": expected,
+            "outcome": {"state": "correct", "reason": "ok", "score": 1.0},
+            "conclusions": [{"expected": expected["conclusions"][0], "answer_claim": value_claim, "semantic_status": "matched", "grounding_status": "grounded", "reason": "ok"}],
+            "actions": [{"status": "allowed", "passed": True, "mismatches": []}],
+            "action_ledger": {
+                "successful": [{"domain": "light", "service": "turn_on", "target": {"entity_id": "light.living"}}],
+                "rejected": [],
+            },
+            "tool_events": [{"tool_name": "execute_home_code", "args": {"code": "return hass.states['sensor.living_temp']"}, "output": {"execution": {"status": "ok"}, "output": {"entity_id": "sensor.living_temp", "state": "on"}, "note": "provider-token"}, "call_index": 0, "turn_index": 0, "batch_index": 0, "batch_size": 1}],
+            "diagnostics": {"tool_calls": 2, "successful_tool_calls": 1, "failed_tool_calls": 1, "execute_repairs": 1, "model_turns": 2, "parallel_batches": 0, "max_batch_size": 1, "elapsed_seconds": 1.25, "cap_exhausted": False, "usage": {"requests": 2, "request_tokens": 10, "response_tokens": 20, "total_tokens": 30, "cost": None}, "failure": "normal"},
+            "provider_error": None,
+            "user_request": "What is the living room temperature?",
         },
-        "scores": {
-            "score": {
-                "name": "score",
-                "value": score,
-                "reason": "passed" if passed else "failed",
-                "source": "evaluator",
-                "evaluator_version": "1",
-            }
-        },
-        "labels": {
-            "model_error": "false",
-            "outcome": "passed" if passed else "failed",
-            "failure_kind": first_fail,
-            "error_type": "none" if error is None else "error",
-        },
-        "assertions": {"required_gates_passed": {"value": passed, "reason": "ok", "source": "evaluator"}},
-        "task_duration": 0.1,
-        "total_duration": 0.1,
+        "scores": {"score": {"name": "score", "value": 1.0, "reason": "ok", "source": "evaluator", "evaluator_version": "2"}},
+        "labels": {"outcome": "correct", "incomplete": False, "failure_classification": "normal"},
+        "assertions": {},
+        "task_duration": 1.25,
+        "total_duration": 1.25,
     }
 
 
-def _report(
-    *cases: dict[str, object], analyses: list[dict[str, object]] | None = None, name: str = "matrix"
-) -> dict[str, object]:
+def _report(case: dict[str, object]) -> dict[str, object]:
     return {
-        "name": name,
-        "cases": list(cases),
+        "name": "matrix",
+        "cases": [case],
         "failures": [],
-        "analyses": analyses
-        if analyses is not None
-        else [
-            {"type": "scalar", "title": "Overall mean score", "description": "Mean", "value": 1.0, "unit": ""},
-            {"type": "scalar", "title": "Incomplete cells", "description": "Incomplete", "value": 0, "unit": ""},
-        ],
+        "analyses": [{"type": "scalar", "title": "Overall correct rate", "description": "Correct rate", "value": 1.0, "unit": ""}],
         "report_evaluator_failures": [],
         "experiment_metadata": None,
         "trace_id": "trace",
@@ -153,5 +133,9 @@ def _report(
     }
 
 
-def _json_report(report: dict[str, object]) -> str:
-    return json.dumps(report)
+def _data_island(rendered: str) -> dict[str, object]:
+    island = rendered.split('id="report-data">', 1)[1].split("</script>", 1)[0]
+    decoded = json.loads(island)
+    if not isinstance(decoded, dict):
+        raise AssertionError("report data island must contain a JSON object")
+    return cast(dict[str, object], decoded)

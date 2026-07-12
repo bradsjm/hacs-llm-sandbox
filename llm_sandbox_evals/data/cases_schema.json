@@ -1,251 +1,87 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "LLM Sandbox eval cases",
+  "title": "LLM Sandbox eval cases v2",
   "type": "object",
   "additionalProperties": false,
-  "required": [
-    "name",
-    "cases"
-  ],
+  "required": ["name", "cases"],
   "properties": {
-    "name": {
-      "type": "string"
-    },
-    "cases": {
-      "type": "array",
-      "items": {
-        "$ref": "#/$defs/case_wrapper"
-      }
-    }
+    "name": {"type": "string"},
+    "cases": {"type": "array", "minItems": 80, "maxItems": 80, "items": {"$ref": "#/$defs/case_wrapper"}}
   },
   "$defs": {
+    "string_list": {"type": "array", "items": {"type": "string"}},
     "case_wrapper": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "name",
-        "inputs"
-      ],
-      "properties": {
-        "name": {
-          "type": "string"
-        },
-        "inputs": {
-          "$ref": "#/$defs/case"
-        }
-      }
+      "type": "object", "additionalProperties": false, "required": ["name", "inputs"],
+      "properties": {"name": {"type": "string"}, "inputs": {"$ref": "#/$defs/case"}}
     },
     "case": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "id",
-        "category",
-        "home",
-        "user_request",
-        "actions_enabled",
-        "expected"
-      ],
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "category", "home", "user_request", "actions_enabled", "oracle_version", "expected"],
       "properties": {
-        "id": {
-          "type": "string"
-        },
-        "category": {
-          "type": "string",
-          "maxLength": 13,
-          "enum": [
-            "state",
-            "registry",
-            "history",
-            "statistics",
-            "logbook",
-            "automation",
-            "action",
-            "safety",
-            "system"
-          ]
-        },
-        "home": {
-          "type": "string"
-        },
-        "user_request": {
-          "type": "string"
-        },
-        "actions_enabled": {
-          "type": "boolean"
-        },
-        "llm_context": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "device_id"
-          ],
-          "properties": {
-            "device_id": {
-              "type": "string"
-            }
-          }
-        },
-        "action_domains": {
-          "type": "array",
-          "minItems": 1,
-          "items": {
-            "type": "string"
-          }
-        },
-        "expected": {
-          "$ref": "#/$defs/expected"
-        }
+        "id": {"type": "string"},
+        "category": {"type": "string", "maxLength": 13, "enum": ["state", "registry", "history", "statistics", "logbook", "automation", "action", "safety", "system"]},
+        "home": {"type": "string"},
+        "user_request": {"type": "string"},
+        "actions_enabled": {"type": "boolean"},
+        "oracle_version": {"const": 2},
+        "llm_context": {"type": "object", "additionalProperties": false, "required": ["device_id"], "properties": {"device_id": {"type": "string"}}},
+        "action_domains": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+        "expected": {"$ref": "#/$defs/expected"}
       }
     },
     "expected": {
-      "type": "object",
-      "additionalProperties": false,
+      "type": "object", "additionalProperties": false, "required": ["conclusions", "actions", "blocked_outcome"],
       "properties": {
-        "provenance_values": {
-          "$ref": "#/$defs/strings"
-        },
-        "tool_result_checks": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/tool_check"
-          }
-        },
-        "blocked_outcome": {
-          "$ref": "#/$defs/blocked"
-        },
-        "actions": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/action"
-          }
-        },
-        "tool_call_par": {
-          "type": "integer",
-          "minimum": 1
-        }
+        "conclusions": {"type": "array", "items": {"$ref": "#/$defs/conclusion"}},
+        "actions": {"type": "array", "items": {"$ref": "#/$defs/action"}},
+        "blocked_outcome": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/blocked"}]}
       }
     },
-    "strings": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      }
+    "conclusion": {
+      "oneOf": [
+        {"type": "object", "additionalProperties": false, "required": ["claim", "assertion", "tolerance"], "properties": {"claim": {"oneOf": [{"$ref": "#/$defs/value_claim"}, {"$ref": "#/$defs/relation_claim"}, {"$ref": "#/$defs/aggregate_claim"}, {"$ref": "#/$defs/event_claim"}]}, "assertion": {"const": "equals"}, "tolerance": {"type": "null"}}},
+        {"type": "object", "additionalProperties": false, "required": ["claim", "assertion", "tolerance"], "properties": {"claim": {"oneOf": [{"$ref": "#/$defs/numeric_value_claim"}, {"$ref": "#/$defs/numeric_aggregate_claim"}]}, "assertion": {"const": "approximate"}, "tolerance": {"type": "number", "exclusiveMinimum": 0}}},
+        {"type": "object", "additionalProperties": false, "required": ["claim", "assertion", "tolerance"], "properties": {"claim": {"$ref": "#/$defs/collection_claim"}, "assertion": {"enum": ["exact_items", "contains_items"]}, "tolerance": {"type": "null"}}},
+        {"type": "object", "additionalProperties": false, "required": ["claim", "assertion", "tolerance"], "properties": {"claim": {"$ref": "#/$defs/no_data_claim"}, "assertion": {"const": "empty"}, "tolerance": {"type": "null"}}}
+      ]
     },
-    "blocked": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "error_keys"
-        ,
-        "actions"
-      ],
-      "properties": {
-        "max_attempts": {
-          "type": "integer",
-          "minimum": 1
-        },
-        "error_keys": {
-          "type": "array",
-          "minItems": 1,
-          "items": {
-            "type": "string"
-          }
-        },
-        "actions": {
-          "type": "array",
-          "minItems": 1,
-          "items": {
-            "$ref": "#/$defs/action"
-          }
-        }
-      }
+    "claim": {"oneOf": [{"$ref": "#/$defs/value_claim"}, {"$ref": "#/$defs/relation_claim"}, {"$ref": "#/$defs/collection_claim"}, {"$ref": "#/$defs/aggregate_claim"}, {"$ref": "#/$defs/event_claim"}, {"$ref": "#/$defs/no_data_claim"}]},
+    "scalar": {"type": ["string", "number", "boolean", "null"]},
+    "value_claim": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "subject_kind", "subject_id", "field", "attribute_name", "value"],
+      "properties": {"kind": {"const": "value"}, "subject_kind": {"enum": ["entity", "device", "area", "automation", "repair", "notification", "service"]}, "subject_id": {"type": "string"}, "field": {"enum": ["state", "attribute", "name", "manufacturer", "model", "enabled", "available", "service", "message", "status", "value", "unit"]}, "attribute_name": {"anyOf": [{"type": "null"}, {"type": "string", "minLength": 1}]}, "value": {"$ref": "#/$defs/scalar"}},
+      "allOf": [{"if": {"properties": {"field": {"const": "attribute"}}}, "then": {"properties": {"attribute_name": {"type": "string", "minLength": 1}}}}, {"if": {"properties": {"field": {"not": {"const": "attribute"}}}}, "then": {"properties": {"attribute_name": {"type": "null"}}}}]
+    },
+    "numeric_value_claim": {"allOf": [{"$ref": "#/$defs/value_claim"}, {"properties": {"value": {"type": "number"}}}]},
+    "relation_claim": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "subject_kind", "subject_id", "relation", "object_kind", "object_id"],
+      "properties": {"kind": {"const": "relation"}, "subject_kind": {"enum": ["entity", "device", "area", "automation"]}, "subject_id": {"type": "string"}, "relation": {"enum": ["entity_device", "entity_area", "device_area", "area_floor", "automation_target", "entity_service"]}, "object_kind": {"enum": ["entity", "device", "area", "floor", "service"]}, "object_id": {"type": "string"}}
+    },
+    "collection_claim": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "collection", "filter_kind", "filter_value", "items"],
+      "properties": {"kind": {"const": "collection"}, "collection": {"enum": ["entity_ids", "automation_ids", "repair_ids", "notification_ids", "service_ids"]}, "filter_kind": {"enum": ["all", "area", "device", "floor", "label", "domain", "state"]}, "filter_value": {"anyOf": [{"type": "null"}, {"type": "string", "minLength": 1}]}, "items": {"type": "array", "uniqueItems": true, "items": {"type": "string"}}},
+      "allOf": [{"if": {"properties": {"filter_kind": {"const": "all"}}}, "then": {"properties": {"filter_value": {"type": "null"}}}}, {"if": {"properties": {"filter_kind": {"not": {"const": "all"}}}}, "then": {"properties": {"filter_value": {"type": "string", "minLength": 1}}}}]
+    },
+    "aggregate_claim": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "source", "operator", "subject_ids", "input_field", "input_value", "value", "unit"],
+      "properties": {"kind": {"const": "aggregate"}, "source": {"enum": ["states", "history", "statistics", "logbook"]}, "operator": {"enum": ["count", "mean", "minimum", "maximum", "sum", "duration_seconds", "first_seen", "last_seen", "time_in_state", "convert"]}, "subject_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string"}}, "input_field": {"enum": ["none", "state", "mean", "min", "max", "sum", "event_message"]}, "input_value": {"$ref": "#/$defs/scalar"}, "value": {"type": ["string", "number", "boolean"]}, "unit": {"anyOf": [{"type": "null"}, {"type": "string"}]}}
+    },
+    "numeric_aggregate_claim": {"allOf": [{"$ref": "#/$defs/aggregate_claim"}, {"properties": {"value": {"type": "number"}}}]},
+    "event_claim": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "source", "entity_id", "event_kind", "value", "when"],
+      "properties": {"kind": {"const": "event"}, "source": {"enum": ["logbook", "history", "automation_run"]}, "entity_id": {"type": "string"}, "event_kind": {"enum": ["logbook_message", "state_transition", "automation_run"]}, "value": {"type": "string"}, "when": {"anyOf": [{"type": "null"}, {"type": "string"}]}}
+    },
+    "no_data_claim": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "source", "scope_entity_ids"],
+      "properties": {"kind": {"const": "no_data"}, "source": {"enum": ["history", "statistics", "logbook", "automation"]}, "scope_entity_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string"}}}
     },
     "action": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "domain",
-        "service"
-      ],
-      "properties": {
-        "domain": {
-          "type": "string"
-        },
-        "service": {
-          "type": "string"
-        },
-        "target_entity_ids": {
-          "$ref": "#/$defs/strings"
-        },
-        "service_data": {
-          "type": "object"
-        }
-      }
+      "type": "object", "additionalProperties": false, "required": ["domain", "service"],
+      "properties": {"domain": {"type": "string"}, "service": {"type": "string"}, "target_entity_ids": {"$ref": "#/$defs/string_list"}, "service_data": {"type": "object", "additionalProperties": true}}
     },
-    "tool_check": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "tool_name"
-      ],
-      "properties": {
-        "tool_name": {
-          "enum": [
-            "execute_home_code",
-            "get_history",
-            "get_statistics",
-            "get_logbook",
-            "get_automation"
-          ]
-        },
-        "entity_ids": {
-          "$ref": "#/$defs/strings"
-        },
-        "statistic_ids": {
-          "$ref": "#/$defs/strings"
-        },
-        "fields": {
-          "$ref": "#/$defs/strings"
-        },
-        "period": {
-          "type": "string"
-        },
-        "entry_values": {
-          "$ref": "#/$defs/strings"
-        },
-        "min_results": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "pagination_complete": {
-          "type": "boolean"
-        },
-        "entry_values_by_entity": {
-          "type": "object",
-          "additionalProperties": {
-            "$ref": "#/$defs/strings"
-          }
-        },
-        "field_values_by_entity": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "object"
-          }
-        },
-        "content_action_target_by_entity": {
-          "type": "object",
-          "additionalProperties": {
-            "$ref": "#/$defs/strings"
-          }
-        },
-        "first_run_when_by_entity": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "string"
-          }
-        }
-      }
+    "blocked": {
+      "type": "object", "additionalProperties": false, "required": ["error_keys", "actions"],
+      "properties": {"error_keys": {"type": "array", "minItems": 1, "items": {"type": "string"}}, "actions": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/action"}}}
     }
   }
 }

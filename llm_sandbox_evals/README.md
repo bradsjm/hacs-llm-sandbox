@@ -1,179 +1,227 @@
 # LLM Sandbox Evals
 
-Development-only eval harness for the `llm_sandbox` Home Assistant integration. It runs a real `pydantic_ai.Agent` against **frozen Home Assistant fixtures**, executes the production `execute_home_code` / recorder tool cores, scores structured final outcomes with a global tool-call cutoff plus successful-call efficiency, and ranks **prompt candidates** across a **matrix of language models** through native `pydantic_evals` `Dataset` / `EvaluationReport` reporting.
+Development-only evaluation harness for the `llm_sandbox` Home Assistant
+integration. It runs a real `pydantic_ai.Agent` against fresh, frozen fixtures,
+executes the production tool cores, and evaluates prompt candidates across a
+candidate × model matrix with native `pydantic_evals` reports. It never touches
+a live Home Assistant instance and is not imported by the integration runtime.
 
-This package is not part of the integration runtime. It never adds dependencies to `custom_components/` or `manifest.json`, and it never touches a live Home Assistant instance.
-
-## Quick start (offline, no API key)
+## Quick start
 
 ```bash
-scripts/setup-evals                      # uv sync --group dev --group evals
+scripts/setup-evals
 uv run --group dev --group evals python -m llm_sandbox_evals eval --models stub
 ```
 
-The `stub` FunctionModel is deterministic and keyless — it validates the full pipeline (Pydantic AI agent -> production tool core -> terminal answer -> scoring -> native report) end to end. Stdout stays factual and machine-readable:
-
-```text
-run_dir: eval_data/runs/20260630-164326-318981
-report_html: eval_data/runs/20260630-164326-318981/report.html
-overall_mean: 0.858
-baseline/stub: mean=0.858 tool_calls=1.000
-```
-
-On a terminal, `eval` clears the prior screen and renders one live stderr view with overall progress, active matrix cells and tool phases, recent results, and totals, then a compact artifact summary. Recent `Gates` squares are filled when required and hollow when optional; green means passed and red means failed. Calls are green at or below the scoring par and amber above it. Press **Escape** to cancel an interactive run; it writes no artifacts or stdout summary. With redirected stderr, it emits readable lifecycle lines instead. Every completed run writes `report.json` containing native analyses plus per-cell traces and auto-emits `report.html` for browser-based visual navigation; regenerate the HTML with `report <run_id> --html`.
-
-The CLI reports interruptions and unexpected failures as concise stderr lines without a traceback. Set `LLM_SANDBOX_EVALS_DEBUG=1` to re-raise unexpected exceptions while developing; interrupts remain clean.
-
-## Running real models
-
-Any Pydantic AI provider-prefixed model id works, such as `openai:gpt-4o-mini`, `anthropic:claude-haiku-4-5`, or `openrouter:openai/gpt-4o-mini`; API keys are read from the environment (for example `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, `GOOGLE_API_KEY`, or `GEMINI_API_KEY`). A `.env` file in the repo root is auto-loaded by the CLI (shell exports take precedence over `.env`), and `.env` is gitignored.
-
-```bash
-cat > .env <<'EOF'
-OPENAI_API_KEY=sk-...
-ANTHROPIC_API_KEY=sk-ant-...
-EOF
-uv run --group dev --group evals python -m llm_sandbox_evals eval --models openai:gpt-4o-mini,anthropic:claude-haiku-4-5,stub
-```
-
-Every candidate is evaluated against every model. The native `Candidate x model means` analysis shows the matrix; the native `Candidate ranking` analysis ranks candidates by mean score with a small prompt-size tie-break. A model call that fails (bad key, bad model id, network, or per-generation timeout) is captured as a `model_error` trace, scores `0.0`, and is excluded from candidate/model mean-score denominators (it is reported separately as an `Incomplete cells` count) so a provider outage does not read as a candidate-quality failure. The provider exception type/message, timeout details, and cause chain are included in the trace.
-
-## Optimizing the prompt (DSPy COPRO)
-
-The `optimize` command uses [DSPy](https://dspy.ai/)'s COPRO instruction optimizer to rewrite the API instruction (`api_prompt`, seeded from the selected production prompt profile) and **keeps the real agent harness as the metric**: COPRO proposes instruction variants, and each is scored by `run_case(...)` against one target model using production tool calls and structured outcome checks. The winner is then optionally cross-evaluated against the model matrix.
-
-`optimize` uses DSPy, whose `dspy.LM` path accepts litellm-style ids such as `openrouter/...`; `eval` uses Pydantic AI provider-prefixed ids such as `openrouter:...`.
-
-```bash
-uv run --group dev --group evals python -m llm_sandbox_evals optimize \
-  --target-model openrouter/deepseek/deepseek-v4-flash \
-  --breadth 5 --depth 2 \
-  --cases state,registry,action \
-  --cross-eval-models openrouter/deepseek/deepseek-v4-flash,stub
-```
-
-Flags:
-
-- `--target-model` — model to optimize against (required; must be a real model, not `stub`).
-- `--proposer-model` — model COPRO uses to propose rewrites (defaults to the target model).
-- `--breadth` / `--depth` — COPRO search breadth/depth (defaults 5/2). COPRO requires breadth greater than 1. Cost scales as `breadth × depth × trainset`.
-- `--length-penalty` — penalty coefficient applied when selecting COPRO candidates to tie-break toward smaller prompts at equal quality (default: `0.02`; `0` disables the size tie-break).
-- `--cases` — case ids/categories used as the optimization trainset (keep small to bound cost).
-- `--cross-eval-models` — models for the baseline-vs-optimized leaderboard.
-- `--prompt-profile PROFILE_ID` — selects one production prompt profile for the baseline candidate and runtime settings (default: `balanced`). This is separate from `--candidates`, which selects eval prompt candidates.
-- `--target-reasoning` — reasoning effort stored for DSPy target-model configuration; the eval harness itself uses `--reasoning` / `config.reasoning_effort` when running `run_case(...)`.
-- `--proposer-reasoning` — reasoning effort for the proposer model during DSPy.
-- `--reasoning` — reasoning effort forwarded to the cross-eval harness models.
-
-It writes `optimized_candidate.json` + `optimized_prompt.md` and prints a baseline-vs-optimized summary plus the cross-eval run dir when requested. Cross-eval runs use the same native eval artifact: `report.json`. **Production `prompts.py` is never auto-patched** — the optimized text is exported for human review. Re-evaluate a saved candidate against any models:
-
-```bash
-uv run --group dev --group evals python -m llm_sandbox_evals eval \
-  --prompt-profile balanced \
-  --candidates baseline,optimized:eval_data/runs/<run_id>/optimized_candidate.json \
-  --models openrouter:deepseek/deepseek-v4-flash,stub
-```
+The deterministic `stub` FunctionModel is keyless and validates the pipeline:
+structured agent output, production tool calls, v2 scoring, and report writing.
+Every run writes `report.json` and `report.html` under
+`eval_data/runs/<run_id>/`. Standard output contains machine-readable artifact
+paths and correct-rate summaries; interactive progress is written to stderr.
 
 ## Commands
 
 ```text
-python -m llm_sandbox_evals eval [--models id,...] [--candidates id,...] [--prompt-profile ID] [--cases id,...|category,...] [--concurrency N] [--max-tool-calls N] [--model-timeout SECONDS] [--reasoning LEVEL] [--runs-dir PATH]
-python -m llm_sandbox_evals optimize --target-model ID [--proposer-model ID] [--prompt-profile ID] [--breadth N] [--depth N] [--length-penalty COEFF] [--cases ...] [--cross-eval-models ...] [--target-reasoning LEVEL] [--proposer-reasoning LEVEL] [--reasoning LEVEL] [--runs-dir PATH]
+python -m llm_sandbox_evals eval [--models id,...] [--candidates id,...]
+  [--prompt-profile ID] [--cases id,...|category,...] [--concurrency N]
+  [--max-tool-calls N] [--model-timeout SECONDS] [--reasoning LEVEL]
+  [--temperature FLOAT] [--runs-dir PATH]
+
+python -m llm_sandbox_evals optimize --target-model ID [--proposer-model ID]
+  [--prompt-profile ID] [--breadth N] [--depth N] [--length-penalty COEFF]
+  [--cases ...] [--cross-eval-models ...] [--target-reasoning LEVEL]
+  [--proposer-reasoning LEVEL] [--reasoning LEVEL] [--runs-dir PATH]
+
 python -m llm_sandbox_evals report <run_id> [--html] [--runs-dir PATH]
 ```
 
-- `eval` builds a native `pydantic_evals.Dataset`, runs the matrix with a stderr-only live terminal view (or line fallback when redirected), and writes `report.json` plus interactive `report.html` artifacts under `eval_data/runs/<run_id>/`.
-- `optimize` runs DSPy COPRO against one target model and cross-evaluates the winner (see _Optimizing the prompt_ above).
-- `report <run_id>` re-renders saved native analyses and cell scores from `report.json` and makes no model calls; add `--html` to regenerate `report.html` only.
-- `--cases` accepts case ids **or** category names (`state`, `registry`, `history`, `statistics`, `logbook`, `automation`, `action`, `safety`, `system`).
-- `--candidates` accepts `baseline`, `profile:<id>` production profiles, and `optimized:<path>` (a saved `optimized_candidate.json`).
-- `--prompt-profile PROFILE_ID` selects one production base prompt profile for the whole run (default: `balanced`); it is not comma-separated and is separate from `--candidates`.
-- `guided`, `balanced`, and `frontier` preserve the same capability/safety catalog while varying coaching and density; compare them with `--candidates baseline,profile:guided,profile:balanced,profile:frontier` or select one via `--prompt-profile`.
-- `--reasoning LEVEL` forwards a reasoning effort (e.g. `medium`/`high`, or `none` to disable a reasoning model) to real models via Pydantic AI provider settings (OpenRouter/OpenAI reasoning effort). `optimize` adds `--target-reasoning` and `--proposer-reasoning` to control the target and proposer models independently (e.g. `--target-reasoning none --proposer-reasoning high`).
-- `--model-timeout SECONDS` bounds one model generation before recording `model_error` (default `75`). Slow free models may need a higher value or lower `--concurrency`.
-- A non-empty `LOGFIRE_TOKEN` automatically enables native Pydantic Logfire instrumentation. Telemetry console output is disabled so it cannot corrupt Rich Live, stderr, or machine-readable stdout.
-- Defaults: `--models stub`, `--candidates baseline`, `--prompt-profile balanced`, all cases.
+- `eval` runs every selected candidate/model/case cell. Defaults are the
+  `stub` model, `baseline` candidate, `balanced` production profile, all cases,
+  concurrency 5, a 10-call safety cap, and a 75-second model-generation
+  timeout.
+- `report` reloads a saved v2 report without model calls. `--html` regenerates
+  only the self-contained HTML dashboard.
+- `--cases` accepts case IDs or `state`, `registry`, `history`, `statistics`,
+  `logbook`, `automation`, `action`, `safety`, and `system`.
+- `--candidates` accepts `baseline`, `profile:<id>`, and
+  `optimized:<path>` candidate artifacts.
+- Real Pydantic AI models use provider-prefixed IDs such as
+  `openai:gpt-4o-mini` or `openrouter:...`; keys come from the environment or
+  a gitignored root `.env` file.
+
+## V2 scoring model
+
+The only model-produced eval result is:
+
+```python
+EvalAnswer(answer: str, claims: list[AnswerClaim])
+```
+
+`answer` is for display and diagnostics only. It is never parsed, searched, or
+used as evidence. `claims` is a discriminated, extra-forbidden union of these
+typed forms:
+
+- `value`: one entity, device, area, automation, repair, notification, or
+  service field and scalar value;
+- `relation`: one finite relationship such as entity-to-device,
+  entity-to-area, device-to-area, automation-to-target, or entity-to-service;
+- `collection`: sorted unique IDs filtered by `all`, area, device, floor, label,
+  domain, or state;
+- `aggregate`: a fixed operation over declared state, history, statistics, or
+  logbook subjects;
+- `event`: one history transition, logbook message, or automation run;
+- `no_data`: an empty history, statistics, logbook, or automation source with an
+  exact resolved entity scope.
+
+Authored v2 conclusions use exactly one of these assertions:
+
+| Assertion        | Meaning                                                             |
+| ---------------- | ------------------------------------------------------------------- |
+| `equals`         | All identifying fields and the value/event match exactly.           |
+| `approximate`    | Numeric value or aggregate is within the positive finite tolerance. |
+| `exact_items`    | A collection has exactly the authored item set.                     |
+| `contains_items` | A collection contains every authored item.                          |
+| `empty`          | The source is empty and its resolved scope exactly matches.         |
+
+Every expected conclusion must have a semantically matching answer claim and a
+grounded normalized fact. All submitted claims must also be grounded, so an
+extra unrelated claim makes the cell incorrect. Aggregates are recomputed from
+all declared source records; the expected number appearing in prose or a
+different record is not evidence.
+
+Evidence is path-independent: successful production envelopes from any number
+of calls, turns, or parallel batches are normalized and unioned. A failed call
+followed by a successful call can therefore be correct, and a final failed
+tool event does not erase earlier valid evidence. Facts retain tool, call,
+turn, batch, and record metadata for traceability, but scoring never reads raw
+arguments, `printed`, notes, error metadata, or model prose.
+
+Direct recorder no-data results need identity as well as emptiness. The flat
+declarative-history envelope is `{window, scope: {entity_ids}, rows}` and the
+logbook envelope is `{window, scope: {entity_ids}, entries}`. `scope.entity_ids`
+is the sorted, visible scope resolved by the production query core. It appears
+on successful empty results, normal pages, and cursor continuations. It is not
+copied from the request and does not grant access.
+
+Actions are scored from two separate ledgers:
+
+- The successful ledger must match the authored allowed effects, including
+  domain, service, canonical relevant service data, and the exact target union.
+  Split disjoint calls are allowed; duplicates, overlaps, supersets, and
+  unrelated successful effects are not.
+- The rejected ledger is used for blocked-action cases. Required policy/error
+  keys and rejected effects must be present, with no successful effects.
+
+Read-only cases fail on unexpected successful effects. Failed exploratory or
+recovery attempts remain diagnostics unless the case explicitly authors a
+blocked effect.
+
+### Cell states and aggregation
+
+Each cell is exactly `correct`, `incorrect`, or `incomplete`:
+
+- `correct` means all conclusions, claims, and action expectations pass; its
+  native score is `1.0`.
+- `incorrect` means the model completed but semantic grounding or action
+  expectations failed; its native score is `0.0`.
+- `incomplete` means provider, transport, timeout, model-protocol, or harness
+  failure. It is excluded from correct-rate denominators and shown as coverage.
+
+The hard call cap is a safety stop. Cap exhaustion without a valid final
+`EvalAnswer` is `incorrect`, not an efficiency penalty. Calls, failed calls,
+repairs, turns, parallelism, elapsed time, token usage, cost, and cap status
+are diagnostics only; they cannot change a completed cell's score or rank.
+Reports rank by correct rate, then the minimum completed-model correct rate,
+then authored prompt size. A pair with no completed cells is `N/A` and is not
+ranked.
+
+## Adding cases
+
+Edit `data/cases.yaml`; it is loaded through native `Dataset.from_file()`.
+`data/cases_schema.json` is the focused v2 authoring sidecar. Cases retain the
+current categories:
+`state`, `registry`, `history`, `statistics`, `logbook`, `automation`,
+`action`, `safety`, and `system`.
+
+Minimal state example:
+
+```yaml
+- name: my_temperature_case
+  inputs:
+    id: my_temperature_case
+    category: state
+    home: home_default
+    user_request: What is the living room temperature?
+    actions_enabled: false
+    oracle_version: 2
+    expected:
+      conclusions:
+        - claim:
+            kind: value
+            subject_kind: entity
+            subject_id: sensor.living_temp
+            field: state
+            attribute_name: null
+            value: "25.2"
+          assertion: equals
+          tolerance: null
+      actions: []
+      blocked_outcome: null
+```
+
+Use exact IDs and values from a real frozen fixture. Action cases declare
+`expected.actions`; blocked cases declare `expected.blocked_outcome`; read
+cases declare `expected.conclusions`. Do not add legacy token lists, generic
+predicates, free-form result paths, or call-count expectations.
+
+## Fixtures and production alignment
+
+Add a Python module under `homes/` exposing `snapshot() -> HomeSnapshot`,
+`recorder() -> dict`, and `NAME`, then register it in `homes/__init__.py`.
+Fixtures are fresh, frozen, deterministic Python data; there is no JSON
+deserializer for `HomeSnapshot`. Recorder cases exercise the production
+`GetHistoryTool`, `GetStatisticsTool`, and `GetLogbookTool` query cores with a
+fixture-backed `RecorderSource`. The eval harness must not duplicate those
+query implementations.
+
+## Prompt optimization
+
+`optimize` uses DSPy COPRO to propose `api_prompt` rewrites and evaluates each
+proposal through the real v2 harness. The quality metric is the binary
+`trace.outcome.score` (`1.0` only for correct cells, otherwise `0.0`). The
+optional length penalty is used only inside COPRO to prefer a smaller authored
+prompt when quality is tied; reported baseline and optimized means remain raw
+correct rates. The exported `optimized_candidate.json` and
+`optimized_prompt.md` never patch production prompts automatically.
+
+## Artifacts and report versioning
+
+Each run directory contains:
+
+- `report.json` — native analyses plus self-contained v2 traces containing the
+  authored oracle, `EvalAnswer`, normalized conclusion results, action ledgers,
+  chronological tool events, diagnostics, and outcome;
+- `report.html` — an interactive dashboard for outcomes, expected conclusions,
+  claim semantic/grounding results, successful/rejected effects, evidence,
+  diagnostics, and the unrestricted final answer.
+
+`reports.load_report()` requires a v2 artifact envelope and rejects missing or
+older scoring artifacts with `legacy scoring artifact; rerun evaluation`.
+There is intentionally no compatibility decoder or rescorer for old reports.
+Saved optimized candidate JSON remains loadable because it contains prompt
+fields only, but it must be evaluated again under v2.
 
 ## Checks
 
 ```bash
-scripts/setup-evals        # uv sync --group dev --group evals
-scripts/check-evals        # ruff + mypy + eval pytest + offline stub eval (no API key, no dspy call)
-scripts/format-evals       # ruff format
-scripts/optimize-evals     # DSPy COPRO run — needs API keys, costs model calls
+scripts/check-evals
+scripts/format-evals
+scripts/markdown-check
+scripts/yaml-check
+scripts/check
 ```
 
-The integration's `scripts/check` is unaffected by this package. `optimize-evals` is intentionally **not** part of `check-evals` (it requires a real model and spends budget).
-
-## How scoring works
-
-Each `(candidate, model, case)` runs until the Pydantic AI agent emits a terminal natural-language answer with no tool calls, or until the global `config.max_tool_calls` cutoff is exceeded and the harness records `tool_calls_exceeded`. It then produces a score in `[0.0, 1.0]`:
-
-- **Required outcome gates** (any failure caps the case at `0.0`): the case has a meaningful structured oracle; `provenance_values` appear in structured payloads when specified; each `tool_result_check_*` finds a successful, relevant tool result shape that is non-empty unless the expected outcome explicitly allows no data with `min_results: 0`; the final tool call did not fail; allowed actions match exact expected side effects, or blocked actions satisfy `blocked_outcome`; and tool calls stay within the global cap.
-- **Successful-call efficiency:** successful cases score `1.0` at or below their tool-call par, then linearly decay to `0.5` at the `10`-call runaway cap. Par is derived from structured case requirements by default (`tool_result_checks` plus one action/blocked-action step) and can be overridden with `tool_call_par` when a case has a known better calibrated expectation.
-- **Allowed actions are exact successful side effects:** split calls may satisfy the exact expected target union for the same domain/service/service-data effect, but supersets, duplicate successful calls, and unrelated successful side effects fail. Failed intermediate action attempts do not fail scoring by themselves; they only count against the global tool-call cap.
-- **Blocked actions are structured side-effect checks:** they require an observed rejected action matching the requested domain, service, target, and service data; no successful action; bounded attempts; and an expected error key. Sandbox/tool enforcement belongs in unit or integration tests, not LLM evals.
-- **Final-answer wording is displayed but never scored:** all score evidence comes from structured tool results, recorded action effects, and observed action rejections.
-- **Tool-call counts are reported and efficiency-scored:** every trace records `tool_call_count`; the default hard cutoff is `10` and remains a runaway stop, while below-cap calls affect successful-case score through `tool_call_efficiency`.
-
-## Adding cases
-
-Edit `data/cases.yaml`. It is a native `pydantic_evals.Dataset` file with one authored `Case` per eval case (`name` mirrors `inputs.id`); `cases.py` loads it with `Dataset.from_file()` and exposes the stable `CASES: list[EvalCase]` surface. `cases_schema.json` is intentionally a focused authoring subset: it rejects generic dataset wrappers, unsupported context fields, and other loader-accepted shapes that this suite does not author. Each case must be a realistic human Home Assistant task, not a tool-contract, sandbox-enforcement, or malformed-input test. Do not reintroduce removed tool-contract/recovery/malformed-input cases as LLM evals; they belong in unit/integration tests. Prompts should not ask for entity IDs, tool names, raw service names, selectors, or implementation details unless a real user would naturally ask that way. Each case references a fixture by `home` name and pins the action setting, the initiating context, and deterministic expectations:
-
-```yaml
-name: llm_sandbox_cases
-cases:
-  - name: my_case
-    inputs:
-      id: my_case
-      category: state
-      home: home_default
-      user_request: What is the living room temperature?
-      actions_enabled: false
-      expected:
-        provenance_values:
-          - sensor.living_temp
-        tool_result_checks:
-          - tool_name: execute_home_code
-            entity_ids:
-              - sensor.living_temp
-            entry_values:
-              - "25.2"
-```
-
-Categories: `state`, `registry`, `history`, `statistics`, `logbook`, `automation`, `action`, `safety`, `system`. No-data is a normal recorder outcome when it is proved with `min_results: 0`. New cases should use the current outcome fields:
-
-- `provenance_values` — supplemental entity IDs, default IDs, selector-expansion facts, or other tool-payload evidence. Provenance alone is not an oracle.
-- `tool_result_checks` — structured evidence for `execute_home_code`, `get_history`, `get_statistics`, or `get_logbook`; `execute_home_code` checks may combine top-level `output` values across successful snippets, but never score `printed` lines or envelope metadata. Recorder/history/statistics/logbook checks prove one successful, relevant result shape that is non-empty unless the expected outcome explicitly allows no data with `min_results: 0`. Use `entry_values_by_entity` when a multi-entity result needs different expected values per entity.
-- `blocked_outcome` — structured expectations for deliberately blocked actions: exact requested `actions`, allowed error keys, maximum attempts, and a required observed rejection.
-- `pagination_complete` — require a recorder result to show a complete cursor chain, beginning with `next_cursor` and ending on a cursor response without one.
-- `actions` — exact allowed successful side effects, with split calls allowed only when they satisfy the expected target union and no extra or duplicate successful side effects occur.
-- `tool_call_par` — optional successful-call efficiency par. Leave unset unless there is a concrete calibrated reason; the scorer derives a par from the case's structured requirements.
-  The global `config.max_tool_calls` remains the hard call cap; use `tool_call_par` only for calibrated efficiency overrides. Scoring also requires `execution_ok` and excludes provider/infra `model_error` cells from means while counting them as incomplete. Recorder evals may be solved by supported selectors through native function calling, but the prompt should only mention selectors when that is natural user phrasing.
-
-Recorder eval execution calls the production `GetHistoryTool` / `GetStatisticsTool` / `GetLogbookTool.run_query(...)` cores with a fixture-backed `RecorderSource`; result envelopes are the production envelopes, including cursor and recoverable-error shapes.
-
-## Adding fixtures
-
-Add a module under `homes/` exposing `snapshot() -> HomeSnapshot` and `recorder() -> dict`, then register it in `homes/__init__.py`. Fixtures are **Python data modules** (there is no JSON deserializer for `HomeSnapshot`); model the helpers on the existing `home_default.py` / `home_minimal.py`, which mirror the production builder's effective-area rule and sorted tuple indexes. Keep fixtures frozen and deterministic.
-
-`homes/home_real.py` is a data-driven fixture baked from a frozen snapshot of a real Home Assistant instance (`home_real_data.json`, Assist-exposed entities only), demonstrating the pattern at scale (3 floors, 19 areas, 24 entities). The real `execute_home_code` runs genuine facade queries against it.
-
-## Adding prompt candidates
-
-`baseline` (auto-built from production `prompts.py`), `profile:<id>` production profiles such as `profile:guided`, `profile:balanced`, and `profile:frontier`, and any `optimized:<path>` candidate (a saved `optimized_candidate.json`) are loadable via `--candidates`. `load_candidates` rejects unknown ids. To evaluate a hand-authored alternative prompt, add a `PromptCandidate` and expose it through `prompts.load_candidates`. The `optimize` command emits optimized candidates through this same seam.
-
-## Artifacts
-
-`eval_data/` is gitignored. Each eval run writes these artifacts under `eval_data/runs/<run_id>/`:
-
-- `report.json` — native analyses from the `EvaluationReport`, run metadata, per-cell scores/checks, and outcome traces (`output`, `tool_call_count`, recorded actions, checks, and error label/detail). It does not store API keys.
-- `report.html` — interactive self-contained dashboard for visual navigation of the candidate × model × case matrix. Open it in a browser; `eval` writes it automatically, and `python -m llm_sandbox_evals report <run_id> --html` regenerates it from `report.json` without model calls.
-
-DSPy optimization runs write `optimized_candidate.json` and `optimized_prompt.md`; if `--cross-eval-models` is set, the cross-eval run directory contains its own `report.json` and `report.html`.
-
-## Scope
-
-**In:** deterministic structured-outcome scoring, successful-call efficiency scoring, tool-call count reporting, multi-model matrix, native `pydantic_evals` `Dataset` / `EvaluationReport` integration, token-enabled Logfire export with console output disabled, Pydantic AI agent tool-calling, offline FunctionModel stub validation, production `execute_home_code` and recorder cores against frozen snapshots, `report.json` artifacts, and DSPy COPRO instruction optimization (export-only; never auto-patches production `prompts.py`).
-
-**Out of scope:** LLM-as-judge scoring, live Home Assistant or recorder DB, CI jobs that call paid models, mutable cross-turn fixture state, and auto-editing production `prompts.py`. GEPA/MIPROv2 (richer feedback-driven or joint demo+instruction search) are not yet wired; COPRO is the implemented optimizer.
+`check-evals` runs Ruff, mypy, eval tests, and the offline stub matrix.
+`scripts/check` is the repository-wide check and must remain unchanged for
+eval work. `scripts/markdown-check` uses markdownlint and `scripts/yaml-check`
+uses yamllint over repository YAML configuration.

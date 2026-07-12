@@ -51,7 +51,7 @@ type NotificationRecord = tuple[str, str | None, str]
 type ConfigEntryRecord = tuple[str, str, str, str, str, str | None, str | None, str | None]
 
 _STATES: tuple[StateRecord, ...] = (
-    ("light.living", "on", "Living Room Light", "2026-06-29T12:00:00+00:00", {"brightness": 210}),
+    ("light.living", "on", "Living Room Light", "2026-06-29T10:00:00+00:00", {"brightness": 210}),
     ("light.bedroom", "off", "Bedroom Light", "2026-06-29T12:00:00+00:00", {}),
     ("light.office_desk", "on", "Office Desk Light", "2026-06-29T12:00:00+00:00", {"brightness": 120}),
     (
@@ -65,6 +65,27 @@ _STATES: tuple[StateRecord, ...] = (
         "sensor.bedroom_humidity",
         "64",
         "Bedroom Humidity",
+        "2026-06-29T12:00:00+00:00",
+        {"device_class": "humidity", "unit_of_measurement": "%"},
+    ),
+    (
+        "sensor.living_humidity",
+        "48",
+        "Living Humidity",
+        "2026-06-29T12:00:00+00:00",
+        {"device_class": "humidity", "unit_of_measurement": "%"},
+    ),
+    (
+        "sensor.office_temp",
+        "23.1",
+        "Office Temperature",
+        "2026-06-29T12:00:00+00:00",
+        {"device_class": "temperature", "unit_of_measurement": "°C"},
+    ),
+    (
+        "sensor.office_humidity",
+        "52",
+        "Office Humidity",
         "2026-06-29T12:00:00+00:00",
         {"device_class": "humidity", "unit_of_measurement": "%"},
     ),
@@ -138,6 +159,39 @@ _ENTITIES: tuple[EntityRecord, ...] = (
         None,
     ),
     (
+        "sensor.living_humidity",
+        "uid-sensor-living-humidity",
+        "device_living_climate",
+        "area_living",
+        ("label_climate",),
+        None,
+        None,
+        "humidity",
+        None,
+    ),
+    (
+        "sensor.office_temp",
+        "uid-sensor-office-temp",
+        "device_office_desk",
+        "area_office",
+        ("label_climate",),
+        None,
+        None,
+        "temperature",
+        None,
+    ),
+    (
+        "sensor.office_humidity",
+        "uid-sensor-office-humidity",
+        "device_office_desk",
+        "area_office",
+        ("label_climate",),
+        None,
+        None,
+        "humidity",
+        None,
+    ),
+    (
         "sensor.office_power",
         "uid-sensor-office-power",
         "device_office_desk",
@@ -194,16 +248,23 @@ _DEVICES: tuple[DeviceRecord, ...] = (
     ("device_bedroom_lamp", "Bedroom Lamp", "area_bedroom", ("label_evening",)),
     ("device_bedroom_climate", "Bedroom Thermostat", "area_bedroom", ("label_climate",)),
     ("device_dehumidifier", "Bedroom Dehumidifier", "area_bedroom", ("label_climate",)),
-    ("device_office_desk", "Office Desk", "area_office", ("label_work",)),
+    ("device_office_desk", "Office Desk", "area_office", ("label_work", "label_climate")),
     ("device_note", "Office Note", "area_office", ("label_work",)),
     ("device_router", "Office Router", "area_office", ("label_work",)),
     ("device_garage", "Garage Opener", None, ()),
 )
 
 _AREAS: tuple[AreaRecord, ...] = (
-    ("area_living", "Living Room", "floor_main", ("label_evening",), "sensor.living_temp", None),
+    (
+        "area_living",
+        "Living Room",
+        "floor_main",
+        ("label_evening",),
+        "sensor.living_temp",
+        "sensor.living_humidity",
+    ),
     ("area_bedroom", "Bedroom", "floor_upstairs", ("label_climate",), None, "sensor.bedroom_humidity"),
-    ("area_office", "Office", "floor_upstairs", ("label_work",), None, None),
+    ("area_office", "Office", "floor_upstairs", ("label_work",), "sensor.office_temp", "sensor.office_humidity"),
 )
 _FLOORS: tuple[FloorRecord, ...] = (("floor_main", "Main Floor", 1), ("floor_upstairs", "Upstairs", 2))
 _LABELS: tuple[LabelRecord, ...] = (
@@ -357,6 +418,30 @@ def recorder() -> RecorderData:
                     "last_updated": "2026-06-29T12:00:00+00:00",
                 },
             ],
+            "sensor.living_humidity": [
+                {
+                    "state": "48",
+                    "attributes": {"unit_of_measurement": "%"},
+                    "last_changed": "2026-06-29T12:00:00+00:00",
+                    "last_updated": "2026-06-29T12:00:00+00:00",
+                }
+            ],
+            "sensor.office_temp": [
+                {
+                    "state": "23.1",
+                    "attributes": {"unit_of_measurement": "°C"},
+                    "last_changed": "2026-06-29T12:00:00+00:00",
+                    "last_updated": "2026-06-29T12:00:00+00:00",
+                }
+            ],
+            "sensor.office_humidity": [
+                {
+                    "state": "52",
+                    "attributes": {"unit_of_measurement": "%"},
+                    "last_changed": "2026-06-29T12:00:00+00:00",
+                    "last_updated": "2026-06-29T12:00:00+00:00",
+                }
+            ],
         },
         "statistics": {
             "sensor.bedroom_humidity": [
@@ -378,7 +463,29 @@ def recorder() -> RecorderData:
                     "max": 65.0,
                     "mean": 64.0,
                 },
-            ]
+            ],
+            "sensor.living_humidity": [
+                {
+                    "start": "2026-06-29T11:00:00+00:00",
+                    "end": "2026-06-29T12:00:00+00:00",
+                    "state": 48.0,
+                    "sum": 48.0,
+                    "min": 47.0,
+                    "max": 49.0,
+                    "mean": 48.0,
+                }
+            ],
+            "sensor.office_humidity": [
+                {
+                    "start": "2026-06-29T11:00:00+00:00",
+                    "end": "2026-06-29T12:00:00+00:00",
+                    "state": 52.0,
+                    "sum": 52.0,
+                    "min": 51.0,
+                    "max": 53.0,
+                    "mean": 52.0,
+                }
+            ],
         },
         "logbook": {
             "light.living": [

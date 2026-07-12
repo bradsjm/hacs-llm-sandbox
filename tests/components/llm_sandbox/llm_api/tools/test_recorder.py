@@ -250,6 +250,7 @@ async def test_logbook_returns_entries_for_visible_entity(
 
     result = await _call_logbook(hass, recorder_entry, {"entity_ids": ["light.bedroom"]})
 
+    assert result["scope"] == {"entity_ids": ["light.bedroom"]}
     assert isinstance(result["entries"], list)
     assert len(result["entries"]) >= 1
     row = result["entries"][-1]
@@ -277,7 +278,45 @@ async def test_logbook_same_scope_cursor_returns_older_page(
 
     assert len(first["entries"]) == 1
     assert len(second["entries"]) == 1
+    assert first["scope"] == second["scope"] == {"entity_ids": ["light.bedroom"]}
     assert first["entries"] != second["entries"]
+
+
+async def test_logbook_scope_is_sorted_and_matches_selector_resolution(
+    hass: HomeAssistant,
+    recorder_entry: MockConfigEntry,
+) -> None:
+    """Explicit and selector scopes expose the same normalized visible IDs."""
+    from homeassistant.helpers import area_registry as ar
+
+    hass.states.async_set("light.bedroom", "on", {"friendly_name": "Bedroom Light"})
+    await _sync_recorder(hass)
+    bedroom = ar.async_get(hass).async_get_area_by_name("Bedroom")
+    assert bedroom is not None
+
+    explicit = await _call_logbook(hass, recorder_entry, {"entity_ids": ["light.bedroom"]})
+    selected = await _call_logbook(hass, recorder_entry, {"area_id": bedroom.id})
+
+    assert explicit["scope"] == selected["scope"] == {"entity_ids": ["light.bedroom"]}
+
+
+async def test_logbook_empty_result_retains_resolved_scope(
+    hass: HomeAssistant,
+    recorder_entry: MockConfigEntry,
+) -> None:
+    """An authorized empty logbook result still identifies its resolved scope."""
+    result = await _call_logbook(
+        hass,
+        recorder_entry,
+        {
+            "entity_ids": ["light.bedroom"],
+            "start": "2000-01-01T00:00:00+00:00",
+            "end": "2000-01-02T00:00:00+00:00",
+        },
+    )
+
+    assert result["scope"] == {"entity_ids": ["light.bedroom"]}
+    assert result["entries"] == []
 
 
 async def test_logbook_unavailable_returns_error_key(
@@ -720,6 +759,82 @@ async def test_history_multi_entity_asymmetric_exhaustion_no_duplicates(
     assert second["entities"]["light.living_room"]["rows"] == []
     # The non-exhausted stream still advances.
     assert second["entities"]["light.bedroom"]["rows"]
+
+
+def test_byte_rejected_sibling_cutoff_progresses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A byte-rejected entity stream remains resumable when its sibling fits."""
+    monkeypatch.setattr(recorder, "MAX_RECORDER_PAGE_BYTES", 8 * 1024)
+    scope = ["sensor.large", "sensor.small"]
+    large_rows = [[f"2026-01-01T00:0{index}:00+00:00", f"large-{index}" + "x" * 9_000] for index in range(3)]
+    pages = {
+        "sensor.large": large_rows,
+        "sensor.small": [["2026-01-01T00:03:00+00:00", "small"]],
+    }
+
+    def payload_for(selected: dict[str, list[list[object]]], next_cutoffs: dict[str, str]) -> JsonObjectType:
+        return cast(
+            JsonObjectType,
+            {
+                "scope": {"entity_ids": scope},
+                "entities": selected,
+                "next_cutoffs": next_cutoffs,
+            },
+        )
+
+    first, first_cutoffs = recorder._fit_recorder_page_bytes(
+        pages,
+        current_cutoffs={},
+        full_next_cutoffs={},
+        ts_of=lambda row: str(row[0]),
+        payload_for=payload_for,
+    )
+
+    assert first["sensor.large"] == []
+    assert first["sensor.small"] == pages["sensor.small"]
+    assert first_cutoffs["sensor.small"] == ""
+    assert first_cutoffs["sensor.large"] > pages["sensor.large"][-1][0]
+    assert _compact_json_bytes(payload_for(first, first_cutoffs)) <= recorder.MAX_RECORDER_PAGE_BYTES
+
+    second_pages = {
+        "sensor.large": pages["sensor.large"],
+        "sensor.small": [],
+    }
+    second, second_cutoffs = recorder._fit_recorder_page_bytes(
+        second_pages,
+        current_cutoffs=first_cutoffs,
+        full_next_cutoffs={},
+        ts_of=lambda row: str(row[0]),
+        payload_for=payload_for,
+    )
+
+    assert second["sensor.large"] == [pages["sensor.large"][-1]]
+    assert second["sensor.small"] == []
+    assert payload_for(first, first_cutoffs)["scope"] == payload_for(second, second_cutoffs)["scope"]
+
+    third, third_cutoffs = recorder._fit_recorder_page_bytes(
+        {"sensor.large": pages["sensor.large"][:2], "sensor.small": []},
+        current_cutoffs=second_cutoffs,
+        full_next_cutoffs={},
+        ts_of=lambda row: str(row[0]),
+        payload_for=payload_for,
+    )
+    fourth, fourth_cutoffs = recorder._fit_recorder_page_bytes(
+        {"sensor.large": pages["sensor.large"][:1], "sensor.small": []},
+        current_cutoffs=third_cutoffs,
+        full_next_cutoffs={},
+        ts_of=lambda row: str(row[0]),
+        payload_for=payload_for,
+    )
+
+    assert third["sensor.large"] == [pages["sensor.large"][1]]
+    assert fourth["sensor.large"] == [pages["sensor.large"][0]]
+    assert fourth_cutoffs == {}
+    assert [row[1] for page in (first, second, third, fourth) for row in page["sensor.large"]] == [
+        row[1] for row in reversed(large_rows)
+    ]
+    assert payload_for(first, first_cutoffs)["scope"] == payload_for(third, third_cutoffs)["scope"]
 
 
 async def test_history_declarative_limit_above_cap_clamps(

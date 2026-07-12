@@ -74,7 +74,7 @@ def test_eval_keeps_stdout_factual_and_writes_artifacts(capsys: pytest.CaptureFi
     run_dir = Path(lines[0].removeprefix("run_dir: "))
     assert lines[0] == f"run_dir: {run_dir}"
     assert lines[1] == f"report_html: {run_dir / 'report.html'}"
-    assert lines[2].startswith("overall_mean: ")
+    assert lines[2].startswith("correct_rate: ")
     assert "\x1b" not in captured.out
     assert (run_dir / "report.json").is_file()
     assert (run_dir / "report.html").is_file()
@@ -132,7 +132,7 @@ def test_eval_reports_completed_cell_error_on_redirected_stderr(
 
     assert exit_code == 0
     assert "cell finished" in captured.err
-    assert "current temperature in the living room" in captured.err
+    assert "current living room temperature" in captured.err
     assert "provider rejected model" in captured.err
     assert "provider rejected model" not in captured.out
 
