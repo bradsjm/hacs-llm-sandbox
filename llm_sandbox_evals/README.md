@@ -14,7 +14,7 @@ uv run --group dev --group evals python -m llm_sandbox_evals eval --models stub
 ```
 
 The deterministic `stub` FunctionModel is keyless and validates the pipeline:
-structured agent output, production tool calls, v2 scoring, and report writing.
+case-selected flat output, production tool calls, v3 scoring, and report writing.
 Every run writes `report.json` and `report.html` under
 `eval_data/runs/<run_id>/`. Standard output contains machine-readable artifact
 paths and correct-rate summaries; interactive progress is written to stderr.
@@ -40,7 +40,7 @@ python -m llm_sandbox_evals report <run_id> [--html] [--runs-dir PATH]
   concurrency 5, a 10-call safety cap, a 75-second model-generation timeout,
   and tool-based structured output. Use `--output-mode json-schema` to request
   provider-native schema output instead.
-- `report` reloads a saved v2 report without model calls. `--html` regenerates
+- `report` reloads a saved v3 report without model calls. `--html` regenerates
   only the self-contained HTML dashboard.
 - `--cases` accepts case IDs or `state`, `registry`, `history`, `statistics`,
   `logbook`, `automation`, `action`, `safety`, and `system`.
@@ -50,17 +50,25 @@ python -m llm_sandbox_evals report <run_id> [--html] [--runs-dir PATH]
   `openai:gpt-4o-mini` or `openrouter:...`; keys come from the environment or
   a gitignored root `.env` file.
 
-## V2 scoring model
+## V3 scoring model
 
-The only model-produced eval result is:
+Code selects exactly one flat model-facing result from each case's oracle:
 
 ```python
-EvalAnswer(answer: str, claims: list[AnswerClaim])
+ActionAnswer(answer: str, success: bool)
+ReadAnswer(answer: str, findings: list[Finding])
+ListAnswer(answer: str, items: list[str])
 ```
 
 `answer` is for display and diagnostics only. It is never parsed, searched, or
-used as evidence. `claims` is a discriminated, extra-forbidden union of these
-typed forms:
+used as evidence. A collection conclusion selects `ListAnswer`; otherwise any
+conclusion selects `ReadAnswer`; a case without conclusions selects
+`ActionAnswer`. Collection takes precedence, and authored cases do not mix
+collection and read conclusions. `ActionAnswer.success` is diagnostic-only and
+never scored.
+
+The six typed claims remain code-side oracle and scoring specifications only;
+models do not emit or negotiate them:
 
 - `value`: one entity, device, area, automation, repair, notification, or
   service field and scalar value;
@@ -74,7 +82,7 @@ typed forms:
 - `no_data`: an empty history, statistics, logbook, or automation source with an
   exact resolved entity scope.
 
-Authored v2 conclusions use exactly one of these assertions:
+Authored oracle-version-2 conclusions use exactly one of these assertions:
 
 | Assertion        | Meaning                                                             |
 | ---------------- | ------------------------------------------------------------------- |
@@ -84,11 +92,15 @@ Authored v2 conclusions use exactly one of these assertions:
 | `contains_items` | A collection contains every authored item.                          |
 | `empty`          | The source is empty and its resolved scope exactly matches.         |
 
-Every expected conclusion must have a semantically matching answer claim and a
-grounded normalized fact. All submitted claims must also be grounded, so an
-extra unrelated claim makes the cell incorrect. Aggregates are recomputed from
-all declared source records; the expected number appearing in prose or a
-different record is not evidence.
+Every expected read conclusion must have a matching flat finding and grounded
+normalized evidence. Finding subjects identify the authored subject while
+values and timestamps distinguish the expected fact; aggregate subjects may be
+one of the declared subjects and values use the authored tolerance. Relations
+without a useful scalar representation are matched by subject and grounded by
+the code-side relation oracle. Every submitted finding and list item must also
+correspond to normalized evidence, so extra ungrounded content makes the cell
+incorrect. Aggregates are still recomputed from all declared source records;
+the expected number appearing in prose or a different record is not evidence.
 
 Evidence is path-independent: successful production envelopes from any number
 of calls, turns, or parallel batches are normalized and unioned. A failed call
@@ -102,8 +114,9 @@ declarative-history envelope is `{window, scope: {entity_ids}, rows}` and the
 logbook envelope is `{window, scope: {entity_ids}, entries}`. `scope.entity_ids`
 is the sorted, visible scope resolved by the production query core. It appears
 on successful empty results, normal pages, and cursor continuations. It is not
-copied from the request and does not grant access. A no-data claim must be
-proven by one successful envelope whose scope exactly matches and whose
+copied from the request and does not grant access. A no-data `ReadAnswer` must
+contain no findings, while its code-side oracle scope must be proven by one
+successful envelope whose scope exactly matches and whose
 same-envelope source collection has no relevant rows; scope fragments from
 separate calls are not combined. History duration claims require a valid,
 non-conflicting `window.start`/`window.end` pair and include each entity's
@@ -129,15 +142,15 @@ unexpected effect.
 
 Each cell is exactly `correct`, `incorrect`, or `incomplete`:
 
-- `correct` means all conclusions, claims, and action expectations pass; its
+- `correct` means all conclusions, submitted findings/items, and action expectations pass; its
   native score is `1.0`.
 - `incorrect` means the model completed but semantic grounding or action
   expectations failed; its native score is `0.0`.
 - `incomplete` means provider, transport, timeout, model-protocol, or harness
   failure. It is excluded from correct-rate denominators and shown as coverage.
 
-The hard call cap is a safety stop. Cap exhaustion without a valid final
-`EvalAnswer` is `incorrect`, not an operational penalty. Calls, failed calls,
+The hard call cap is a safety stop. Cap exhaustion without a valid final flat
+answer is `incorrect`, not an operational penalty. Calls, failed calls,
 repairs, turns, parallelism, elapsed time, token usage, cost, and cap status
 are diagnostics only; they cannot change a completed cell's score or rank.
 Reports rank by correct rate, then the minimum completed-model correct rate,
@@ -213,20 +226,20 @@ only its known `InputField`/`OutputField` prefix deprecation warning.
 
 Each run directory contains:
 
-- `report.json` — native analyses plus self-contained v2 traces containing the
-  authored oracle, `EvalAnswer`, normalized conclusion results, action ledgers,
+- `report.json` — native analyses plus self-contained v3 traces containing the
+  authored oracle, the selected flat answer, normalized conclusion results, action ledgers,
   chronological tool events, diagnostics, outcome, and per-trace
-  `scoring_version: 2`;
+  `scoring_version: 3`;
 - `report.html` — an interactive dashboard for outcomes, expected conclusions,
-  claim semantic/grounding results, successful/rejected effects, evidence,
+  finding/item semantic and grounding results, successful/rejected effects, evidence,
   diagnostics, and the unrestricted final answer.
 
-`reports.load_report()` requires version 2 on both the artifact envelope and
+`reports.load_report()` requires version 3 on both the artifact envelope and
 every trace, and rejects missing or older markers with
 `legacy scoring artifact; rerun evaluation`.
-Only scoring v2 artifacts are accepted; unsupported artifacts must be rerun.
+Only scoring v3 artifacts are accepted; unsupported artifacts must be rerun.
 Saved optimized candidate JSON remains loadable because it contains prompt
-fields only, but it must be evaluated again under v2.
+fields only, but it must be evaluated again under v3.
 
 ## Checks
 

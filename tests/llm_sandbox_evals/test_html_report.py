@@ -6,9 +6,9 @@ from llm_sandbox_evals.html_report import render_html, write_html
 import pytest
 
 
-def test_render_html_embeds_v2_trace_data_island() -> None:
+def test_render_html_embeds_v3_trace_data_island() -> None:
     report = _report(_case())
-    rendered = render_html(report, run_id="v2-run", created_at="2026-07-12T00:00:00+00:00")
+    rendered = render_html(report, run_id="v3-run", created_at="2026-07-12T00:00:00+00:00")
 
     assert rendered.startswith("<!doctype html>")
     island = _data_island(rendered)
@@ -20,6 +20,7 @@ def test_render_html_embeds_v2_trace_data_island() -> None:
     assert island["cases"][0]["output"]["tool_events"][0]["output"]["execution"]["status"] == "ok"
     assert island["cases"][0]["output"]["diagnostics"]["tool_calls"] == 2
     assert island["cases"][0]["output"]["answer"]["answer"] == "The light is on."
+    assert island["cases"][0]["output"]["answer"]["findings"][0]["subject"] == "sensor.living_temp"
 
 
 @pytest.mark.parametrize(
@@ -32,14 +33,14 @@ def test_render_html_embeds_v2_trace_data_island() -> None:
     ],
     ids=["img-breakout", "script-breakout", "uppercase-breakout", "mixedcase-breakout"],
 )
-def test_render_html_escapes_v2_answer_script_breakout(dangerous: str) -> None:
+def test_render_html_escapes_v3_answer_script_breakout(dangerous: str) -> None:
     report = _report(_case(answer_text=dangerous))
     rendered = render_html(report)
 
     assert "</" not in rendered.split('id="report-data">', 1)[1].split("</script>", 1)[0]
 
 
-def test_render_html_keeps_v2_detail_projection_and_raw_trace_fields() -> None:
+def test_render_html_keeps_v3_detail_projection_and_raw_trace_fields() -> None:
     rendered = render_html(_report(_case()))
 
     for marker in (
@@ -57,7 +58,7 @@ def test_render_html_keeps_v2_detail_projection_and_raw_trace_fields() -> None:
     assert "get_logbook" in rendered
     markers = (
         "Authored expected conclusions and effects",
-        "Submitted claims and grounding",
+        "Submitted findings/items and grounding",
         "Action ledgers and results",
         "Chronological tool evidence",
         "Diagnostics",
@@ -68,7 +69,7 @@ def test_render_html_keeps_v2_detail_projection_and_raw_trace_fields() -> None:
     assert '.map((event, index) => toolCard(event.tool_name === "execute_home_code")(event, index))' in rendered
 
 
-def test_write_html_round_trip_preserves_v2_trace(tmp_path: Path) -> None:
+def test_write_html_round_trip_preserves_v3_trace(tmp_path: Path) -> None:
     run_dir = tmp_path / "20260709-120102-123456"
     run_dir.mkdir()
     (run_dir / "report.json").write_text(json.dumps(_report(_case())), encoding="utf-8")
@@ -97,6 +98,7 @@ def _case(*, answer_text: str = "The light is on.") -> dict[str, object]:
         "attribute_name": None,
         "value": "on",
     }
+    finding = {"subject": "sensor.living_temp", "value": "on", "unit": None, "when": None}
     expected = {
         "conclusions": [{"claim": value_claim, "assertion": "equals", "tolerance": None}],
         "actions": [
@@ -105,33 +107,33 @@ def _case(*, answer_text: str = "The light is on.") -> dict[str, object]:
         "blocked_outcome": None,
     }
     return {
-        "name": "baseline/stub/case-v2",
+        "name": "baseline/stub/case-v3",
         "inputs": {
-            "case_id": "case-v2",
+            "case_id": "case-v3",
             "candidate_id": "baseline",
             "model_id": "stub",
             "home": "home_minimal",
             "category": "action",
         },
         "metadata": {
-            "case_id": "case-v2",
+            "case_id": "case-v3",
             "candidate_id": "baseline",
             "model_id": "stub",
             "home": "home_minimal",
             "category": "action",
         },
         "output": {
-            "case_id": "case-v2",
+            "case_id": "case-v3",
             "category": "state",
             "candidate_id": "baseline",
             "model_id": "stub",
-            "answer": {"answer": answer_text, "claims": [value_claim]},
+            "answer": {"answer": answer_text, "findings": [finding]},
             "expected": expected,
             "outcome": {"state": "correct", "reason": "ok", "score": 1.0},
             "conclusions": [
                 {
                     "expected": expected["conclusions"][0],
-                    "answer_claim": value_claim,
+                    "matched_finding": finding,
                     "semantic_status": "matched",
                     "grounding_status": "grounded",
                     "reason": "ok",
@@ -187,9 +189,10 @@ def _case(*, answer_text: str = "The light is on.") -> dict[str, object]:
             },
             "provider_error": None,
             "user_request": "What is the living room temperature?",
+            "scoring_version": 3,
         },
         "scores": {
-            "score": {"name": "score", "value": 1.0, "reason": "ok", "source": "evaluator", "evaluator_version": "2"}
+            "score": {"name": "score", "value": 1.0, "reason": "ok", "source": "evaluator", "evaluator_version": "3"}
         },
         "labels": {"outcome": "correct", "incomplete": False, "failure_classification": "normal"},
         "assertions": {},

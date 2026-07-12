@@ -17,8 +17,11 @@ sandbox-enforcement, malformed-input, or unit/integration-test cases.
 
 - Every case is oracle version 2 (`oracle_version: 2`). Preserve the existing
   nine categories and their 80-case distribution.
-- The final model result is an `EvalAnswer`: display-only `answer` text plus a
-  typed `claims` list. The answer text is never parsed or scored.
+- The final model result is one code-selected flat shape: `ActionAnswer`,
+  `ReadAnswer`, or `ListAnswer`. Every shape has display-only `answer` text;
+  action answers add diagnostic-only `success`, read answers add scalar
+  `findings`, and list answers add string `items`. The answer text and action
+  success flag are never parsed or scored.
 - Every read/answer case declares one or more typed `ExpectedConclusion`s.
   Action-only cases may have no conclusions. A case must otherwise declare an
   allowed action ledger or a blocked-action outcome.
@@ -54,7 +57,8 @@ sandbox-enforcement, malformed-input, or unit/integration-test cases.
 Each completed cell has exactly one state: `correct`, `incorrect`, or
 `incomplete`. Correctness requires every expected conclusion to be both
 semantically matched and grounded in normalized successful evidence; all
-submitted claims must also be grounded. Action effects are checked separately.
+submitted findings/items must also be grounded. The six claim types remain
+oracle/scoring-only specifications. Action effects are checked separately.
 The derived native score is binary: `1.0` for correct and `0.0` otherwise.
 
 Provider, transport, timeout, model-protocol, and unexpected harness failures
@@ -62,7 +66,7 @@ are `incomplete` and are excluded from quality denominators. Tool calls,
 failed calls, repairs, model turns, parallel batches, elapsed time, token
 usage, cost, and cap exhaustion are diagnostics only. The hard tool-call cap
 remains a runaway safety stop; exhausting it without a valid final
-`EvalAnswer` is `incorrect`, not an operational penalty.
+flat answer is `incorrect`, not an operational penalty.
 Read-only traces have no synthetic action result, and zero-completion pair,
 model, or category quality rates are `N/A` rather than zero.
 
@@ -109,11 +113,11 @@ fresh scoped HomeSnapshot -> EvalRuntime -> production tool cores
         |                                      v
         |                         successful tool envelopes + action records
         v                                      |
-Pydantic AI Agent -> EvalAnswer(answer, claims)
+Pydantic AI Agent -> ActionAnswer | ReadAnswer | ListAnswer
         |                                      |
         +--------------------+-----------------+
                              v
-          normalize evidence / score claims / score action ledgers
+       normalize evidence / score findings or items / score action ledgers
                              |
                              v
                  CaseTrace -> native report + HTML
@@ -124,15 +128,15 @@ Pydantic AI Agent -> EvalAnswer(answer, claims)
 
 ### Module map
 
-- `schema.py` — versioned `EvalAnswer`/claim models, v2 case oracles,
+- `schema.py` — versioned flat answer models, oracle-only claim models, v2 case oracles,
   `CaseOutcome`, `ConclusionResult`, action ledgers, diagnostics, and
-  self-contained `CaseTrace` records with required scoring version 2.
+  self-contained `CaseTrace` records with required scoring version 3.
 - `cases.py` and `data/cases.yaml` — native Dataset loading and the 80 authored
   cases; `data/cases_schema.json` is the focused v2 authoring schema.
 - `homes/` — frozen Python fixture modules and the `get_home()` registry.
 - `prompts.py` — production-profile candidates and prompt-size helpers.
 - `agent_runner.py` — Pydantic AI agent, production tool schemas, and offline
-  `FunctionModel` stub; the agent output type is `EvalAnswer`.
+  `FunctionModel` stub; the output shape is selected code-side per case.
 - `runtime.py` — fixture-backed recorder source and eval runtime construction.
 - `tools.py` — evaluation scope, fixture scoping, recording action seam, and
   action normalization; it contains no tool emulators.
@@ -152,8 +156,8 @@ Pydantic AI Agent -> EvalAnswer(answer, claims)
   quality ranking by correct rate rather than operational diagnostics.
 - `terminal.py` — stderr-only live progress and correct/incorrect/incomplete
   summaries.
-- `reports.py` — v2 `report.json` persistence and strict artifact loading.
-- `html_report.py` — self-contained report dashboard with claims, grounding,
+- `reports.py` — v3 `report.json` persistence and strict artifact loading.
+- `html_report.py` — self-contained report dashboard with findings/items, grounding,
   ledgers, all chronological evidence, diagnostics, and answer details.
 - `optimize_dspy.py` — DSPy COPRO prompt export and binary harness metric.
 - `cli.py` / `__main__.py` — `eval`, `report`, and `optimize` commands.

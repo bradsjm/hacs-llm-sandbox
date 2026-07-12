@@ -151,11 +151,12 @@ def _build_parser() -> argparse.ArgumentParser:
         description=(
             "Development-only eval harness for the llm_sandbox Home Assistant integration.\n"
             "It runs the integration's real LLM tools against frozen fixtures, evaluates\n"
-            "structured claims and evidence plus action effects, and ranks candidates by binary correctness."
+            "case-selected flat answers against grounded oracle evidence and action effects, and ranks candidates "
+            "by binary correctness."
         ),
         epilog=(
             "Examples:\n"
-            "  # Offline, no API key — evaluates structured claims and action effects:\n"
+            "  # Offline, no API key — evaluates flat answers and action effects:\n"
             "  python -m llm_sandbox_evals eval --models stub\n"
             "\n"
             "  # Score real models (keys read from env/.env):\n"
@@ -187,7 +188,8 @@ def _add_eval_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPar
         description=(
             "Run the eval matrix: for every (prompt candidate x language model x test case),\n"
             "ask the model to use the available tools over one or more turns against a\n"
-            "frozen Home Assistant snapshot, then evaluates structured claims, grounded evidence, and actions.\n"
+            "frozen Home Assistant snapshot, then evaluates flat findings/items, grounded oracle evidence, and "
+            "actions.\n"
             "Results are binary correct/incorrect; provider failures are incomplete. Artifacts are written under the\n"
             "runs directory; a native pydantic-evals summary is printed to stdout."
         ),
@@ -313,7 +315,7 @@ def _add_optimize_parser(subparsers: argparse._SubParsersAction[argparse.Argumen
         description=(
             "Use DSPy's COPRO instruction optimizer to rewrite the execute_home_code\n"
             "instruction. The REAL eval harness is the metric: each proposed instruction is\n"
-            "evaluated through structured EvalAnswer claims, grounded tool evidence, and action ledgers against the\n"
+            "evaluated through case-selected flat answers, grounded oracle evidence, and action ledgers against the\n"
             "target model. The winning instruction is exported for human review; production\n"
             "prompts.py is never auto-patched."
         ),

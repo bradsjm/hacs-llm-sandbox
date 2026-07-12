@@ -1,4 +1,4 @@
-"""Versioned contracts for structured eval answers and scoring traces."""
+"""Versioned contracts for flat eval answers, oracle claims, and scoring traces."""
 # The models below are deliberately field-oriented public schema; class-level
 # docstrings would add noise without improving the generated contract.
 # ruff: noqa: D101, D102, D105, UP037
@@ -13,6 +13,7 @@ type JsonScalar = str | int | float | bool | None
 type SubjectKind = Literal["entity", "device", "area", "automation", "repair", "notification", "service"]
 
 
+# Claims are authored oracle and scoring specifications; models never emit them.
 class _Claim(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -131,12 +132,40 @@ type AnswerClaim = Annotated[
 ]
 
 
-class EvalAnswer(BaseModel):
-    """The only model-produced eval result; answer prose is display-only."""
-
+class Finding(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    answer: str
-    claims: list[AnswerClaim] = Field(default_factory=list)
+
+    subject: str = Field(
+        min_length=1,
+        description="Entity, device, area, automation, repair, notification, or service id.",
+    )
+    value: JsonScalar = Field(description="Observed scalar value for the subject.")
+    unit: str | None = Field(default=None, description="Unit associated with the observed value, when applicable.")
+    when: str | None = Field(default=None, description="ISO timestamp for a time-scoped finding, when applicable.")
+
+
+class ActionAnswer(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    answer: str = Field(description="Unrestricted display-only answer text; it is never parsed or scored.")
+    success: bool = Field(description="Diagnostic action-success assessment; it is displayed but never scored.")
+
+
+class ReadAnswer(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    answer: str = Field(description="Unrestricted display-only answer text; it is never parsed or scored.")
+    findings: list[Finding] = Field(default_factory=list, description="Flat observed facts supporting the answer.")
+
+
+class ListAnswer(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    answer: str = Field(description="Unrestricted display-only answer text; it is never parsed or scored.")
+    items: list[str] = Field(default_factory=list, description="Identifiers comprising the requested collection.")
+
+
+type AnswerShape = ActionAnswer | ReadAnswer | ListAnswer
 
 
 class ExpectedConclusion(BaseModel):
@@ -215,6 +244,16 @@ class Expected:
             raise ValueError("duplicate expected conclusions are not allowed")
 
 
+def select_answer_shape(expected: Expected) -> type[AnswerShape]:
+    """Select the single flat model-facing shape for an authored oracle."""
+    # Collection takes precedence; authored cases never mix collection and read conclusions.
+    if any(conclusion.claim.kind == "collection" for conclusion in expected.conclusions):
+        return ListAnswer
+    if expected.conclusions:
+        return ReadAnswer
+    return ActionAnswer
+
+
 @dataclass(frozen=True, slots=True)
 class EvalCase:
     id: str
@@ -242,7 +281,7 @@ class ToolEvent:
 @dataclass(frozen=True, slots=True)
 class ConclusionResult:
     expected: ExpectedConclusion
-    answer_claim: AnswerClaim | None
+    matched_finding: Finding | None
     semantic_status: Literal["matched", "mismatched"]
     grounding_status: Literal["grounded", "ungrounded"]
     reason: str
@@ -292,7 +331,7 @@ class CaseTrace:
     category: str
     candidate_id: str
     model_id: str
-    answer: EvalAnswer | None
+    answer: AnswerShape | None
     expected: Expected
     outcome: CaseOutcome
     conclusions: tuple[ConclusionResult, ...]
@@ -300,7 +339,7 @@ class CaseTrace:
     action_ledger: ActionLedger
     tool_events: tuple[ToolEvent, ...]
     diagnostics: EvalDiagnostics
-    scoring_version: Literal[2] = 2
+    scoring_version: Literal[3] = 3
     provider_error: str | None = None
     user_request: str = ""
     conversation_id: str | None = None

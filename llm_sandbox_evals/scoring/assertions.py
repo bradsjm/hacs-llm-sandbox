@@ -1,48 +1,61 @@
-"""Finite semantic assertion operations."""
+"""Finite semantic assertion operations for flat model answers."""
 
 from math import isclose
 
-from llm_sandbox_evals.schema import AggregateClaim, AnswerClaim, ExpectedConclusion, ValueClaim
+from llm_sandbox_evals.schema import (
+    AggregateClaim,
+    AnswerClaim,
+    CollectionClaim,
+    EventClaim,
+    Finding,
+    RelationClaim,
+    ValueClaim,
+)
 
 
-def assertion_matches(expected: ExpectedConclusion, actual: AnswerClaim) -> bool:
-    """Compare only authored typed fields; no prose or token search is involved."""
-    if expected.claim.kind != actual.kind:
-        return False
-    if expected.assertion == "equals":
-        return expected.claim == actual
-    if expected.assertion == "approximate":
-        if isinstance(expected.claim, ValueClaim) and isinstance(actual, ValueClaim):
-            return _same_value_identity(expected.claim, actual) and _close(
-                actual.value, expected.claim.value, expected.tolerance or 0.0
-            )
-        if isinstance(expected.claim, AggregateClaim) and isinstance(actual, AggregateClaim):
-            return _same_aggregate_identity(expected.claim, actual) and _close(
-                actual.value, expected.claim.value, expected.tolerance or 0.0
-            )
-        return False
-    if expected.assertion == "empty":
-        return expected.claim == actual
-    expected_items = set(expected.claim.items)  # type: ignore[union-attr]
-    actual_items = set(actual.items)  # type: ignore[union-attr]
-    return actual_items == expected_items if expected.assertion == "exact_items" else expected_items <= actual_items
+def _read_finding_matches(claim: AnswerClaim, finding: Finding, tolerance: float | None) -> bool:
+    """Match one flat finding to an authored read claim without parsing prose."""
+    if isinstance(claim, ValueClaim):
+        return finding.subject == claim.subject_id and _same_scalar(finding.value, claim.value, tolerance)
+    if isinstance(claim, EventClaim):
+        return (
+            finding.subject == claim.entity_id
+            and finding.value == claim.value
+            and (claim.when is None or finding.when == claim.when)
+        )
+    if isinstance(claim, AggregateClaim):
+        return (
+            finding.subject in claim.subject_ids
+            and _same_scalar(finding.value, claim.value, tolerance)
+            and (claim.unit is None or finding.unit == claim.unit)
+        )
+    if isinstance(claim, RelationClaim):
+        return finding.subject == claim.subject_id and finding.value == claim.object_id
+    return False
 
 
-def _same_value_identity(expected: object, actual: object) -> bool:
-    fields = ("subject_kind", "subject_id", "field", "attribute_name")
-    return all(getattr(expected, field) == getattr(actual, field) for field in fields)
+def _list_items_match(claim: CollectionClaim, items: list[str], assertion: str) -> bool:
+    """Apply an authored finite set assertion to submitted collection items."""
+    expected_items = set(claim.items)
+    actual_items = set(items)
+    return actual_items == expected_items if assertion == "exact_items" else expected_items <= actual_items
 
 
-def _same_aggregate_identity(expected: object, actual: object) -> bool:
-    fields = ("source", "operator", "subject_ids", "input_field", "input_value", "unit")
-    return all(getattr(expected, field) == getattr(actual, field) for field in fields)
+def _same_scalar(actual: object, expected: object, tolerance: float | None) -> bool:
+    actual_number, expected_number = _number(actual), _number(expected)
+    if actual_number is not None and expected_number is not None:
+        return isclose(actual_number, expected_number, abs_tol=tolerance or 0.0, rel_tol=0.0)
+    return actual == expected
 
 
-def _close(actual: object, expected: object, tolerance: float) -> bool:
-    return (
-        isinstance(actual, (int, float))
-        and not isinstance(actual, bool)
-        and isinstance(expected, (int, float))
-        and not isinstance(expected, bool)
-        and isclose(float(actual), float(expected), abs_tol=tolerance, rel_tol=0.0)
-    )
+def _number(value: object) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return None
+    return None

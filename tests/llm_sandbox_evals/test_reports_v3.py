@@ -8,7 +8,7 @@ from llm_sandbox_evals.reports import load_report, rescore_trace, write_report_j
 import pytest
 
 
-async def test_v2_report_round_trip_rescores_from_stored_trace(tmp_path: Path) -> None:
+async def test_v3_report_round_trip_rescores_from_stored_trace(tmp_path: Path) -> None:
     config = EvalConfig(
         models=["stub"],
         candidates=["baseline"],
@@ -17,9 +17,9 @@ async def test_v2_report_round_trip_rescores_from_stored_trace(tmp_path: Path) -
         homes=None,
         runs_dir=tmp_path,
     )
-    report = await run_matrix(config, run_id="v2-round-trip")
+    report = await run_matrix(config, run_id="v3-round-trip")
     original = report.cases[0].output
-    run_dir = write_report_json(report, config, run_id="v2-round-trip-written")
+    run_dir = write_report_json(report, config, run_id="v3-round-trip-written")
 
     loaded = load_report(run_dir)
     restored = loaded.cases[0].output
@@ -30,8 +30,8 @@ async def test_v2_report_round_trip_rescores_from_stored_trace(tmp_path: Path) -
     assert restored.answer == original.answer
     assert restored.tool_events == original.tool_events
     assert restored.action_ledger == original.action_ledger
-    assert restored.scoring_version == 2
-    assert json.loads((run_dir / "report.json").read_text(encoding="utf-8"))["scoring_version"] == 2
+    assert restored.scoring_version == 3
+    assert json.loads((run_dir / "report.json").read_text(encoding="utf-8"))["scoring_version"] == 3
 
 
 def test_legacy_or_incomplete_report_is_rejected_before_validation(tmp_path: Path) -> None:
@@ -60,7 +60,7 @@ def test_legacy_report_without_scoring_version_is_rejected(tmp_path: Path) -> No
         load_report(run_dir)
 
 
-@pytest.mark.parametrize("trace_version", [None, 1], ids=["missing", "invalid"])
+@pytest.mark.parametrize("trace_version", [None, 1, 2], ids=["missing", "invalid", "legacy-v2"])
 async def test_report_rejects_missing_or_invalid_trace_version(tmp_path: Path, trace_version: int | None) -> None:
     config = EvalConfig(
         models=["stub"],

@@ -1,6 +1,6 @@
 """Pydantic AI agent wiring for evals over production tool cores."""
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 import json
 import re
 from typing import Literal, Protocol, cast
@@ -50,7 +50,14 @@ from voluptuous_openapi import convert
 
 from llm_sandbox_evals.config import EvalOutputMode
 from llm_sandbox_evals.runtime import EvalRuntime
-from llm_sandbox_evals.schema import AggregateClaim, AnswerClaim, EvalAnswer, EventClaim, ValueClaim
+from llm_sandbox_evals.schema import (
+    ActionAnswer,
+    AnswerShape,
+    Finding,
+    ListAnswer,
+    ReadAnswer,
+    select_answer_shape,
+)
 
 _ENTITY_ID_RE = re.compile(r"\b[a-z_]+\.[a-z0-9_]+\b")
 _FIXED_END = "2026-06-29T12:00:00+00:00"
@@ -68,11 +75,16 @@ class _EvalTool(Protocol):
 
 def build_agent(
     runtime: EvalRuntime, model_id: str, output_mode: EvalOutputMode = "tool"
-) -> Agent[EvalRuntime, EvalAnswer]:
+) -> Agent[EvalRuntime, AnswerShape]:
     """Build a Pydantic AI agent with production schemas and eval deps."""
     tools = build_agent_tools(runtime)
+    shape = select_answer_shape(runtime.case.expected)
     # Branch boundary: keep the default tool protocol explicit while allowing providers with native schemas.
-    output_type = ToolOutput(EvalAnswer) if output_mode == "tool" else NativeOutput(EvalAnswer)
+    output_type: ToolOutput[AnswerShape] | NativeOutput[AnswerShape] = (
+        cast(ToolOutput[AnswerShape], ToolOutput(shape))
+        if output_mode == "tool"
+        else cast(NativeOutput[AnswerShape], NativeOutput(shape))
+    )
     return Agent(
         model=make_model(model_id),
         tools=tools,
@@ -334,7 +346,14 @@ async def _stub_respond(messages: list[ModelMessage], info: AgentInfo) -> ModelR
 
 def _stub_output_response(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
     """Emit a structured result using the request's configured output protocol."""
-    answer = EvalAnswer(answer=_all_tool_content(messages) or "", claims=_stub_claims(messages))
+    shape = _select_stub_shape(info)
+    answer_text = _all_tool_content(messages) or ""
+    builders: dict[type[AnswerShape], Callable[[], AnswerShape]] = {
+        ReadAnswer: lambda: ReadAnswer(answer=answer_text, findings=_stub_findings(messages)),
+        ListAnswer: lambda: ListAnswer(answer=answer_text, items=_stub_items(messages)),
+        ActionAnswer: lambda: ActionAnswer(answer=answer_text, success=True),
+    }
+    answer = builders[shape]()
     # Branch boundary: native output providers receive the structured payload as their response body.
     if info.model_request_parameters.output_mode == "native":
         return ModelResponse(parts=[TextPart(content=answer.model_dump_json())])
@@ -352,116 +371,139 @@ def _stub_output_response(messages: list[ModelMessage], info: AgentInfo) -> Mode
     )
 
 
-def _stub_claims(messages: list[ModelMessage]) -> list[AnswerClaim]:
-    """Derive a small set of claims from copied production result records."""
-    claims: list[AnswerClaim] = []
+def _select_stub_shape(info: AgentInfo) -> type[AnswerShape]:
+    """Recover the selected flat output shape from native or tool request schemas."""
+    # Branch boundary: native output has no output tool, so inspect its wrapped object schema directly.
+    if info.model_request_parameters.output_mode == "native":
+        output_object = info.model_request_parameters.output_object
+        if output_object is None:
+            raise RuntimeError("structured native eval output schema was not registered")
+        schema = output_object.json_schema
+    else:
+        if not info.output_tools:
+            raise RuntimeError("structured eval output tool was not registered")
+        schema = info.output_tools[0].parameters_json_schema
+    properties = schema.get("properties")
+    keys = properties.keys() if isinstance(properties, dict) else ()
+    registry: dict[str, type[AnswerShape]] = {
+        "findings": ReadAnswer,
+        "items": ListAnswer,
+        "success": ActionAnswer,
+    }
+    selected = {registry[key] for key in keys if key in registry}
+    if len(selected) != 1:
+        raise RuntimeError("structured eval output schema did not identify one answer shape")
+    return selected.pop()
+
+
+def _stub_findings(messages: list[ModelMessage]) -> list[Finding]:
+    """Derive flat findings from copied production result records."""
+    findings: list[Finding] = []
     for message in messages:
         if not isinstance(message, ModelRequest):
             continue
         for part in message.parts:
             if not isinstance(part, ToolReturnPart) or not isinstance(part.content, dict):
                 continue
-            _claims_from_value(part.content.get("output"), claims)
+            _findings_from_value(part.content.get("output"), findings)
             entities = part.content.get("entities")
             if isinstance(entities, dict):
                 for entity_id, record in entities.items():
                     if isinstance(entity_id, str) and isinstance(record, dict):
-                        _claims_from_value({"entity_id": entity_id, "rows": record.get("rows")}, claims)
+                        _findings_from_value({"entity_id": entity_id, "rows": record.get("rows")}, findings)
+            statistics = part.content.get("statistics")
+            if isinstance(statistics, dict):
+                for statistic_id, record in statistics.items():
+                    if isinstance(statistic_id, str) and isinstance(record, dict):
+                        _findings_from_value({"entity_id": statistic_id, "rows": record.get("rows")}, findings)
             entries = part.content.get("entries")
             if isinstance(entries, list):
                 for entry in entries:
                     if isinstance(entry, dict) and isinstance(entry.get("entity_id"), str):
-                        claims.append(  # noqa: PERF401 - constructing validated Pydantic claims is clearer here.
-                            EventClaim(
-                                source="logbook",
-                                entity_id=entry["entity_id"],
-                                event_kind="logbook_message",
+                        findings.append(  # noqa: PERF401 - validated model construction is clearer here.
+                            Finding(
+                                subject=entry["entity_id"],
                                 value=str(entry.get("message", "")),
                                 when=entry.get("when") if isinstance(entry.get("when"), str) else None,
                             )
                         )
     user_request = _first_user_content(messages).lower()
     history_values = [
-        (claim.entity_id, float(claim.value))
-        for claim in claims
-        if isinstance(claim, EventClaim) and claim.source == "history" and _is_numeric(claim.value)
+        (finding.subject, number)
+        for finding in findings
+        if finding.when is not None and (number := _as_float(finding.value)) is not None
     ]
     if "living room temperature reading in the last 24 hours" in user_request:
         values = [value for entity_id, value in history_values if entity_id == "sensor.living_temp"]
         if values:
-            claims.append(
-                AggregateClaim(
-                    source="history",
-                    operator="maximum",
-                    subject_ids=["sensor.living_temp"],
-                    input_field="state",
-                    input_value="state",
-                    value=max(values),
-                    unit="°C",
-                )
-            )
+            findings.append(Finding(subject="sensor.living_temp", value=max(values), unit="°C"))
     if "every outside temperature reading in the last 24 hours" in user_request:
         values = [value for entity_id, value in history_values if entity_id == "sensor.tempest_temperature"]
         if values:
-            claims.append(
-                AggregateClaim(
-                    source="history",
-                    operator="maximum",
-                    subject_ids=["sensor.tempest_temperature"],
-                    input_field="state",
-                    input_value="state",
-                    value=max(values),
-                    unit="°F",
-                )
-            )
-    return claims
+            findings.append(Finding(subject="sensor.tempest_temperature", value=max(values), unit="°F"))
+    return findings
 
 
-def _claims_from_value(value: object, claims: list[AnswerClaim]) -> None:
+def _findings_from_value(value: object, findings: list[Finding]) -> None:
     if isinstance(value, list):
         for item in value:
-            _claims_from_value(item, claims)
+            _findings_from_value(item, findings)
         return
     if not isinstance(value, dict):
         return
     entity_id = value.get("entity_id")
     if isinstance(entity_id, str) and "state" in value:
-        claims.append(ValueClaim(subject_kind="entity", subject_id=entity_id, field="state", value=value["state"]))
+        findings.append(Finding(subject=entity_id, value=value["state"]))
     if isinstance(entity_id, str) and isinstance(value.get("duration_seconds"), int | float):
-        claims.append(
-            AggregateClaim(
-                source="states",
-                operator="duration_seconds",
-                subject_ids=[entity_id],
-                input_field="none",
-                value=value["duration_seconds"],
-                unit="seconds",
-            )
-        )
+        findings.append(Finding(subject=entity_id, value=value["duration_seconds"], unit="seconds"))
     attributes = value.get("attributes")
     if isinstance(entity_id, str) and isinstance(attributes, dict):
         for name, item in attributes.items():
             if isinstance(name, str) and (isinstance(item, str | int | float | bool) or item is None):
-                claims.append(
-                    ValueClaim(
-                        subject_kind="entity",
-                        subject_id=entity_id,
-                        field="attribute",
-                        attribute_name=name,
-                        value=item,
-                    )
-                )
+                findings.append(Finding(subject=entity_id, value=item))
     for row in value.get("rows", ()) if isinstance(value.get("rows"), list) else ():
         if isinstance(row, list) and len(row) >= 2 and isinstance(entity_id, str):
-            claims.append(  # noqa: PERF401 - constructing validated Pydantic claims is clearer here.
-                EventClaim(
-                    source="history",
-                    entity_id=entity_id,
-                    event_kind="state_transition",
-                    value=str(row[1]),
-                    when=row[0] if isinstance(row[0], str) else None,
+            when = row[0] if isinstance(row[0], str) else None
+            row_value = row[1]
+            if isinstance(row_value, dict):
+                # State mutation: copy each scalar statistic field as its own flat finding.
+                findings.extend(
+                    Finding(subject=entity_id, value=item, when=when)
+                    for item in row_value.values()
+                    if isinstance(item, str | int | float | bool) or item is None
                 )
-            )
+            elif isinstance(row_value, str | int | float | bool) or row_value is None:
+                findings.append(Finding(subject=entity_id, value=row_value, when=when))
+
+
+def _stub_items(messages: list[ModelMessage]) -> list[str]:
+    """Return the sorted entity-id-bearing records copied from successful tool results."""
+    items: set[str] = set()
+    for message in messages:
+        if not isinstance(message, ModelRequest):
+            continue
+        for part in message.parts:
+            if isinstance(part, ToolReturnPart):
+                _collect_entity_ids(part.content, items)
+    return sorted(items)
+
+
+def _collect_entity_ids(value: object, items: set[str]) -> None:
+    if isinstance(value, list):
+        for item in value:
+            _collect_entity_ids(item, items)
+        return
+    if not isinstance(value, dict):
+        if isinstance(value, str) and _ENTITY_ID_RE.fullmatch(value):
+            items.add(value)
+        return
+    entity_id = value.get("entity_id")
+    if isinstance(entity_id, str):
+        items.add(entity_id)
+    for key, item in value.items():
+        if isinstance(key, str) and _ENTITY_ID_RE.fullmatch(key):
+            items.add(key)
+        _collect_entity_ids(item, items)
 
 
 def _tool_call_part(tool_name: str, tool_args: dict[str, object], index: int) -> ToolCallPart:
@@ -514,6 +556,15 @@ def _stub_initial_calls(user_request: str) -> tuple[tuple[str, dict[str, object]
         )
     if "living room light turned on today" in lowered:
         return ((TOOL_GET_LOGBOOK, {"entity_ids": ["light.living"], **_today_window()}),)
+    if "office power statistics over the last day" in lowered:
+        return (
+            (
+                TOOL_GET_STATISTICS,
+                {"statistic_ids": ["sensor.office_power"], "period": "hour", **_last_day_window()},
+            ),
+        )
+    if "bedroom humidity alert activity in todays logbook" in lowered:
+        return ((TOOL_GET_LOGBOOK, {"entity_ids": ["sensor.bedroom_humidity"], **_today_window()}),)
     if "all lights upstairs" in lowered:
         return (
             (
@@ -710,13 +761,14 @@ def _select_stub_tool(user_request: str) -> str:
     return TOOL_EXECUTE_HOME_CODE
 
 
-def _is_numeric(value: object) -> bool:
-    """Return whether a copied recorder scalar is numeric."""
+def _as_float(value: object) -> float | None:
+    """Return a copied numeric recorder scalar as a float."""
+    if isinstance(value, bool):
+        return None
     try:
-        float(value)  # type: ignore[arg-type]
+        return float(value)  # type: ignore[arg-type]
     except TypeError, ValueError:
-        return False
-    return True
+        return None
 
 
 def _build_stub_tool_args(tool_name: str, user_request: str) -> dict[str, object]:

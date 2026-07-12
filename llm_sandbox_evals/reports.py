@@ -14,7 +14,7 @@ from llm_sandbox_evals.scoring import evaluate_case
 type MatrixReport = EvaluationReport[MatrixCellRef, CaseTrace, MatrixCellMeta]
 
 _REPORT_ADAPTER: TypeAdapter[MatrixReport] = TypeAdapter(MatrixReport)
-_SCORING_VERSION = 2
+_SCORING_VERSION = 3
 _CASE_TRACE_FIELDS = frozenset(
     {
         "case_id",
@@ -55,7 +55,7 @@ def write_report_json(
 def load_report(run_dir: Path) -> MatrixReport:
     """Load a saved native pydantic-evals report artifact."""
     payload = json.loads((run_dir / "report.json").read_bytes())
-    if not _contains_v2_trace(payload):
+    if not _contains_v3_trace(payload):
         # Deliberately reject before Pydantic validation so legacy artifacts cannot
         # be silently reinterpreted by a future schema-compatible decoder.
         raise ValueError("legacy scoring artifact; rerun evaluation")
@@ -63,7 +63,7 @@ def load_report(run_dir: Path) -> MatrixReport:
 
 
 def rescore_trace(trace: CaseTrace) -> CaseOutcome:
-    """Rescore a v2 trace using only its persisted oracle, answer, evidence, and ledger."""
+    """Rescore a v3 trace using only its persisted oracle, answer, evidence, and ledger."""
     if trace.scoring_version != _SCORING_VERSION:
         raise ValueError("legacy scoring artifact; rerun evaluation")
     if trace.answer is None:
@@ -81,8 +81,8 @@ def rescore_trace(trace: CaseTrace) -> CaseOutcome:
     return outcome
 
 
-def _contains_v2_trace(payload: object) -> bool:
-    """Check the serialized report envelope for the self-contained v2 trace shape."""
+def _contains_v3_trace(payload: object) -> bool:
+    """Check the serialized report envelope for the self-contained v3 trace shape."""
     if (
         not isinstance(payload, dict)
         or payload.get("scoring_version") != _SCORING_VERSION

@@ -1,60 +1,63 @@
+from typing import Literal
+
 from llm_sandbox_evals.schema import (
+    ActionAnswer,
     AggregateClaim,
     BlockedOutcome,
     CaseContext,
     CollectionClaim,
-    EvalAnswer,
     EvalCase,
     EventClaim,
     Expected,
     ExpectedAction,
     ExpectedConclusion,
+    Finding,
+    ListAnswer,
     NoDataClaim,
+    ReadAnswer,
     RelationClaim,
     ToolEvent,
     ValueClaim,
+    select_answer_shape,
 )
 from llm_sandbox_evals.scoring import evaluate_case
-from pydantic import ValidationError
 import pytest
 
 
-def test_claim_contract_rejects_open_ended_and_invalid_shapes() -> None:
-    with pytest.raises(ValidationError):
-        EvalAnswer.model_validate(
-            {
-                "answer": "x",
-                "claims": [
-                    {"kind": "value", "subject_kind": "entity", "subject_id": "x", "field": "unknown", "value": "y"}
-                ],
-            }
-        )
-    with pytest.raises(ValidationError):
-        ValueClaim(subject_kind="entity", subject_id="x", field="state", attribute_name="wrong", value="on")
-    with pytest.raises(ValidationError):
-        CollectionClaim(collection="entity_ids", filter_kind="all", filter_value="x", items=["x"])
-    with pytest.raises(ValidationError):
-        AggregateClaim(source="states", operator="count", subject_ids=["x", "x"], input_field="none", value=2)
-    with pytest.raises(ValidationError):
-        ExpectedConclusion(
-            claim=CollectionClaim(collection="entity_ids", filter_kind="all", items=["x"]), assertion="equals"
-        )
-    with pytest.raises(ValidationError):
-        EvalAnswer.model_validate(
-            {
-                "answer": "x",
-                "claims": [
-                    {
-                        "kind": "value",
-                        "subject_kind": "entity",
-                        "subject_id": "x",
-                        "field": "state",
-                        "predicate": "on",
-                        "value": "on",
-                    }
-                ],
-            }
-        )
+@pytest.mark.parametrize(
+    ("expected", "shape"),
+    [
+        pytest.param(
+            Expected(
+                conclusions=(
+                    ExpectedConclusion(
+                        claim=CollectionClaim(collection="entity_ids", filter_kind="all", items=["light.a"]),
+                        assertion="exact_items",
+                    ),
+                )
+            ),
+            ListAnswer,
+            id="collection",
+        ),
+        pytest.param(
+            Expected(
+                conclusions=(
+                    ExpectedConclusion(
+                        claim=ValueClaim(subject_kind="entity", subject_id="sensor.a", field="state", value="on"),
+                        assertion="equals",
+                    ),
+                )
+            ),
+            ReadAnswer,
+            id="read",
+        ),
+        pytest.param(Expected(blocked_outcome=BlockedOutcome()), ActionAnswer, id="action"),
+    ],
+)
+def test_select_answer_shape_maps_conclusions_to_flat_shapes(
+    expected: Expected, shape: type[ActionAnswer | ReadAnswer | ListAnswer]
+) -> None:
+    assert select_answer_shape(expected) is shape
 
 
 def test_expected_rejects_empty_and_mixed_blocked_oracles() -> None:
@@ -73,7 +76,7 @@ def test_read_only_case_has_no_synthetic_action_result() -> None:
         {"execution": {"status": "ok"}, "output": {"entity_id": "light.living", "state": "on"}},
     )
 
-    outcome, _, actions = evaluate_case(_case(expected), EvalAnswer(answer="", claims=[claim]), (event,))
+    outcome, _, actions = evaluate_case(_case(expected), _read_answer("light.living", "on"), (event,))
 
     assert outcome.state == "correct"
     assert actions == ()
@@ -89,7 +92,7 @@ def test_read_only_unexpected_successful_effect_is_incorrect_without_action_resu
     )
     recorded = ({"domain": "light", "service": "turn_off", "status": "ok"},)
 
-    outcome, _, actions = evaluate_case(_case(expected), EvalAnswer(answer="", claims=[claim]), (event,), recorded)
+    outcome, _, actions = evaluate_case(_case(expected), _read_answer("light.living", "on"), (event,), recorded)
 
     assert (outcome.state, outcome.reason) == ("incorrect", "unexpected_effect")
     assert actions == ()
@@ -104,9 +107,7 @@ def test_failed_execute_then_successful_grounded_call_scores_correct() -> None:
             ),
         )
     )
-    answer = EvalAnswer(
-        answer="on", claims=[ValueClaim(subject_kind="entity", subject_id="light.living", field="state", value="on")]
-    )
+    answer = ReadAnswer(answer="on", findings=[Finding(subject="light.living", value="on")])
     outcome, conclusions, _ = evaluate_case(
         _case(expected),
         answer,
@@ -146,7 +147,8 @@ def test_parallel_direct_results_union_without_path_or_final_event_dependency() 
         ),
         ToolEvent("get_history", {}, {"status": "error"}),
     )
-    outcome, _, _ = evaluate_case(_case(expected), EvalAnswer(answer="", claims=claims), events)
+    answer = ReadAnswer(answer="", findings=[Finding(subject=claim.subject_id, value=claim.value) for claim in claims])
+    outcome, _, _ = evaluate_case(_case(expected), answer, events)
     assert outcome.state == "correct"
 
 
@@ -156,7 +158,13 @@ def test_wrong_entity_value_cannot_ground_and_extra_claim_fails() -> None:
     expected = Expected(conclusions=(ExpectedConclusion(claim=expected_claim, assertion="equals"),))
     outcome, _, _ = evaluate_case(
         _case(expected),
-        EvalAnswer(answer="", claims=[expected_claim, wrong]),
+        ReadAnswer(
+            answer="",
+            findings=[
+                Finding(subject=expected_claim.subject_id, value="20"),
+                Finding(subject=wrong.subject_id, value="20"),
+            ],
+        ),
         (
             ToolEvent(
                 "execute_home_code",
@@ -178,14 +186,14 @@ def test_aggregate_recomputed_and_tolerance_is_explicit() -> None:
         value=21.0,
     )
     expected = Expected(conclusions=(ExpectedConclusion(claim=claim, assertion="approximate", tolerance=0.01),))
-    answer_claim = claim.model_copy(update={"value": 20.5})
+    submitted_value = 20.5
     events = tuple(
         ToolEvent(
             "execute_home_code", {}, {"execution": {"status": "ok"}, "output": {"entity_id": entity, "state": state}}
         )
         for entity, state in (("sensor.a", 20), ("sensor.b", 21))
     )
-    outcome, _, _ = evaluate_case(_case(expected), EvalAnswer(answer="", claims=[answer_claim]), events)
+    outcome, _, _ = evaluate_case(_case(expected), _read_answer("sensor.a", submitted_value), events)
     assert outcome.state == "incorrect"
 
 
@@ -204,7 +212,6 @@ def test_authored_approximate_claim_uses_tolerance_for_grounding_and_global_chec
         input_value="state",
         value=20.5,
     )
-    submitted = expected_claim.model_copy(update={"value": submitted_value})
     expected = Expected(
         conclusions=(ExpectedConclusion(claim=expected_claim, assertion="approximate", tolerance=0.01),)
     )
@@ -214,7 +221,7 @@ def test_authored_approximate_claim_uses_tolerance_for_grounding_and_global_chec
         {"entities": {"sensor.a": {"rows": [["2026-01-01T00:00:00+00:00", "20.5"]]}}},
     )
 
-    outcome, _, _ = evaluate_case(_case(expected), EvalAnswer(answer="", claims=[submitted]), (event,))
+    outcome, _, _ = evaluate_case(_case(expected), _read_answer("sensor.a", submitted_value), (event,))
 
     assert outcome.state == expected_state
 
@@ -228,8 +235,6 @@ def test_extra_unselected_approximate_claim_remains_exactly_grounded() -> None:
         input_value="state",
         value=20.5,
     )
-    selected = expected_claim.model_copy(update={"value": 20.495})
-    extra = expected_claim.model_copy(update={"value": 20.496})
     expected = Expected(
         conclusions=(ExpectedConclusion(claim=expected_claim, assertion="approximate", tolerance=0.01),)
     )
@@ -239,7 +244,11 @@ def test_extra_unselected_approximate_claim_remains_exactly_grounded() -> None:
         {"entities": {"sensor.a": {"rows": [["2026-01-01T00:00:00+00:00", "20.5"]]}}},
     )
 
-    outcome, _, _ = evaluate_case(_case(expected), EvalAnswer(answer="", claims=[selected, extra]), (event,))
+    answer = ReadAnswer(
+        answer="",
+        findings=[Finding(subject="sensor.a", value=20.495), Finding(subject="sensor.a", value=20.496)],
+    )
+    outcome, _, _ = evaluate_case(_case(expected), answer, (event,))
 
     assert outcome.state == "incorrect"
 
@@ -249,8 +258,9 @@ def test_empty_logbook_requires_returned_exact_scope() -> None:
     expected = Expected(conclusions=(ExpectedConclusion(claim=claim, assertion="empty"),))
     good = ToolEvent("get_logbook", {}, {"scope": {"entity_ids": ["light.a", "light.b"]}, "entries": []}, call_index=1)
     bad = ToolEvent("get_logbook", {}, {"scope": {"entity_ids": ["light.a"]}, "entries": []}, call_index=1)
-    assert evaluate_case(_case(expected), EvalAnswer(answer="", claims=[claim]), (good,))[0].state == "correct"
-    assert evaluate_case(_case(expected), EvalAnswer(answer="", claims=[claim]), (bad,))[0].state == "incorrect"
+    answer = ReadAnswer(answer="", findings=[])
+    assert evaluate_case(_case(expected), answer, (good,))[0].state == "correct"
+    assert evaluate_case(_case(expected), answer, (bad,))[0].state == "incorrect"
 
 
 def test_empty_logbook_does_not_union_fragmented_scopes() -> None:
@@ -260,7 +270,7 @@ def test_empty_logbook_does_not_union_fragmented_scopes() -> None:
         ToolEvent("get_logbook", {}, {"scope": {"entity_ids": ["light.a"]}, "entries": []}, call_index=1),
         ToolEvent("get_logbook", {}, {"scope": {"entity_ids": ["light.b"]}, "entries": []}, call_index=2),
     )
-    assert evaluate_case(_case(expected), EvalAnswer(answer="", claims=[claim]), events)[0].state == "incorrect"
+    assert evaluate_case(_case(expected), ReadAnswer(answer="", findings=[]), events)[0].state == "incorrect"
 
 
 def test_empty_logbook_ignores_unrelated_nonempty_event() -> None:
@@ -275,7 +285,7 @@ def test_empty_logbook_ignores_unrelated_nonempty_event() -> None:
             call_index=2,
         ),
     )
-    assert evaluate_case(_case(expected), EvalAnswer(answer="", claims=[claim]), events)[0].state == "correct"
+    assert evaluate_case(_case(expected), ReadAnswer(answer="", findings=[]), events)[0].state == "correct"
 
 
 def test_empty_statistics_rejects_rows_for_the_matching_statistic_id() -> None:
@@ -286,7 +296,7 @@ def test_empty_statistics_rejects_rows_for_the_matching_statistic_id() -> None:
         {},
         {"statistics": {"sensor.a": {"fields": ["mean"], "rows": [["2026-01-01T00:00:00+00:00", {"mean": 5.0}]]}}},
     )
-    assert evaluate_case(_case(expected), EvalAnswer(answer="", claims=[claim]), (event,))[0].state == "incorrect"
+    assert evaluate_case(_case(expected), ReadAnswer(answer="", findings=[]), (event,))[0].state == "incorrect"
 
 
 @pytest.mark.parametrize(
@@ -327,7 +337,7 @@ def test_action_ledger_accepts_disjoint_splits_and_rejects_duplicates_or_superse
     recorded: tuple[dict[str, object], ...], passed: bool
 ) -> None:
     expected = Expected(actions=(ExpectedAction("light", "turn_on", ("light.a", "light.b")),))
-    outcome, _, actions = evaluate_case(_case(expected), EvalAnswer(answer=""), (), recorded)
+    outcome, _, actions = evaluate_case(_case(expected), ActionAnswer(answer="", success=True), (), recorded)
     assert outcome.state == ("correct" if passed else "incorrect")
     assert actions[0].passed is passed
 
@@ -377,7 +387,7 @@ def test_history_aggregate_operators_recompute_numeric_strings_and_timestamps(
         value=value,
     )
     expected = Expected(conclusions=(ExpectedConclusion(claim=claim, assertion="equals"),))
-    answer = EvalAnswer(answer="", claims=[claim])
+    answer = _aggregate_answer(claim)
     event = ToolEvent(
         "get_history",
         {},
@@ -439,7 +449,7 @@ def test_recorder_aggregates_require_qualifying_source_from_every_subject(
     expected = Expected(conclusions=(ExpectedConclusion(claim=claim, assertion="equals"),))
 
     outcome, conclusions, _ = evaluate_case(
-        _case(expected), EvalAnswer(answer="", claims=[claim]), (ToolEvent(tool_name, {}, output),)
+        _case(expected), _aggregate_answer(claim), (ToolEvent(tool_name, {}, output),)
     )
 
     assert outcome.state == "incorrect"
@@ -450,14 +460,13 @@ def test_aggregate_recomputed_value_must_match_submitted_claim() -> None:
     claim = AggregateClaim(
         source="history", operator="mean", subject_ids=["sensor.a"], input_field="state", input_value="state", value=2
     )
-    wrong = claim.model_copy(update={"value": 99})
     expected = Expected(conclusions=(ExpectedConclusion(claim=claim, assertion="equals"),))
     event = ToolEvent(
         "get_history",
         {},
         {"entities": {"sensor.a": {"rows": [["2026-01-01T00:00:00+00:00", "1"], ["2026-01-01T01:00:00+00:00", "3"]]}}},
     )
-    assert evaluate_case(_case(expected), EvalAnswer(answer="", claims=[wrong]), (event,))[0].state == "incorrect"
+    assert evaluate_case(_case(expected), _read_answer("sensor.a", 99), (event,))[0].state == "incorrect"
 
 
 def test_convert_aggregate_uses_declared_units() -> None:
@@ -483,7 +492,7 @@ def test_convert_aggregate_uses_declared_units() -> None:
             },
         },
     )
-    assert evaluate_case(_case(expected), EvalAnswer(answer="", claims=[claim]), (event,))[0].state == "correct"
+    assert evaluate_case(_case(expected), _aggregate_answer(claim), (event,))[0].state == "correct"
 
 
 def test_history_duration_operators_use_selected_state_intervals() -> None:
@@ -506,7 +515,7 @@ def test_history_duration_operators_use_selected_state_intervals() -> None:
                 "entities": {"light.a": {"rows": rows}},
             },
         )
-        outcome, _, _ = evaluate_case(_case(expected), EvalAnswer(answer="", claims=[claim]), (event,))
+        outcome, _, _ = evaluate_case(_case(expected), _aggregate_answer(claim), (event,))
         assert outcome.state == "correct"
 
 
@@ -539,7 +548,7 @@ def test_state_duration_requires_explicit_evidence_from_every_subject(
     expected = Expected(conclusions=(ExpectedConclusion(claim=claim, assertion="equals"),))
     event = ToolEvent("execute_home_code", {}, {"execution": {"status": "ok"}, "output": output})
 
-    outcome, _, _ = evaluate_case(_case(expected), EvalAnswer(answer="", claims=[claim]), (event,))
+    outcome, _, _ = evaluate_case(_case(expected), _aggregate_answer(claim), (event,))
 
     assert outcome.state == expected_state
 
@@ -574,7 +583,7 @@ def test_history_duration_requires_valid_window_endpoint(window: dict[str, objec
         {},
         {"window": window, "entities": {"light.a": {"rows": [["2026-01-01T01:00:00+00:00", "on"]]}}},
     )
-    assert evaluate_case(_case(expected), EvalAnswer(answer="", claims=[claim]), (event,))[0].state == (
+    assert evaluate_case(_case(expected), _aggregate_answer(claim), (event,))[0].state == (
         "correct" if passed else "incorrect"
     )
 
@@ -600,7 +609,7 @@ def test_history_duration_sums_interleaved_entities_independently() -> None:
             },
         },
     )
-    assert evaluate_case(_case(expected), EvalAnswer(answer="", claims=[claim]), (event,))[0].state == "correct"
+    assert evaluate_case(_case(expected), _aggregate_answer(claim), (event,))[0].state == "correct"
 
 
 def test_history_duration_fails_when_subject_has_no_rows() -> None:
@@ -621,7 +630,7 @@ def test_history_duration_fails_when_subject_has_no_rows() -> None:
             "entities": {"light.a": {"rows": [["2026-01-01T00:00:00+00:00", "on"]]}, "light.b": {"rows": []}},
         },
     )
-    assert evaluate_case(_case(expected), EvalAnswer(answer="", claims=[claim]), (event,))[0].state == "incorrect"
+    assert evaluate_case(_case(expected), _aggregate_answer(claim), (event,))[0].state == "incorrect"
 
 
 def test_history_duration_ignores_unrelated_differing_window_endpoint() -> None:
@@ -654,7 +663,7 @@ def test_history_duration_ignores_unrelated_differing_window_endpoint() -> None:
             call_index=2,
         ),
     )
-    assert evaluate_case(_case(expected), EvalAnswer(answer="", claims=[claim]), events)[0].state == "correct"
+    assert evaluate_case(_case(expected), _aggregate_answer(claim), events)[0].state == "correct"
 
 
 def test_history_duration_combines_per_subject_calls_with_different_endpoints() -> None:
@@ -687,7 +696,7 @@ def test_history_duration_combines_per_subject_calls_with_different_endpoints() 
             call_index=2,
         ),
     )
-    assert evaluate_case(_case(expected), EvalAnswer(answer="", claims=[claim]), events)[0].state == "correct"
+    assert evaluate_case(_case(expected), _aggregate_answer(claim), events)[0].state == "correct"
 
 
 def test_history_duration_cannot_borrow_endpoint_from_another_event() -> None:
@@ -717,7 +726,7 @@ def test_history_duration_cannot_borrow_endpoint_from_another_event() -> None:
             call_index=2,
         ),
     )
-    assert evaluate_case(_case(expected), EvalAnswer(answer="", claims=[claim]), events)[0].state == "incorrect"
+    assert evaluate_case(_case(expected), _aggregate_answer(claim), events)[0].state == "incorrect"
 
 
 def test_history_duration_unions_same_endpoint_pages() -> None:
@@ -764,7 +773,7 @@ def test_history_duration_unions_same_endpoint_pages() -> None:
             call_index=2,
         ),
     )
-    answer = EvalAnswer(answer="", claims=[claim])
+    answer = _aggregate_answer(claim)
     assert evaluate_case(_case(expected), answer, events[:1])[0].state == "incorrect"
     assert evaluate_case(_case(expected), answer, events)[0].state == "correct"
 
@@ -809,7 +818,7 @@ def test_history_duration_does_not_merge_same_end_different_start_windows() -> N
             call_index=2,
         ),
     )
-    assert evaluate_case(_case(expected), EvalAnswer(answer="", claims=[claim]), events)[0].state == "incorrect"
+    assert evaluate_case(_case(expected), _aggregate_answer(claim), events)[0].state == "incorrect"
 
 
 def test_history_duration_deduplicates_overlapping_same_endpoint_rows() -> None:
@@ -856,7 +865,7 @@ def test_history_duration_deduplicates_overlapping_same_endpoint_rows() -> None:
             call_index=2,
         ),
     )
-    assert evaluate_case(_case(expected), EvalAnswer(answer="", claims=[claim]), events)[0].state == "correct"
+    assert evaluate_case(_case(expected), _aggregate_answer(claim), events)[0].state == "correct"
 
 
 def test_history_count_respects_selected_state_qualifier() -> None:
@@ -873,7 +882,7 @@ def test_history_count_respects_selected_state_qualifier() -> None:
             }
         },
     )
-    assert evaluate_case(_case(expected), EvalAnswer(answer="", claims=[claim]), (event,))[0].state == "incorrect"
+    assert evaluate_case(_case(expected), _aggregate_answer(claim), (event,))[0].state == "incorrect"
 
 
 @pytest.mark.parametrize(
@@ -899,7 +908,7 @@ def test_numeric_state_aggregates_require_each_source_unit(units: tuple[str, str
     ]
     outcome, _, _ = evaluate_case(
         _case(expected),
-        EvalAnswer(answer="", claims=[claim]),
+        _aggregate_answer(claim),
         (ToolEvent("execute_home_code", {}, {"execution": {"status": "ok"}, "output": output}),),
     )
     assert outcome.state == ("correct" if passed else "incorrect")
@@ -923,7 +932,7 @@ def test_state_count_rejects_missing_declared_subject_even_when_count_is_zero() 
             "output": {"entity_id": "sensor.a", "state": "off"},
         },
     )
-    outcome, _, _ = evaluate_case(_case(expected), EvalAnswer(answer="", claims=[claim]), (event,))
+    outcome, _, _ = evaluate_case(_case(expected), _aggregate_answer(claim), (event,))
     assert outcome.state == "incorrect"
 
 
@@ -945,7 +954,7 @@ def test_floor_collection_requires_transitive_entity_area_floor_links(missing_in
     ]
     output[missing_index].pop(missing_field)
     event = ToolEvent("execute_home_code", {}, {"execution": {"status": "ok"}, "output": output})
-    assert evaluate_case(_case(expected), EvalAnswer(answer="", claims=[claim]), (event,))[0].state == "incorrect"
+    assert evaluate_case(_case(expected), ListAnswer(answer="", items=claim.items), (event,))[0].state == "incorrect"
 
 
 def test_floor_collection_uses_area_floor_join() -> None:
@@ -960,7 +969,31 @@ def test_floor_collection_uses_area_floor_join() -> None:
         {"area_id": "area.b", "floor_id": "floor_upstairs", "name": "B"},
     ]
     event = ToolEvent("execute_home_code", {}, {"execution": {"status": "ok"}, "output": output})
-    assert evaluate_case(_case(expected), EvalAnswer(answer="", claims=[claim]), (event,))[0].state == "correct"
+    assert evaluate_case(_case(expected), ListAnswer(answer="", items=claim.items), (event,))[0].state == "correct"
+
+
+@pytest.mark.parametrize(
+    ("assertion", "items", "expected_state"),
+    [
+        pytest.param("exact_items", ["light.a", "light.b"], "correct", id="exact-pass"),
+        pytest.param("exact_items", ["light.a", "light.b", "light.c"], "incorrect", id="exact-fail"),
+        pytest.param("contains_items", ["light.a", "light.b", "light.c"], "correct", id="contains-pass"),
+        pytest.param("contains_items", ["light.a"], "incorrect", id="contains-fail"),
+    ],
+)
+def test_list_items_match_collection_oracle_exact_and_contains(
+    assertion: Literal["exact_items", "contains_items"], items: list[str], expected_state: str
+) -> None:
+    claim = CollectionClaim(
+        collection="entity_ids", filter_kind="domain", filter_value="light", items=["light.a", "light.b"]
+    )
+    expected = Expected(conclusions=(ExpectedConclusion(claim=claim, assertion=assertion),))
+    output = [{"entity_id": entity_id, "state": "on"} for entity_id in ("light.a", "light.b", "light.c")]
+    event = ToolEvent("execute_home_code", {}, {"execution": {"status": "ok"}, "output": output})
+
+    outcome, _, _ = evaluate_case(_case(expected), ListAnswer(answer="", items=items), (event,))
+
+    assert outcome.state == expected_state
 
 
 @pytest.mark.parametrize(
@@ -998,7 +1031,11 @@ def test_event_claims_use_their_source_field_not_a_generic_value(claim: EventCla
         else "get_automation"
     )
     assert (
-        evaluate_case(_case(expected), EvalAnswer(answer="", claims=[claim]), (ToolEvent(tool, {}, output),))[0].state
+        evaluate_case(
+            _case(expected),
+            _read_answer(claim.entity_id, claim.value, when=claim.when),
+            (ToolEvent(tool, {}, output),),
+        )[0].state
         == "correct"
     )
 
@@ -1040,10 +1077,19 @@ def test_execute_records_preserve_registry_system_and_service_associations() -> 
         "service": {"entity_id": "climate.a", "services": ["climate.set_temperature"]},
     }
     expected = Expected(conclusions=tuple(ExpectedConclusion(claim=claim, assertion="equals") for claim in claims))
+    findings = [
+        Finding(subject="device.a", value="Acme"),
+        Finding(subject="area.a", value="Kitchen"),
+        Finding(subject="repair.a", value=True),
+        Finding(subject="note.a", value="Battery low"),
+        Finding(subject="light.a", value="device.a"),
+        Finding(subject="device.a", value="area.a"),
+        Finding(subject="climate.a", value="climate.set_temperature"),
+    ]
     assert (
         evaluate_case(
             _case(expected),
-            EvalAnswer(answer="", claims=claims),
+            ReadAnswer(answer="", findings=findings),
             (ToolEvent("execute_home_code", {}, {"execution": {"status": "ok"}, "output": list(output.values())}),),
         )[0].state
         == "correct"
@@ -1071,7 +1117,7 @@ def test_execute_registry_join_keys_do_not_change_record_subject_kind(
     expected = Expected(conclusions=(ExpectedConclusion(claim=claim, assertion="equals"),))
     event = ToolEvent("execute_home_code", {}, {"execution": {"status": "ok"}, "output": record})
 
-    outcome, conclusions, _ = evaluate_case(_case(expected), EvalAnswer(answer="", claims=[claim]), (event,))
+    outcome, conclusions, _ = evaluate_case(_case(expected), _read_answer(claim.subject_id, claim.value), (event,))
 
     assert outcome.state == "incorrect"
     assert conclusions[0].grounding_status == "ungrounded"
@@ -1090,7 +1136,7 @@ def test_collection_filter_keeps_all_facts_for_each_subject() -> None:
     assert (
         evaluate_case(
             _case(expected),
-            EvalAnswer(answer="", claims=[claim]),
+            ListAnswer(answer="", items=claim.items),
             (ToolEvent("execute_home_code", {}, {"execution": {"status": "ok"}, "output": output}),),
         )[0].state
         == "correct"
@@ -1111,7 +1157,7 @@ def test_blocked_action_requires_every_authored_error_key() -> None:
         "status": "error",
         "error": {"key": "actions_disabled"},
     }
-    outcome, _, results = evaluate_case(_case(expected), EvalAnswer(answer=""), (), (action,))
+    outcome, _, results = evaluate_case(_case(expected), ActionAnswer(answer="", success=True), (), (action,))
     assert outcome.state == "incorrect"
     assert "missing_error_key" in results[0].mismatches
 
@@ -1130,7 +1176,7 @@ def test_blocked_action_rejects_wrong_entity_target() -> None:
         "status": "error",
         "error": {"key": "actions_disabled"},
     }
-    outcome, _, results = evaluate_case(_case(expected), EvalAnswer(answer=""), (), (action,))
+    outcome, _, results = evaluate_case(_case(expected), ActionAnswer(answer="", success=True), (), (action,))
     assert outcome.state == "incorrect"
     assert any(mismatch.startswith("target:") for mismatch in results[0].mismatches)
 
@@ -1162,7 +1208,7 @@ def test_action_target_union_rejects_targetless_targeted_conflicts(
     if blocked:
         action["error"] = {"key": "actions_disabled"}
 
-    outcome, _, results = evaluate_case(_case(expected), EvalAnswer(answer=""), (), (action,))
+    outcome, _, results = evaluate_case(_case(expected), ActionAnswer(answer="", success=True), (), (action,))
 
     assert outcome.state == "incorrect"
     assert any(mismatch.startswith("target:") for mismatch in results[0].mismatches)
@@ -1185,7 +1231,7 @@ def test_action_ledger_rejects_duplicate_targets_within_one_recorded_action(bloc
     if blocked:
         action["error"] = {"key": "actions_disabled"}
 
-    outcome, _, results = evaluate_case(_case(expected), EvalAnswer(answer=""), (), (action,))
+    outcome, _, results = evaluate_case(_case(expected), ActionAnswer(answer="", success=True), (), (action,))
 
     assert outcome.state == "incorrect"
     assert any(mismatch.startswith("duplicate:") for mismatch in results[0].mismatches)
@@ -1195,15 +1241,41 @@ def test_extra_aggregate_claim_must_match_its_recomputed_value() -> None:
     expected_claim = AggregateClaim(
         source="history", operator="mean", subject_ids=["sensor.a"], input_field="state", input_value="state", value=2
     )
-    extra_claim = expected_claim.model_copy(update={"value": 99})
     expected = Expected(conclusions=(ExpectedConclusion(claim=expected_claim, assertion="equals"),))
     event = ToolEvent(
         "get_history",
         {},
         {"entities": {"sensor.a": {"rows": [["2026-01-01T00:00:00+00:00", "1"], ["2026-01-01T01:00:00+00:00", "3"]]}}},
     )
-    answer = EvalAnswer(answer="", claims=[expected_claim, extra_claim])
+    answer = ReadAnswer(
+        answer="",
+        findings=[Finding(subject="sensor.a", value=2), Finding(subject="sensor.a", value=99)],
+    )
     assert evaluate_case(_case(expected), answer, (event,))[0].state == "incorrect"
+
+
+@pytest.mark.parametrize("success", [False, True], ids=["diagnostic-failure", "diagnostic-success"])
+def test_action_answer_success_is_never_scored(success: bool) -> None:
+    expected = Expected(actions=(ExpectedAction("light", "turn_on", ("light.a",)),))
+    recorded = ({"domain": "light", "service": "turn_on", "target": {"entity_id": "light.a"}, "status": "ok"},)
+
+    outcome, _, _ = evaluate_case(_case(expected), ActionAnswer(answer="", success=success), (), recorded)
+
+    assert outcome.state == "correct"
+
+
+def _read_answer(
+    subject: str,
+    value: str | int | float | bool | None,
+    *,
+    unit: str | None = None,
+    when: str | None = None,
+) -> ReadAnswer:
+    return ReadAnswer(answer="", findings=[Finding(subject=subject, value=value, unit=unit, when=when)])
+
+
+def _aggregate_answer(claim: AggregateClaim) -> ReadAnswer:
+    return _read_answer(claim.subject_ids[0], claim.value, unit=claim.unit)
 
 
 def _case(expected: Expected) -> EvalCase:

@@ -868,14 +868,14 @@ _HTML_TEMPLATE = """<!doctype html>
           : "";
          const expectedBlock = `<div class="detail-sub"><h4>Authored expected conclusions and effects</h4></div>${codeBlock(json(trace.expected), "json")}`;
          const actionContract = actionResults.length ? actionResults : "no action contract";
-         // The v2 detail order moves from outcome through authored/scored evidence to unrestricted output.
+          // The v3 detail order moves from outcome through authored/scored evidence to unrestricted output.
          panel.innerHTML =
             `<h3>${escapeHtml(cell.case_id)} <span class="badge ${escapeHtml(cell._status)}">${escapeHtml(cell._status)}</span></h3>`
           + `<p class="verdict ${verdictClass}">${escapeHtml(verdict)}</p>`
           + `<p class="detail-headline"><b>${escapeHtml(cell.candidate_id)}</b> / <b>${escapeHtml(cell.model_id)}</b> · score <b>${escapeHtml(fmtNumber(cell.score))}</b> · tools <b>${escapeHtml(cell.tool_calls)}</b> · <b>${escapeHtml(fmtDuration(cell.duration))}</b></p>`
            + taskBlock
            + expectedBlock
-            + `<div class="detail-sub"><h4>Submitted claims and grounding</h4></div>${codeBlock(json(trace.conclusions), "json")}`
+             + `<div class="detail-sub"><h4>Submitted findings/items and grounding</h4></div>${codeBlock(json(trace.conclusions), "json")}`
             + `<div class="detail-sub"><h4>Action ledgers and results</h4></div>${codeBlock(json({successful, rejected, results: actionContract}), "json")}`
             + `<div class="detail-sub"><h4>Chronological tool evidence</h4><span class="meta">${toolEvents.length} calls, in order</span></div>`
            + `<div class="detail-grid">${chronologicalDetail}</div>`

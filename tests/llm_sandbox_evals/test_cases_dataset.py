@@ -14,6 +14,7 @@ from llm_sandbox_evals.config import EvalConfig
 from llm_sandbox_evals.harness import run_case
 from llm_sandbox_evals.homes import get_home
 from llm_sandbox_evals.prompts import load_candidates
+from llm_sandbox_evals.schema import ActionAnswer, ListAnswer, ReadAnswer, select_answer_shape
 import pytest
 import yaml
 
@@ -58,6 +59,14 @@ def test_dataset_preserves_exact_case_taxonomy_and_counts() -> None:
     assert len(cases) == 80
     assert Counter(case["category"] for case in cases) == _CATEGORY_COUNTS
     assert {case["category"] for case in cases} == set(_CATEGORY_COUNTS)
+
+
+def test_all_cases_select_one_flat_answer_shape() -> None:
+    selected = {case.id: select_answer_shape(case.expected) for case in CASES}
+
+    assert len(selected) == 80
+    assert set(selected.values()) == {ActionAnswer, ReadAnswer, ListAnswer}
+    assert selected["real_count_lights_on"] is ListAnswer
 
 
 def test_dataset_is_v2_only_and_has_no_legacy_contract_fields() -> None:
@@ -381,6 +390,33 @@ async def test_stub_conditional_cases_ground_antecedent_and_effect(case_id: str,
 
     assert trace.outcome.state == "correct"
     assert all(result.grounding_status == "grounded" for result in trace.conclusions)
+
+
+@pytest.mark.parametrize(
+    "case_id",
+    [
+        pytest.param("recovery_statistic_no_data", id="statistics"),
+        pytest.param("honesty_empty_logbook", id="logbook"),
+    ],
+)
+async def test_stub_no_data_cases_use_empty_findings_and_oracle_scope(case_id: str, tmp_path: Path) -> None:
+    candidate = load_candidates(["baseline"], DEFAULT_PROMPT_PROFILE)[0]
+    case = next(case for case in CASES if case.id == case_id)
+    config = EvalConfig(
+        models=["stub"],
+        candidates=[candidate.id],
+        prompt_profile=DEFAULT_PROMPT_PROFILE,
+        cases=[case_id],
+        homes=None,
+        runs_dir=tmp_path,
+    )
+
+    trace = await run_case(candidate, "stub", case, config, profile=resolve_profile(DEFAULT_PROMPT_PROFILE))
+
+    assert isinstance(trace.answer, ReadAnswer)
+    assert trace.answer.findings == []
+    assert trace.outcome.state == "correct"
+    assert trace.conclusions[0].grounding_status == "grounded"
 
 
 async def test_stub_pagination_case_requires_and_completes_cursor_chain(tmp_path: Path) -> None:
