@@ -1,10 +1,12 @@
 from io import StringIO
+from typing import Literal
 
 from llm_sandbox_evals.experiment import MatrixCellRef, MatrixProgressEvent
 from llm_sandbox_evals.schema import CaseTrace, CheckResult
 from llm_sandbox_evals.terminal import _WARNING, MatrixTerminalReporter, _outcome_text
 import pytest
-from rich.console import Console
+from rich.console import Console, Group
+from rich.progress import Progress
 from rich.table import Table
 
 
@@ -94,6 +96,56 @@ def test_terminal_counts_tool_call_limit_as_failure_without_error_diagnostic() -
     assert "failed=1" in output
     assert "incomplete=0" in output
     assert "error=" not in output
+
+
+def test_live_refreshes_replaced_lanes_before_printing_diagnostic(monkeypatch: pytest.MonkeyPatch) -> None:
+    events: list[Literal["diagnostic", "update"]] = []
+    updates: list[tuple[object, bool]] = []
+    reporter = MatrixTerminalReporter()
+    completed = MatrixCellRef("completed", "candidate", "model", "home", "state_read")
+    replacement = MatrixCellRef("replacement", "candidate", "model", "home", "state_read")
+    trace = CaseTrace(
+        case_id=completed.case_id,
+        category=completed.category,
+        candidate_id=completed.candidate_id,
+        model_id=completed.model_id,
+        score=0.0,
+        output="",
+        tool_call_count=0,
+        recorded_actions=(),
+        checks=(CheckResult("execution_ok", False, True, ""),),
+        error="provider failure",
+    )
+
+    def update(renderable: object, *, refresh: bool = False) -> None:
+        events.append("update")
+        updates.append((renderable, refresh))
+
+    def print_diagnostic(_event: MatrixProgressEvent, _diagnostic: str) -> None:
+        events.append("diagnostic")
+
+    reporter._live = type("LiveCapture", (), {"update": staticmethod(update)})()
+    monkeypatch.setattr(reporter, "_print_live_diagnostic", print_diagnostic)
+    reporter.handle(MatrixProgressEvent("cell_started", cell=completed, request="completed request"))
+    reporter.handle(MatrixProgressEvent("cell_started", cell=replacement, request="replacement request"))
+    events.clear()
+    updates.clear()
+
+    reporter.handle(MatrixProgressEvent("cell_finished", cell=completed, trace=trace, completion_index=1, total=2))
+
+    assert events == ["update", "diagnostic"]
+    assert updates[0][1] is True
+    captured_renderable = updates[0][0]
+    assert isinstance(captured_renderable, Group)
+    rendered_lanes = next(
+        renderable
+        for renderable in captured_renderable.renderables
+        if isinstance(renderable, Progress) and renderable.tasks and renderable.tasks[0].total is None
+    )
+    assert len(rendered_lanes.tasks) == 1
+    assert replacement in reporter._lanes
+    assert completed not in reporter._lanes
+    assert rendered_lanes.tasks[0].fields["started_at"] == reporter._lanes[replacement].started_at
 
 
 def _column_widths(table: Table, console: Console) -> dict[str, int]:

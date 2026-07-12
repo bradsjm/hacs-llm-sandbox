@@ -189,8 +189,8 @@ def _add_eval_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPar
         ),
         epilog=(
             "Notes:\n"
-            "  - --cases accepts case ids OR category names: state_read, registry_read,\n"
-            "    recorder_read, action_allowed, action_blocked, complex.\n"
+            "  - --cases accepts case ids OR category names: state, registry, history,\n"
+            "    statistics, logbook, automation, action, safety, system.\n"
             "  - --candidates accepts `baseline` and `optimized:<path>` (a saved\n"
             "    optimized_candidate.json from `optimize`).\n"
             "  - --prompt-profile selects one production base prompt profile for\n"

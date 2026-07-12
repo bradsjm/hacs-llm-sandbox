@@ -1,5 +1,8 @@
+from collections import Counter
 from collections.abc import Sequence
+import json
 from pathlib import Path
+from typing import cast
 
 from llm_sandbox_evals.cases import CASES, load_cases
 from llm_sandbox_evals.harness import _select_cases
@@ -14,6 +17,17 @@ _DELETED_CASE_IDS = frozenset(
         "recorder_selector_floor_target",
     }
 )
+_CATEGORY_COUNTS = {
+    "state": 18,
+    "registry": 8,
+    "history": 12,
+    "statistics": 5,
+    "logbook": 4,
+    "automation": 3,
+    "action": 26,
+    "safety": 2,
+    "system": 2,
+}
 
 
 def test_load_cases_returns_native_dataset_inputs_in_stable_order() -> None:
@@ -27,10 +41,10 @@ def test_load_cases_returns_native_dataset_inputs_in_stable_order() -> None:
 
 def test_harness_select_cases_consumes_loaded_suite_order() -> None:
     assert _select_cases(None, None) == CASES
-    assert [case.id for case in _select_cases(["recorder_read"], None)[:3]] == [
+    assert [case.id for case in _select_cases(["history"], None)[:3]] == [
         "recorder_living_temp_history",
-        "recorder_bedroom_humidity_statistics",
-        "recorder_living_light_logbook",
+        "multi_discover_living_temp_history",
+        "multi_parallel_temp_history_humidity_stats",
     ]
 
 
@@ -62,12 +76,17 @@ def test_blocked_cases_require_expected_rejections_without_allowed_effects() -> 
     assert all(not case.expected.actions for case in blocked_cases)
 
 
-def test_deleted_cases_are_absent_and_no_data_is_a_recorder_read() -> None:
+def test_cases_use_the_primary_objective_category_taxonomy() -> None:
     case_ids = {case.id for case in CASES}
+    schema_category = _cases_schema_category()
     no_data_case = _case_by_id(CASES, "recovery_statistic_no_data")
 
     assert not (case_ids & _DELETED_CASE_IDS)
-    assert no_data_case.category == "recorder_read"
+    assert Counter(case.category for case in CASES) == _CATEGORY_COUNTS
+    assert set(schema_category["enum"]) == set(_CATEGORY_COUNTS)
+    assert schema_category["maxLength"] == 13
+    assert all(len(case.category) <= 13 for case in CASES)
+    assert no_data_case.category == "statistics"
     assert no_data_case.expected.tool_result_checks[0].min_results == 0
 
 
@@ -97,6 +116,23 @@ def test_real_office_inventory_requires_all_fixture_backed_entities_and_devices(
 def _native_dataset() -> Dataset[EvalCase, object, object]:
     dataset_path = Path(__file__).parents[2] / "llm_sandbox_evals" / "data" / "cases.yaml"
     return Dataset[EvalCase, object, object].from_file(dataset_path)
+
+
+def _cases_schema_category() -> dict[str, object]:
+    schema_path = Path(__file__).parents[2] / "llm_sandbox_evals" / "data" / "cases_schema.json"
+    schema = cast(dict[str, object], json.loads(schema_path.read_text(encoding="utf-8")))
+    definitions = schema["$defs"]
+    assert isinstance(definitions, dict)
+    case = definitions["case"]
+    assert isinstance(case, dict)
+    properties = case["properties"]
+    assert isinstance(properties, dict)
+    category = properties["category"]
+    assert isinstance(category, dict)
+    enum = category["enum"]
+    assert isinstance(enum, list)
+    assert all(isinstance(value, str) for value in enum)
+    return category
 
 
 def _case_by_id(cases: Sequence[EvalCase], case_id: str) -> EvalCase:

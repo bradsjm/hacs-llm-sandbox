@@ -194,9 +194,10 @@ class MatrixTerminalReporter:
             diagnostic = _compact_diagnostic(event.trace.error)
 
         if self._live is not None:
+            # Refresh the replacement state before a durable write can make Live redraw stale lanes.
+            self._live.update(self._render(), refresh=True)
             if diagnostic is not None:
                 self._print_live_diagnostic(event, diagnostic)
-            self._live.update(self._render())
         elif not self._console.is_terminal:
             self._print_line(event, diagnostic=diagnostic)
 

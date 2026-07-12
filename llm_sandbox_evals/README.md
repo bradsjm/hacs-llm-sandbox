@@ -48,7 +48,7 @@ The `optimize` command uses [DSPy](https://dspy.ai/)'s COPRO instruction optimiz
 uv run --group dev --group evals python -m llm_sandbox_evals optimize \
   --target-model openrouter/deepseek/deepseek-v4-flash \
   --breadth 5 --depth 2 \
-  --cases state_read,registry_read,complex \
+  --cases state,registry,action \
   --cross-eval-models openrouter/deepseek/deepseek-v4-flash,stub
 ```
 
@@ -85,7 +85,7 @@ python -m llm_sandbox_evals report <run_id> [--html] [--runs-dir PATH]
 - `eval` builds a native `pydantic_evals.Dataset`, runs the matrix with a stderr-only live terminal view (or line fallback when redirected), and writes `report.json` plus interactive `report.html` artifacts under `eval_data/runs/<run_id>/`.
 - `optimize` runs DSPy COPRO against one target model and cross-evaluates the winner (see _Optimizing the prompt_ above).
 - `report <run_id>` re-renders saved native analyses and cell scores from `report.json` and makes no model calls; add `--html` to regenerate `report.html` only.
-- `--cases` accepts case ids **or** category names (`state_read`, `registry_read`, `recorder_read`, `action_allowed`, `action_blocked`, `complex`, `automation_read`).
+- `--cases` accepts case ids **or** category names (`state`, `registry`, `history`, `statistics`, `logbook`, `automation`, `action`, `safety`, `system`).
 - `--candidates` accepts `baseline`, `profile:<id>` production profiles, and `optimized:<path>` (a saved `optimized_candidate.json`).
 - `--prompt-profile PROFILE_ID` selects one production base prompt profile for the whole run (default: `balanced`); it is not comma-separated and is separate from `--candidates`.
 - `guided`, `balanced`, and `frontier` preserve the same capability/safety catalog while varying coaching and density; compare them with `--candidates baseline,profile:guided,profile:balanced,profile:frontier` or select one via `--prompt-profile`.
@@ -126,7 +126,7 @@ cases:
   - name: my_case
     inputs:
       id: my_case
-      category: state_read
+      category: state
       home: home_default
       user_request: What is the living room temperature?
       actions_enabled: false
@@ -141,7 +141,7 @@ cases:
               - "25.2"
 ```
 
-Categories: `state_read`, `registry_read`, `recorder_read`, `action_allowed`, `action_blocked`, `complex`, `automation_read`. No-data is a normal recorder outcome when it is proved with `min_results: 0`. New cases should use the current outcome fields:
+Categories: `state`, `registry`, `history`, `statistics`, `logbook`, `automation`, `action`, `safety`, `system`. No-data is a normal recorder outcome when it is proved with `min_results: 0`. New cases should use the current outcome fields:
 
 - `provenance_values` — supplemental entity IDs, default IDs, selector-expansion facts, or other tool-payload evidence. Provenance alone is not an oracle.
 - `tool_result_checks` — structured evidence for `execute_home_code`, `get_history`, `get_statistics`, or `get_logbook`; `execute_home_code` checks may combine top-level `output` values across successful snippets, but never score `printed` lines or envelope metadata. Recorder/history/statistics/logbook checks prove one successful, relevant result shape that is non-empty unless the expected outcome explicitly allows no data with `min_results: 0`. Use `entry_values_by_entity` when a multi-entity result needs different expected values per entity.

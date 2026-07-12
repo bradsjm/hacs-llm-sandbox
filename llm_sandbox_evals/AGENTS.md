@@ -73,7 +73,7 @@ The harness owns the snapshot lifecycle and builds a fresh scoped snapshot per c
 
 - `schema.py` — **stable shared contracts** (`PromptCandidate`, `EvalCase`, `Expected`, `ExpectedAction`, `CaseContext`, `CheckResult`, `ToolEvent`, `CaseTrace`). Do not rename fields without updating all consumers.
 - `config.py` — `EvalConfig` + `load_config()` (defaults: `models=["stub"]`, `candidates=["baseline"]`, `max_tool_calls=10`).
-- `data/cases.yaml` — native `pydantic_evals.Dataset` authoring file for the predefined suite (simple -> complex, all categories), with a focused `data/cases_schema.json` authoring sidecar. The sidecar deliberately rejects unsupported generic wrapper and context fields; it is not a full `Dataset.from_file()` schema.
+- `data/cases.yaml` — native `pydantic_evals.Dataset` authoring file for the predefined suite (simple -> multi-step, all categories), with a focused `data/cases_schema.json` authoring sidecar. The sidecar deliberately rejects unsupported generic wrapper and context fields; it is not a full `Dataset.from_file()` schema.
 - `cases.py` — loads `data/cases.yaml` with `Dataset.from_file()` and exposes stable `CASES: list[EvalCase]`.
 - `homes/` — frozen fixture modules (`snapshot() -> HomeSnapshot`, `recorder() -> dict`) + `get_home(name)` registry.
 - `prompts.py` — `baseline_candidate()` (from production builders), `load_candidates(ids, prompt_profile_id)`, and prompt-size helpers. `guided`/`balanced`/`frontier` are production profiles for guidance-and-density evals.

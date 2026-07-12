@@ -51,7 +51,19 @@
           "type": "string"
         },
         "category": {
-          "type": "string"
+          "type": "string",
+          "maxLength": 13,
+          "enum": [
+            "state",
+            "registry",
+            "history",
+            "statistics",
+            "logbook",
+            "automation",
+            "action",
+            "safety",
+            "system"
+          ]
         },
         "home": {
           "type": "string"

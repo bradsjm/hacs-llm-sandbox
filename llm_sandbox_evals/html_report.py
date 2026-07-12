@@ -855,13 +855,15 @@ _HTML_TEMPLATE = """<!doctype html>
         model_error: { title: "Provider error", what: "The run failed from an infra/provider error, not the model's answer. The cell is incomplete." },
       };
       const CATEGORY_INFO = {
-        state_read: "Answer a question about current entity state.",
-        registry_read: "Answer using device / entity / area registry info.",
-        recorder_read: "Answer using recorded history, statistics, or logbook data.",
-        action_allowed: "Perform an allowed action (service call).",
-        action_blocked: "Correctly refuse a disallowed action.",
-        complex: "Multi-step task combining reads and/or actions.",
-        automation_read: "Answer a question about automations.",
+        state: "Answer a question about current entity state.",
+        registry: "Answer using device, entity, area, or service registry information.",
+        history: "Answer using recorded state history.",
+        statistics: "Answer using recorder statistics.",
+        logbook: "Answer using logbook entries.",
+        automation: "Answer a question about automations.",
+        action: "Perform or correctly refuse a requested service action.",
+        safety: "Handle a safety- or scope-sensitive request safely.",
+        system: "Answer a question about Home Assistant system status.",
       };
       const gateBase = name => name.replace(/_\\d+$/, "");
       const fbList = value => (value || "").split(",").filter(Boolean);
@@ -986,13 +988,19 @@ _HTML_TEMPLATE = """<!doctype html>
         let categoryItems = [];
         let traceNote = "code the agent executed";
         let traceEmpty = "The agent didn't run any execute_home_code snippet.";
-        if (["action_allowed", "action_blocked"].includes(cell.category)) {
-          traceNote = "service actions the agent attempted"; traceEmpty = "The agent attempted no actions.";
-          categoryItems = actions.map(actionCard);
-        } else if (cell.category === "recorder_read") {
+        let traceMeta = "";
+        if (cell.category === "action") {
+          traceNote = "execution details and recorded service actions"; traceEmpty = "The agent ran no code or attempted actions.";
+          const executionEvents = toolEvents.filter(ev => ev.tool_name === "execute_home_code");
+          categoryItems = [...executionEvents.map(toolCard(true)), ...actions.map(actionCard)];
+          traceMeta = `${executionEvents.length} execution ${executionEvents.length === 1 ? "call" : "calls"}, ${actions.length} action ${actions.length === 1 ? "attempt" : "attempts"}`;
+        } else if (["history", "statistics", "logbook"].includes(cell.category)) {
           traceNote = "recorder queries the agent ran"; traceEmpty = "The agent ran no recorder queries.";
           const recorderTools = new Set(["get_history", "get_statistics", "get_logbook"]);
           categoryItems = toolEvents.filter(ev => recorderTools.has(ev.tool_name)).map(toolCard(false));
+        } else if (cell.category === "automation") {
+          traceNote = "automation queries the agent ran"; traceEmpty = "The agent ran no automation queries.";
+          categoryItems = toolEvents.filter(ev => ev.tool_name === "get_automation").map(toolCard(false));
         } else {
           categoryItems = toolEvents.filter(ev => ev.tool_name === "execute_home_code").map(toolCard(true));
         }
@@ -1019,7 +1027,13 @@ _HTML_TEMPLATE = """<!doctype html>
         const expectedBlock = expected.length
           ? `<p class="detail-lead">A correct run should:</p><ul class="expected-list">${expected.map(item => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`
           : "";
-        const traceMeta = categoryItems.length ? `<span class="meta">${categoryItems.length} ${categoryItems.length === 1 ? "call" : "calls"}, in order</span>` : "";
+        if (!traceMeta && categoryItems.length) {
+          traceMeta = `${categoryItems.length} ${categoryItems.length === 1 ? "call" : "calls"}, in order`;
+        }
+        const traceMetaBlock = traceMeta ? `<span class="meta">${traceMeta}</span>` : "";
+        const traceLead = cell.category === "action"
+          ? "Execution details and recorded actions are grouped by type; their relative order is not shown."
+          : `The ${traceNote} during its turn — top = first.`;
         // Narrative order matches real time for the temporal parts (task -> did ->
         // answered) and explicitly flags scoring as an after-the-fact judgment.
         panel.innerHTML =
@@ -1028,8 +1042,8 @@ _HTML_TEMPLATE = """<!doctype html>
           + `<p class="detail-headline"><b>${escapeHtml(cell.candidate_id)}</b> / <b>${escapeHtml(cell.model_id)}</b> · score <b>${escapeHtml(fmtNumber(cell.score))}</b> · tools <b>${escapeHtml(cell.tool_calls)}</b> · <b>${escapeHtml(fmtDuration(cell.duration))}</b></p>`
           + taskBlock
           + expectedBlock
-          + `<div class="detail-sub"><h4>What the agent did</h4>${traceMeta}</div>`
-          + `<p class="detail-lead">The ${escapeHtml(traceNote)} during its turn — top = first.</p>`
+          + `<div class="detail-sub"><h4>What the agent did</h4>${traceMetaBlock}</div>`
+          + `<p class="detail-lead">${escapeHtml(traceLead)}</p>`
           + `<div class="detail-grid">${categoryDetail}</div>`
           + `<div class="detail-sub"><h4>What the agent answered</h4></div>`
           + `<details><summary>Show final reply${answerLen ? ` (${answerLen} chars)` : ""}</summary>${finalAnswerBlock}</details>`

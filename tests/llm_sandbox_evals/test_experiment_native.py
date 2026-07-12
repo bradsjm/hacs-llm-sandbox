@@ -45,7 +45,7 @@ async def test_run_matrix_stub_slice_writes_reloadable_report_json(tmp_path: Pat
         candidate_id="baseline",
         model_id="stub",
         home="home_minimal",
-        category="state_read",
+        category="state",
     )
     assert report_case.metadata == {
         "run_id": "stub-slice",
@@ -53,7 +53,7 @@ async def test_run_matrix_stub_slice_writes_reloadable_report_json(tmp_path: Pat
         "candidate_id": "baseline",
         "model_id": "stub",
         "home": "home_minimal",
-        "category": "state_read",
+        "category": "state",
     }
     assert isinstance(report_case.output, CaseTrace)
     assert report_case.output.score == pytest.approx(1.0)
@@ -108,7 +108,7 @@ async def test_run_matrix_emits_cell_and_tool_lifecycle_events(tmp_path: Path) -
         candidate_id="baseline",
         model_id="stub",
         home="home_minimal",
-        category="state_read",
+        category="state",
     )
     assert events[0].total == 1
     assert all(event.cell == cell for event in events[1:])
