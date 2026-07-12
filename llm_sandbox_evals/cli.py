@@ -33,6 +33,8 @@ from llm_sandbox_evals.terminal import MatrixTerminalReporter
 type _TermiosSettings = list[int | list[bytes | int]]
 
 _ESCAPE_DELAY_SECONDS = 0.05
+_CLI_ERROR_MAX_CHARS = 500
+_DEBUG_ENV_VAR = "LLM_SANDBOX_EVALS_DEBUG"
 
 
 class _EvalCancelled(Exception):
@@ -107,23 +109,36 @@ class _EscapeWatcher:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Run the eval CLI."""
-    # Load a .env file (if present) before any model adapter runs. Existing
-    # environment variables take precedence, so explicit exports still win.
-    load_dotenv()
-    parser = _build_parser()
-    args = parser.parse_args(argv)
+    """Run the eval CLI with one user-facing application error boundary."""
+    command: str | None = None
+    try:
+        # Load a .env file (if present) before any model adapter runs. Existing
+        # environment variables take precedence, so explicit exports still win.
+        load_dotenv()
+        parser = _build_parser()
+        args = parser.parse_args(argv)
+        command = args.command
 
-    # Branch boundary: argparse leaves subcommand unset when invoked without args.
-    if args.command == "eval":
-        return _run_eval(args)
-    if args.command == "report":
-        return _run_report(args)
-    if args.command == "optimize":
-        return _run_optimize(args)
+        # Branch boundary: argparse leaves subcommand unset when invoked without args.
+        if command == "eval":
+            return _run_eval(args)
+        if command == "report":
+            return _run_report(args)
+        if command == "optimize":
+            return _run_optimize(args)
 
-    parser.print_help(sys.stderr)
-    return 2
+        parser.print_help(sys.stderr)
+        return 2
+    except KeyboardInterrupt, asyncio.CancelledError:
+        # Terminal contexts unwind before this boundary renders the durable interruption line.
+        _say("eval interrupted" if command == "eval" else "interrupted")
+        return 130
+    except Exception as err:
+        # Branch boundary: developers may opt into the original exception for local debugging.
+        if os.getenv(_DEBUG_ENV_VAR) == "1":
+            raise
+        _say(_format_unexpected_error(err))
+        return 1
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -618,6 +633,20 @@ def _say(text: str) -> None:
     if text:
         sys.stderr.write(text if text.endswith("\n") else text + "\n")
     sys.stderr.flush()
+
+
+def _format_unexpected_error(error: Exception) -> str:
+    """Return one bounded diagnostic line including the useful exception cause chain."""
+    parts: list[str] = []
+    current: BaseException | None = error
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        detail = " ".join(str(current).split())
+        parts.append(f"{type(current).__name__}: {detail}" if detail else type(current).__name__)
+        current = current.__cause__ or current.__context__
+    message = "error: " + " (caused by ".join(parts) + ")" * (len(parts) - 1)
+    return message if len(message) <= _CLI_ERROR_MAX_CHARS else f"{message[: _CLI_ERROR_MAX_CHARS - 3]}..."
 
 
 def _derive_run_id() -> str:

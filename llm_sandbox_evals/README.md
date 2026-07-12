@@ -22,6 +22,8 @@ baseline/stub: mean=0.858 tool_calls=1.000
 
 On a terminal, `eval` clears the prior screen and renders one live stderr view with overall progress, active matrix cells and tool phases, recent results, and totals, then a compact artifact summary. Recent `Gates` squares are filled when required and hollow when optional; green means passed and red means failed. Calls are green at or below the scoring par and amber above it. Press **Escape** to cancel an interactive run; it writes no artifacts or stdout summary. With redirected stderr, it emits readable lifecycle lines instead. Every completed run writes `report.json` containing native analyses plus per-cell traces and auto-emits `report.html` for browser-based visual navigation; regenerate the HTML with `report <run_id> --html`.
 
+The CLI reports interruptions and unexpected failures as concise stderr lines without a traceback. Set `LLM_SANDBOX_EVALS_DEBUG=1` to re-raise unexpected exceptions while developing; interrupts remain clean.
+
 ## Running real models
 
 Any Pydantic AI provider-prefixed model id works, such as `openai:gpt-4o-mini`, `anthropic:claude-haiku-4-5`, or `openrouter:openai/gpt-4o-mini`; API keys are read from the environment (for example `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, `GOOGLE_API_KEY`, or `GEMINI_API_KEY`). A `.env` file in the repo root is auto-loaded by the CLI (shell exports take precedence over `.env`), and `.env` is gitignored.

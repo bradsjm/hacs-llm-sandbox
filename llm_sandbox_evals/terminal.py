@@ -30,10 +30,15 @@ _RECENT_RESULTS = 10
 _MAX_DIAGNOSTIC_CHARS = 500
 _MODEL_METADATA_WIDTH = 18
 _RECENT_MODEL_WIDTH = 11
-_PHASE_WIDTH = 32
+_CATEGORY_WIDTH = 11
+# Rich adds two cells of padding to each Progress column, so phase also funds Category's padding.
+_PHASE_WIDTH = 32 - _CATEGORY_WIDTH - 2
 _GATE_WIDTH = 10
 _NARROW_GATE_WIDTH = 8
 _RECENT_RESPONSE_MIN_WIDTH = 100
+_RECENT_NARROW_OUTCOME_WIDTH = 15
+_RECENT_WIDE_OUTCOME_WIDTH = 3
+_RECENT_WIDE_OUTCOME_MAX_WIDTH = 18
 
 
 @dataclass(slots=True)
@@ -336,6 +341,12 @@ class MatrixTerminalReporter:
                 style="dim",
                 table_column=Column(width=_MODEL_METADATA_WIDTH, no_wrap=True, overflow="ellipsis"),
             ),
+            TextColumn(
+                "{task.fields[category]}",
+                markup=True,
+                style="dim",
+                table_column=Column(width=_CATEGORY_WIDTH, no_wrap=True, overflow="ellipsis"),
+            ),
             _PhaseColumn(table_column=Column(width=_PHASE_WIDTH, justify="right", no_wrap=True, overflow="ellipsis")),
             _ElapsedColumn(table_column=Column(width=6, no_wrap=True)),
             expand=True,
@@ -345,6 +356,7 @@ class MatrixTerminalReporter:
                 escape(lane.request),
                 total=None,
                 metadata=escape(_left_ellipsis(lane.cell.model_id, _MODEL_METADATA_WIDTH)),
+                category=escape(_left_ellipsis(lane.cell.category, _CATEGORY_WIDTH)),
                 phase=escape(_lane_phase(lane.active_tools)),
                 started_at=lane.started_at,
             )
@@ -354,6 +366,7 @@ class MatrixTerminalReporter:
                     total=1,
                     completed=1,
                     metadata="",
+                    category="",
                     phase="",
                     response=lane.response,
                     show_spinner=False,
@@ -366,7 +379,15 @@ class MatrixTerminalReporter:
         show_response = self._console.width >= _RECENT_RESPONSE_MIN_WIDTH
         request_ratio = 3 if show_response else 1
         response_ratio = 4
-        outcome_ratio = 4 if show_response else 8
+        # Branch boundary: bounded Outcome width pays for Category before request/response space is allocated.
+        outcome_width = (
+            min(
+                _RECENT_WIDE_OUTCOME_MAX_WIDTH,
+                _RECENT_WIDE_OUTCOME_WIDTH + (self._console.width - _RECENT_RESPONSE_MIN_WIDTH) // 3,
+            )
+            if show_response
+            else _RECENT_NARROW_OUTCOME_WIDTH
+        )
         gate_width = _GATE_WIDTH if show_response else _NARROW_GATE_WIDTH
         table = Table(
             box=None,
@@ -378,10 +399,11 @@ class MatrixTerminalReporter:
         table.add_column("", width=1, no_wrap=True)
         table.add_column("Eval", width=4, justify="right", no_wrap=True)
         table.add_column("Model", width=_RECENT_MODEL_WIDTH, no_wrap=True, overflow="ellipsis")
+        table.add_column("Category", width=_CATEGORY_WIDTH, no_wrap=True, overflow="ellipsis")
         table.add_column("Request", ratio=request_ratio, no_wrap=True, overflow="ellipsis")
         if show_response:
             table.add_column("Response", ratio=response_ratio, no_wrap=True, overflow="ellipsis")
-        table.add_column("Outcome", ratio=outcome_ratio, min_width=18, no_wrap=True, overflow="ellipsis")
+        table.add_column("Outcome", width=outcome_width, no_wrap=True, overflow="ellipsis")
         table.add_column("Gates", width=gate_width, no_wrap=True)
         table.add_column("Calls", width=5, justify="right", no_wrap=True)
         table.add_column("Elapsed", width=7, justify="right", no_wrap=True)
@@ -391,6 +413,7 @@ class MatrixTerminalReporter:
                 Text(glyph, style=style),
                 str(result.completion_index),
                 _LeftEllipsisText(result.cell.model_id, style="dim"),
+                _LeftEllipsisText(result.cell.category, style="dim"),
                 _safe_text(result.request),
             ]
             if show_response:
@@ -502,7 +525,9 @@ def _call_text(tool_calls: int, par: int | None) -> Text:
 
 
 def _outcome_text(outcome: str, detail: str, style: str) -> Text:
-    """Render a semantic outcome label followed by an optional neutral explanation."""
+    """Render failure detail directly, otherwise a semantic outcome label and explanation."""
+    if outcome == "Needs attention":
+        return Text(detail or outcome, style=style)
     rendered = Text()
     rendered.append(outcome, style=style)
     if detail:
