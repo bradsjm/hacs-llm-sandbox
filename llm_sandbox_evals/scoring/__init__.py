@@ -1,4 +1,4 @@
-"""Small stable public surface for v3 eval scoring."""
+"""Small stable public surface for v4 eval scoring."""
 
 from llm_sandbox_evals.scoring.actions import build_action_ledger, score_actions
 from llm_sandbox_evals.scoring.contracts import EvidenceFact, NormalizedEvidence, Provenance

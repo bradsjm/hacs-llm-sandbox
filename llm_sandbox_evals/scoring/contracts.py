@@ -1,4 +1,4 @@
-"""Immutable evidence records used by the v3 scorer."""
+"""Immutable evidence records used by the v4 scorer."""
 # These records are intentionally structural; their fields are the evidence API.
 # ruff: noqa: D101, D102
 

@@ -59,7 +59,7 @@ class MatrixProgressEvent:
 
 @dataclass(slots=True)
 class SandboxOutcome(Evaluator[MatrixCellRef, CaseTrace, MatrixCellMeta]):
-    """Expose the v2 binary outcome as native pydantic-evals results."""
+    """Expose the v4 binary outcome as native pydantic-evals results."""
 
     def evaluate(
         self, ctx: EvaluatorContext[MatrixCellRef, CaseTrace, MatrixCellMeta]

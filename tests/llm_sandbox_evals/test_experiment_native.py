@@ -21,10 +21,10 @@ import pytest
 from llm_sandbox_evals import reports
 
 
-async def test_run_matrix_stub_persists_v3_trace_and_binary_rate(tmp_path: Path) -> None:
-    report = await run_matrix(_config(tmp_path, cases=["state_living_temperature"]), run_id="stub-v3")
+async def test_run_matrix_stub_persists_v4_trace_and_binary_rate(tmp_path: Path) -> None:
+    report = await run_matrix(_config(tmp_path, cases=["state_living_temperature"]), run_id="stub-v4")
     run_dir = reports.write_report_json(
-        report, _config(tmp_path, cases=["state_living_temperature"]), run_id="stub-v3"
+        report, _config(tmp_path, cases=["state_living_temperature"]), run_id="stub-v4"
     )
     reloaded = reports.load_report(run_dir)
     trace = reloaded.cases[0].output
@@ -36,10 +36,10 @@ async def test_run_matrix_stub_persists_v3_trace_and_binary_rate(tmp_path: Path)
     assert _scalar(reloaded.analyses, "Overall correct rate").value in {0.0, 1.0}
 
 
-async def test_run_matrix_emits_v3_lifecycle_events(tmp_path: Path) -> None:
+async def test_run_matrix_emits_v4_lifecycle_events(tmp_path: Path) -> None:
     events = []
     report = await run_matrix(
-        _config(tmp_path, cases=["state_living_temperature"]), run_id="lifecycle-v3", on_event=events.append
+        _config(tmp_path, cases=["state_living_temperature"]), run_id="lifecycle-v4", on_event=events.append
     )
 
     assert [event.state for event in events] == [
@@ -57,7 +57,7 @@ async def test_report_excludes_incomplete_from_correct_rate_and_keeps_coverage(t
     config = _config(tmp_path, models=["model-a", "model-b"])
     candidates = [_candidate("baseline", api_prompt="long authored prompt"), _candidate("compact", api_prompt="short")]
     selected_cases = [_case("case-a", "state"), _case("case-b", "state")]
-    dataset = build_dataset(config, candidates, selected_cases, "aggregation-v3")
+    dataset = build_dataset(config, candidates, selected_cases, "aggregation-v4")
     states = {
         ("baseline", "model-a", "case-a"): "correct",
         ("baseline", "model-a", "case-b"): "incorrect",
@@ -72,7 +72,7 @@ async def test_report_excludes_incomplete_from_correct_rate_and_keeps_coverage(t
     async def task(cell: MatrixCellRef) -> CaseTrace:
         return _trace(cell, states[(cell.candidate_id, cell.model_id, cell.case_id)])
 
-    report = await dataset.evaluate(task, name="aggregation-v3", progress=False, retry_task=None)
+    report = await dataset.evaluate(task, name="aggregation-v4", progress=False, retry_task=None)
     ranking = _table(report.analyses, "Candidate ranking")
     pairs = _table(report.analyses, "Candidate x model outcomes")
 
@@ -122,7 +122,7 @@ def _trace(cell: MatrixCellRef, state: str) -> CaseTrace:
         category=cell.category,
         candidate_id=cell.candidate_id,
         model_id=cell.model_id,
-        answer=ActionAnswer(answer="", success=True),
+        answer=ActionAnswer(answer=""),
         expected=Expected(blocked_outcome=BlockedOutcome()),
         outcome=CaseOutcome(state, state),
         conclusions=(),
@@ -130,7 +130,7 @@ def _trace(cell: MatrixCellRef, state: str) -> CaseTrace:
         action_ledger=ActionLedger(),
         tool_events=(),
         diagnostics=EvalDiagnostics(),
-        scoring_version=3,
+        scoring_version=4,
     )
 
 

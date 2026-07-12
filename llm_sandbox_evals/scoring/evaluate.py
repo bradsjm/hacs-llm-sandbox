@@ -5,25 +5,32 @@ from datetime import UTC, datetime
 from itertools import pairwise, product
 
 from llm_sandbox_evals.schema import (
-    ActionAnswer,
     ActionResult,
-    AggregateClaim,
+    AggregateAnswer,
+    AggregateExpectation,
+    AnswerExpectation,
     AnswerShape,
     CaseOutcome,
-    CollectionClaim,
     ConclusionResult,
+    EntityAnswer,
+    EntityCollectionAnswer,
+    EntityCollectionExpectation,
+    EntityExpectation,
+    EntityRelationAnswer,
+    EntityRelationExpectation,
     EvalCase,
-    EventClaim,
-    ExpectedConclusion,
-    Finding,
-    ListAnswer,
-    NoDataClaim,
-    ReadAnswer,
-    RelationClaim,
-    ValueClaim,
+    NoDataAnswer,
+    NoDataExpectation,
 )
 from llm_sandbox_evals.scoring.actions import build_action_ledger, score_actions
-from llm_sandbox_evals.scoring.assertions import _list_items_match, _read_finding_matches
+from llm_sandbox_evals.scoring.assertions import (
+    _aggregate_matches,
+    _collection_matches,
+    _entity_matches,
+    _no_data_matches,
+    _relation_matches,
+    _same_scalar,
+)
 from llm_sandbox_evals.scoring.contracts import EvidenceFact, NormalizedEvidence
 from llm_sandbox_evals.scoring.evidence import normalize_events
 
@@ -34,50 +41,17 @@ def evaluate_case(
     tool_events: Sequence,
     recorded_actions: Sequence[dict[str, object]] = (),
 ) -> tuple[CaseOutcome, tuple[ConclusionResult, ...], tuple[ActionResult, ...]]:
-    """Score a case-selected flat answer against oracle claims and action ledgers."""
+    """Score one concrete answer shape against successful evidence and action ledgers."""
     evidence = normalize_events(tool_events)
-    # Branch boundary: each model-facing shape has one finite scoring path.
-    match answer:
-        case ReadAnswer(findings=findings):
-            conclusion_results = tuple(
-                _score_read_conclusion(expected, findings, evidence) for expected in case.expected.conclusions
-            )
-            selected_findings = {
-                id(result.matched_finding): result.expected
-                for result in conclusion_results
-                if result.matched_finding is not None
-            }
-            all_answer_content_grounded = all(
-                _finding_grounded(finding, evidence, selected_findings.get(id(finding))) for finding in findings
-            )
-        case ListAnswer(items=items):
-            conclusion_results = tuple(
-                _score_list_conclusion(expected, items, evidence) for expected in case.expected.conclusions
-            )
-            grounded_items = set().union(
-                *(
-                    _collection_items(conclusion.claim, evidence)
-                    for conclusion in case.expected.conclusions
-                    if isinstance(conclusion.claim, CollectionClaim)
-                )
-            )
-            all_answer_content_grounded = all(item in grounded_items for item in items)
-        case ActionAnswer():
-            conclusion_results = tuple(
-                ConclusionResult(expected, None, "mismatched", "ungrounded", "missing_finding")
-                for expected in case.expected.conclusions
-            )
-            all_answer_content_grounded = True
+    expectation = case.expected.expectation
+    shape_result = _score_shape(expectation, answer, evidence) if expectation is not None else None
+    conclusion_results = (shape_result,) if shape_result is not None else ()
     ledger = build_action_ledger(recorded_actions)
     action_result = score_actions(case.expected.actions, case.expected.blocked_outcome, ledger)
-    correct = all(
-        result.semantic_status == "matched" and result.grounding_status == "grounded" for result in conclusion_results
-    )
+    correct = all(result.matched and result.grounded for result in conclusion_results)
     action_passed = action_result.passed if action_result is not None else not ledger.successful
-    correct = correct and all_answer_content_grounded and action_passed
-    reason = (
-        "ok" if correct else _reason(conclusion_results, action_result, all_answer_content_grounded, ledger.successful)
-    )
+    correct = correct and action_passed
+    reason = "ok" if correct else _reason(conclusion_results, action_result, ledger.successful)
     return (
         CaseOutcome("correct" if correct else "incorrect", reason),
         conclusion_results,
@@ -85,125 +59,99 @@ def evaluate_case(
     )
 
 
-def _score_read_conclusion(
-    expected: ExpectedConclusion, findings: Sequence[Finding], evidence: NormalizedEvidence
-) -> ConclusionResult:
-    if isinstance(expected.claim, NoDataClaim):
-        # No-data is represented by an empty answer and proved by the oracle's exact resolved scope.
-        if findings:
-            return ConclusionResult(expected, None, "mismatched", "ungrounded", "expected_empty_findings")
-        grounded = _no_data_grounded(expected.claim, evidence)
-        return ConclusionResult(
-            expected,
-            None,
-            "matched",
-            "grounded" if grounded else "ungrounded",
-            "ok" if grounded else "scope_mismatch",
-        )
-    matching = next(
-        (finding for finding in findings if _read_finding_matches(expected.claim, finding, expected.tolerance)),
-        None,
-    )
-    # Some registry joins are evidenced as relations but have no useful scalar model value.
-    if (
-        matching is None
-        and isinstance(expected.claim, RelationClaim)
-        and expected.claim.relation
-        in {
-            "entity_area",
-            "device_area",
-            "area_floor",
-        }
-    ):
-        matching = next((finding for finding in findings if finding.subject == expected.claim.subject_id), None)
-    if matching is None:
-        return ConclusionResult(expected, None, "mismatched", "ungrounded", "missing_finding")
-    expected_grounded = _oracle_claim_grounded(expected, evidence)
-    if not expected_grounded:
-        return ConclusionResult(expected, matching, "matched", "ungrounded", "oracle_not_grounded")
-    actual_grounded = _finding_grounded(matching, evidence, expected)
-    return ConclusionResult(
-        expected,
-        matching,
-        "matched",
-        "grounded" if actual_grounded else "ungrounded",
-        "ok" if actual_grounded else "finding_not_grounded",
-    )
+def _score_shape(expected: AnswerExpectation, answer: AnswerShape, evidence: NormalizedEvidence) -> ConclusionResult:
+    """Score the selected concrete shape; mismatched runtime shapes cannot borrow another path."""
+    matched = False
+    grounded = False
+    match expected, answer:
+        case EntityExpectation() as entity, EntityAnswer() as submitted:
+            matched = _entity_matches(entity, submitted)
+            grounded = matched and _entity_grounded(entity, submitted, evidence)
+        case EntityCollectionExpectation() as collection, EntityCollectionAnswer() as submitted:
+            matched = _collection_matches(collection, submitted)
+            grounded = matched and _collection_grounded(submitted, evidence)
+        case AggregateExpectation() as aggregate, AggregateAnswer() as submitted:
+            matched = _aggregate_matches(aggregate, submitted)
+            grounded = matched and _aggregate_expectation_grounded(aggregate, evidence)
+        case EntityRelationExpectation() as relation, EntityRelationAnswer() as submitted:
+            matched = _relation_matches(relation, submitted)
+            grounded = matched and _relation_grounded(relation, evidence)
+        case NoDataExpectation() as no_data, NoDataAnswer() as submitted:
+            matched = _no_data_matches(submitted)
+            grounded = matched and _no_data_grounded(no_data, evidence)
+    if grounded:
+        return ConclusionResult(expected, matched, grounded, "ok")
+    if matched:
+        return ConclusionResult(expected, matched, grounded, "evidence_missing")
+    return ConclusionResult(expected, matched, grounded, "answer_mismatch")
 
 
-def _score_list_conclusion(
-    expected: ExpectedConclusion, items: list[str], evidence: NormalizedEvidence
-) -> ConclusionResult:
-    if not isinstance(expected.claim, CollectionClaim) or not _list_items_match(
-        expected.claim, items, expected.assertion
-    ):
-        return ConclusionResult(expected, None, "mismatched", "ungrounded", "collection_mismatch")
-    grounded = set(expected.claim.items) <= _collection_items(expected.claim, evidence)
-    return ConclusionResult(
-        expected,
-        None,
-        "matched",
-        "grounded" if grounded else "ungrounded",
-        "ok" if grounded else "collection_not_grounded",
-    )
-
-
-def _oracle_claim_grounded(expected: ExpectedConclusion, evidence: NormalizedEvidence) -> bool:
-    claim = expected.claim
-    if isinstance(claim, AggregateClaim):
-        return _aggregate_claim_grounded(claim, evidence, expected.tolerance)
-    if isinstance(claim, RelationClaim):
-        return any(
-            all(
-                fact.get(key) == getattr(claim, key)
-                for key in ("subject_kind", "subject_id", "relation", "object_kind", "object_id")
-            )
-            for fact in evidence.for_kind("relation")
-        )
-    if isinstance(claim, EventClaim):
-        matching = Finding(subject=claim.entity_id, value=claim.value, when=claim.when)
-    elif isinstance(claim, ValueClaim):
-        matching = Finding(subject=claim.subject_id, value=claim.value)
-    else:
-        return False
-    return _finding_grounded(matching, evidence, expected)
-
-
-def _finding_grounded(
-    finding: Finding,
-    evidence: NormalizedEvidence,
-    expected: ExpectedConclusion | None,
-) -> bool:
-    if expected is not None and isinstance(expected.claim, AggregateClaim):
-        return _aggregate_claim_grounded(expected.claim, evidence, expected.tolerance)
-    if expected is not None and isinstance(expected.claim, RelationClaim):
-        return _oracle_claim_grounded(expected, evidence)
-    tolerance = expected.tolerance if expected is not None else None
-    scalar_facts = (
-        *((fact, "subject_id", "value", "timestamp") for fact in evidence.for_kind("value")),
-        *((fact, "entity_id", "value", "when") for fact in evidence.for_kind("history_attribute")),
-        *((fact, "entity_id", "state", "when") for fact in evidence.for_kind("history_row")),
-        *((fact, "statistic_id", "value", "when") for fact in evidence.for_kind("statistic_value")),
-        *((fact, "entity_id", "message", "when") for fact in evidence.for_kind("logbook_event")),
-        *((fact, "entity_id", "value", "when") for fact in evidence.for_kind("automation_run")),
-    )
+def _entity_grounded(expected: EntityExpectation, answer: EntityAnswer, evidence: NormalizedEvidence) -> bool:
+    source_facts = {
+        "states": ("value", "subject_id", "value", "field"),
+        "history": (
+            "history_attribute" if expected.input_field == "attribute" else "history_row",
+            "entity_id",
+            "value" if expected.input_field == "attribute" else "state",
+            "attribute_name",
+        ),
+        "logbook": ("logbook_event", "entity_id", "message", "message"),
+        "automation": (
+            "automation_run" if expected.input_field == "run" else "value",
+            "entity_id" if expected.input_field == "run" else "subject_id",
+            "value",
+            "field",
+        ),
+    }
+    kind, id_key, value_key, field_key = source_facts[expected.source]
     return any(
-        fact.get(subject_key) == finding.subject
-        and _same_scalar(fact.get(value_key), finding.value, tolerance)
-        and (finding.when is None or fact.get(when_key) == finding.when)
-        for fact, subject_key, value_key, when_key in scalar_facts
-    ) or any(
-        fact.get("subject_id") == finding.subject and fact.get("object_id") == finding.value
+        fact.get(id_key) == answer.entity_id
+        and _same_scalar(fact.get(value_key), answer.value, expected.tolerance)
+        and (
+            expected.source == "logbook"
+            or expected.input_field == "run"
+            or (
+                expected.source == "history"
+                and (
+                    expected.input_field == "state"
+                    or (expected.input_field == "attribute" and fact.get("attribute_name") == expected.input_value)
+                )
+            )
+            or (
+                expected.input_field == "attribute"
+                and fact.get(field_key) == "attribute"
+                and fact.get("attribute_name") == expected.input_value
+            )
+            or fact.get(field_key) == expected.input_field
+        )
+        for fact in evidence.for_kind(kind)
+    )
+
+
+def _collection_grounded(answer: EntityCollectionAnswer, evidence: NormalizedEvidence) -> bool:
+    returned_ids = {
+        value
+        for fact in evidence.facts
+        for key in ("subject_id", "entity_id", "statistic_id")
+        if isinstance((value := fact.get(key)), str)
+    }
+    return set(answer.entity_ids) <= returned_ids
+
+
+def _relation_grounded(expected: EntityRelationExpectation, evidence: NormalizedEvidence) -> bool:
+    return any(
+        fact.get("subject_id") == expected.entity_id
+        and fact.get("object_id") == expected.related_id
+        and fact.get("relation") == expected.relation
         for fact in evidence.for_kind("relation")
     )
 
 
-def _no_data_grounded(claim: NoDataClaim, evidence: NormalizedEvidence) -> bool:
+def _no_data_grounded(claim: NoDataExpectation, evidence: NormalizedEvidence) -> bool:
     rows = {
         "history": "history_row",
         "statistics": "statistic_value",
         "logbook": "logbook_event",
-        "automation": "automation_run",
     }[claim.source]
     identity_key = "statistic_id" if claim.source == "statistics" else "entity_id"
     # A resolved empty result is indivisible: scope and rows must come from one event.
@@ -223,89 +171,19 @@ def _no_data_grounded(claim: NoDataClaim, evidence: NormalizedEvidence) -> bool:
     return False
 
 
-def _collection_items(claim: CollectionClaim, evidence: NormalizedEvidence) -> set[str]:
-    collection = claim.collection
-    candidates: dict[str, list[EvidenceFact]] = {}
-    for fact in evidence.for_kind("value"):
-        subject_id = fact.get("subject_id")
-        if isinstance(subject_id, str):
-            candidates.setdefault(subject_id, []).append(fact)
-    if collection == "entity_ids":
-        candidates = {
-            subject_id: facts
-            for subject_id, facts in candidates.items()
-            if any(fact.get("subject_kind") == "entity" for fact in facts)
-        }
-    if collection == "automation_ids":
-        candidates = {
-            subject_id: facts
-            for subject_id, facts in candidates.items()
-            if any(fact.get("subject_kind") == "automation" for fact in facts)
-        }
-    if claim.filter_kind == "domain":
-        candidates = {
-            subject_id: facts
-            for subject_id, facts in candidates.items()
-            if any(fact.get("field") == "domain" and fact.get("value") == claim.filter_value for fact in facts)
-            or subject_id.split(".", 1)[0] == claim.filter_value
-        }
-    if claim.filter_kind == "state":
-        candidates = {
-            subject_id: facts
-            for subject_id, facts in candidates.items()
-            if any(fact.get("field") == "state" and fact.get("value") == claim.filter_value for fact in facts)
-        }
-    if claim.filter_kind in {"area", "device", "floor"}:
-        if claim.filter_kind == "floor":
-            area_ids = {
-                fact.get("subject_id")
-                for fact in evidence.for_kind("relation")
-                if fact.get("relation") == "area_floor" and fact.get("object_id") == claim.filter_value
-            }
-            candidates = {
-                subject_id: facts
-                for subject_id, facts in candidates.items()
-                if any(
-                    fact.get("relation") == "entity_area" and fact.get("object_id") in area_ids
-                    for fact in evidence.for_kind("relation")
-                    if fact.get("subject_id") == subject_id
-                )
-            }
-            return set(candidates)
-        relation = {"area": "entity_area", "device": "entity_device"}[claim.filter_kind]
-        candidates = {
-            subject_id: facts
-            for subject_id, facts in candidates.items()
-            if any(
-                fact.get("relation") == relation and fact.get("object_id") == claim.filter_value
-                for fact in evidence.for_kind("relation")
-                if fact.get("subject_id") == subject_id
-            )
-        }
-    if claim.filter_kind == "label":
-        candidates = {
-            subject_id: facts
-            for subject_id, facts in candidates.items()
-            if any(
-                fact.get("entity_id") == subject_id and fact.get("value") == claim.filter_value
-                for fact in evidence.for_kind("association")
-            )
-        }
-    return set(candidates)
-
-
-def _aggregate_claim_grounded(claim: AggregateClaim, evidence: NormalizedEvidence, tolerance: float | None) -> bool:
+def _aggregate_expectation_grounded(claim: AggregateExpectation, evidence: NormalizedEvidence) -> bool:
     if claim.source == "history" and claim.operator in {"duration_seconds", "time_in_state"}:
         return any(
-            _same_scalar(value, claim.value, tolerance) for value in _history_duration_candidates(claim, evidence)
+            _same_scalar(value, claim.value, claim.tolerance)
+            for value in _history_duration_candidates(claim, evidence)
         )
     computed = _aggregate_value(claim, evidence)
     if computed is None:
         return False
-    return _same_scalar(computed, claim.value, tolerance)
+    return _same_scalar(computed, claim.value, claim.tolerance)
 
 
-def _aggregate_value(claim: AggregateClaim, evidence: NormalizedEvidence) -> object:
+def _aggregate_value(claim: AggregateExpectation, evidence: NormalizedEvidence) -> object:
     subject_ids = set(claim.subject_ids)
     rows: list[tuple[str | None, object]] = []
     contributing_subjects: set[str] = set()
@@ -388,12 +266,6 @@ def _aggregate_value(claim: AggregateClaim, evidence: NormalizedEvidence) -> obj
         return max(numeric) if numeric else None
     if claim.operator == "sum":
         return sum(numeric) if numeric else None
-    if claim.operator in {"first_seen", "last_seen"}:
-        timestamps = sorted(
-            (when for when, _value in rows if _parse_time(when) is not None),
-            key=lambda value: _parse_time(value) or datetime.min.replace(tzinfo=UTC),
-        )
-        return (timestamps[0] if claim.operator == "first_seen" else timestamps[-1]) if timestamps else None
     if claim.operator in {"duration_seconds", "time_in_state"}:
         if explicit_duration_values:
             return sum(explicit_duration_values)
@@ -406,7 +278,7 @@ def _aggregate_value(claim: AggregateClaim, evidence: NormalizedEvidence) -> obj
 
 
 def _states_aggregate_value(
-    claim: AggregateClaim, evidence: NormalizedEvidence, subject_ids: set[str]
+    claim: AggregateExpectation, evidence: NormalizedEvidence, subject_ids: set[str]
 ) -> float | int | None:
     state_facts = {
         subject_id: tuple(
@@ -492,12 +364,12 @@ def _duration(rows: Sequence[tuple[str | None, object]], state: object) -> float
     return total
 
 
-def _history_duration(claim: AggregateClaim, evidence: NormalizedEvidence) -> float | None:
+def _history_duration(claim: AggregateExpectation, evidence: NormalizedEvidence) -> float | None:
     candidates = _history_duration_candidates(claim, evidence)
     return candidates[0] if candidates else None
 
 
-def _history_duration_candidates(claim: AggregateClaim, evidence: NormalizedEvidence) -> tuple[float, ...]:
+def _history_duration_candidates(claim: AggregateExpectation, evidence: NormalizedEvidence) -> tuple[float, ...]:
     window_by_event: dict[tuple[str, int, int, int], tuple[str, str]] = {}
     invalid_events: set[tuple[str, int, int, int]] = set()
     for fact in evidence.for_kind("history_window"):
@@ -588,28 +460,15 @@ def _convert(value: float, source_unit: object, target_unit: str | None) -> floa
     return value if source_unit == target_unit else None
 
 
-def _same_scalar(actual: object, expected: object, tolerance: float | None) -> bool:
-    actual_number, expected_number = _number(actual), _number(expected)
-    if actual_number is not None and expected_number is not None:
-        return abs(actual_number - expected_number) <= (tolerance or 0.0)
-    return actual == expected
-
-
 def _reason(
     results: Sequence[ConclusionResult],
     action: ActionResult | None,
-    all_grounded: bool,
     unexpected_effects: Sequence[dict[str, object]],
 ) -> str:
-    if not all_grounded:
-        return "extra_ungrounded_finding"
-    if any(result.semantic_status == "mismatched" for result in results):
-        return next((result.reason for result in results if result.semantic_status == "mismatched"), "missing_finding")
-    if any(result.grounding_status == "ungrounded" for result in results):
-        return next(
-            (result.reason for result in results if result.grounding_status == "ungrounded"),
-            "finding_not_grounded",
-        )
+    if any(not result.matched for result in results):
+        return "answer_mismatch"
+    if any(not result.grounded for result in results):
+        return "evidence_missing"
     if action is None:
-        return "unexpected_effect" if unexpected_effects else "incorrect"
-    return action.mismatches[0] if action.mismatches else "incorrect"
+        return "action_mismatch" if unexpected_effects else "answer_mismatch"
+    return "action_mismatch"

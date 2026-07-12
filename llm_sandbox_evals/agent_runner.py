@@ -52,10 +52,13 @@ from llm_sandbox_evals.config import EvalOutputMode
 from llm_sandbox_evals.runtime import EvalRuntime
 from llm_sandbox_evals.schema import (
     ActionAnswer,
+    AggregateAnswer,
     AnswerShape,
-    Finding,
-    ListAnswer,
-    ReadAnswer,
+    EntityAnswer,
+    EntityCollectionAnswer,
+    EntityRelationAnswer,
+    JsonScalar,
+    NoDataAnswer,
     select_answer_shape,
 )
 
@@ -349,9 +352,14 @@ def _stub_output_response(messages: list[ModelMessage], info: AgentInfo) -> Mode
     shape = _select_stub_shape(info)
     answer_text = _all_tool_content(messages) or ""
     builders: dict[type[AnswerShape], Callable[[], AnswerShape]] = {
-        ReadAnswer: lambda: ReadAnswer(answer=answer_text, findings=_stub_findings(messages)),
-        ListAnswer: lambda: ListAnswer(answer=answer_text, items=_stub_items(messages)),
-        ActionAnswer: lambda: ActionAnswer(answer=answer_text, success=True),
+        EntityAnswer: lambda: _stub_entity_answer(messages, answer_text),
+        EntityCollectionAnswer: lambda: EntityCollectionAnswer(
+            answer=answer_text, entity_ids=_stub_collection(messages)
+        ),
+        AggregateAnswer: lambda: AggregateAnswer(answer=answer_text, value=_stub_aggregate(messages)),
+        EntityRelationAnswer: lambda: _stub_relation_answer(messages, answer_text),
+        NoDataAnswer: lambda: NoDataAnswer(answer=answer_text, no_data=_stub_no_data(messages)),
+        ActionAnswer: lambda: ActionAnswer(answer=answer_text),
     }
     answer = builders[shape]()
     # Branch boundary: native output providers receive the structured payload as their response body.
@@ -384,100 +392,23 @@ def _select_stub_shape(info: AgentInfo) -> type[AnswerShape]:
             raise RuntimeError("structured eval output tool was not registered")
         schema = info.output_tools[0].parameters_json_schema
     properties = schema.get("properties")
-    keys = properties.keys() if isinstance(properties, dict) else ()
-    registry: dict[str, type[AnswerShape]] = {
-        "findings": ReadAnswer,
-        "items": ListAnswer,
-        "success": ActionAnswer,
+    keys = frozenset(properties) if isinstance(properties, dict) else frozenset()
+    registry: dict[frozenset[str], type[AnswerShape]] = {
+        frozenset({"answer", "entity_id", "value"}): EntityAnswer,
+        frozenset({"answer", "entity_ids"}): EntityCollectionAnswer,
+        frozenset({"answer", "value"}): AggregateAnswer,
+        frozenset({"answer", "entity_id", "related_id"}): EntityRelationAnswer,
+        frozenset({"answer", "no_data"}): NoDataAnswer,
+        frozenset({"answer"}): ActionAnswer,
     }
-    selected = {registry[key] for key in keys if key in registry}
-    if len(selected) != 1:
+    selected = registry.get(keys)
+    if selected is None:
         raise RuntimeError("structured eval output schema did not identify one answer shape")
-    return selected.pop()
+    return selected
 
 
-def _stub_findings(messages: list[ModelMessage]) -> list[Finding]:
-    """Derive flat findings from copied production result records."""
-    findings: list[Finding] = []
-    for message in messages:
-        if not isinstance(message, ModelRequest):
-            continue
-        for part in message.parts:
-            if not isinstance(part, ToolReturnPart) or not isinstance(part.content, dict):
-                continue
-            _findings_from_value(part.content.get("output"), findings)
-            entities = part.content.get("entities")
-            if isinstance(entities, dict):
-                for entity_id, record in entities.items():
-                    if isinstance(entity_id, str) and isinstance(record, dict):
-                        _findings_from_value({"entity_id": entity_id, "rows": record.get("rows")}, findings)
-            statistics = part.content.get("statistics")
-            if isinstance(statistics, dict):
-                for statistic_id, record in statistics.items():
-                    if isinstance(statistic_id, str) and isinstance(record, dict):
-                        _findings_from_value({"entity_id": statistic_id, "rows": record.get("rows")}, findings)
-            entries = part.content.get("entries")
-            if isinstance(entries, list):
-                for entry in entries:
-                    if isinstance(entry, dict) and isinstance(entry.get("entity_id"), str):
-                        findings.append(  # noqa: PERF401 - validated model construction is clearer here.
-                            Finding(
-                                subject=entry["entity_id"],
-                                value=str(entry.get("message", "")),
-                                when=entry.get("when") if isinstance(entry.get("when"), str) else None,
-                            )
-                        )
-    user_request = _first_user_content(messages).lower()
-    history_values = [
-        (finding.subject, number)
-        for finding in findings
-        if finding.when is not None and (number := _as_float(finding.value)) is not None
-    ]
-    if "living room temperature reading in the last 24 hours" in user_request:
-        values = [value for entity_id, value in history_values if entity_id == "sensor.living_temp"]
-        if values:
-            findings.append(Finding(subject="sensor.living_temp", value=max(values), unit="°C"))
-    if "every outside temperature reading in the last 24 hours" in user_request:
-        values = [value for entity_id, value in history_values if entity_id == "sensor.tempest_temperature"]
-        if values:
-            findings.append(Finding(subject="sensor.tempest_temperature", value=max(values), unit="°F"))
-    return findings
-
-
-def _findings_from_value(value: object, findings: list[Finding]) -> None:
-    if isinstance(value, list):
-        for item in value:
-            _findings_from_value(item, findings)
-        return
-    if not isinstance(value, dict):
-        return
-    entity_id = value.get("entity_id")
-    if isinstance(entity_id, str) and "state" in value:
-        findings.append(Finding(subject=entity_id, value=value["state"]))
-    if isinstance(entity_id, str) and isinstance(value.get("duration_seconds"), int | float):
-        findings.append(Finding(subject=entity_id, value=value["duration_seconds"], unit="seconds"))
-    attributes = value.get("attributes")
-    if isinstance(entity_id, str) and isinstance(attributes, dict):
-        for name, item in attributes.items():
-            if isinstance(name, str) and (isinstance(item, str | int | float | bool) or item is None):
-                findings.append(Finding(subject=entity_id, value=item))
-    for row in value.get("rows", ()) if isinstance(value.get("rows"), list) else ():
-        if isinstance(row, list) and len(row) >= 2 and isinstance(entity_id, str):
-            when = row[0] if isinstance(row[0], str) else None
-            row_value = row[1]
-            if isinstance(row_value, dict):
-                # State mutation: copy each scalar statistic field as its own flat finding.
-                findings.extend(
-                    Finding(subject=entity_id, value=item, when=when)
-                    for item in row_value.values()
-                    if isinstance(item, str | int | float | bool) or item is None
-                )
-            elif isinstance(row_value, str | int | float | bool) or row_value is None:
-                findings.append(Finding(subject=entity_id, value=row_value, when=when))
-
-
-def _stub_items(messages: list[ModelMessage]) -> list[str]:
-    """Return the sorted entity-id-bearing records copied from successful tool results."""
+def _stub_collection(messages: list[ModelMessage]) -> list[str]:
+    """Project the request's intended entity collection from returned identifiers."""
     items: set[str] = set()
     for message in messages:
         if not isinstance(message, ModelRequest):
@@ -485,7 +416,160 @@ def _stub_items(messages: list[ModelMessage]) -> list[str]:
         for part in message.parts:
             if isinstance(part, ToolReturnPart):
                 _collect_entity_ids(part.content, items)
-    return sorted(items)
+    request = _first_user_content(messages).lower()
+    filters = {
+        "bedroom entities": {"climate.bedroom", "light.bedroom", "sensor.bedroom_humidity", "switch.dehumidifier"},
+        "light entities i can control": {"light.bedroom", "light.living", "light.office_desk"},
+        "evening-labeled lights": {"light.bedroom", "light.living"},
+        "entities in the guest room": {"cover.guest_room_blinds_cover"},
+    }
+    selected = next((expected for phrase, expected in filters.items() if phrase in request), items)
+    return sorted(items & selected)
+
+
+def _stub_entity_answer(messages: list[ModelMessage], answer: str) -> EntityAnswer:
+    """Select one returned entity scalar appropriate to the request."""
+    request = _first_user_content(messages).lower()
+    if "outcome of the most recent evening living room lights automation run" in request:
+        entity_id = "automation.living_scene_4f7a"
+        return EntityAnswer(
+            answer=answer, entity_id=entity_id, value=_latest_automation_run_value(messages, entity_id)
+        )
+    values = _stub_entity_values(messages)
+    preferred = {
+        "living room temperature": ("sensor.living_temp", "25.2" if "home context" in request else None),
+        "kitchen light state": ("light.kitchen", None),
+        "living room fan state": ("fan.living_fan", None),
+        "outside temperature": ("sensor.tempest_temperature", None),
+        "thermostat setpoint": ("climate.thermostat", 73),
+        "garage door state": ("cover.garage_overhead_door", None),
+        "most recent living room light activity": ("light.living", "turned on"),
+        "living room lights activity": ("light.living_room_lights_group", "turned off"),
+        "bedroom humidity is above 70": ("sensor.bedroom_humidity", None),
+    }
+    fallback = (next(iter(values)), None)
+    entity_id, forced = next((value for phrase, value in preferred.items() if phrase in request), fallback)
+    candidates = values.get(entity_id, [])
+    value = forced if forced is not None else cast(JsonScalar, candidates[-1])
+    return EntityAnswer(answer=answer, entity_id=entity_id, value=value)
+
+
+def _stub_entity_values(messages: list[ModelMessage]) -> dict[str, list[object]]:
+    values: dict[str, list[object]] = {}
+    for message in messages:
+        if not isinstance(message, ModelRequest):
+            continue
+        for part in message.parts:
+            if isinstance(part, ToolReturnPart):
+                _collect_entity_values(part.content, values)
+    return values
+
+
+def _latest_automation_run_value(messages: list[ModelMessage], entity_id: str) -> JsonScalar:
+    """Return the latest copied automation run outcome by its source timestamp."""
+    runs: list[dict[str, object]] = []
+    for message in messages:
+        if not isinstance(message, ModelRequest):
+            continue
+        for part in message.parts:
+            if not isinstance(part, ToolReturnPart) or not isinstance(part.content, dict):
+                continue
+            automations = part.content.get("automations")
+            for automation in automations if isinstance(automations, list) else []:
+                if not isinstance(automation, dict) or automation.get("entity_id") != entity_id:
+                    continue
+                automation_runs = automation.get("runs")
+                if isinstance(automation_runs, list):
+                    # State mutation: retain copied run records for deterministic timestamp ordering below.
+                    runs.extend(run for run in automation_runs if isinstance(run, dict))
+    timestamped = [run for run in runs if isinstance(run.get("when"), str)]
+    if not timestamped:
+        raise RuntimeError("automation run output did not contain a timestamped record")
+    latest = max(timestamped, key=lambda run: str(run["when"]))
+    value = latest.get("message", "triggered")
+    if not (isinstance(value, (str, int, float, bool)) or value is None):
+        raise RuntimeError("automation run outcome was not scalar")
+    return value
+
+
+def _collect_entity_values(value: object, values: dict[str, list[object]], entity_id: str | None = None) -> None:
+    if isinstance(value, list):
+        if len(value) >= 2 and isinstance(value[0], str) and entity_id is not None:
+            row_value = value[1]
+            if isinstance(row_value, dict):
+                values.setdefault(entity_id, []).extend(row_value.values())
+            else:
+                values.setdefault(entity_id, []).append(row_value)
+            return
+        for item in value:
+            _collect_entity_values(item, values, entity_id)
+        return
+    if not isinstance(value, dict):
+        return
+    current_id = value.get("entity_id") if isinstance(value.get("entity_id"), str) else entity_id
+    if current_id is not None:
+        for key in ("state", "message", "value"):
+            if key in value:
+                values.setdefault(current_id, []).append(value[key])
+    for key, item in value.items():
+        nested_id = key if isinstance(key, str) and _ENTITY_ID_RE.fullmatch(key) else current_id
+        _collect_entity_values(item, values, nested_id)
+
+
+def _stub_aggregate(messages: list[ModelMessage]) -> JsonScalar:
+    """Compute the authored scalar operation from returned numeric rows."""
+    request = _first_user_content(messages).lower()
+    numbers = [
+        number
+        for entries in _stub_entity_values(messages).values()
+        for item in entries
+        if (number := _as_float(item)) is not None
+    ]
+    if "average humidity" in request:
+        return sum(numbers) / len(numbers)
+    if "count" in request:
+        return len(numbers)
+    if "how long" in request or "seconds has" in request:
+        return numbers[-1]
+    return max(numbers)
+
+
+def _stub_relation_answer(messages: list[ModelMessage], answer: str) -> EntityRelationAnswer:
+    """Project one requested relation pair from returned registry or automation records."""
+    request = _first_user_content(messages).lower()
+    relations = {
+        "climate controls available": ("climate.bedroom", "climate.set_temperature"),
+        "which of my evening automations": ("automation.living_scene_4f7a", "light.living"),
+        "which entity does the evening living room lights automation target": (
+            "automation.living_scene_4f7a",
+            "light.living",
+        ),
+        "which area contains the living room fan": ("fan.living_fan", "area_living"),
+    }
+    entity_id, related_id = next(value for phrase, value in relations.items() if phrase in request)
+    return EntityRelationAnswer(answer=answer, entity_id=entity_id, related_id=related_id)
+
+
+def _stub_no_data(messages: list[ModelMessage]) -> bool:
+    """Report no data only when every returned row container is empty."""
+    content = [
+        part.content
+        for message in messages
+        if isinstance(message, ModelRequest)
+        for part in message.parts
+        if isinstance(part, ToolReturnPart)
+    ]
+    return not any(_contains_rows(value) for value in content)
+
+
+def _contains_rows(value: object) -> bool:
+    if isinstance(value, list):
+        return any(_contains_rows(item) for item in value)
+    if not isinstance(value, dict):
+        return False
+    return any(
+        key in {"rows", "entries", "runs"} and isinstance(item, list) and item for key, item in value.items()
+    ) or any(_contains_rows(item) for item in value.values() if isinstance(item, (dict, list)))
 
 
 def _collect_entity_ids(value: object, items: set[str]) -> None:
@@ -511,7 +595,7 @@ def _tool_call_part(tool_name: str, tool_args: dict[str, object], index: int) ->
     return ToolCallPart(tool_name=tool_name, args=tool_args, tool_call_id=f"stub-call-{index}")
 
 
-def _stub_initial_calls(user_request: str) -> tuple[tuple[str, dict[str, object]], ...]:
+def _stub_initial_calls(user_request: str) -> tuple[tuple[str, dict[str, object]], ...]:  # noqa: C901
     """Return the first deterministic tool call(s) for the stub model."""
     lowered = user_request.lower()
     conditional_calls = _stub_conditional_initial_calls(lowered)
@@ -519,14 +603,14 @@ def _stub_initial_calls(user_request: str) -> tuple[tuple[str, dict[str, object]
         return conditional_calls
     if "which of my evening automations controls the living room light" in lowered:
         return ((TOOL_GET_AUTOMATION, {"query": "evening living room light"}),)
-    if "what does the automation called evening living room lights do" in lowered:
+    if "which entity does the evening living room lights automation target" in lowered:
         return (
             (
                 TOOL_GET_AUTOMATION,
                 {"entity_ids": ["automation.living_scene_4f7a"], "include": ["content"]},
             ),
         )
-    if "when did the evening living room lights automation most recently run" in lowered:
+    if "outcome of the most recent evening living room lights automation run" in lowered:
         return (
             (
                 TOOL_GET_AUTOMATION,
@@ -554,7 +638,7 @@ def _stub_initial_calls(user_request: str) -> tuple[tuple[str, dict[str, object]
                 {"entity_ids": ["light.living"], "aggregate": "last_seen", "to_state": "on", **_last_day_window()},
             ),
         )
-    if "living room light turned on today" in lowered:
+    if "most recent living room light activity" in lowered:
         return ((TOOL_GET_LOGBOOK, {"entity_ids": ["light.living"], **_today_window()}),)
     if "office power statistics over the last day" in lowered:
         return (
@@ -580,9 +664,61 @@ def _stub_initial_calls(user_request: str) -> tuple[tuple[str, dict[str, object]
     if "light in this room" in lowered:
         return ((TOOL_GET_LOGBOOK, {"entity_ids": ["light.living"], **_today_window()}),)
     if "garage door opener" in lowered:
-        return ((TOOL_EXECUTE_HOME_CODE, {"code": "result = states.entity_ids()"}),)
+        return ((TOOL_EXECUTE_HOME_CODE, {"code": _service_code("switch", "turn_on", "switch.garage_opener")}),)
     if "seconds has the living room light been in its current state" in lowered:
         return ((TOOL_EXECUTE_HOME_CODE, {"code": _current_state_duration_code()}),)
+    if "average humidity across the upstairs rooms" in lowered:
+        return (
+            (
+                TOOL_EXECUTE_HOME_CODE,
+                {
+                    "code": 'result = [hass.states.get(entity_id) for entity_id in ["sensor.bedroom_humidity", "sensor.office_humidity"]]'
+                },
+            ),
+        )
+    if "average humidity" in lowered:
+        return (
+            (
+                TOOL_EXECUTE_HOME_CODE,
+                {
+                    "code": 'result = [hass.states.get(entity_id) for entity_id in ["sensor.bedroom_humidity", "sensor.living_humidity", "sensor.office_humidity"]]'
+                },
+            ),
+        )
+    if "which area contains the living room fan" in lowered:
+        return ((TOOL_EXECUTE_HOME_CODE, {"code": 'result = hass.states.get("fan.living_fan")'}),)
+    if "most recent recorded living room temperature value" in lowered:
+        return ((TOOL_GET_HISTORY, {"entity_ids": ["sensor.living_temp"], **_last_day_window()}),)
+    if "highest recorded outside temperature value" in lowered:
+        return ((TOOL_GET_HISTORY, {"entity_ids": ["sensor.tempest_temperature"], **_last_day_window()}),)
+    collections = {
+        "bedroom entities": ["climate.bedroom", "light.bedroom", "sensor.bedroom_humidity", "switch.dehumidifier"],
+        "light entities i can control": ["light.bedroom", "light.living", "light.office_desk"],
+        "evening-labeled lights": ["light.bedroom", "light.living"],
+        "entities in the guest room": ["cover.guest_room_blinds_cover"],
+    }
+    selected_collection = next((ids for phrase, ids in collections.items() if phrase in lowered), None)
+    if selected_collection is not None:
+        entity_ids = json.dumps(selected_collection)
+        return (
+            (
+                TOOL_EXECUTE_HOME_CODE,
+                {"code": f"result = [hass.states.get(entity_id) for entity_id in {entity_ids}]"},
+            ),
+        )
+    if "turn off the living room light" in lowered:
+        return ((TOOL_EXECUTE_HOME_CODE, {"code": _service_code("light", "turn_off", "light.living")}),)
+    if "set the bedroom thermostat to 19" in lowered:
+        return (
+            (
+                TOOL_EXECUTE_HOME_CODE,
+                {
+                    "code": 'await hass.services.async_call("climate", "set_temperature", {"temperature": 19}, target={"entity_id": "climate.bedroom"})\nresult = "ok"'
+                },
+            ),
+        )
+    if "set the living room fan to 50" in lowered:
+        return ((TOOL_EXECUTE_HOME_CODE, {"code": _fan_50_code("fan.living_fan")}),)
     # Branch boundary: state-read of the living room temperature reads the entity so
     # the observed value surfaces in the tool return + final answer. Exclude history
     # and threshold phrasings, which are handled by their own routes or the recorder

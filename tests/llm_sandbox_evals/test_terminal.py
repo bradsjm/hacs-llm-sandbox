@@ -16,7 +16,7 @@ from rich.console import Console
         pytest.param("incomplete", "provider_error", "incomplete — provider_error", id="incomplete"),
     ],
 )
-def test_terminal_renders_v3_outcomes_without_operational_scoring(outcome: str, detail: str, expected: str) -> None:
+def test_terminal_renders_v4_outcomes_without_operational_scoring(outcome: str, detail: str, expected: str) -> None:
     rendered = _outcome_text(outcome, detail, "style")
 
     assert rendered.plain == expected
@@ -96,5 +96,5 @@ def _trace(
         action_ledger=ActionLedger(),
         tool_events=(),
         diagnostics=EvalDiagnostics(tool_calls=tool_calls, cap_exhausted=cap_exhausted, elapsed_seconds=elapsed),
-        scoring_version=3,
+        scoring_version=4,
     )

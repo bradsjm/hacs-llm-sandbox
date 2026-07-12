@@ -1,44 +1,43 @@
-"""Finite semantic assertion operations for flat model answers."""
+"""Finite semantic comparisons for concrete model answers."""
 
 from math import isclose
 
 from llm_sandbox_evals.schema import (
-    AggregateClaim,
-    AnswerClaim,
-    CollectionClaim,
-    EventClaim,
-    Finding,
-    RelationClaim,
-    ValueClaim,
+    AggregateAnswer,
+    AggregateExpectation,
+    EntityAnswer,
+    EntityCollectionAnswer,
+    EntityCollectionExpectation,
+    EntityExpectation,
+    EntityRelationAnswer,
+    EntityRelationExpectation,
+    NoDataAnswer,
 )
 
 
-def _read_finding_matches(claim: AnswerClaim, finding: Finding, tolerance: float | None) -> bool:
-    """Match one flat finding to an authored read claim without parsing prose."""
-    if isinstance(claim, ValueClaim):
-        return finding.subject == claim.subject_id and _same_scalar(finding.value, claim.value, tolerance)
-    if isinstance(claim, EventClaim):
-        return (
-            finding.subject == claim.entity_id
-            and finding.value == claim.value
-            and (claim.when is None or finding.when == claim.when)
-        )
-    if isinstance(claim, AggregateClaim):
-        return (
-            finding.subject in claim.subject_ids
-            and _same_scalar(finding.value, claim.value, tolerance)
-            and (claim.unit is None or finding.unit == claim.unit)
-        )
-    if isinstance(claim, RelationClaim):
-        return finding.subject == claim.subject_id and finding.value == claim.object_id
-    return False
+def _entity_matches(expected: EntityExpectation, answer: EntityAnswer) -> bool:
+    """Match an entity identifier and scalar value."""
+    return answer.entity_id == expected.entity_id and _same_scalar(answer.value, expected.value, expected.tolerance)
 
 
-def _list_items_match(claim: CollectionClaim, items: list[str], assertion: str) -> bool:
-    """Apply an authored finite set assertion to submitted collection items."""
-    expected_items = set(claim.items)
-    actual_items = set(items)
-    return actual_items == expected_items if assertion == "exact_items" else expected_items <= actual_items
+def _collection_matches(expected: EntityCollectionExpectation, answer: EntityCollectionAnswer) -> bool:
+    """Match a collection as an exact set without accepting duplicates."""
+    return len(answer.entity_ids) == len(set(answer.entity_ids)) and set(answer.entity_ids) == set(expected.entity_ids)
+
+
+def _aggregate_matches(expected: AggregateExpectation, answer: AggregateAnswer) -> bool:
+    """Match an aggregate scalar using its authored tolerance when present."""
+    return _same_scalar(answer.value, expected.value, expected.tolerance)
+
+
+def _relation_matches(expected: EntityRelationExpectation, answer: EntityRelationAnswer) -> bool:
+    """Match both identifiers in an authored relation."""
+    return answer.entity_id == expected.entity_id and answer.related_id == expected.related_id
+
+
+def _no_data_matches(answer: NoDataAnswer) -> bool:
+    """Accept only an explicit true no-data result."""
+    return answer.no_data is True
 
 
 def _same_scalar(actual: object, expected: object, tolerance: float | None) -> bool:

@@ -53,21 +53,30 @@ def normalize_automation_output(output: Mapping[str, object], provenance: Proven
         target = action.get("target") if isinstance(action, Mapping) else None
         targets = target.get("entity_id") if isinstance(target, Mapping) else None
         targets = [targets] if isinstance(targets, str) else targets
-        for target_id in targets if isinstance(targets, list) else []:
-            if isinstance(target_id, str):
-                fact(
-                    "relation",
-                    {
-                        "subject_kind": "automation",
-                        "subject_id": entity_id,
-                        "relation": "automation_target",
-                        "object_kind": "entity",
-                        "object_id": target_id,
-                    },
-                    provenance,
-                    facts,
-                    entity_id,
-                )
+        target_ids = (
+            {target_id for target_id in targets if isinstance(target_id, str)} if isinstance(targets, list) else set()
+        )
+        references = record.get("references")
+        referenced_entities = references.get("entities") if isinstance(references, Mapping) else None
+        target_ids.update(
+            str(reference["id"])
+            for reference in (referenced_entities if isinstance(referenced_entities, list) else [])
+            if isinstance(reference, Mapping) and isinstance(reference.get("id"), str)
+        )
+        for target_id in target_ids:
+            fact(
+                "relation",
+                {
+                    "subject_kind": "automation",
+                    "subject_id": entity_id,
+                    "relation": "automation_target",
+                    "object_kind": "entity",
+                    "object_id": target_id,
+                },
+                provenance,
+                facts,
+                entity_id,
+            )
         runs = record.get("runs")
         for run in runs if isinstance(runs, list) else []:
             if isinstance(run, Mapping) and isinstance(run.get("when"), str):

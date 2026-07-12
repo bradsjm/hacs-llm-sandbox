@@ -12,11 +12,10 @@ from llm_sandbox_evals.runtime import build_eval_runtime, build_fixture_recorder
 from llm_sandbox_evals.schema import (
     BlockedOutcome,
     CaseContext,
+    EntityExpectation,
     EvalCase,
     Expected,
     ExpectedAction,
-    ExpectedConclusion,
-    ValueClaim,
 )
 from llm_sandbox_evals.tools import EVAL_SCOPE, apply_scope
 
@@ -203,12 +202,7 @@ def _case(*, actions_enabled: bool, expected: Expected | None = None) -> EvalCas
         llm_context=CaseContext(device_id="device_assist_living"),
         expected=expected
         or Expected(
-            conclusions=(
-                ExpectedConclusion(
-                    claim=ValueClaim(subject_kind="entity", subject_id="light.living", field="state", value="on"),
-                    assertion="equals",
-                ),
-            )
+            expectation=EntityExpectation(source="states", entity_id="light.living", input_field="state", value="on")
         ),
     )
 

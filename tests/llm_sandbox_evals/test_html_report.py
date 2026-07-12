@@ -6,21 +6,21 @@ from llm_sandbox_evals.html_report import render_html, write_html
 import pytest
 
 
-def test_render_html_embeds_v3_trace_data_island() -> None:
+def test_render_html_embeds_v4_trace_data_island() -> None:
     report = _report(_case())
-    rendered = render_html(report, run_id="v3-run", created_at="2026-07-12T00:00:00+00:00")
+    rendered = render_html(report, run_id="v4-run", created_at="2026-07-12T00:00:00+00:00")
 
     assert rendered.startswith("<!doctype html>")
     island = _data_island(rendered)
     assert island["cases"][0]["output"]["outcome"]["state"] == "correct"
-    assert island["cases"][0]["output"]["expected"]["conclusions"][0]["assertion"] == "equals"
-    assert island["cases"][0]["output"]["conclusions"][0]["semantic_status"] == "matched"
-    assert island["cases"][0]["output"]["conclusions"][0]["grounding_status"] == "grounded"
+    assert island["cases"][0]["output"]["expected"]["expectation"]["kind"] == "entity"
+    assert island["cases"][0]["output"]["conclusions"][0]["matched"] is True
+    assert island["cases"][0]["output"]["conclusions"][0]["grounded"] is True
     assert island["cases"][0]["output"]["action_ledger"]["successful"][0]["domain"] == "light"
     assert island["cases"][0]["output"]["tool_events"][0]["output"]["execution"]["status"] == "ok"
     assert island["cases"][0]["output"]["diagnostics"]["tool_calls"] == 2
     assert island["cases"][0]["output"]["answer"]["answer"] == "The light is on."
-    assert island["cases"][0]["output"]["answer"]["findings"][0]["subject"] == "sensor.living_temp"
+    assert island["cases"][0]["output"]["answer"]["entity_id"] == "sensor.living_temp"
 
 
 @pytest.mark.parametrize(
@@ -33,14 +33,14 @@ def test_render_html_embeds_v3_trace_data_island() -> None:
     ],
     ids=["img-breakout", "script-breakout", "uppercase-breakout", "mixedcase-breakout"],
 )
-def test_render_html_escapes_v3_answer_script_breakout(dangerous: str) -> None:
+def test_render_html_escapes_v4_answer_script_breakout(dangerous: str) -> None:
     report = _report(_case(answer_text=dangerous))
     rendered = render_html(report)
 
     assert "</" not in rendered.split('id="report-data">', 1)[1].split("</script>", 1)[0]
 
 
-def test_render_html_keeps_v3_detail_projection_and_raw_trace_fields() -> None:
+def test_render_html_keeps_v4_detail_projection_and_raw_trace_fields() -> None:
     rendered = render_html(_report(_case()))
 
     for marker in (
@@ -57,8 +57,8 @@ def test_render_html_keeps_v3_detail_projection_and_raw_trace_fields() -> None:
     assert "execute_home_code" in rendered
     assert "get_logbook" in rendered
     markers = (
-        "Authored expected conclusions and effects",
-        "Submitted findings/items and grounding",
+        "Authored expectation and effects",
+        "Submitted answer and grounding",
         "Action ledgers and results",
         "Chronological tool evidence",
         "Diagnostics",
@@ -69,7 +69,7 @@ def test_render_html_keeps_v3_detail_projection_and_raw_trace_fields() -> None:
     assert '.map((event, index) => toolCard(event.tool_name === "execute_home_code")(event, index))' in rendered
 
 
-def test_write_html_round_trip_preserves_v3_trace(tmp_path: Path) -> None:
+def test_write_html_round_trip_preserves_v4_trace(tmp_path: Path) -> None:
     run_dir = tmp_path / "20260709-120102-123456"
     run_dir.mkdir()
     (run_dir / "report.json").write_text(json.dumps(_report(_case())), encoding="utf-8")
@@ -90,52 +90,52 @@ def test_render_html_tolerates_minimal_empty_report() -> None:
 
 
 def _case(*, answer_text: str = "The light is on.") -> dict[str, object]:
-    value_claim = {
-        "kind": "value",
-        "subject_kind": "entity",
-        "subject_id": "sensor.living_temp",
-        "field": "state",
-        "attribute_name": None,
+    expectation = {
+        "kind": "entity",
+        "source": "states",
+        "entity_id": "sensor.living_temp",
+        "input_field": "state",
+        "input_value": None,
         "value": "on",
+        "tolerance": None,
+        "unit": None,
     }
-    finding = {"subject": "sensor.living_temp", "value": "on", "unit": None, "when": None}
     expected = {
-        "conclusions": [{"claim": value_claim, "assertion": "equals", "tolerance": None}],
+        "expectation": expectation,
         "actions": [
             {"domain": "light", "service": "turn_on", "target_entity_ids": ["light.living"], "service_data": None}
         ],
         "blocked_outcome": None,
     }
     return {
-        "name": "baseline/stub/case-v3",
+        "name": "baseline/stub/case-v4",
         "inputs": {
-            "case_id": "case-v3",
+            "case_id": "case-v4",
             "candidate_id": "baseline",
             "model_id": "stub",
             "home": "home_minimal",
             "category": "action",
         },
         "metadata": {
-            "case_id": "case-v3",
+            "case_id": "case-v4",
             "candidate_id": "baseline",
             "model_id": "stub",
             "home": "home_minimal",
             "category": "action",
         },
         "output": {
-            "case_id": "case-v3",
+            "case_id": "case-v4",
             "category": "state",
             "candidate_id": "baseline",
             "model_id": "stub",
-            "answer": {"answer": answer_text, "findings": [finding]},
+            "answer": {"answer": answer_text, "entity_id": "sensor.living_temp", "value": "on"},
             "expected": expected,
             "outcome": {"state": "correct", "reason": "ok", "score": 1.0},
             "conclusions": [
                 {
-                    "expected": expected["conclusions"][0],
-                    "matched_finding": finding,
-                    "semantic_status": "matched",
-                    "grounding_status": "grounded",
+                    "expected": expectation,
+                    "matched": True,
+                    "grounded": True,
                     "reason": "ok",
                 }
             ],
@@ -189,10 +189,10 @@ def _case(*, answer_text: str = "The light is on.") -> dict[str, object]:
             },
             "provider_error": None,
             "user_request": "What is the living room temperature?",
-            "scoring_version": 3,
+            "scoring_version": 4,
         },
         "scores": {
-            "score": {"name": "score", "value": 1.0, "reason": "ok", "source": "evaluator", "evaluator_version": "3"}
+            "score": {"name": "score", "value": 1.0, "reason": "ok", "source": "evaluator", "evaluator_version": "4"}
         },
         "labels": {"outcome": "correct", "incomplete": False, "failure_classification": "normal"},
         "assertions": {},

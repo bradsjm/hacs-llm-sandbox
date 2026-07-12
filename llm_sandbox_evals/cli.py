@@ -188,7 +188,7 @@ def _add_eval_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPar
         description=(
             "Run the eval matrix: for every (prompt candidate x language model x test case),\n"
             "ask the model to use the available tools over one or more turns against a\n"
-            "frozen Home Assistant snapshot, then evaluates flat findings/items, grounded oracle evidence, and "
+            "frozen Home Assistant snapshot, then evaluates one concrete answer shape, grounded oracle evidence, and "
             "actions.\n"
             "Results are binary correct/incorrect; provider failures are incomplete. Artifacts are written under the\n"
             "runs directory; a native pydantic-evals summary is printed to stdout."

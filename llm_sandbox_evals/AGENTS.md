@@ -15,18 +15,24 @@ never connects to a live Home Assistant instance.
 Cases are realistic human Home Assistant requests, not tool-contract,
 sandbox-enforcement, malformed-input, or unit/integration-test cases.
 
-- Every case is oracle version 2 (`oracle_version: 2`). Preserve the existing
-  nine categories and their 80-case distribution.
-- The final model result is one code-selected flat shape: `ActionAnswer`,
-  `ReadAnswer`, or `ListAnswer`. Every shape has display-only `answer` text;
-  action answers add diagnostic-only `success`, read answers add scalar
-  `findings`, and list answers add string `items`. The answer text and action
-  success flag are never parsed or scored.
-- Every read/answer case declares one or more typed `ExpectedConclusion`s.
-  Action-only cases may have no conclusions. A case must otherwise declare an
-  allowed action ledger or a blocked-action outcome.
-- Claims must describe facts, not predicates or free-form paths. Use only the
-  finite claim fields and assertion vocabulary documented in the README.
+- Every case is oracle version 3 (`oracle_version: 3`). Keep the existing nine
+  categories without preserving the former 80-case quotas.
+- The final model result is one code-selected concrete shape: `EntityAnswer`,
+  `EntityCollectionAnswer`, `AggregateAnswer`, `EntityRelationAnswer`,
+  `NoDataAnswer`, or `ActionAnswer`. Every shape has display-only `answer` text,
+  and the model sees only its selected shape, never a union.
+- Every read case declares exactly one typed internal expectation. Action-only
+  cases have no expectation. Conditional actions may pair one entity or
+  aggregate expectation with an allowed action ledger.
+- Expectations describe finite facts, not predicates or free-form paths.
+  Optional tolerance on entity and aggregate expectations means approximate.
+- Entity expectations may use states, history, logbook, or automation evidence;
+  statistics use aggregate expectations. No-data expectations are limited to
+  history, statistics, and logbook because those sources expose resolved scope.
+- Entity expectation fields are source-specific: states allow state/name/
+  attribute, history allows state/attribute, logbook allows message, and
+  automation allows enabled/name/value/run. Only attribute expectations set
+  `input_value`, using it as the required nonempty attribute name.
 - Evidence must come from successful production-tool result envelopes. Tool
   arguments, model prose, `printed`, notes, error metadata, and unrelated
   records are not evidence. The scorer preserves call/turn/batch metadata for
@@ -35,7 +41,7 @@ sandbox-enforcement, malformed-input, or unit/integration-test cases.
   checked from the rejected ledger and require the expected policy effect,
   allowed error key, and no successful effect. Failed exploratory attempts are
   diagnostics unless a blocked-action oracle explicitly requires them.
-- Direct logbook and flat declarative-history no-data conclusions must name the
+- Direct logbook and flat declarative-history no-data expectations must name the
   exact resolved entity scope. The production response supplies
   `scope.entity_ids`; do not infer scope from raw selectors or call arguments.
   Scope and emptiness must be established by the same successful event, never
@@ -55,10 +61,11 @@ sandbox-enforcement, malformed-input, or unit/integration-test cases.
 ## Outcome and diagnostics contract
 
 Each completed cell has exactly one state: `correct`, `incorrect`, or
-`incomplete`. Correctness requires every expected conclusion to be both
-semantically matched and grounded in normalized successful evidence; all
-submitted findings/items must also be grounded. The six claim types remain
-oracle/scoring-only specifications. Action effects are checked separately.
+`incomplete`. Correctness requires the selected shape's required fields to
+match and ground in normalized successful evidence. Aggregates are recomputed,
+collections require exact returned ID sets, no-data preserves same-envelope
+scope, and action effects are checked separately from the ledger. There is no
+global extra-content grounding gate.
 The derived native score is binary: `1.0` for correct and `0.0` otherwise.
 
 Provider, transport, timeout, model-protocol, and unexpected harness failures
@@ -113,11 +120,11 @@ fresh scoped HomeSnapshot -> EvalRuntime -> production tool cores
         |                                      v
         |                         successful tool envelopes + action records
         v                                      |
-Pydantic AI Agent -> ActionAnswer | ReadAnswer | ListAnswer
+Pydantic AI Agent -> one of six concrete FinalAnswer subclasses
         |                                      |
         +--------------------+-----------------+
                              v
-       normalize evidence / score findings or items / score action ledgers
+       normalize evidence / score required shape fields / score action ledgers
                              |
                              v
                  CaseTrace -> native report + HTML
@@ -128,11 +135,11 @@ Pydantic AI Agent -> ActionAnswer | ReadAnswer | ListAnswer
 
 ### Module map
 
-- `schema.py` — versioned flat answer models, oracle-only claim models, v2 case oracles,
+- `schema.py` — six concrete answer models, one-expectation oracle models,
   `CaseOutcome`, `ConclusionResult`, action ledgers, diagnostics, and
-  self-contained `CaseTrace` records with required scoring version 3.
-- `cases.py` and `data/cases.yaml` — native Dataset loading and the 80 authored
-  cases; `data/cases_schema.json` is the focused v2 authoring schema.
+  self-contained `CaseTrace` records with required scoring version 4.
+- `cases.py` and `data/cases.yaml` — native Dataset loading and the 24-case first
+  tranche; `data/cases_schema.json` is the focused oracle-v3 authoring schema.
 - `homes/` — frozen Python fixture modules and the `get_home()` registry.
 - `prompts.py` — production-profile candidates and prompt-size helpers.
 - `agent_runner.py` — Pydantic AI agent, production tool schemas, and offline
@@ -143,12 +150,12 @@ Pydantic AI Agent -> ActionAnswer | ReadAnswer | ListAnswer
 - `scoring/contracts.py` — immutable normalized fact records and call metadata.
 - `scoring/evidence.py` — selects successful envelopes and unions normalized
   facts from execute, history, statistics, logbook, and automation results.
-- `scoring/assertions.py` — finite equality, tolerance, set, and empty-scope
-  comparisons.
+- `scoring/assertions.py` — per-shape equality, tolerance, set, relation, and
+  no-data comparisons.
 - `scoring/actions.py` — canonical successful/rejected action-ledger checks.
 - `scoring/{execute,history,statistics,logbook,automation}.py` — payload
   normalizers and source-specific grounding logic.
-- `scoring/evaluate.py` — composes conclusion and action results into the
+- `scoring/evaluate.py` — composes shape-grounding and action results into the
   binary/incomplete outcome and native score.
 - `harness.py` — fresh snapshot lifecycle, structured agent run, chronological
   tool events, action ledgers, diagnostics, and failure classification.
@@ -156,8 +163,8 @@ Pydantic AI Agent -> ActionAnswer | ReadAnswer | ListAnswer
   quality ranking by correct rate rather than operational diagnostics.
 - `terminal.py` — stderr-only live progress and correct/incorrect/incomplete
   summaries.
-- `reports.py` — v3 `report.json` persistence and strict artifact loading.
-- `html_report.py` — self-contained report dashboard with findings/items, grounding,
+- `reports.py` — v4 `report.json` persistence and strict artifact loading.
+- `html_report.py` — self-contained report dashboard with answer grounding,
   ledgers, all chronological evidence, diagnostics, and answer details.
 - `optimize_dspy.py` — DSPy COPRO prompt export and binary harness metric.
 - `cli.py` / `__main__.py` — `eval`, `report`, and `optimize` commands.

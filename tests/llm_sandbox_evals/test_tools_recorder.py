@@ -25,7 +25,7 @@ from homeassistant.helpers import llm
 from llm_sandbox_evals.homes import get_home
 from llm_sandbox_evals.prompts import baseline_candidate
 from llm_sandbox_evals.runtime import build_eval_runtime, build_fixture_recorder_source
-from llm_sandbox_evals.schema import CaseContext, EvalCase, Expected, ExpectedConclusion, ValueClaim
+from llm_sandbox_evals.schema import CaseContext, EntityExpectation, EvalCase, Expected
 from llm_sandbox_evals.tools import EVAL_SCOPE, apply_scope
 import pytest
 
@@ -649,12 +649,7 @@ def _case() -> EvalCase:
         actions_enabled=False,
         llm_context=CaseContext(),
         expected=Expected(
-            conclusions=(
-                ExpectedConclusion(
-                    claim=ValueClaim(subject_kind="entity", subject_id="light.living", field="state", value="on"),
-                    assertion="equals",
-                ),
-            )
+            expectation=EntityExpectation(source="states", entity_id="light.living", input_field="state", value="on")
         ),
     )
 

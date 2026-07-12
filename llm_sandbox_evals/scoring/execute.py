@@ -1,6 +1,7 @@
 """Normalize JSON-safe execute payload records into grounded facts."""
 
 from collections.abc import Mapping
+import json
 
 from llm_sandbox_evals.scoring._facts import fact, typed_record
 from llm_sandbox_evals.scoring.contracts import EvidenceFact, Provenance
@@ -51,6 +52,12 @@ def _normalize_execute(value: object, provenance: Provenance, facts: list[Eviden
                         entity_id,
                     )
         attributes = value.get("attributes")
+        if isinstance(attributes, str):
+            try:
+                parsed_attributes = json.loads(attributes)
+            except json.JSONDecodeError:
+                parsed_attributes = None
+            attributes = parsed_attributes if isinstance(parsed_attributes, Mapping) else None
         if isinstance(attributes, Mapping):
             for name, item in attributes.items():
                 fact(
@@ -129,3 +136,9 @@ def _normalize_execute(value: object, provenance: Provenance, facts: list[Eviden
                     entity_id,
                 )
     typed_record(value, provenance, facts)
+    # Nested projected containers are independent returned records. Known entity
+    # attributes and service catalogs were already consumed above and must not duplicate facts.
+    consumed_keys = {"attributes", "services"} if isinstance(entity_id, str) else set()
+    for key, nested in value.items():
+        if key not in consumed_keys and isinstance(nested, (Mapping, list)):
+            _normalize_execute(nested, provenance, facts)

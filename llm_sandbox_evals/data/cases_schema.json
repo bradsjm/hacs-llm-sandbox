@@ -1,15 +1,16 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "LLM Sandbox eval cases v2",
+  "title": "LLM Sandbox eval cases oracle v3",
   "type": "object",
   "additionalProperties": false,
   "required": ["name", "cases"],
   "properties": {
     "name": {"type": "string"},
-    "cases": {"type": "array", "minItems": 80, "maxItems": 80, "items": {"$ref": "#/$defs/case_wrapper"}}
+    "cases": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/case_wrapper"}}
   },
   "$defs": {
-    "string_list": {"type": "array", "items": {"type": "string"}},
+    "string_list": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "scalar": {"type": ["string", "number", "boolean", "null"]},
     "case_wrapper": {
       "type": "object", "additionalProperties": false, "required": ["name", "inputs"],
       "properties": {"name": {"type": "string"}, "inputs": {"$ref": "#/$defs/case"}}
@@ -23,57 +24,74 @@
         "home": {"type": "string"},
         "user_request": {"type": "string"},
         "actions_enabled": {"type": "boolean"},
-        "oracle_version": {"const": 2},
+        "oracle_version": {"const": 3},
         "llm_context": {"type": "object", "additionalProperties": false, "required": ["device_id"], "properties": {"device_id": {"type": "string"}}},
         "action_domains": {"type": "array", "minItems": 1, "items": {"type": "string"}},
         "expected": {"$ref": "#/$defs/expected"}
       }
     },
     "expected": {
-      "type": "object", "additionalProperties": false, "required": ["conclusions", "actions", "blocked_outcome"],
+      "type": "object", "additionalProperties": false, "required": ["expectation", "actions", "blocked_outcome"],
       "properties": {
-        "conclusions": {"type": "array", "items": {"$ref": "#/$defs/conclusion"}},
+        "expectation": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/entity"}, {"$ref": "#/$defs/entity_collection"}, {"$ref": "#/$defs/aggregate"}, {"$ref": "#/$defs/entity_relation"}, {"$ref": "#/$defs/no_data"}]},
         "actions": {"type": "array", "items": {"$ref": "#/$defs/action"}},
-        "blocked_outcome": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/blocked"}]}
+        "blocked_outcome": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/blocked"}]}
       }
     },
-    "conclusion": {
-      "oneOf": [
-        {"type": "object", "additionalProperties": false, "required": ["claim", "assertion", "tolerance"], "properties": {"claim": {"oneOf": [{"$ref": "#/$defs/value_claim"}, {"$ref": "#/$defs/relation_claim"}, {"$ref": "#/$defs/aggregate_claim"}, {"$ref": "#/$defs/event_claim"}]}, "assertion": {"const": "equals"}, "tolerance": {"type": "null"}}},
-        {"type": "object", "additionalProperties": false, "required": ["claim", "assertion", "tolerance"], "properties": {"claim": {"oneOf": [{"$ref": "#/$defs/numeric_value_claim"}, {"$ref": "#/$defs/numeric_aggregate_claim"}]}, "assertion": {"const": "approximate"}, "tolerance": {"type": "number", "exclusiveMinimum": 0}}},
-        {"type": "object", "additionalProperties": false, "required": ["claim", "assertion", "tolerance"], "properties": {"claim": {"$ref": "#/$defs/collection_claim"}, "assertion": {"enum": ["exact_items", "contains_items"]}, "tolerance": {"type": "null"}}},
-        {"type": "object", "additionalProperties": false, "required": ["claim", "assertion", "tolerance"], "properties": {"claim": {"$ref": "#/$defs/no_data_claim"}, "assertion": {"const": "empty"}, "tolerance": {"type": "null"}}}
+    "entity": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "source", "entity_id", "input_field", "input_value", "value", "tolerance", "unit"],
+      "properties": {
+        "kind": {"const": "entity"}, "source": {"enum": ["states", "history", "logbook", "automation"]},
+        "entity_id": {"type": "string", "minLength": 1}, "input_field": {"enum": ["state", "attribute", "name", "enabled", "message", "value", "run"]},
+        "input_value": {"$ref": "#/$defs/scalar"}, "value": {"$ref": "#/$defs/scalar"},
+        "tolerance": {"oneOf": [{"type": "null"}, {"type": "number", "exclusiveMinimum": 0}]},
+        "unit": {"oneOf": [{"type": "null"}, {"type": "string"}]}
+      },
+      "allOf": [
+        {"oneOf": [
+          {"properties": {"source": {"const": "states"}, "input_field": {"enum": ["state", "attribute", "name"]}}},
+          {"properties": {"source": {"const": "history"}, "input_field": {"enum": ["state", "attribute"]}}},
+          {"properties": {"source": {"const": "logbook"}, "input_field": {"const": "message"}}},
+          {"properties": {"source": {"const": "automation"}, "input_field": {"enum": ["enabled", "name", "value", "run"]}}}
+        ]},
+        {"if": {"properties": {"input_field": {"const": "attribute"}}}, "then": {"properties": {"input_value": {"type": "string", "minLength": 1}}}, "else": {"properties": {"input_value": {"type": "null"}}}}
       ]
     },
-    "claim": {"oneOf": [{"$ref": "#/$defs/value_claim"}, {"$ref": "#/$defs/relation_claim"}, {"$ref": "#/$defs/collection_claim"}, {"$ref": "#/$defs/aggregate_claim"}, {"$ref": "#/$defs/event_claim"}, {"$ref": "#/$defs/no_data_claim"}]},
-    "scalar": {"type": ["string", "number", "boolean", "null"]},
-    "value_claim": {
-      "type": "object", "additionalProperties": false, "required": ["kind", "subject_kind", "subject_id", "field", "attribute_name", "value"],
-      "properties": {"kind": {"const": "value"}, "subject_kind": {"enum": ["entity", "device", "area", "automation", "repair", "notification", "service"]}, "subject_id": {"type": "string"}, "field": {"enum": ["state", "attribute", "name", "manufacturer", "model", "enabled", "available", "service", "message", "status", "value", "unit"]}, "attribute_name": {"anyOf": [{"type": "null"}, {"type": "string", "minLength": 1}]}, "value": {"$ref": "#/$defs/scalar"}},
-      "allOf": [{"if": {"properties": {"field": {"const": "attribute"}}}, "then": {"properties": {"attribute_name": {"type": "string", "minLength": 1}}}}, {"if": {"properties": {"field": {"not": {"const": "attribute"}}}}, "then": {"properties": {"attribute_name": {"type": "null"}}}}]
+    "entity_collection": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "entity_ids", "filter_kind", "filter_value"],
+      "properties": {
+        "kind": {"const": "entity_collection"}, "entity_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+        "filter_kind": {"oneOf": [{"type": "null"}, {"enum": ["all", "area", "device", "floor", "label", "domain", "state"]}]},
+        "filter_value": {"oneOf": [{"type": "null"}, {"type": "string", "minLength": 1}]}
+      }
     },
-    "numeric_value_claim": {"allOf": [{"$ref": "#/$defs/value_claim"}, {"properties": {"value": {"type": "number"}}}]},
-    "relation_claim": {
-      "type": "object", "additionalProperties": false, "required": ["kind", "subject_kind", "subject_id", "relation", "object_kind", "object_id"],
-      "properties": {"kind": {"const": "relation"}, "subject_kind": {"enum": ["entity", "device", "area", "automation"]}, "subject_id": {"type": "string"}, "relation": {"enum": ["entity_device", "entity_area", "device_area", "area_floor", "automation_target", "entity_service"]}, "object_kind": {"enum": ["entity", "device", "area", "floor", "service"]}, "object_id": {"type": "string"}}
+    "aggregate": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "source", "operator", "subject_ids", "input_field", "input_value", "value", "tolerance", "unit"],
+      "properties": {
+        "kind": {"const": "aggregate"}, "source": {"enum": ["states", "history", "statistics", "logbook"]},
+        "operator": {"enum": ["count", "mean", "minimum", "maximum", "sum", "duration_seconds", "time_in_state", "convert"]},
+        "subject_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+        "input_field": {"enum": ["none", "state", "mean", "min", "max", "sum", "event_message"]},
+        "input_value": {"$ref": "#/$defs/scalar"}, "value": {"$ref": "#/$defs/scalar"},
+        "tolerance": {"oneOf": [{"type": "null"}, {"type": "number", "exclusiveMinimum": 0}]},
+        "unit": {"oneOf": [{"type": "null"}, {"type": "string"}]}
+      }
     },
-    "collection_claim": {
-      "type": "object", "additionalProperties": false, "required": ["kind", "collection", "filter_kind", "filter_value", "items"],
-      "properties": {"kind": {"const": "collection"}, "collection": {"enum": ["entity_ids", "automation_ids", "repair_ids", "notification_ids", "service_ids"]}, "filter_kind": {"enum": ["all", "area", "device", "floor", "label", "domain", "state"]}, "filter_value": {"anyOf": [{"type": "null"}, {"type": "string", "minLength": 1}]}, "items": {"type": "array", "uniqueItems": true, "items": {"type": "string"}}},
-      "allOf": [{"if": {"properties": {"filter_kind": {"const": "all"}}}, "then": {"properties": {"filter_value": {"type": "null"}}}}, {"if": {"properties": {"filter_kind": {"not": {"const": "all"}}}}, "then": {"properties": {"filter_value": {"type": "string", "minLength": 1}}}}]
+    "entity_relation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "relation", "entity_id", "related_id", "scope_entity_ids"],
+      "properties": {
+        "kind": {"const": "entity_relation"}, "relation": {"enum": ["entity_device", "entity_area", "automation_target", "entity_service"]},
+        "entity_id": {"type": "string", "minLength": 1}, "related_id": {"type": "string", "minLength": 1},
+        "scope_entity_ids": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/string_list"}]}
+      }
     },
-    "aggregate_claim": {
-      "type": "object", "additionalProperties": false, "required": ["kind", "source", "operator", "subject_ids", "input_field", "input_value", "value", "unit"],
-      "properties": {"kind": {"const": "aggregate"}, "source": {"enum": ["states", "history", "statistics", "logbook"]}, "operator": {"enum": ["count", "mean", "minimum", "maximum", "sum", "duration_seconds", "first_seen", "last_seen", "time_in_state", "convert"]}, "subject_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string"}}, "input_field": {"enum": ["none", "state", "mean", "min", "max", "sum", "event_message"]}, "input_value": {"$ref": "#/$defs/scalar"}, "value": {"type": ["string", "number", "boolean"]}, "unit": {"anyOf": [{"type": "null"}, {"type": "string"}]}}
-    },
-    "numeric_aggregate_claim": {"allOf": [{"$ref": "#/$defs/aggregate_claim"}, {"properties": {"value": {"type": "number"}}}]},
-    "event_claim": {
-      "type": "object", "additionalProperties": false, "required": ["kind", "source", "entity_id", "event_kind", "value", "when"],
-      "properties": {"kind": {"const": "event"}, "source": {"enum": ["logbook", "history", "automation_run"]}, "entity_id": {"type": "string"}, "event_kind": {"enum": ["logbook_message", "state_transition", "automation_run"]}, "value": {"type": "string"}, "when": {"anyOf": [{"type": "null"}, {"type": "string"}]}}
-    },
-    "no_data_claim": {
+    "no_data": {
       "type": "object", "additionalProperties": false, "required": ["kind", "source", "scope_entity_ids"],
-      "properties": {"kind": {"const": "no_data"}, "source": {"enum": ["history", "statistics", "logbook", "automation"]}, "scope_entity_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string"}}}
+      "properties": {"kind": {"const": "no_data"}, "source": {"enum": ["history", "statistics", "logbook"]}, "scope_entity_ids": {"$ref": "#/$defs/string_list"}}
     },
     "action": {
       "type": "object", "additionalProperties": false, "required": ["domain", "service"],
