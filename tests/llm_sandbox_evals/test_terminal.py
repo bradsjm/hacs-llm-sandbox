@@ -16,7 +16,7 @@ from rich.console import Console
         pytest.param("incomplete", "provider_error", "incomplete — provider_error", id="incomplete"),
     ],
 )
-def test_terminal_renders_v2_outcomes_without_efficiency(outcome: str, detail: str, expected: str) -> None:
+def test_terminal_renders_v2_outcomes_without_operational_scoring(outcome: str, detail: str, expected: str) -> None:
     rendered = _outcome_text(outcome, detail, "style")
 
     assert rendered.plain == expected
@@ -33,7 +33,7 @@ def test_terminal_reports_cap_as_incorrect_diagnostic() -> None:
     reporter.handle(MatrixProgressEvent("matrix_started", total=1))
     reporter.handle(MatrixProgressEvent("cell_started", cell=cell, request="request"))
     reporter.handle(MatrixProgressEvent("cell_finished", cell=cell, trace=trace, completion_index=1, total=1))
-    reporter.finish(overall_mean=0.0, run_dir="run", report_html="report.html")
+    reporter.finish(overall_correct_rate=0.0, run_dir="run", report_html="report.html")
 
     output = stream.getvalue()
     assert "incorrect=1" in output
@@ -48,7 +48,11 @@ def test_terminal_recent_table_places_calls_and_elapsed_in_their_columns() -> No
     reporter._console = console
     cell = MatrixCellRef("case", "candidate", "model", "home", "state")
     reporter.handle(MatrixProgressEvent("cell_started", cell=cell, request="request"))
-    reporter.handle(MatrixProgressEvent("cell_finished", cell=cell, trace=_trace("correct", tool_calls=3, elapsed=2.0), completion_index=1, total=1))
+    reporter.handle(
+        MatrixProgressEvent(
+            "cell_finished", cell=cell, trace=_trace("correct", tool_calls=3, elapsed=2.0), completion_index=1, total=1
+        )
+    )
 
     table = reporter._recent_table()
     assert [column.header for column in table.columns][-3:] == ["Reason", "Calls", "Elapsed"]
@@ -80,16 +84,17 @@ def _trace(
     elapsed: float | None = None,
 ) -> CaseTrace:
     return CaseTrace(
-        "case",
-        "state",
-        "candidate",
-        "model",
-        None,
-        Expected(blocked_outcome=BlockedOutcome()),
-        CaseOutcome(state, "cap_exhausted" if cap_exhausted else state),
-        (),
-        (),
-        ActionLedger(),
-        (),
-        EvalDiagnostics(tool_calls=tool_calls, cap_exhausted=cap_exhausted, elapsed_seconds=elapsed),
+        case_id="case",
+        category="state",
+        candidate_id="candidate",
+        model_id="model",
+        answer=None,
+        expected=Expected(blocked_outcome=BlockedOutcome()),
+        outcome=CaseOutcome(state, "cap_exhausted" if cap_exhausted else state),
+        conclusions=(),
+        actions=(),
+        action_ledger=ActionLedger(),
+        tool_events=(),
+        diagnostics=EvalDiagnostics(tool_calls=tool_calls, cap_exhausted=cap_exhausted, elapsed_seconds=elapsed),
+        scoring_version=2,
     )

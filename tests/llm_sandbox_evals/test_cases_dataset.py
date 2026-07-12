@@ -1,11 +1,19 @@
 from collections import Counter
+from datetime import datetime
+from itertools import pairwise
 import json
 from math import isclose
 from pathlib import Path
 from typing import Any, cast
 
-from custom_components.llm_sandbox.snapshot.models import HomeSnapshot
+from custom_components.llm_sandbox.const import DEFAULT_PROMPT_PROFILE
+from custom_components.llm_sandbox.llm_api.prompts import resolve_profile
+from custom_components.llm_sandbox.snapshot.models import HomeSnapshot, SafeState
+from llm_sandbox_evals.cases import CASES
+from llm_sandbox_evals.config import EvalConfig
+from llm_sandbox_evals.harness import run_case
 from llm_sandbox_evals.homes import get_home
+from llm_sandbox_evals.prompts import load_candidates
 import pytest
 import yaml
 
@@ -144,6 +152,43 @@ def test_reviewed_case_oracles_reference_reachable_fixture_facts() -> None:
     assert {claim.get("attribute_name") for claim in state_claims} == {None, "brightness"}
     assert snapshot.states["light.living"].attributes["brightness"] == 210
 
+    upstairs_areas = {area_id for area_id, area in snapshot.areas.items() if area.floor_id == "floor_upstairs"}
+    assert upstairs_areas >= {"area_bedroom", "area_office"}
+    floor_action = cases["action_floor_target"]["expected"]["actions"]
+    assert floor_action == [
+        {"domain": "light", "service": "turn_off", "target_entity_ids": ["light.bedroom", "light.office_desk"]}
+    ]
+
+    duration = cases["recorder_aggregate_on_duration"]["expected"]["conclusions"][0]["claim"]
+    first_seen = cases["recorder_aggregate_first_light_on"]["expected"]["conclusions"][0]["claim"]
+    assert (duration["operator"], duration["input_value"], duration["value"], duration["unit"]) == (
+        "duration_seconds",
+        "on",
+        54900.0,
+        "seconds",
+    )
+    assert (first_seen["operator"], first_seen["input_value"], first_seen["value"]) == (
+        "first_seen",
+        "on",
+        "2026-06-28T14:00:00+00:00",
+    )
+    assert "recorder_aggregate_time_in_state" not in cases
+    fahrenheit = cases["competence_unit_reasoning_fahrenheit"]["expected"]["conclusions"][0]
+    assert (fahrenheit["claim"], fahrenheit["assertion"], fahrenheit["tolerance"]) == (
+        {
+            "kind": "aggregate",
+            "source": "states",
+            "operator": "convert",
+            "subject_ids": ["sensor.tempest_temperature"],
+            "input_field": "state",
+            "input_value": "°F",
+            "value": 25.0,
+            "unit": "°C",
+        },
+        "approximate",
+        0.01,
+    )
+
 
 def test_collection_oracles_match_fixture_entity_populations() -> None:
     for case in _cases():
@@ -164,7 +209,7 @@ def test_collection_oracles_match_fixture_entity_populations() -> None:
 
 
 def test_aggregate_oracles_match_fixture_recorder_and_state_facts() -> None:
-    supported = {"count", "mean", "minimum", "maximum", "sum"}
+    supported = {"count", "mean", "minimum", "maximum", "sum", "duration_seconds", "first_seen", "convert"}
     for case in _cases():
         recorder = get_home(case["home"]).recorder()
         snapshot = get_home(case["home"]).snapshot()
@@ -174,7 +219,7 @@ def test_aggregate_oracles_match_fixture_recorder_and_state_facts() -> None:
                 continue
             assert claim["operator"] in supported, case["id"]
             values = _aggregate_inputs(snapshot, recorder, claim)
-            actual = _aggregate_value(values, claim["operator"])
+            actual = _aggregate_value(values, claim["operator"], claim)
             expected = claim["value"]
             assert actual is not None, case["id"]
             if conclusion["assertion"] == "approximate":
@@ -198,6 +243,11 @@ def _collection_matches(snapshot: HomeSnapshot, entity_id: str, filter_kind: str
         if effective_area is None and entity.device_id is not None:
             effective_area = snapshot.devices[entity.device_id].area_id
         return effective_area == filter_value
+    if filter_kind == "floor":
+        effective_area = entity.area_id
+        if effective_area is None and entity.device_id is not None:
+            effective_area = snapshot.devices[entity.device_id].area_id
+        return effective_area is not None and snapshot.areas[effective_area].floor_id == filter_value
     return False
 
 
@@ -205,9 +255,11 @@ def _aggregate_inputs(snapshot: HomeSnapshot, recorder: dict[str, object], claim
     source = claim["source"]
     subject_ids = cast(list[str], claim["subject_ids"])
     if source == "states":
-        return [snapshot.states[entity_id].state for entity_id in subject_ids]
+        return [snapshot.states[entity_id] for entity_id in subject_ids]
     if source == "history":
         history = cast(dict[str, list[dict[str, object]]], recorder["history"])
+        if claim["operator"] in {"duration_seconds", "first_seen"}:
+            return [(row["last_changed"], row["state"]) for entity_id in subject_ids for row in history[entity_id]]
         return [row["state"] for entity_id in subject_ids for row in history[entity_id]]
     if source == "statistics":
         statistics = cast(dict[str, list[dict[str, object]]], recorder["statistics"])
@@ -216,10 +268,46 @@ def _aggregate_inputs(snapshot: HomeSnapshot, recorder: dict[str, object], claim
     raise AssertionError(f"unsupported fixture aggregate source: {source}")
 
 
-def _aggregate_value(values: list[object], operator: str) -> int | float | None:
+def _aggregate_value(values: list[object], operator: str, claim: dict[str, object]) -> int | float | str | None:
     if operator == "count":
-        return len(values)
-    numeric = [float(value) for value in values if isinstance(value, (int, float, str)) and _is_number(value)]
+        return (
+            int(sum(value.state == claim["input_value"] for value in values if isinstance(value, SafeState)))
+            if values and isinstance(values[0], SafeState)
+            else len(values)
+        )
+    if operator == "duration_seconds":
+        if values and isinstance(values[0], SafeState):
+            return sum(
+                (
+                    datetime.fromisoformat("2026-06-29T12:00:00+00:00") - datetime.fromisoformat(value.last_changed)
+                ).total_seconds()
+                for value in values
+                if isinstance(value, SafeState)
+            )
+        rows = cast(list[tuple[str, object]], values)
+        endpoints = [*rows, ("2026-06-29T12:00:00+00:00", None)]
+        return sum(
+            (
+                (datetime.fromisoformat(following[0]) - datetime.fromisoformat(current[0])).total_seconds()
+                for current, following in pairwise(endpoints)
+                if current[1] == claim["input_value"]
+            ),
+            0.0,
+        )
+    if operator == "first_seen":
+        return next(
+            (when for when, value in cast(list[tuple[str, object]], values) if value == claim["input_value"]), None
+        )
+    if operator == "convert":
+        assert isinstance(values[0], SafeState)
+        value = float(values[0].state)
+        return (value - 32) * 5 / 9 if claim["input_value"] == "°F" and claim["unit"] == "°C" else None
+    numeric = [
+        float(value.state) if isinstance(value, SafeState) else float(value)
+        for value in values
+        if (isinstance(value, SafeState) and value.attributes.get("unit_of_measurement") == claim["input_value"])
+        or (isinstance(value, (int, float, str)) and _is_number(value))
+    ]
     if not numeric:
         return None
     if operator == "mean":
@@ -251,7 +339,7 @@ def _is_number(value: int | float | str) -> bool:
         pytest.param("multi_history_then_living_fan", True, id="history-true"),
         pytest.param("multi_history_then_living_light_off", False, id="history-false"),
         pytest.param("multi_logbook_then_living_light_off", True, id="logbook-true"),
-        pytest.param("action_floor_target", False, id="logbook-false"),
+        pytest.param("real_logbook_then_keep_living_lights_on", False, id="logbook-false"),
     ],
 )
 def test_conditional_action_population_is_explicit(case_id: str, expected_actions: bool) -> None:
@@ -259,6 +347,103 @@ def test_conditional_action_population_is_explicit(case_id: str, expected_action
 
     assert bool(case["expected"]["actions"]) is expected_actions
     assert case["expected"]["conclusions"]
+    request = case["user_request"].lower()
+    assert request.startswith("if ")
+    assert "otherwise" in request
+
+
+@pytest.mark.parametrize(
+    "case_id",
+    [
+        pytest.param("complex_hot_living_turn_on_fan", id="temperature-true"),
+        pytest.param("real_conditional_close_blinds", id="temperature-false"),
+        pytest.param("action_high_consequence_clear_intent", id="humidity-true"),
+        pytest.param("complex_humidity_dehumidifier", id="humidity-false"),
+        pytest.param("multi_history_then_living_fan", id="history-true"),
+        pytest.param("multi_history_then_living_light_off", id="history-false"),
+        pytest.param("multi_logbook_then_living_light_off", id="logbook-true"),
+        pytest.param("real_logbook_then_keep_living_lights_on", id="logbook-false"),
+    ],
+)
+async def test_stub_conditional_cases_ground_antecedent_and_effect(case_id: str, tmp_path: Path) -> None:
+    candidate = load_candidates(["baseline"], DEFAULT_PROMPT_PROFILE)[0]
+    case = next(case for case in CASES if case.id == case_id)
+    config = EvalConfig(
+        models=["stub"],
+        candidates=[candidate.id],
+        prompt_profile=DEFAULT_PROMPT_PROFILE,
+        cases=[case_id],
+        homes=None,
+        runs_dir=tmp_path,
+    )
+
+    trace = await run_case(candidate, "stub", case, config, profile=resolve_profile(DEFAULT_PROMPT_PROFILE))
+
+    assert trace.outcome.state == "correct"
+    assert all(result.grounding_status == "grounded" for result in trace.conclusions)
+
+
+async def test_stub_pagination_case_requires_and_completes_cursor_chain(tmp_path: Path) -> None:
+    candidate = load_candidates(["baseline"], DEFAULT_PROMPT_PROFILE)[0]
+    case = next(case for case in CASES if case.id == "recorder_pagination_next_cursor")
+    config = EvalConfig(
+        models=["stub"],
+        candidates=[candidate.id],
+        prompt_profile=DEFAULT_PROMPT_PROFILE,
+        cases=[case.id],
+        homes=None,
+        runs_dir=tmp_path,
+        max_tool_calls=10,
+    )
+
+    trace = await run_case(candidate, "stub", case, config, profile=resolve_profile(DEFAULT_PROMPT_PROFILE))
+
+    assert trace.outcome.state == "correct"
+    assert len(trace.tool_events) > 1
+    assert trace.tool_events[0].output.get("next_cursor") is not None
+    assert all("cursor" in event.args for event in trace.tool_events[1:])
+    first_entities = cast(dict[str, dict[str, object]], trace.tool_events[0].output["entities"])
+    first_rows = cast(list[list[object]], first_entities["sensor.living_power"]["rows"])
+    assert ["2026-06-28T12:00:00+00:00", "0"] not in first_rows
+    continuation_rows = [
+        row
+        for event in trace.tool_events[1:]
+        for entity in cast(dict[str, dict[str, object]], event.output["entities"]).values()
+        for row in cast(list[list[object]], entity["rows"])
+    ]
+    assert ["2026-06-28T12:00:00+00:00", "0"] in continuation_rows
+
+
+def test_floor_action_oracle_is_explicit_and_resolved() -> None:
+    case = next(case for case in _cases() if case["id"] == "action_floor_target")
+    assert case["expected"]["conclusions"] == []
+    assert case["expected"]["actions"] == [
+        {"domain": "light", "service": "turn_off", "target_entity_ids": ["light.bedroom", "light.office_desk"]}
+    ]
+
+
+async def test_stub_floor_action_executes_exact_production_effect(tmp_path: Path) -> None:
+    candidate = load_candidates(["baseline"], DEFAULT_PROMPT_PROFILE)[0]
+    case = next(case for case in CASES if case.id == "action_floor_target")
+    config = EvalConfig(
+        models=["stub"],
+        candidates=[candidate.id],
+        prompt_profile=DEFAULT_PROMPT_PROFILE,
+        cases=[case.id],
+        homes=None,
+        runs_dir=tmp_path,
+    )
+
+    trace = await run_case(candidate, "stub", case, config, profile=resolve_profile(DEFAULT_PROMPT_PROFILE))
+
+    assert trace.outcome.state == "correct"
+    assert trace.actions[0].passed
+    assert trace.action_ledger.rejected == ()
+    assert len(trace.action_ledger.successful) == 1
+    action = trace.action_ledger.successful[0]
+    assert (action["domain"], action["service"]) == ("light", "turn_off")
+    target = cast(dict[str, object], action["target"])
+    assert target["entity_id"] == ["light.bedroom", "light.office_desk"]
 
 
 def test_schema_sidecar_is_closed_and_keeps_category_contract() -> None:

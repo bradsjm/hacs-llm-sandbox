@@ -1,18 +1,78 @@
+from dataclasses import dataclass
 from pathlib import Path
 
 from custom_components.llm_sandbox.const import DEFAULT_PROMPT_PROFILE
 from custom_components.llm_sandbox.llm_api.prompts import resolve_profile
 from llm_sandbox_evals.cases import CASES
 from llm_sandbox_evals.config import EvalConfig
-from llm_sandbox_evals.harness import run_case
+from llm_sandbox_evals.harness import _diagnostics, _usage, run_case
 from llm_sandbox_evals.prompts import load_candidates
-from pydantic_ai.messages import ModelMessage, ModelResponse, ToolCallPart
+from llm_sandbox_evals.schema import ToolEvent
+from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
+import pytest
 
 from llm_sandbox_evals import agent_runner
 
 
-async def test_run_case_records_model_error(monkeypatch: object, tmp_path: Path) -> None:
+@dataclass
+class _UsageDouble:
+    requests: int | None
+    input_tokens: int | None
+    output_tokens: int | None
+    details: dict[str, object]
+
+
+@dataclass
+class _ResultDouble:
+    usage_data: _UsageDouble
+
+    def usage(self) -> _UsageDouble:
+        return self.usage_data
+
+
+@pytest.mark.parametrize(
+    ("input_tokens", "output_tokens", "total_tokens"),
+    [(None, None, None), (10, None, None), (10, 5, 15)],
+)
+def test_usage_preserves_unknown_token_components(
+    input_tokens: int | None, output_tokens: int | None, total_tokens: int | None
+) -> None:
+    result = _ResultDouble(_UsageDouble(1, input_tokens, output_tokens, {}))
+    usage = _usage(result)
+    assert usage == {
+        "requests": 1,
+        "request_tokens": input_tokens,
+        "response_tokens": output_tokens,
+        "total_tokens": total_tokens,
+    }
+
+
+def test_parallel_batches_count_unique_model_responses() -> None:
+    events = (
+        ToolEvent("get_history", {}, {}, turn_index=2, batch_index=0, batch_size=2),
+        ToolEvent("get_statistics", {}, {}, turn_index=2, batch_index=1, batch_size=2),
+    )
+
+    diagnostics = _diagnostics(events, (), elapsed=0.0, usage=None, failure=None)
+
+    assert diagnostics.parallel_batches == 1
+    assert diagnostics.max_batch_size == 2
+
+
+def test_diagnostics_reject_unfinished_empty_return_but_accept_valid_empty_recorder_result() -> None:
+    events = (
+        ToolEvent("execute_home_code", {}, {}),
+        ToolEvent("get_logbook", {}, {"scope": {"entity_ids": ["light.a"]}, "entries": []}),
+    )
+
+    diagnostics = _diagnostics(events, (), elapsed=0.0, usage=None, failure=None)
+
+    assert diagnostics.successful_tool_calls == 1
+    assert diagnostics.failed_tool_calls == 1
+
+
+async def test_run_case_records_provider_failure_as_incomplete(monkeypatch: object, tmp_path: Path) -> None:
     candidate = load_candidates(["baseline"], DEFAULT_PROMPT_PROFILE)[0]
     profile = resolve_profile(DEFAULT_PROMPT_PROFILE)
     config = EvalConfig(
@@ -34,6 +94,36 @@ async def test_run_case_records_model_error(monkeypatch: object, tmp_path: Path)
     assert trace.outcome.score == 0.0
     assert trace.provider_error is not None
     assert trace.diagnostics.failure == "provider_error"
+
+
+async def test_failure_diagnostics_count_captured_tool_free_model_response(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    candidate = load_candidates(["baseline"], DEFAULT_PROMPT_PROFILE)[0]
+    config = EvalConfig(
+        models=["failing-after-response"],
+        candidates=[candidate.id],
+        prompt_profile=DEFAULT_PROMPT_PROFILE,
+        cases=None,
+        homes=None,
+        runs_dir=tmp_path,
+    )
+
+    def make_model(_model_id: str) -> FunctionModel:
+        return FunctionModel(_tool_free_response_then_failure, model_name="failing-after-response")
+
+    monkeypatch.setattr(agent_runner, "make_model", make_model)
+    trace = await run_case(
+        candidate,
+        "failing-after-response",
+        CASES[0],
+        config,
+        profile=resolve_profile(DEFAULT_PROMPT_PROFILE),
+    )
+
+    assert trace.outcome.state == "incomplete"
+    assert trace.diagnostics.model_turns == 1
+    assert trace.diagnostics.tool_calls == 0
 
 
 async def test_run_case_keeps_normal_completion_outside_failure_classification(tmp_path: Path) -> None:
@@ -82,17 +172,23 @@ async def test_run_case_does_not_force_final_answer_after_max_tool_calls(monkeyp
     assert trace.diagnostics.failure == "cap_exhausted"
     assert trace.diagnostics.cap_exhausted is True
     assert trace.diagnostics.tool_calls == 3
+    assert trace.diagnostics.failed_tool_calls == 1
     assert len(trace.tool_events) == 3
     assert trace.tool_events[-1].output == {}
     assert len(trace.action_ledger.successful) == 2
     assert all(
-        action["domain"] == "light" and action["service"] == "turn_off"
-        for action in trace.action_ledger.successful
+        action["domain"] == "light" and action["service"] == "turn_off" for action in trace.action_ledger.successful
     )
 
 
 async def _failing_model(_messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
     raise RuntimeError("provider rejected model")
+
+
+async def _tool_free_response_then_failure(messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+    if any(isinstance(message, ModelResponse) for message in messages):
+        raise RuntimeError("provider failed after a response")
+    return ModelResponse(parts=[TextPart("not structured output")])
 
 
 async def _looping_model(_messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:

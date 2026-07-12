@@ -184,10 +184,15 @@ def recorder() -> RecorderData:
         "logbook": {
             "light.living_room_lights_group": [
                 {
+                    "when": "2026-06-29T09:00:00+00:00",
+                    "name": "Living Room Lights Group",
+                    "message": "turned on",
+                },
+                {
                     "when": "2026-06-29T10:30:00+00:00",
                     "name": "Living Room Lights Group",
                     "message": "turned off",
-                }
+                },
             ]
         },
     }

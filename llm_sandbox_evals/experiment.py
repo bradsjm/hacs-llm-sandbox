@@ -123,6 +123,7 @@ class CandidateMatrixReport(ReportEvaluator[MatrixCellRef, CaseTrace, MatrixCell
                     "Elapsed",
                     "Tokens",
                     "Cost",
+                    *categories,
                 ],
                 rows=[
                     [
@@ -140,6 +141,7 @@ class CandidateMatrixReport(ReportEvaluator[MatrixCellRef, CaseTrace, MatrixCell
                         _round(row.mean_elapsed),
                         _optional_round(row.mean_tokens),
                         _optional_round(row.mean_cost),
+                        *[_optional_round(row.category_rates[category]) for category in categories],
                     ]
                     for row in pairs
                 ],
@@ -316,8 +318,8 @@ def _presentation_request(request: str) -> str:
     return " ".join(request.split())[:240]
 
 
-def overall_mean(report: EvaluationReport[MatrixCellRef, CaseTrace, MatrixCellMeta]) -> float:
-    """Return the completed-cell correct rate (the public legacy name remains native API)."""
+def overall_correct_rate(report: EvaluationReport[MatrixCellRef, CaseTrace, MatrixCellMeta]) -> float:
+    """Return the completed-cell correct rate."""
     for analysis in report.analyses:
         if isinstance(analysis, ScalarResult) and analysis.title == "Overall correct rate":
             return float(analysis.value)
@@ -326,7 +328,7 @@ def overall_mean(report: EvaluationReport[MatrixCellRef, CaseTrace, MatrixCellMe
 
 def matrix_summary_lines(report: EvaluationReport[MatrixCellRef, CaseTrace, MatrixCellMeta]) -> list[str]:
     """Return concise machine-readable outcome summaries."""
-    lines = [f"correct_rate: {overall_mean(report):.3f}"]
+    lines = [f"correct_rate: {overall_correct_rate(report):.3f}"]
     for analysis in report.analyses:
         if isinstance(analysis, TableResult) and analysis.title == "Candidate x model outcomes":
             lines.extend(
@@ -354,7 +356,7 @@ def _pair_rows(
             counts = _counts(selected)
             diagnostics = [trace.diagnostics for trace in selected]
             category_rates = {
-                category: _rate(
+                category: _nullable_rate(
                     sum(t.outcome.state == "correct" for t in selected if t.category == category),
                     sum(t.outcome.state != "incomplete" for t in selected if t.category == category),
                 )
@@ -442,10 +444,6 @@ def _counts(traces: Sequence[CaseTrace]) -> dict[str, int]:
         "incomplete": sum(t.outcome.state == "incomplete" for t in traces),
         "completed": sum(t.outcome.state != "incomplete" for t in traces),
     }
-
-
-def _case_score(report_case: ReportCase[MatrixCellRef, CaseTrace, MatrixCellMeta]) -> float:
-    return report_case.output.outcome.score
 
 
 def _metadata_str(report_case: ReportCase[MatrixCellRef, CaseTrace, MatrixCellMeta], key: str) -> str:

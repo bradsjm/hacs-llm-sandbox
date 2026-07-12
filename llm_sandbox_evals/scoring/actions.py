@@ -17,7 +17,7 @@ def build_action_ledger(actions: Sequence[Mapping[str, object]]) -> ActionLedger
 
 def score_actions(
     expected: tuple[ExpectedAction, ...], blocked: BlockedOutcome | None, ledger: ActionLedger
-) -> ActionResult:
+) -> ActionResult | None:
     if blocked is not None:
         mismatches: list[str] = []
         if ledger.successful:
@@ -36,18 +36,18 @@ def score_actions(
         mismatches.extend(key for key in wanted if key not in actual)
         mismatches.extend(key for key in actual if key not in wanted)
         for key, targets in wanted.items():
-            if key in actual and targets is not None and actual[key] != targets:
+            if key in actual and actual[key] != targets:
                 mismatches.append(f"target:{key}")
         return ActionResult("blocked", not mismatches, tuple(dict.fromkeys(mismatches)))
     if not expected:
-        return ActionResult("no_action", not ledger.successful, ("unexpected_effect",) if ledger.successful else ())
+        return None
     mismatches = []
     wanted = {_effect_key(action): _targets(action.target_entity_ids) for action in expected}
     actual = _ledger_effects(ledger.successful, mismatches)
     mismatches.extend(key for key in wanted if key not in actual)
     mismatches.extend(key for key in actual if key not in wanted)
     for key, targets in wanted.items():
-        if key in actual and targets is not None and actual[key] != targets:
+        if key in actual and actual[key] != targets:
             mismatches.append(f"target:{key}")
     return ActionResult("allowed", not mismatches, tuple(dict.fromkeys(mismatches)))
 
@@ -59,7 +59,10 @@ def _ledger_effects(
     seen: dict[str, set[str]] = {}
     for action in actions:
         key = _recorded_key(action)
-        targets = set(_action_targets(action))
+        action_targets = _action_targets(action)
+        if len(action_targets) != len(set(action_targets)):
+            mismatches.append(f"duplicate:{key}")
+        targets = set(action_targets)
         if key in result and (result[key] is None or not targets.isdisjoint(seen.get(key, set()))):
             mismatches.append(f"duplicate:{key}")
         if not targets:
@@ -112,7 +115,7 @@ def _action_targets(action: Mapping[str, object]) -> tuple[str, ...]:
                     values.append(value)
                 elif isinstance(value, list):
                     values.extend(item for item in value if isinstance(item, str))
-    return tuple(dict.fromkeys(values))
+    return tuple(values)
 
 
 def _targets(values: tuple[str, ...]) -> frozenset[str] | None:

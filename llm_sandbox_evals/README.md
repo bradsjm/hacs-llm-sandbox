@@ -101,7 +101,13 @@ declarative-history envelope is `{window, scope: {entity_ids}, rows}` and the
 logbook envelope is `{window, scope: {entity_ids}, entries}`. `scope.entity_ids`
 is the sorted, visible scope resolved by the production query core. It appears
 on successful empty results, normal pages, and cursor continuations. It is not
-copied from the request and does not grant access.
+copied from the request and does not grant access. A no-data claim must be
+proven by one successful envelope whose scope exactly matches and whose
+same-envelope source collection has no relevant rows; scope fragments from
+separate calls are not combined. History duration claims require a valid,
+non-conflicting `window.start`/`window.end` pair and include each entity's
+terminal matching-state interval through that endpoint. Pagination pages are
+unioned only when the complete normalized window matches.
 
 Actions are scored from two separate ledgers:
 
@@ -114,7 +120,9 @@ Actions are scored from two separate ledgers:
 
 Read-only cases fail on unexpected successful effects. Failed exploratory or
 recovery attempts remain diagnostics unless the case explicitly authors a
-blocked effect.
+blocked effect. Their trace has no synthetic action-result row: an empty
+`actions` tuple means no action contract, while the ledger still exposes any
+unexpected effect.
 
 ### Cell states and aggregation
 
@@ -128,12 +136,12 @@ Each cell is exactly `correct`, `incorrect`, or `incomplete`:
   failure. It is excluded from correct-rate denominators and shown as coverage.
 
 The hard call cap is a safety stop. Cap exhaustion without a valid final
-`EvalAnswer` is `incorrect`, not an efficiency penalty. Calls, failed calls,
+`EvalAnswer` is `incorrect`, not an operational penalty. Calls, failed calls,
 repairs, turns, parallelism, elapsed time, token usage, cost, and cap status
 are diagnostics only; they cannot change a completed cell's score or rank.
 Reports rank by correct rate, then the minimum completed-model correct rate,
-then authored prompt size. A pair with no completed cells is `N/A` and is not
-ranked.
+then authored prompt size. Pair, model, and category rates with no completed
+cells are `N/A` and are excluded from quality ordering.
 
 ## Adding cases
 
@@ -173,6 +181,10 @@ Use exact IDs and values from a real frozen fixture. Action cases declare
 `expected.actions`; blocked cases declare `expected.blocked_outcome`; read
 cases declare `expected.conclusions`. Do not add legacy token lists, generic
 predicates, free-form result paths, or call-count expectations.
+Conditional predicates belong in the complete human request, including the
+true action and false no-action instruction. Grounded antecedent conclusions
+plus the action ledger validate the branch; the model does not submit a
+separate predicate field.
 
 ## Fixtures and production alignment
 
@@ -193,6 +205,8 @@ optional length penalty is used only inside COPRO to prefer a smaller authored
 prompt when quality is tied; reported baseline and optimized means remain raw
 correct rates. The exported `optimized_candidate.json` and
 `optimized_prompt.md` never patch production prompts automatically.
+DSPy remains a lazy optimize-only import; the CLI import boundary contains
+only its known `InputField`/`OutputField` prefix deprecation warning.
 
 ## Artifacts and report versioning
 
@@ -200,14 +214,16 @@ Each run directory contains:
 
 - `report.json` — native analyses plus self-contained v2 traces containing the
   authored oracle, `EvalAnswer`, normalized conclusion results, action ledgers,
-  chronological tool events, diagnostics, and outcome;
+  chronological tool events, diagnostics, outcome, and per-trace
+  `scoring_version: 2`;
 - `report.html` — an interactive dashboard for outcomes, expected conclusions,
   claim semantic/grounding results, successful/rejected effects, evidence,
   diagnostics, and the unrestricted final answer.
 
-`reports.load_report()` requires a v2 artifact envelope and rejects missing or
-older scoring artifacts with `legacy scoring artifact; rerun evaluation`.
-There is intentionally no compatibility decoder or rescorer for old reports.
+`reports.load_report()` requires version 2 on both the artifact envelope and
+every trace, and rejects missing or older markers with
+`legacy scoring artifact; rerun evaluation`.
+Only scoring v2 artifacts are accepted; unsupported artifacts must be rerun.
 Saved optimized candidate JSON remains loadable because it contains prompt
 fields only, but it must be evaluated again under v2.
 

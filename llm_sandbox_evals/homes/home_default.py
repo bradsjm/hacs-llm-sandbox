@@ -97,6 +97,13 @@ _STATES: tuple[StateRecord, ...] = (
         {"device_class": "power", "unit_of_measurement": "W"},
     ),
     (
+        "sensor.living_power",
+        "1004",
+        "Living Power",
+        "2026-06-29T11:59:00+00:00",
+        {"device_class": "power", "unit_of_measurement": "W"},
+    ),
+    (
         "sensor.router_uptime",
         "7200",
         "Router Uptime",
@@ -197,6 +204,17 @@ _ENTITIES: tuple[EntityRecord, ...] = (
         "device_office_desk",
         None,
         ("label_work",),
+        None,
+        None,
+        "power",
+        None,
+    ),
+    (
+        "sensor.living_power",
+        "uid-sensor-living-power",
+        "device_living_light",
+        "area_living",
+        (),
         None,
         None,
         "power",
@@ -377,7 +395,8 @@ def recorder() -> RecorderData:
     """Return canned recorder rows for the richer home."""
     return {
         "history": {
-            "light.living": _paginated_light_history(),
+            "light.living": _living_light_history(),
+            "sensor.living_power": _paginated_power_history(),
             "sensor.living_temp": [
                 {
                     "state": "24.4",
@@ -572,18 +591,36 @@ def automation() -> AutomationData:
     }
 
 
-def _paginated_light_history() -> list[dict[str, object]]:
-    """Build deterministic light rows exceeding one history page for cursor evals."""
+def _living_light_history() -> list[dict[str, object]]:
+    """Return sparse, realistic light transitions for the fixed 24-hour window."""
+    return [
+        {
+            "state": state,
+            "attributes": {"brightness": 210 if state == "on" else 0},
+            "last_changed": when,
+            "last_updated": when,
+        }
+        for when, state in (
+            ("2026-06-28T12:00:00+00:00", "off"),
+            ("2026-06-28T14:00:00+00:00", "on"),
+            ("2026-06-28T18:30:00+00:00", "off"),
+            ("2026-06-28T21:15:00+00:00", "on"),
+            ("2026-06-29T08:00:00+00:00", "off"),
+        )
+    ]
+
+
+def _paginated_power_history() -> list[dict[str, object]]:
+    """Build monotonic sensor readings exceeding one production history page."""
     start = datetime.fromisoformat(CREATED_AT) - timedelta(hours=24)
     rows: list[dict[str, object]] = []
     for index in range(1005):
-        # Rows are regenerated per recorder call and alternate state for aggregate math.
+        # Rows are regenerated per recorder call and intentionally do not encode state transitions.
         timestamp = (start + timedelta(seconds=index * 86)).isoformat()
-        state = "on" if index % 2 == 0 else "off"
         rows.append(
             {
-                "state": state,
-                "attributes": {"brightness": 210 if state == "on" else 0},
+                "state": str(index),
+                "attributes": {"unit_of_measurement": "W"},
                 "last_changed": timestamp,
                 "last_updated": timestamp,
             }

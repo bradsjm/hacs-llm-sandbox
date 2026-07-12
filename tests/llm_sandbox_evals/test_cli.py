@@ -1,5 +1,7 @@
 import asyncio
 from collections.abc import Callable
+from contextlib import nullcontext
+import json
 import os
 from pathlib import Path
 import pty
@@ -9,6 +11,9 @@ import subprocess
 import sys
 import termios
 import time
+from types import SimpleNamespace
+from typing import Never
+import warnings
 
 from llm_sandbox_evals.cli import main
 from pydantic_ai.messages import ModelMessage, ModelResponse
@@ -16,7 +21,17 @@ from pydantic_ai.models import Model
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 import pytest
 
-from llm_sandbox_evals import agent_runner, cli, logfire_config, optimize_dspy, reports
+from llm_sandbox_evals import agent_runner, cli, logfire_config, reports
+
+
+def test_optimizer_loader_contains_known_dspy_warning_only() -> None:
+    optimizer = cli._load_optimizer()
+    with warnings.catch_warnings(record=True) as captured:
+        warnings.simplefilter("always")
+        warnings.warn("unrelated project warning", DeprecationWarning, stacklevel=1)
+
+    assert optimizer.__name__ == "llm_sandbox_evals.optimize_dspy"
+    assert [str(item.message) for item in captured] == ["unrelated project warning"]
 
 
 async def _raise_keyboard_interrupt(*_args: object) -> object:
@@ -42,6 +57,11 @@ def _raise_report_error(*_args: object, **_kwargs: object) -> object:
 def _raise_optimizer_error(*_args: object, **_kwargs: object) -> object:
     """Raise a deterministic optimizer runtime failure."""
     raise RuntimeError("optimizer runtime failed")
+
+
+def _failing_optimizer_loader() -> SimpleNamespace:
+    """Return an optimizer double without importing the optional DSPy dependency."""
+    return SimpleNamespace(run_optimize=_raise_optimizer_error)
 
 
 def _prepare_noop(_runs_dir: Path) -> None:
@@ -211,9 +231,9 @@ def test_eval_cancellation_is_clean_without_artifacts_or_stdout(
         ),
         pytest.param(
             ["optimize", "--target-model", "model", "--runs-dir", "{runs_dir}"],
-            optimize_dspy,
-            "run_optimize",
-            _raise_optimizer_error,
+            cli,
+            "_load_optimizer",
+            _failing_optimizer_loader,
             _prepare_noop,
             "optimizer runtime failed",
             id="optimize-runtime",
@@ -276,6 +296,66 @@ def test_main_preserves_argparse_system_exit() -> None:
         main(["eval", "--unknown-option"])
 
 
+async def test_external_cancellation_stops_inner_interactive_matrix(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def blocking_matrix(*_args: object, **_kwargs: object) -> Never:
+        started.set()
+        try:
+            await asyncio.Future()
+        finally:
+            cancelled.set()
+        raise AssertionError("unreachable")
+
+    monkeypatch.setattr(cli.experiment, "run_matrix", blocking_matrix)
+    monkeypatch.setattr(cli, "_is_interactive_eval", lambda: True)
+    monkeypatch.setattr(cli, "_EscapeWatcher", lambda _cancel: nullcontext(SimpleNamespace(cancelled=False)))
+    config = cli.EvalConfig(
+        models=["stub"],
+        candidates=["baseline"],
+        prompt_profile="balanced",
+        cases=None,
+        homes=None,
+        runs_dir=tmp_path,
+    )
+    outer = asyncio.create_task(
+        cli._run_eval_matrix(config, "cancel-test", SimpleNamespace(handle=lambda _event: None))
+    )
+    await started.wait()
+
+    outer.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(outer, timeout=1)
+
+    assert cancelled.is_set()
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        pytest.param({"cases": []}, id="missing-root-version"),
+        pytest.param({"scoring_version": 2, "cases": [{"output": {}}]}, id="missing-trace-version"),
+    ],
+)
+def test_report_html_rejects_legacy_artifacts(
+    payload: dict[str, object], capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    run_dir = tmp_path / "legacy"
+    run_dir.mkdir()
+    (run_dir / "report.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    exit_code = main(["report", "legacy", "--html", "--runs-dir", str(tmp_path)])
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert captured.out == ""
+    assert "legacy scoring artifact" in captured.err
+    assert not (run_dir / "report.html").exists()
+
+
 @pytest.mark.timeout(30)
 def test_pty_sigint_interrupts_real_stub_eval_without_traceback_or_artifacts(tmp_path: Path) -> None:
     master_fd, slave_fd = pty.openpty()
@@ -311,7 +391,12 @@ def test_pty_sigint_interrupts_real_stub_eval_without_traceback_or_artifacts(tmp
                 break
         assert b"LLM Sandbox evaluation" in stderr
         process.send_signal(signal.SIGINT)
-        stdout, _ = process.communicate(timeout=10)
+        interrupt_deadline = time.monotonic() + 10
+        while process.poll() is None and time.monotonic() < interrupt_deadline:
+            ready, _, _ = select.select([master_fd], [], [], 0.1)
+            if ready:
+                stderr.extend(os.read(master_fd, 65536))
+        stdout, _ = process.communicate(timeout=1)
         while True:
             try:
                 chunk = os.read(master_fd, 65536)

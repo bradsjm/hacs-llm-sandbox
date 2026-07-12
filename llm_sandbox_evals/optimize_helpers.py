@@ -12,7 +12,7 @@ def size_penalized_utility(score: float, api_prompt_ratio: float, penalty: float
 
     ratio <= 1.0 (prompt shrank or stayed same) returns the raw score unchanged;
     growth reduces utility linearly. This steers COPRO candidate selection only
-    and is NEVER applied to the human-facing baseline_mean/optimized_mean numbers.
+    and is NEVER applied to the human-facing correct-rate numbers.
     """
     return score - penalty * max(0.0, api_prompt_ratio - 1.0)
 

@@ -112,6 +112,7 @@ async def run_case(
             diagnostic=False,
             elapsed=perf_counter() - started,
             tool_events=tool_events,
+            messages=captured,
             recorded_actions=_recorded_actions_from_tool_events(tool_events, proposed_actions),
             conversation_id=_conversation_id(captured),
         )
@@ -126,6 +127,7 @@ async def run_case(
             diagnostic=True,
             elapsed=perf_counter() - started,
             tool_events=tool_events,
+            messages=captured,
             recorded_actions=_recorded_actions_from_tool_events(tool_events, proposed_actions),
             conversation_id=_conversation_id(captured),
         )
@@ -140,6 +142,7 @@ async def run_case(
             diagnostic=True,
             elapsed=perf_counter() - started,
             tool_events=tool_events,
+            messages=captured,
             recorded_actions=_recorded_actions_from_tool_events(tool_events, proposed_actions),
             conversation_id=_conversation_id(captured),
         )
@@ -154,6 +157,7 @@ async def run_case(
             diagnostic=True,
             elapsed=perf_counter() - started,
             tool_events=tool_events,
+            messages=captured,
             recorded_actions=_recorded_actions_from_tool_events(tool_events, proposed_actions),
             conversation_id=_conversation_id(captured),
         )
@@ -169,6 +173,7 @@ def _failure_trace(
     diagnostic: bool,
     elapsed: float | None = None,
     tool_events: tuple[ToolEvent, ...] = (),
+    messages: Sequence[object] = (),
     recorded_actions: tuple[dict[str, object], ...] = (),
     conversation_id: str | None = None,
 ) -> CaseTrace:
@@ -187,7 +192,7 @@ def _failure_trace(
         tool_events=tool_events,
         diagnostics=_diagnostics(
             tool_events,
-            tool_events,
+            messages,
             elapsed=elapsed,
             usage=None,
             failure=failure,
@@ -263,7 +268,7 @@ def _tool_events(messages: Sequence[object]) -> tuple[ToolEvent, ...]:
     Tool-call arguments are captured for traceability but are NOT used as
     evidence by scoring. Tool returns (``ToolReturnPart.content``) are the
     production result envelopes and feed the any-source evidence audit and the
-    ``execution_ok`` gate.
+     successful production evidence.
     """
     returns_by_id: dict[str, object] = {}
     calls: list[ToolCallPart] = []
@@ -335,7 +340,7 @@ def _diagnostics(
         failed_tool_calls=len(events) - len(successful),
         execute_repairs=repairs,
         model_turns=turn_count,
-        parallel_batches=sum(1 for size in batch_sizes if size > 1),
+        parallel_batches=len({event.turn_index for event in events if event.batch_size > 1}),
         max_batch_size=max(batch_sizes, default=1),
         elapsed_seconds=elapsed,
         cap_exhausted=cap_exhausted,
@@ -350,11 +355,15 @@ def _usage(result: object) -> dict[str, int | float | None] | None:
     if not callable(usage_method):
         return None
     usage = usage_method()
+    input_tokens = getattr(usage, "input_tokens", None)
+    output_tokens = getattr(usage, "output_tokens", None)
     values: dict[str, int | float | None] = {
         "requests": getattr(usage, "requests", None),
-        "request_tokens": getattr(usage, "input_tokens", None),
-        "response_tokens": getattr(usage, "output_tokens", None),
-        "total_tokens": (getattr(usage, "input_tokens", 0) or 0) + (getattr(usage, "output_tokens", 0) or 0),
+        "request_tokens": input_tokens,
+        "response_tokens": output_tokens,
+        "total_tokens": input_tokens + output_tokens
+        if isinstance(input_tokens, (int, float)) and isinstance(output_tokens, (int, float))
+        else None,
     }
     details = getattr(usage, "details", {})
     if isinstance(details, dict) and isinstance(details.get("cost"), int | float):

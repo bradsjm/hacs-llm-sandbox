@@ -257,7 +257,7 @@ _HTML_TEMPLATE = """<!doctype html>
       <h1 id="run-title">Eval report</h1>
       <p id="created-at">Created: —</p>
       <section class="summary-grid" aria-label="Run summary">
-        <article class="summary-card"><strong id="overall-mean">—</strong><span>Overall mean score</span></article>
+        <article class="summary-card"><strong id="overall-correct-rate">—</strong><span>Overall correct rate</span></article>
         <article class="summary-card pass"><strong id="pass-count">0</strong><span id="pass-label">Pass</span></article>
         <article class="summary-card fail"><strong id="fail-count">0</strong><span>Fail</span></article>
         <article class="summary-card incomplete"><strong id="incomplete-count">0</strong><span>Incomplete</span></article>
@@ -276,10 +276,9 @@ _HTML_TEMPLATE = """<!doctype html>
     <section id="charts" aria-labelledby="charts-heading">
       <h2 id="charts-heading">Score &amp; outcome charts</h2>
       <div id="chart-empty" class="empty-state" hidden>No cases are available in this report.</div>
-      <article class="panel" id="heatmap-panel"><h3>Candidate &times; model mean score</h3><div id="heatmap" class="chart" role="img"></div></article>
+       <article class="panel" id="heatmap-panel"><h3>Candidate &times; model correct rate</h3><div id="heatmap" class="chart" role="img"></div></article>
       <div class="chart-row">
         <article class="panel"><h3>Outcome by category</h3><div id="outcomes" class="chart" role="img"></div></article>
-        <article class="panel"><h3>Score distribution</h3><div id="histogram" class="chart" role="img"></div></article>
         <article class="panel"><h3>Tool calls by category</h3><div id="toolcalls" class="chart" role="img"></div></article>
       </div>
     </section>
@@ -458,7 +457,7 @@ _HTML_TEMPLATE = """<!doctype html>
         document.getElementById("nav-run-id").textContent = runTitle;
         const created = DATA._meta?.created_at ? new Date(DATA._meta.created_at) : null;
         document.getElementById("created-at").textContent = `Created: ${created && !Number.isNaN(created.valueOf()) ? created.toLocaleString() : "—"}`;
-         document.getElementById("overall-mean").textContent = fmt(byTitle("Overall correct rate")?.value);
+         document.getElementById("overall-correct-rate").textContent = fmt(byTitle("Overall correct rate")?.value);
         // Pass/fail counts answer "how bad is it?" directly in the hero band.
          const passCount = CELLS.filter(c => c._status === "correct").length;
          const failCount = CELLS.filter(c => c._status === "incorrect").length;
@@ -475,9 +474,9 @@ _HTML_TEMPLATE = """<!doctype html>
       const renderAnalyses = analyses => {
         const host = document.getElementById("analysis-list");
         const list = Array.isArray(analyses) ? analyses : [];
-        // "Overall mean score" and "Incomplete cells" are already surfaced in the hero
+         // "Overall correct rate" and "Incomplete cells" are already surfaced in the hero
         // summary band; skip them here so they are not duplicated as scalar cards.
-        const heroScalars = new Set(["Overall mean score", "Incomplete cells"]);
+         const heroScalars = new Set(["Overall correct rate", "Incomplete cells"]);
         // Only render a description when it carries real text (avoids a stray "—").
         const desc = value => (typeof value === "string" && value.trim()) ? `<p>${escapeHtml(value)}</p>` : "";
         const scalars = list.filter(a => a?.type === "scalar" && !heroScalars.has(a.title));
@@ -507,7 +506,7 @@ _HTML_TEMPLATE = """<!doctype html>
           document.getElementById("chart-empty").hidden = false;
           return;
         }
-        const mean = values => values.length ? values.reduce((a, b) => a + b, 0) / values.length : 0;
+        const correctRate = values => values.length ? values.reduce((a, b) => a + b, 0) / values.length : 0;
         // Five-number summary [min, Q1, median, Q3, max] via linear-interpolation quantiles.
         const quantile = (sorted, p) => {
           if (sorted.length === 0) return 0;
@@ -521,9 +520,7 @@ _HTML_TEMPLATE = """<!doctype html>
           const sorted = [...values].sort((a, b) => a - b);
           return [sorted[0], quantile(sorted, 0.25), quantile(sorted, 0.5), quantile(sorted, 0.75), sorted[sorted.length - 1]];
         };
-        // Mirror experiment._complete_cases / CandidateMatrixReport: incomplete
-        // (model_error) cells are excluded from mean-score denominators so a provider
-        // outage does not read as a near-zero candidate/model quality.
+         // Incomplete provider cells are excluded from completed-cell correct-rate denominators.
         const completeCells = cells.filter(c => c._status !== "incomplete");
         const chartText = { color: cssToken("--chart-text"), fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" };
         const axisLabel = { color: cssToken("--chart-axis"), fontSize: 11, hideOverlap: true };
@@ -535,7 +532,7 @@ _HTML_TEMPLATE = """<!doctype html>
           echarts.getInstanceByDom(el)?.dispose();
           return echarts.init(el);
         };
-        // A 1x1 matrix heatmap is a single rectangle duplicating the hero mean; hide it.
+         // A 1x1 matrix heatmap is a single rectangle duplicating the hero rate; hide it.
         const heatmapPanel = document.getElementById("heatmap-panel");
         const degenerate = candidates.length * models.length <= 1;
         heatmapPanel.hidden = degenerate;
@@ -543,12 +540,12 @@ _HTML_TEMPLATE = """<!doctype html>
         if (!degenerate) {
           const heatData = [];
           candidates.forEach((candidate, y) => models.forEach((model, x) => {
-            heatData.push([x, y, Number(mean(completeCells.filter(c => c.candidate_id === candidate && c.model_id === model).map(c => c.score)).toFixed(3))]);
+             heatData.push([x, y, Number(correctRate(completeCells.filter(c => c.candidate_id === candidate && c.model_id === model).map(c => c.score)).toFixed(3))]);
           }));
           const heatmap = initChart("heatmap");
           // Viridis-style ramp: perceptually ordered and colorblind-safe, unlike red→green.
           heatmap.setOption({ textStyle: chartText, tooltip: { position: "top" }, grid: { left: 120, right: 32, top: 20, bottom: 76, containLabel: true }, xAxis: { type: "category", data: models, axisLabel: { ...axisLabel, rotate: models.length > 1 ? 25 : 0 }, axisLine }, yAxis: { type: "category", data: candidates, axisLabel, axisLine }, visualMap: { min: 0, max: 1, orient: "horizontal", left: "center", bottom: 0, textStyle: { color: cssToken("--chart-axis") }, inRange: { color: ["#440154", "#31688e", "#35b779", "#fde725"] } }, series: [{ type: "heatmap", data: heatData, label: { show: true, color: "#fff", fontWeight: 700, textBorderColor: "rgba(0, 0, 0, 0.55)", textBorderWidth: 2 } }] });
-          document.getElementById("heatmap").setAttribute("aria-label", `Mean score heatmap across ${candidates.length} candidates and ${models.length} models.`);
+           document.getElementById("heatmap").setAttribute("aria-label", `Correct-rate heatmap across ${candidates.length} candidates and ${models.length} models.`);
           charts.push(heatmap);
         }
          const statusNames = ["correct", "incorrect", "incomplete"];
@@ -558,11 +555,6 @@ _HTML_TEMPLATE = """<!doctype html>
         outcomes.setOption({ textStyle: chartText, tooltip: { trigger: "axis", axisPointer: { type: "shadow" } }, legend: { textStyle: { color: cssToken("--chart-axis") } }, grid: { left: 44, right: 18, top: 36, bottom: 74, containLabel: true }, xAxis: { type: "category", data: categories, axisLabel: { ...axisLabel, rotate: categories.length > 3 ? 25 : 0 }, axisLine }, yAxis: { type: "value", axisLabel, axisLine, splitLine }, series: statusNames.map((status, i) => ({ name: status, type: "bar", stack: "outcome", itemStyle: { color: statusColors[status] }, data: outcomeCounts.map(counts => counts[i]) })) });
         // Canvas charts are invisible to assistive tech; carry the numbers in the label.
         document.getElementById("outcomes").setAttribute("aria-label", `Outcomes by category: ${categories.map((cat, i) => `${cat} ${outcomeCounts[i][0]} pass, ${outcomeCounts[i][1]} fail, ${outcomeCounts[i][2]} incomplete`).join("; ")}.`);
-        const bins = Array.from({ length: 10 }, (_, i) => ({ label: `${(i / 10).toFixed(1)}-${((i + 1) / 10).toFixed(1)}`, count: 0 }));
-        cells.forEach(cell => { bins[Math.min(9, Math.max(0, Math.floor(cell.score * 10)))].count += 1; });
-        const histogram = initChart("histogram");
-        histogram.setOption({ textStyle: chartText, tooltip: {}, grid: { left: 44, right: 18, top: 20, bottom: 74, containLabel: true }, xAxis: { type: "category", data: bins.map(b => b.label), axisLabel: { ...axisLabel, rotate: 30 }, axisLine }, yAxis: { type: "value", axisLabel, axisLine, splitLine }, series: [{ type: "bar", data: bins.map(b => b.count), itemStyle: { color: cssToken("--focus") } }] });
-        document.getElementById("histogram").setAttribute("aria-label", `Score distribution across ten 0.1-wide bins: ${bins.map(b => `${b.label}: ${b.count}`).join(", ")}.`);
          // Tool calls are diagnostic only: show their per-category distribution without
          // allowing it to affect correctness or ranking.
         const boxCategories = categories.filter(cat => cells.some(c => c.category === cat));
@@ -570,7 +562,7 @@ _HTML_TEMPLATE = """<!doctype html>
         const toolcalls = initChart("toolcalls");
         toolcalls.setOption({ textStyle: chartText, tooltip: { trigger: "item" }, grid: { left: 48, right: 18, top: 26, bottom: 74, containLabel: true }, xAxis: { type: "category", data: boxCategories, axisLabel: { ...axisLabel, rotate: boxCategories.length > 3 ? 25 : 0 }, axisLine }, yAxis: { type: "value", name: "Tool calls", nameTextStyle: { color: cssToken("--chart-axis"), fontWeight: 700 }, axisLabel, axisLine, splitLine }, series: [{ type: "boxplot", data: boxData, itemStyle: { color: "transparent", borderColor: cssToken("--chart-box"), borderWidth: 1.5 } }] });
         document.getElementById("toolcalls").setAttribute("aria-label", `Box plot of tool call counts by category: ${boxCategories.map((cat, i) => `${cat} median ${boxData[i][2]}`).join(", ")}.`);
-        charts.push(outcomes, histogram, toolcalls);
+         charts.push(outcomes, toolcalls);
         let resizeTimer;
         window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => charts.forEach(chart => chart.isDisposed?.() || chart.resize()), 120); });
       };
@@ -849,27 +841,13 @@ _HTML_TEMPLATE = """<!doctype html>
         const verdictClass = cell._status;
         let verdict;
          verdict = `${cell._status}: ${cell._reason}`;
-        // Trace = what the agent actually did during its turn (the real timeline).
-        let categoryItems = [];
-        let traceNote = "code the agent executed";
-        let traceEmpty = "The agent didn't run any execute_home_code snippet.";
-        let traceMeta = "";
-        if (cell.category === "action") {
-          traceNote = "execution details and recorded service actions"; traceEmpty = "The agent ran no code or attempted actions.";
-          const executionEvents = toolEvents.filter(ev => ev.tool_name === "execute_home_code");
-           categoryItems = executionEvents.map(toolCard(true));
-           traceMeta = `${executionEvents.length} execution ${executionEvents.length === 1 ? "call" : "calls"}`;
-        } else if (["history", "statistics", "logbook"].includes(cell.category)) {
-          traceNote = "recorder queries the agent ran"; traceEmpty = "The agent ran no recorder queries.";
-          const recorderTools = new Set(["get_history", "get_statistics", "get_logbook"]);
-          categoryItems = toolEvents.filter(ev => recorderTools.has(ev.tool_name)).map(toolCard(false));
-        } else if (cell.category === "automation") {
-          traceNote = "automation queries the agent ran"; traceEmpty = "The agent ran no automation queries.";
-          categoryItems = toolEvents.filter(ev => ev.tool_name === "get_automation").map(toolCard(false));
-        } else {
-          categoryItems = toolEvents.filter(ev => ev.tool_name === "execute_home_code").map(toolCard(true));
-        }
-        const categoryDetail = categoryItems.length ? categoryItems.join("") : `<div class="empty-state">${traceEmpty}</div>`;
+         // Every successful or failed production call remains visible across category boundaries.
+         const chronologicalItems = [...toolEvents]
+           .sort((left, right) => left.call_index - right.call_index)
+           .map((event, index) => toolCard(event.tool_name === "execute_home_code")(event, index));
+         const chronologicalDetail = chronologicalItems.length
+           ? chronologicalItems.join("")
+           : `<div class="empty-state">The agent ran no production tools.</div>`;
         const panel = document.getElementById("detail-panel");
         panel.className = "panel";
          const finalAnswer = trace.answer || "—";
@@ -889,30 +867,22 @@ _HTML_TEMPLATE = """<!doctype html>
             + (CATEGORY_INFO[cell.category] ? `<p class="cat-note">${escapeHtml(CATEGORY_INFO[cell.category])}</p>` : "")
           : "";
          const expectedBlock = `<div class="detail-sub"><h4>Authored expected conclusions and effects</h4></div>${codeBlock(json(trace.expected), "json")}`;
-        if (!traceMeta && categoryItems.length) {
-          traceMeta = `${categoryItems.length} ${categoryItems.length === 1 ? "call" : "calls"}, in order`;
-        }
-        const traceMetaBlock = traceMeta ? `<span class="meta">${traceMeta}</span>` : "";
-        const traceLead = cell.category === "action"
-          ? "Execution details and recorded actions are grouped by type; their relative order is not shown."
-          : `The ${traceNote} during its turn — top = first.`;
-        // Narrative order matches real time for the temporal parts (task -> did ->
-        // answered) and explicitly flags scoring as an after-the-fact judgment.
-        panel.innerHTML =
+         const actionContract = actionResults.length ? actionResults : "no action contract";
+         // The v2 detail order moves from outcome through authored/scored evidence to unrestricted output.
+         panel.innerHTML =
             `<h3>${escapeHtml(cell.case_id)} <span class="badge ${escapeHtml(cell._status)}">${escapeHtml(cell._status)}</span></h3>`
           + `<p class="verdict ${verdictClass}">${escapeHtml(verdict)}</p>`
           + `<p class="detail-headline"><b>${escapeHtml(cell.candidate_id)}</b> / <b>${escapeHtml(cell.model_id)}</b> · score <b>${escapeHtml(fmtNumber(cell.score))}</b> · tools <b>${escapeHtml(cell.tool_calls)}</b> · <b>${escapeHtml(fmtDuration(cell.duration))}</b></p>`
-          + taskBlock
-          + expectedBlock
-          + `<div class="detail-sub"><h4>What the agent did</h4>${traceMetaBlock}</div>`
-          + `<p class="detail-lead">${escapeHtml(traceLead)}</p>`
-          + `<div class="detail-grid">${categoryDetail}</div>`
-           + `<div class="detail-sub"><h4>Submitted claims and grounding</h4></div>${codeBlock(json(trace.conclusions), "json")}`
-           + `<div class="detail-sub"><h4>What the agent answered</h4></div>`
-          + `<details><summary>Show final reply${answerLen ? ` (${answerLen} chars)` : ""}</summary>${finalAnswerBlock}</details>`
-           + `<div class="detail-sub"><h4>Action ledgers</h4></div>${codeBlock(json({successful, rejected, results: actionResults}), "json")}`
-           + `<div class="detail-sub"><h4>Diagnostics</h4></div>${codeBlock(json(trace.diagnostics), "json")}`
-          + `<details><summary>Raw case JSON</summary>${codeBlock(json(cell.raw), "json")}</details>`;
+           + taskBlock
+           + expectedBlock
+            + `<div class="detail-sub"><h4>Submitted claims and grounding</h4></div>${codeBlock(json(trace.conclusions), "json")}`
+            + `<div class="detail-sub"><h4>Action ledgers and results</h4></div>${codeBlock(json({successful, rejected, results: actionContract}), "json")}`
+            + `<div class="detail-sub"><h4>Chronological tool evidence</h4><span class="meta">${toolEvents.length} calls, in order</span></div>`
+           + `<div class="detail-grid">${chronologicalDetail}</div>`
+            + `<div class="detail-sub"><h4>Diagnostics</h4></div>${codeBlock(json(trace.diagnostics), "json")}`
+            + `<div class="detail-sub"><h4>Unrestricted final answer</h4></div>`
+           + `<details><summary>Show final reply${answerLen ? ` (${answerLen} chars)` : ""}</summary>${finalAnswerBlock}</details>`
+           + `<details><summary>Raw case JSON</summary>${codeBlock(json(cell.raw), "json")}</details>`;
         // Syntax highlighting is progressive: skip silently when hljs is blocked.
         if (window.hljs) document.querySelectorAll("#detail-panel pre code").forEach(block => hljs.highlightElement(block));
       };

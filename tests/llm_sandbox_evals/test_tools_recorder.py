@@ -223,11 +223,11 @@ async def test_history_byte_rejected_fixture_stream_continues(
     assert _history_result_rows(third, _LIVING_TEMP) == [[timestamps[1], large_states[1]]]
     assert _history_result_rows(fourth, _LIVING_TEMP) == [[timestamps[0], large_states[0]]]
     assert "next_cursor" not in fourth
-    assert [
-        row[1]
-        for page in (first, second, third, fourth)
-        for row in _history_result_rows(page, _LIVING_TEMP)
-    ] == [large_states[2], large_states[1], large_states[0]]
+    assert [row[1] for page in (first, second, third, fourth) for row in _history_result_rows(page, _LIVING_TEMP)] == [
+        large_states[2],
+        large_states[1],
+        large_states[0],
+    ]
 
 
 async def test_statistics_pagination_fits_utf8_rows_and_advances() -> None:

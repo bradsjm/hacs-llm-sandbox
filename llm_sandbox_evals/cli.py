@@ -13,10 +13,13 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 import os
 from pathlib import Path
+import signal
 import sys
 import termios
 import tty
+from types import FrameType, ModuleType
 from typing import cast
+import warnings
 
 from custom_components.llm_sandbox.llm_api.prompts import resolve_profile
 from dotenv import load_dotenv
@@ -147,12 +150,12 @@ def _build_parser() -> argparse.ArgumentParser:
         prog="llm_sandbox_evals",
         description=(
             "Development-only eval harness for the llm_sandbox Home Assistant integration.\n"
-            "It runs the integration's real LLM tools against frozen fixtures, scores each\n"
-            "operation deterministically, and ranks prompt candidates across a matrix of models."
+            "It runs the integration's real LLM tools against frozen fixtures, evaluates\n"
+            "structured claims and evidence plus action effects, and ranks candidates by binary correctness."
         ),
         epilog=(
             "Examples:\n"
-            "  # Offline, no API key — validates the whole pipeline:\n"
+            "  # Offline, no API key — evaluates structured claims and action effects:\n"
             "  python -m llm_sandbox_evals eval --models stub\n"
             "\n"
             "  # Score real models (keys read from env/.env):\n"
@@ -184,7 +187,8 @@ def _add_eval_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPar
         description=(
             "Run the eval matrix: for every (prompt candidate x language model x test case),\n"
             "ask the model to use the available tools over one or more turns against a\n"
-            "frozen Home Assistant snapshot, and score the result in 0.0-1.0. Artifacts are written under the\n"
+            "frozen Home Assistant snapshot, then evaluates structured claims, grounded evidence, and actions.\n"
+            "Results are binary correct/incorrect; provider failures are incomplete. Artifacts are written under the\n"
             "runs directory; a native pydantic-evals summary is printed to stdout."
         ),
         epilog=(
@@ -195,8 +199,8 @@ def _add_eval_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPar
             "    optimized_candidate.json from `optimize`).\n"
             "  - --prompt-profile selects one production base prompt profile for\n"
             "    the whole run; it is separate from --candidates.\n"
-            "  - A failing model call (bad key, network) scores 0.0 for that cell and\n"
-            "    never aborts the run.\n"
+            "  - A failing provider call (bad key, network) is incomplete and excluded\n"
+            "    from the correctness denominator; it never aborts the run.\n"
             "  - Press Escape to cancel an interactive eval run."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -248,7 +252,7 @@ def _add_eval_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPar
         "--model-timeout",
         type=float,
         metavar="SECONDS",
-        help="seconds to wait for one model generation before recording model_error (default: 75).",
+        help="seconds to wait for one model generation before recording an incomplete provider result (default: 75).",
     )
     eval_parser.add_argument(
         "--reasoning",
@@ -303,7 +307,7 @@ def _add_optimize_parser(subparsers: argparse._SubParsersAction[argparse.Argumen
         description=(
             "Use DSPy's COPRO instruction optimizer to rewrite the execute_home_code\n"
             "instruction. The REAL eval harness is the metric: each proposed instruction is\n"
-            "scored by the existing pipeline (parse -> run tool -> check -> score) against the\n"
+            "evaluated through structured EvalAnswer claims, grounded tool evidence, and action ledgers against the\n"
             "target model. The winning instruction is exported for human review; production\n"
             "prompts.py is never auto-patched."
         ),
@@ -357,7 +361,7 @@ def _add_optimize_parser(subparsers: argparse._SubParsersAction[argparse.Argumen
             "penalty coefficient applied to api_prompt growth during COPRO candidate "
             "selection (default: 0.02). Higher values more aggressively tie-break toward "
             "smaller prompts at equal quality; 0 disables size-aware selection. Does not "
-            "change the reported baseline_mean/optimized_mean (those stay raw quality)."
+            "change the reported baseline_correct_rate/optimized_correct_rate (those stay raw quality)."
         ),
     )
     optimize_parser.add_argument(
@@ -411,6 +415,8 @@ def _run_eval(args: argparse.Namespace) -> int:
         temperature=args.temperature,
     )
     run_id = _derive_run_id()
+    previous_sigint = signal.getsignal(signal.SIGINT)
+    signal.signal(signal.SIGINT, _raise_keyboard_interrupt)
     try:
         with MatrixTerminalReporter() as reporter:
             report = asyncio.run(_run_eval_matrix(config, run_id, reporter))
@@ -421,8 +427,12 @@ def _run_eval(args: argparse.Namespace) -> int:
         run_dir = reports.write_report_json(report, config, run_id=run_id)
         report_html = html_report.write_html(run_dir)
         reporter.finish(
-            overall_mean=experiment.overall_mean(report), run_dir=str(run_dir), report_html=str(report_html)
+            overall_correct_rate=experiment.overall_correct_rate(report),
+            run_dir=str(run_dir),
+            report_html=str(report_html),
         )
+    finally:
+        signal.signal(signal.SIGINT, previous_sigint)
 
     # stdout stays machine-readable: the run directory and compact native analysis facts.
     sys.stdout.write(f"run_dir: {run_dir}\n")
@@ -435,17 +445,23 @@ async def _run_eval_matrix(
     config: EvalConfig, run_id: str, reporter: MatrixTerminalReporter
 ) -> EvaluationReport[MatrixCellRef, CaseTrace, MatrixCellMeta]:
     """Run one matrix, allowing Escape to cancel only interactive terminal sessions."""
-    task = asyncio.create_task(experiment.run_matrix(config, run_id=run_id, on_event=reporter.handle))
     # Branch boundary: redirected streams retain their existing non-interactive behavior.
     if not _is_interactive_eval():
-        return await task
-    with _EscapeWatcher(task.cancel) as watcher:
-        try:
-            return await task
-        except asyncio.CancelledError:
-            if watcher.cancelled:
-                raise _EvalCancelled from None
-            raise
+        return await experiment.run_matrix(config, run_id=run_id, on_event=reporter.handle)
+    current_task = asyncio.current_task()
+    assert current_task is not None
+    loop = asyncio.get_running_loop()
+    loop.add_signal_handler(signal.SIGINT, current_task.cancel)
+    try:
+        with _EscapeWatcher(current_task.cancel) as watcher:
+            try:
+                return await experiment.run_matrix(config, run_id=run_id, on_event=reporter.handle)
+            except asyncio.CancelledError:
+                if watcher.cancelled:
+                    raise _EvalCancelled from None
+                raise
+    finally:
+        loop.remove_signal_handler(signal.SIGINT)
 
 
 def _is_interactive_eval() -> bool:
@@ -468,13 +484,13 @@ def _run_report(args: argparse.Namespace) -> int:
         sys.stderr.write(f"error: run not found: {report_json}\n")
         return 1
 
+    report = reports.load_report(report_json.parent)
     if args.html:
         report_html = html_report.write_html(report_json.parent)
         sys.stdout.write(f"report_html: {report_html}\n")
         return 0
 
     _say("(llm sandbox evals) re-rendering the native report summary from report.json (no model calls).\n")
-    report = reports.load_report(report_json.parent)
     report.print(
         console=Console(stderr=True),
         include_output=False,
@@ -487,8 +503,7 @@ def _run_report(args: argparse.Namespace) -> int:
 
 def _run_optimize(args: argparse.Namespace) -> int:
     """Run DSPy optimization and print the exported candidate summary."""
-    # Lazy import keeps the offline eval/report paths usable without importing DSPy.
-    from llm_sandbox_evals import optimize_dspy
+    optimize_dspy = _load_optimizer()
 
     base_config = load_config()
     prompt_profile = args.prompt_profile or base_config.prompt_profile
@@ -523,12 +538,12 @@ def _run_optimize(args: argparse.Namespace) -> int:
 
     _say(
         _optimize_footer(
-            baseline_mean=result.baseline_mean,
-            optimized_mean=result.optimized_mean,
+            baseline_correct_rate=result.baseline_correct_rate,
+            optimized_correct_rate=result.optimized_correct_rate,
             optimized_prompt_chars=result.optimized_prompt_chars,
             baseline_prompt_chars=result.baseline_prompt_chars,
             size_ratio=result.size_ratio,
-            optimized_full_mean=result.optimized_full_mean,
+            optimized_full_correct_rate=result.optimized_full_correct_rate,
             candidate_path=result.candidate_path,
             cross_eval_run_dir=result.cross_eval_run_dir,
             prompt_profile=config.prompt_profile,
@@ -541,12 +556,12 @@ def _run_optimize(args: argparse.Namespace) -> int:
         f"run_dir: {run_dir}",
         f"target_model: {result.target_model}",
         f"proposer_model: {result.proposer_model}",
-        f"baseline_mean: {result.baseline_mean:.3f}",
-        f"optimized_mean: {result.optimized_mean:.3f}",
+        f"baseline_correct_rate: {result.baseline_correct_rate:.3f}",
+        f"optimized_correct_rate: {result.optimized_correct_rate:.3f}",
         f"baseline_prompt_chars: {result.baseline_prompt_chars}",
         f"optimized_prompt_chars: {result.optimized_prompt_chars}",
         f"size_ratio: {result.size_ratio:.3f}",
-        f"optimized_full_mean: {result.optimized_full_mean:.3f}",
+        f"optimized_full_correct_rate: {result.optimized_full_correct_rate:.3f}",
         f"optimized_candidate: {result.candidate_path}",
         f"optimized_prompt: {result.candidate_path.parent / 'optimized_prompt.md'}",
     ]
@@ -555,6 +570,26 @@ def _run_optimize(args: argparse.Namespace) -> int:
         lines.append(f"cross_eval_run_dir: {result.cross_eval_run_dir}")
     sys.stdout.write("\n".join(lines) + "\n")
     return 0
+
+
+def _raise_keyboard_interrupt(_signal_number: int, _frame: FrameType | None) -> None:
+    """Interrupt the terminal setup window before asyncio installs its handler."""
+    raise KeyboardInterrupt
+
+
+def _load_optimizer() -> ModuleType:
+    """Import the optional optimizer while containing one known DSPy warning."""
+    with warnings.catch_warnings():
+        # Boundary constraint: contain only DSPy's known import-time field-prefix deprecation.
+        warnings.filterwarnings(
+            "ignore",
+            message=r".*'prefix' argument in InputField/OutputField is deprecated.*",
+            category=DeprecationWarning,
+            module=r"^dspy\.",
+        )
+        from llm_sandbox_evals import optimize_dspy
+
+    return optimize_dspy
 
 
 def _optimize_banner(config: EvalConfig) -> str:
@@ -567,8 +602,8 @@ def _optimize_banner(config: EvalConfig) -> str:
     return (
         "llm_sandbox evals - DSPy COPRO prompt optimization\n\n"
         "COPRO rewrites the execute_home_code instruction and uses the REAL eval harness\n"
-        "as its metric: every proposed instruction is scored by the existing pipeline\n"
-        "(parse -> run tool -> check -> score) against the target model. The best-scoring\n"
+        "as its metric: every proposed instruction is evaluated through structured answers,\n"
+        "grounded tool evidence, and action ledgers against the target model. The best-correctness\n"
         "instruction is exported for human review. Production prompts.py is never changed.\n\n"
         "COST: this calls real, paid models. Optimizer calls scale roughly as\n"
         "breadth x depth x trainset, plus a baseline and an optimized eval (and the\n"
@@ -587,19 +622,19 @@ def _optimize_banner(config: EvalConfig) -> str:
 
 def _optimize_footer(
     *,
-    baseline_mean: float,
-    optimized_mean: float,
+    baseline_correct_rate: float,
+    optimized_correct_rate: float,
     optimized_prompt_chars: int,
     baseline_prompt_chars: int,
     size_ratio: float,
-    optimized_full_mean: float,
+    optimized_full_correct_rate: float,
     candidate_path: Path,
     cross_eval_run_dir: Path | None,
     prompt_profile: str,
 ) -> str:
     """Build the post-run interpretation + next-steps footer for `optimize`."""
     prompt_path = candidate_path.parent / "optimized_prompt.md"
-    delta = optimized_mean - baseline_mean
+    delta = optimized_correct_rate - baseline_correct_rate
     delta_str = f"{'+' if delta >= 0 else ''}{delta:.3f}"
     cross_eval_line = ""
     # Branch boundary: cross-eval is optional and may not have run.
@@ -610,10 +645,10 @@ def _optimize_footer(
         )
     return (
         "\nOptimization complete.\n\n"
-        f"  baseline_mean   : {baseline_mean:.3f}   (production profile {prompt_profile!r}, on the target model)\n"
-        f"  optimized_mean  : {optimized_mean:.3f}   (best COPRO rewrite)   delta {delta_str}\n"
+        f"  baseline_correct_rate   : {baseline_correct_rate:.3f}   (production profile {prompt_profile!r}, on the target model)\n"
+        f"  optimized_correct_rate  : {optimized_correct_rate:.3f}   (best COPRO rewrite)   delta {delta_str}\n"
         f"  optimized_chars : {optimized_prompt_chars}   (baseline {baseline_prompt_chars}; ratio {size_ratio:.3f})\n"
-        f"  optimized_full_mean : {optimized_full_mean:.3f}   (mean on the FULL case suite, not just the trainset)\n"
+        f"  optimized_full_correct_rate : {optimized_full_correct_rate:.3f}   (full case suite, not just the trainset)\n"
         f"  optimized prompt: {prompt_path}   (the ONLY text COPRO changed - review this)\n"
         f"{cross_eval_line}\n\n"
         "Next steps:\n"

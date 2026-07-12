@@ -48,7 +48,7 @@ from pydantic_ai.settings import ModelSettings
 from voluptuous_openapi import convert
 
 from llm_sandbox_evals.runtime import EvalRuntime
-from llm_sandbox_evals.schema import AnswerClaim, EvalAnswer, EventClaim, ValueClaim
+from llm_sandbox_evals.schema import AggregateClaim, AnswerClaim, EvalAnswer, EventClaim, ValueClaim
 
 _ENTITY_ID_RE = re.compile(r"\b[a-z_]+\.[a-z0-9_]+\b")
 _FIXED_END = "2026-06-29T12:00:00+00:00"
@@ -197,6 +197,13 @@ def _notify_tool_boundary(runtime: EvalRuntime, tool_name: str, *, started: bool
 def _validate_recorder_tool(tool: _EvalTool, kwargs: dict[str, object]) -> _ValidationResult:
     """Validate recorder args in production ordering."""
     try:
+        if "cursor" in kwargs:
+            data = cast(dict[str, object], tool.parameters({"cursor": kwargs["cursor"]}))  # type: ignore[attr-defined]
+            # The private eval wrapper retains the already-resolved cursor scope for
+            # production run_query; only the opaque cursor is used for continuation state.
+            if isinstance(kwargs.get("entity_ids"), list):
+                data["entity_ids"] = kwargs["entity_ids"]
+            return _ValidationResult(data, None)
         return _ValidationResult(cast(dict[str, object], tool.parameters(tool._normalize_args(kwargs))), None)  # type: ignore[attr-defined]
     except Exception as err:
         mapped = tool_error_from_exception(err)
@@ -288,6 +295,20 @@ async def _stub_respond(messages: list[ModelMessage], info: AgentInfo) -> ModelR
     user_request = _first_user_content(messages)
     tool_count = _tool_return_count(messages)
     if _last_tool_content(messages) is not None:
+        last_return = _last_tool_return(messages)
+        if last_return is not None:
+            tool_name, content = last_return
+            next_cursor = content.get("next_cursor")
+            if isinstance(next_cursor, str) and tool_name in {
+                TOOL_GET_HISTORY,
+                TOOL_GET_STATISTICS,
+                TOOL_GET_LOGBOOK,
+                TOOL_GET_AUTOMATION,
+            }:
+                continuation_args: dict[str, object] = {"cursor": next_cursor}
+                if "full living room power sensor history" in user_request.lower():
+                    continuation_args["entity_ids"] = ["sensor.living_power"]
+                return ModelResponse(parts=[_tool_call_part(tool_name, continuation_args, tool_count + 1)])
         followup_calls = _stub_followup_calls(user_request, tool_count)
         if followup_calls:
             return ModelResponse(
@@ -332,6 +353,11 @@ def _stub_claims(messages: list[ModelMessage]) -> list[AnswerClaim]:
             if not isinstance(part, ToolReturnPart) or not isinstance(part.content, dict):
                 continue
             _claims_from_value(part.content.get("output"), claims)
+            entities = part.content.get("entities")
+            if isinstance(entities, dict):
+                for entity_id, record in entities.items():
+                    if isinstance(entity_id, str) and isinstance(record, dict):
+                        _claims_from_value({"entity_id": entity_id, "rows": record.get("rows")}, claims)
             entries = part.content.get("entries")
             if isinstance(entries, list):
                 for entry in entries:
@@ -345,6 +371,40 @@ def _stub_claims(messages: list[ModelMessage]) -> list[AnswerClaim]:
                                 when=entry.get("when") if isinstance(entry.get("when"), str) else None,
                             )
                         )
+    user_request = _first_user_content(messages).lower()
+    history_values = [
+        (claim.entity_id, float(claim.value))
+        for claim in claims
+        if isinstance(claim, EventClaim) and claim.source == "history" and _is_numeric(claim.value)
+    ]
+    if "living room temperature reading in the last 24 hours" in user_request:
+        values = [value for entity_id, value in history_values if entity_id == "sensor.living_temp"]
+        if values:
+            claims.append(
+                AggregateClaim(
+                    source="history",
+                    operator="maximum",
+                    subject_ids=["sensor.living_temp"],
+                    input_field="state",
+                    input_value="state",
+                    value=max(values),
+                    unit="°C",
+                )
+            )
+    if "every outside temperature reading in the last 24 hours" in user_request:
+        values = [value for entity_id, value in history_values if entity_id == "sensor.tempest_temperature"]
+        if values:
+            claims.append(
+                AggregateClaim(
+                    source="history",
+                    operator="maximum",
+                    subject_ids=["sensor.tempest_temperature"],
+                    input_field="state",
+                    input_value="state",
+                    value=max(values),
+                    unit="°F",
+                )
+            )
     return claims
 
 
@@ -358,6 +418,17 @@ def _claims_from_value(value: object, claims: list[AnswerClaim]) -> None:
     entity_id = value.get("entity_id")
     if isinstance(entity_id, str) and "state" in value:
         claims.append(ValueClaim(subject_kind="entity", subject_id=entity_id, field="state", value=value["state"]))
+    if isinstance(entity_id, str) and isinstance(value.get("duration_seconds"), int | float):
+        claims.append(
+            AggregateClaim(
+                source="states",
+                operator="duration_seconds",
+                subject_ids=[entity_id],
+                input_field="none",
+                value=value["duration_seconds"],
+                unit="seconds",
+            )
+        )
     attributes = value.get("attributes")
     if isinstance(entity_id, str) and isinstance(attributes, dict):
         for name, item in attributes.items():
@@ -392,6 +463,9 @@ def _tool_call_part(tool_name: str, tool_args: dict[str, object], index: int) ->
 def _stub_initial_calls(user_request: str) -> tuple[tuple[str, dict[str, object]], ...]:
     """Return the first deterministic tool call(s) for the stub model."""
     lowered = user_request.lower()
+    conditional_calls = _stub_conditional_initial_calls(lowered)
+    if conditional_calls is not None:
+        return conditional_calls
     if "which of my evening automations controls the living room light" in lowered:
         return ((TOOL_GET_AUTOMATION, {"query": "evening living room light"}),)
     if "what does the automation called evening living room lights do" in lowered:
@@ -410,6 +484,8 @@ def _stub_initial_calls(user_request: str) -> tuple[tuple[str, dict[str, object]
         )
     if "sensor.living_room_temperature" in lowered:
         return ((TOOL_GET_HISTORY, {"entity_ids": ["sensor.living_room_temperature"], **_last_day_window()}),)
+    if "full living room power sensor history" in lowered:
+        return ((TOOL_GET_HISTORY, {"entity_ids": ["sensor.living_power"], **_last_day_window()}),)
     if "summarize the living room temperature history" in lowered and "humidity hourly statistics" in lowered:
         return (
             (TOOL_GET_HISTORY, {"entity_ids": ["sensor.living_temp"], **_last_day_window()}),
@@ -420,8 +496,6 @@ def _stub_initial_calls(user_request: str) -> tuple[tuple[str, dict[str, object]
         )
     if "find the living room temperature sensor" in lowered:
         return ((TOOL_EXECUTE_HOME_CODE, {"code": _discover_living_temperature_history_code()}),)
-    if "temperature state history" in lowered and "above 25" in lowered:
-        return ((TOOL_EXECUTE_HOME_CODE, {"code": _history_action_code("fan.living_fan")}),)
     if "light.living last turn on" in lowered or "light.living last turned on" in lowered:
         return (
             (
@@ -431,18 +505,24 @@ def _stub_initial_calls(user_request: str) -> tuple[tuple[str, dict[str, object]
         )
     if "living room light turned on today" in lowered:
         return ((TOOL_GET_LOGBOOK, {"entity_ids": ["light.living"], **_today_window()}),)
-    if "logbook entry showing it turned on today" in lowered:
-        return ((TOOL_EXECUTE_HOME_CODE, {"code": _logbook_light_off_code()}),)
-    if "light state history shows it was on today" in lowered:
-        return ((TOOL_EXECUTE_HOME_CODE, {"code": _history_light_off_code()}),)
+    if "all lights upstairs" in lowered:
+        return (
+            (
+                TOOL_EXECUTE_HOME_CODE,
+                {
+                    "code": 'await hass.services.async_call("light", "turn_off", target={"floor_id": "floor_upstairs"})\n'
+                    'result = "ok"'
+                },
+            ),
+        )
     if "living room light on right now" in lowered and "last change" in lowered:
         return ((TOOL_EXECUTE_HOME_CODE, {"code": _state_and_logbook_code()}),)
     if "light in this room" in lowered:
         return ((TOOL_GET_LOGBOOK, {"entity_ids": ["light.living"], **_today_window()}),)
     if "garage door opener" in lowered:
         return ((TOOL_EXECUTE_HOME_CODE, {"code": "result = states.entity_ids()"}),)
-    if "outside temperature stayed below 80" in lowered:
-        return ((TOOL_EXECUTE_HOME_CODE, {"code": _history_action_code("cover.office_blinds")}),)
+    if "seconds has the living room light been in its current state" in lowered:
+        return ((TOOL_EXECUTE_HOME_CODE, {"code": _current_state_duration_code()}),)
     # Branch boundary: state-read of the living room temperature reads the entity so
     # the observed value surfaces in the tool return + final answer. Exclude history
     # and threshold phrasings, which are handled by their own routes or the recorder
@@ -454,9 +534,36 @@ def _stub_initial_calls(user_request: str) -> tuple[tuple[str, dict[str, object]
     return ((tool_name, _build_stub_tool_args(tool_name, user_request)),)
 
 
+def _stub_conditional_initial_calls(lowered: str) -> tuple[tuple[str, dict[str, object]], ...] | None:
+    """Route the eight authored conditional requests to grounded production evidence."""
+    if "living room temperature reading in the last 24 hours" in lowered and "above 25" in lowered:
+        return ((TOOL_GET_HISTORY, {"entity_ids": ["sensor.living_temp"], **_last_day_window()}),)
+    if "bedroom humidity is above 40%" in lowered:
+        return ((TOOL_EXECUTE_HOME_CODE, {"code": _humidity_dehumidifier_code(40)}),)
+    if "bedroom humidity is above 70%" in lowered:
+        return ((TOOL_EXECUTE_HOME_CODE, {"code": _humidity_dehumidifier_code(70)}),)
+    if "today's logbook shows the living room light turned on" in lowered:
+        return ((TOOL_GET_LOGBOOK, {"entity_ids": ["light.living"], **_today_window()}),)
+    if "light.living state is on after 09:00 today" in lowered:
+        return ((TOOL_GET_HISTORY, {"entity_ids": ["light.living"], **_today_window()}),)
+    if "living room lights group turned on after 11:00" in lowered:
+        return ((TOOL_GET_LOGBOOK, {"entity_ids": ["light.living_room_lights_group"], **_today_window()}),)
+    if "every outside temperature reading in the last 24 hours was below 80" in lowered:
+        return ((TOOL_GET_HISTORY, {"entity_ids": ["sensor.tempest_temperature"], **_last_day_window()}),)
+    if "current outside temperature is below 75" in lowered:
+        return ((TOOL_EXECUTE_HOME_CODE, {"code": 'result = states.get("sensor.tempest_temperature")'}),)
+    return None
+
+
 def _stub_followup_calls(user_request: str, tool_count: int) -> tuple[tuple[str, dict[str, object]], ...]:
     """Return the next deterministic tool call(s) after previous tool output."""
     lowered = user_request.lower()
+    if "living room temperature reading in the last 24 hours" in lowered and tool_count == 1:
+        return ((TOOL_EXECUTE_HOME_CODE, {"code": _fan_50_code("fan.living_fan")}),)
+    if "today's logbook shows the living room light turned on" in lowered and tool_count == 1:
+        return ((TOOL_EXECUTE_HOME_CODE, {"code": _service_code("light", "turn_off", "light.living")}),)
+    if "every outside temperature reading in the last 24 hours was below 80" in lowered and tool_count == 1:
+        return ((TOOL_EXECUTE_HOME_CODE, {"code": _service_code("cover", "close_cover", "cover.office_blinds")}),)
     if "sensor.living_room_temperature" in lowered and tool_count == 1:
         return ((TOOL_EXECUTE_HOME_CODE, {"code": 'result = states.get("sensor.living_temp")'}),)
     if "sensor.living_room_temperature" in lowered and tool_count == 2:
@@ -482,6 +589,16 @@ def _service_code(domain: str, service: str, entity_id: str) -> str:
     )
 
 
+def _humidity_dehumidifier_code(threshold: int) -> str:
+    """Read humidity and conditionally invoke the configured dehumidifier action."""
+    return (
+        'state = hass.states.get("sensor.bedroom_humidity")\n'
+        f"if float(state.state) > {threshold}:\n"
+        '    await hass.services.async_call("switch", "toggle", target={"entity_id": "switch.dehumidifier"})\n'
+        'result = {"entity_id": state.entity_id, "state": state.state}'
+    )
+
+
 def _fan_50_code(entity_id: str) -> str:
     """Return minimal executable code that records a fan percentage service call."""
     return (
@@ -499,42 +616,12 @@ def _discover_living_temperature_history_code() -> str:
     )
 
 
-def _history_action_code(target_entity_id: str) -> str:
-    """Return one snippet that reads temperature history and conditionally acts."""
-    # Branch boundary: fan and cover cases use different history predicates and services.
-    if target_entity_id.startswith("fan."):
-        return (
-            'history = await hass.history("sensor.living_temp", hours=24)\n'
-            'if any(float(row["state"]) > 25 for row in history):\n'
-            '    await hass.services.async_call("fan", "set_percentage", {"percentage": 50}, '
-            'target={"entity_id": "fan.living_fan"})\n'
-            'result = {"entity_id": "sensor.living_temp", "history": history}'
-        )
+def _current_state_duration_code() -> str:
+    """Calculate elapsed state duration from frozen snapshot timestamps and eval end."""
     return (
-        'history = await hass.history("sensor.tempest_temperature", hours=24)\n'
-        'if all(float(row["state"]) < 80 for row in history):\n'
-        '    await hass.services.async_call("cover", "close_cover", target={"entity_id": "cover.office_blinds"})\n'
-        'result = {"entity_id": "sensor.tempest_temperature", "history": history}'
-    )
-
-
-def _logbook_light_off_code() -> str:
-    """Return one snippet that reads logbook evidence before turning the light off."""
-    return (
-        'entries = await hass.logbook("light.living", hours=24)\n'
-        'if any(entry["message"] == "turned on" for entry in entries):\n'
-        '    await hass.services.async_call("light", "turn_off", target={"entity_id": "light.living"})\n'
-        'result = {"entity_id": "light.living", "entries": entries}'
-    )
-
-
-def _history_light_off_code() -> str:
-    """Return one snippet that reads state history before turning the light off."""
-    return (
-        'history = await hass.history("light.living", hours=24)\n'
-        'if any(row["state"] == "on" for row in history):\n'
-        '    await hass.services.async_call("light", "turn_off", target={"entity_id": "light.living"})\n'
-        'result = {"entity_id": "light.living", "history": history}'
+        'state = hass.states.get("light.living")\n'
+        'result = {"entity_id": state.entity_id, "duration_seconds": '
+        "1782734400.0 - state.last_changed_timestamp}"
     )
 
 
@@ -579,6 +666,17 @@ def _last_tool_content(messages: list[ModelMessage]) -> str | None:
     return None
 
 
+def _last_tool_return(messages: list[ModelMessage]) -> tuple[str, dict[str, object]] | None:
+    """Return the latest production tool name and mapping result."""
+    for message in reversed(messages):
+        if not isinstance(message, ModelRequest):
+            continue
+        for part in reversed(message.parts):
+            if isinstance(part, ToolReturnPart) and isinstance(part.content, dict):
+                return part.tool_name, part.content
+    return None
+
+
 def _all_tool_content(messages: list[ModelMessage]) -> str | None:
     """Return all tool-return JSON content in order for deterministic stub summaries."""
     contents = [
@@ -601,6 +699,15 @@ def _select_stub_tool(user_request: str) -> str:
     if "history" in lowered or "last 24" in lowered or "over the last" in lowered:
         return TOOL_GET_HISTORY
     return TOOL_EXECUTE_HOME_CODE
+
+
+def _is_numeric(value: object) -> bool:
+    """Return whether a copied recorder scalar is numeric."""
+    try:
+        float(value)  # type: ignore[arg-type]
+    except TypeError, ValueError:
+        return False
+    return True
 
 
 def _build_stub_tool_args(tool_name: str, user_request: str) -> dict[str, object]:

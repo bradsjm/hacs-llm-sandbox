@@ -2,7 +2,7 @@
 
 from collections.abc import Sequence
 from datetime import UTC, datetime
-from itertools import pairwise
+from itertools import pairwise, product
 
 from llm_sandbox_evals.schema import (
     ActionResult,
@@ -32,25 +32,25 @@ def evaluate_case(
     conclusion_results = tuple(
         _score_conclusion(expected, answer.claims, evidence) for expected in case.expected.conclusions
     )
+    authored_tolerances = _authored_tolerances(answer.claims, case.expected.conclusions)
     ledger = build_action_ledger(recorded_actions)
     action_result = score_actions(case.expected.actions, case.expected.blocked_outcome, ledger)
-    all_answer_claims_grounded = all(_claim_grounded(claim, evidence) for claim in answer.claims)
+    all_answer_claims_grounded = all(
+        _claim_grounded(claim, evidence, authored_tolerances.get(id(claim))) for claim in answer.claims
+    )
     correct = all(
         result.semantic_status == "matched" and result.grounding_status == "grounded" for result in conclusion_results
     )
-    correct = correct and all_answer_claims_grounded and action_result.passed
-    reason = "ok" if correct else _reason(conclusion_results, action_result, all_answer_claims_grounded)
-    return CaseOutcome("correct" if correct else "incorrect", reason), conclusion_results, (action_result,)
-
-
-def is_incomplete(outcome: CaseOutcome | str) -> bool:
-    """Return whether an outcome is provider/infra incomplete rather than incorrect."""
-    return outcome.state == "incomplete" if isinstance(outcome, CaseOutcome) else outcome == "incomplete"
-
-
-def score_case(outcome: CaseOutcome) -> float:
-    """Expose the native binary score used by downstream evaluators."""
-    return outcome.score
+    action_passed = action_result.passed if action_result is not None else not ledger.successful
+    correct = correct and all_answer_claims_grounded and action_passed
+    reason = (
+        "ok" if correct else _reason(conclusion_results, action_result, all_answer_claims_grounded, ledger.successful)
+    )
+    return (
+        CaseOutcome("correct" if correct else "incorrect", reason),
+        conclusion_results,
+        ((action_result,) if action_result is not None else ()),
+    )
 
 
 def _score_conclusion(
@@ -62,12 +62,12 @@ def _score_conclusion(
     expected_grounded = (
         _aggregate_claim_grounded(expected.claim, evidence, expected.tolerance)
         if isinstance(expected.claim, AggregateClaim)
-        else _claim_grounded(expected.claim, evidence)
+        else _claim_grounded(expected.claim, evidence, expected.tolerance)
     )
     actual_grounded = (
         _aggregate_claim_grounded(matching, evidence, expected.tolerance)
         if isinstance(matching, AggregateClaim)
-        else _claim_grounded(matching, evidence)
+        else _claim_grounded(matching, evidence, expected.tolerance)
     )
     if not expected_grounded:
         return ConclusionResult(expected, matching, "matched", "ungrounded", "expected_claim_not_grounded")
@@ -80,12 +80,12 @@ def _score_conclusion(
     )
 
 
-def _claim_grounded(claim: AnswerClaim, evidence: NormalizedEvidence) -> bool:
+def _claim_grounded(claim: AnswerClaim, evidence: NormalizedEvidence, tolerance: float | None = None) -> bool:
     if claim.kind == "value":
         direct = any(
             all(fact.get(key) == getattr(claim, key) for key in ("subject_kind", "subject_id", "field"))
             and (claim.field != "attribute" or fact.get("attribute_name") == claim.attribute_name)
-            and fact.get("value") == claim.value
+            and _same_scalar(fact.get("value"), claim.value, tolerance)
             for fact in evidence.for_kind("value")
         )
         if direct:
@@ -93,7 +93,7 @@ def _claim_grounded(claim: AnswerClaim, evidence: NormalizedEvidence) -> bool:
         return claim.field == "attribute" and any(
             fact.get("entity_id") == claim.subject_id
             and fact.get("attribute_name") == claim.attribute_name
-            and fact.get("value") == claim.value
+            and _same_scalar(fact.get("value"), claim.value, tolerance)
             for fact in evidence.for_kind("history_attribute")
         )
     if claim.kind == "relation":
@@ -129,9 +129,6 @@ def _claim_grounded(claim: AnswerClaim, evidence: NormalizedEvidence) -> bool:
             for fact in facts
         )
     if claim.kind == "no_data":
-        source_scope = {
-            fact.get("entity_id") for fact in evidence.for_kind("scope") if fact.get("source") == claim.source
-        }
         rows = {
             "history": "history_row",
             "statistics": "statistic_value",
@@ -141,13 +138,37 @@ def _claim_grounded(claim: AnswerClaim, evidence: NormalizedEvidence) -> bool:
         if claim.source == "automation":
             rows = "automation_run"
         identity_key = "statistic_id" if claim.source == "statistics" else "entity_id"
-        return source_scope == set(claim.scope_entity_ids) and not any(
-            fact.get(identity_key) in source_scope for fact in evidence.for_kind(rows)
-        )
+        # A resolved empty result is indivisible: scope and rows must come from one event.
+        scope_facts = evidence.for_kind("scope")
+        row_facts = evidence.for_kind(rows)
+        event_ids = {_event_identity(fact) for fact in scope_facts if fact.get("source") == claim.source}
+        for event_id in event_ids:
+            event_scope = {
+                fact.get("entity_id")
+                for fact in scope_facts
+                if fact.get("source") == claim.source and _event_identity(fact) == event_id
+            }
+            if event_scope == set(claim.scope_entity_ids) and not any(
+                fact.get(identity_key) in event_scope and _event_identity(fact) == event_id for fact in row_facts
+            ):
+                return True
+        return False
     if claim.kind == "collection":
         grounded = _collection_items(claim, evidence)
         return set(claim.items) <= grounded
-    return isinstance(claim, AggregateClaim) and _aggregate_claim_grounded(claim, evidence, None)
+    return isinstance(claim, AggregateClaim) and _aggregate_claim_grounded(claim, evidence, tolerance)
+
+
+def _authored_tolerances(claims: Sequence[AnswerClaim], expected: Sequence[ExpectedConclusion]) -> dict[int, float]:
+    """Map only each authored approximate conclusion's selected claim to its tolerance."""
+    result: dict[int, float] = {}
+    for conclusion in expected:
+        if conclusion.assertion != "approximate" or conclusion.tolerance is None:
+            continue
+        matching = next((claim for claim in claims if assertion_matches(conclusion, claim)), None)
+        if matching is not None:
+            result[id(matching)] = conclusion.tolerance
+    return result
 
 
 def _collection_items(claim: CollectionClaim, evidence: NormalizedEvidence) -> set[str]:
@@ -183,7 +204,23 @@ def _collection_items(claim: CollectionClaim, evidence: NormalizedEvidence) -> s
             if any(fact.get("field") == "state" and fact.get("value") == claim.filter_value for fact in facts)
         }
     if claim.filter_kind in {"area", "device", "floor"}:
-        relation = {"area": "entity_area", "device": "entity_device", "floor": "entity_floor"}[claim.filter_kind]
+        if claim.filter_kind == "floor":
+            area_ids = {
+                fact.get("subject_id")
+                for fact in evidence.for_kind("relation")
+                if fact.get("relation") == "area_floor" and fact.get("object_id") == claim.filter_value
+            }
+            candidates = {
+                subject_id: facts
+                for subject_id, facts in candidates.items()
+                if any(
+                    fact.get("relation") == "entity_area" and fact.get("object_id") in area_ids
+                    for fact in evidence.for_kind("relation")
+                    if fact.get("subject_id") == subject_id
+                )
+            }
+            return set(candidates)
+        relation = {"area": "entity_area", "device": "entity_device"}[claim.filter_kind]
         candidates = {
             subject_id: facts
             for subject_id, facts in candidates.items()
@@ -206,6 +243,10 @@ def _collection_items(claim: CollectionClaim, evidence: NormalizedEvidence) -> s
 
 
 def _aggregate_claim_grounded(claim: AggregateClaim, evidence: NormalizedEvidence, tolerance: float | None) -> bool:
+    if claim.source == "history" and claim.operator in {"duration_seconds", "time_in_state"}:
+        return any(
+            _same_scalar(value, claim.value, tolerance) for value in _history_duration_candidates(claim, evidence)
+        )
     computed = _aggregate_value(claim, evidence)
     if computed is None:
         return False
@@ -215,16 +256,24 @@ def _aggregate_claim_grounded(claim: AggregateClaim, evidence: NormalizedEvidenc
 def _aggregate_value(claim: AggregateClaim, evidence: NormalizedEvidence) -> object:
     subject_ids = set(claim.subject_ids)
     rows: list[tuple[str | None, object]] = []
+    contributing_subjects: set[str] = set()
     explicit_duration_values: list[float] = []
     if claim.source == "states":
+        # Branch boundary: state counts qualify by selected state; numeric operations qualify by source unit.
+        if claim.operator in {"count", "mean", "minimum", "maximum", "sum", "convert"}:
+            return _states_aggregate_value(claim, evidence, subject_ids)
         if claim.input_field == "none" and claim.operator in {"duration_seconds", "time_in_state"}:
-            explicit_duration_values = [
-                number
+            explicit_duration_facts = [
+                (str(fact.get("subject_id")), number)
                 for fact in evidence.for_kind("value")
                 if fact.get("subject_id") in subject_ids
                 and fact.get("field") == claim.operator
                 and (number := _number(fact.get("value"))) is not None
             ]
+            # Every declared state subject must contribute its own explicit duration.
+            if {subject_id for subject_id, _number_value in explicit_duration_facts} != subject_ids:
+                return None
+            explicit_duration_values = [number for _subject_id, number in explicit_duration_facts]
             rows.extend(
                 (str(fact.get("timestamp")) if fact.get("timestamp") is not None else None, fact.get("value"))
                 for fact in evidence.for_kind("value")
@@ -243,29 +292,38 @@ def _aggregate_value(claim: AggregateClaim, evidence: NormalizedEvidence) -> obj
                 if fact.get("subject_id") in subject_ids and fact.get("field") == claim.input_field
             )
     elif claim.source == "statistics":
-        rows.extend(
-            (str(fact.get("when")) if fact.get("when") is not None else None, fact.get("value"))
+        facts = tuple(
+            fact
             for fact in evidence.for_kind("statistic_value")
             if fact.get("statistic_id") in subject_ids and fact.get("field") == claim.input_field
         )
+        rows.extend(
+            (str(fact.get("when")) if fact.get("when") is not None else None, fact.get("value")) for fact in facts
+        )
+        contributing_subjects.update(str(fact.get("statistic_id")) for fact in facts)
     elif claim.source == "history":
-        rows = [
-            (str(fact.get("when")), fact.get("state"))
+        if claim.operator in {"duration_seconds", "time_in_state"}:
+            return _history_duration(claim, evidence)
+        facts = tuple(
+            fact
             for fact in evidence.for_kind("history_row")
             if fact.get("entity_id") in subject_ids
-        ]
+            and (claim.input_value in {None, "state", "event_message"} or fact.get("state") == claim.input_value)
+        )
+        rows = [(str(fact.get("when")), fact.get("state")) for fact in facts]
+        contributing_subjects.update(str(fact.get("entity_id")) for fact in facts)
     else:
-        rows = [
-            (str(fact.get("when")), fact.get("message"))
+        facts = tuple(
+            fact
             for fact in evidence.for_kind("logbook_event")
             if fact.get("entity_id") in subject_ids
-        ]
-    if (
-        claim.source in {"history", "logbook"}
-        and claim.operator not in {"duration_seconds", "time_in_state"}
-        and claim.input_value not in {None, "state", "event_message"}
-    ):
-        rows = [(when, value) for when, value in rows if value == claim.input_value]
+            and (claim.input_value in {None, "state", "event_message"} or fact.get("message") == claim.input_value)
+        )
+        rows = [(str(fact.get("when")), fact.get("message")) for fact in facts]
+        contributing_subjects.update(str(fact.get("entity_id")) for fact in facts)
+    # Recorder aggregates require qualifying source evidence from every declared subject.
+    if claim.source in {"statistics", "history", "logbook"} and contributing_subjects != subject_ids:
+        return None
     values = [value for _when, value in rows]
     numeric = [number for value in values if (number := _number(value)) is not None]
     if claim.operator == "count":
@@ -293,6 +351,56 @@ def _aggregate_value(claim: AggregateClaim, evidence: NormalizedEvidence) -> obj
             return None
         return _convert(numeric[0], claim.input_value, claim.unit)
     return None
+
+
+def _states_aggregate_value(
+    claim: AggregateClaim, evidence: NormalizedEvidence, subject_ids: set[str]
+) -> float | int | None:
+    state_facts = {
+        subject_id: tuple(
+            fact
+            for fact in evidence.for_kind("value")
+            if fact.get("subject_id") == subject_id and fact.get("field") == claim.input_field
+        )
+        for subject_id in subject_ids
+    }
+    # Branch boundary: every declared subject must contribute observed state evidence, even for a zero count.
+    if any(not facts for facts in state_facts.values()):
+        return None
+    state_records = {
+        subject_id: {
+            "state": state_facts[subject_id][0].get("value"),
+            "unit": next(
+                (
+                    fact.get("value")
+                    for fact in evidence.for_kind("value")
+                    if fact.get("subject_id") == subject_id
+                    and fact.get("field") == "attribute"
+                    and fact.get("attribute_name") == "unit_of_measurement"
+                ),
+                None,
+            ),
+        }
+        for subject_id in subject_ids
+    }
+    if claim.operator == "count":
+        return sum(record["state"] == claim.input_value for record in state_records.values())
+    if claim.operator not in {"mean", "minimum", "maximum", "sum", "convert"}:
+        return None
+    if any(record["unit"] != claim.input_value for record in state_records.values()):
+        return None
+    numeric = [number for record in state_records.values() if (number := _number(record["state"])) is not None]
+    if len(numeric) != len(subject_ids):
+        return None
+    if claim.operator == "convert":
+        return _convert(numeric[0], claim.input_value, claim.unit)
+    if claim.operator == "mean":
+        return sum(numeric) / len(numeric)
+    if claim.operator == "minimum":
+        return min(numeric)
+    if claim.operator == "maximum":
+        return max(numeric)
+    return sum(numeric)
 
 
 def _number(value: object) -> float | None:
@@ -332,6 +440,92 @@ def _duration(rows: Sequence[tuple[str | None, object]], state: object) -> float
     return total
 
 
+def _history_duration(claim: AggregateClaim, evidence: NormalizedEvidence) -> float | None:
+    candidates = _history_duration_candidates(claim, evidence)
+    return candidates[0] if candidates else None
+
+
+def _history_duration_candidates(claim: AggregateClaim, evidence: NormalizedEvidence) -> tuple[float, ...]:
+    window_by_event: dict[tuple[str, int, int, int], tuple[str, str]] = {}
+    invalid_events: set[tuple[str, int, int, int]] = set()
+    for fact in evidence.for_kind("history_window"):
+        event_id = _event_identity(fact)
+        start = fact.get("start")
+        endpoint = fact.get("end")
+        if (
+            fact.get("valid") is not True
+            or not isinstance(start, str)
+            or not isinstance(endpoint, str)
+            or _parse_time(start) is None
+            or _parse_time(endpoint) is None
+        ):
+            invalid_events.add(event_id)
+            continue
+        window = (start, endpoint)
+        previous = window_by_event.get(event_id)
+        if previous is not None and previous != window:
+            invalid_events.add(event_id)
+        else:
+            window_by_event[event_id] = window
+
+    rows_by_subject_window: dict[str, dict[tuple[str, str], set[tuple[str, object]]]] = {
+        subject_id: {} for subject_id in claim.subject_ids
+    }
+    for fact in evidence.for_kind("history_row"):
+        entity_id = fact.get("entity_id")
+        when = fact.get("when")
+        event_id = _event_identity(fact)
+        event_window = window_by_event.get(event_id)
+        if (
+            isinstance(entity_id, str)
+            and entity_id in rows_by_subject_window
+            and isinstance(when, str)
+            and event_id not in invalid_events
+            and event_window is not None
+        ):
+            rows_by_subject_window[entity_id].setdefault(event_window, set()).add((when, fact.get("state")))
+
+    per_subject: list[tuple[float, ...]] = []
+    for subject_id in claim.subject_ids:
+        subject_candidates = tuple(
+            duration
+            for window, rows in rows_by_subject_window[subject_id].items()
+            if (duration := _duration_through_window(tuple(rows), window, claim.input_value)) is not None
+        )
+        # Same-window pages union; different windows remain coherent alternatives.
+        if not subject_candidates:
+            return ()
+        per_subject.append(subject_candidates)
+    return tuple(sum(values) for values in product(*per_subject))
+
+
+def _duration_through_window(
+    rows: Sequence[tuple[str, object]], window: tuple[str, str], state: object
+) -> float | None:
+    start, endpoint = window
+    start_time, endpoint_time = _parse_time(start), _parse_time(endpoint)
+    if start_time is None or endpoint_time is None or start_time > endpoint_time:
+        return None
+    parsed_rows = [(when, value, _parse_time(when)) for when, value in rows]
+    if any(parsed is None or parsed < start_time or parsed > endpoint_time for _when, _value, parsed in parsed_rows):
+        return None
+    ordered = sorted(rows, key=lambda item: _parse_time(item[0]) or datetime.min.replace(tzinfo=UTC))
+    total = 0.0
+    for current, following in pairwise((*ordered, (endpoint, None))):
+        current_time = _parse_time(current[0])
+        following_time = _parse_time(following[0])
+        if current_time is None or following_time is None or following_time < current_time:
+            return None
+        if current[1] == state:
+            total += (following_time - current_time).total_seconds()
+    return total
+
+
+def _event_identity(fact: EvidenceFact) -> tuple[str, int, int, int]:
+    provenance = fact.provenance
+    return (provenance.tool_name, provenance.call_index, provenance.turn_index, provenance.batch_index)
+
+
 def _convert(value: float, source_unit: object, target_unit: str | None) -> float | None:
     if not isinstance(source_unit, str) or target_unit is None:
         return None
@@ -349,11 +543,18 @@ def _same_scalar(actual: object, expected: object, tolerance: float | None) -> b
     return actual == expected
 
 
-def _reason(results: Sequence[ConclusionResult], action: ActionResult, all_grounded: bool) -> str:
+def _reason(
+    results: Sequence[ConclusionResult],
+    action: ActionResult | None,
+    all_grounded: bool,
+    unexpected_effects: Sequence[dict[str, object]],
+) -> str:
     if not all_grounded:
         return "extra_claim_not_grounded"
     if any(result.semantic_status == "mismatched" for result in results):
         return "conclusion_mismatch"
     if any(result.grounding_status == "ungrounded" for result in results):
         return "conclusion_not_grounded"
+    if action is None:
+        return "unexpected_effect" if unexpected_effects else "incorrect"
     return action.mismatches[0] if action.mismatches else "incorrect"

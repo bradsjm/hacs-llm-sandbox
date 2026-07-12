@@ -28,15 +28,15 @@ class OptimizerResult:
     created_at: str
     target_model: str
     proposer_model: str
-    baseline_mean: float
-    optimized_mean: float
+    baseline_correct_rate: float
+    optimized_correct_rate: float
     optimized_candidate: PromptCandidate
     candidate_path: Path
     cross_eval_run_dir: Path | None
     baseline_prompt_chars: int
     optimized_prompt_chars: int
     size_ratio: float
-    optimized_full_mean: float
+    optimized_full_correct_rate: float
 
 
 def run_optimize(config: EvalConfig) -> OptimizerResult:
@@ -90,7 +90,7 @@ def run_optimize(config: EvalConfig) -> OptimizerResult:
     save_candidate(optimized_candidate, candidate_path)
     (run_dir / "optimized_prompt.md").write_text(optimized_instruction, encoding="utf-8")
 
-    baseline_mean = _candidate_mean(
+    baseline_correct_rate = _candidate_correct_rate(
         EvalConfig(
             models=[pydantic_target],
             candidates=["baseline"],
@@ -102,7 +102,7 @@ def run_optimize(config: EvalConfig) -> OptimizerResult:
             reasoning_effort=config.target_reasoning_effort,
         )
     )
-    optimized_mean = _candidate_mean(
+    optimized_correct_rate = _candidate_correct_rate(
         EvalConfig(
             models=[pydantic_target],
             candidates=[f"optimized:{candidate_path}"],
@@ -115,7 +115,7 @@ def run_optimize(config: EvalConfig) -> OptimizerResult:
         )
     )
     # Branch boundary: this adds one full case-suite pass on the target model, increasing paid model-call cost.
-    optimized_full_mean = _candidate_mean(
+    optimized_full_correct_rate = _candidate_correct_rate(
         EvalConfig(
             models=[pydantic_target],
             candidates=[f"optimized:{candidate_path}"],
@@ -159,15 +159,15 @@ def run_optimize(config: EvalConfig) -> OptimizerResult:
         created_at=created_at,
         target_model=target,
         proposer_model=proposer,
-        baseline_mean=baseline_mean,
-        optimized_mean=optimized_mean,
+        baseline_correct_rate=baseline_correct_rate,
+        optimized_correct_rate=optimized_correct_rate,
         optimized_candidate=optimized_candidate,
         candidate_path=candidate_path,
         cross_eval_run_dir=cross_eval_run_dir,
         baseline_prompt_chars=baseline_prompt_chars,
         optimized_prompt_chars=optimized_prompt_chars,
         size_ratio=size_ratio,
-        optimized_full_mean=optimized_full_mean,
+        optimized_full_correct_rate=optimized_full_correct_rate,
     )
 
 
@@ -249,14 +249,14 @@ def save_candidate(candidate: PromptCandidate, path: Path) -> None:
     path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
-def _candidate_mean(config: EvalConfig) -> float:
-    """Run one candidate/model matrix and return its mean, isolating evaluation failures."""
+def _candidate_correct_rate(config: EvalConfig) -> float:
+    """Run one candidate/model matrix and return its correct rate."""
     run_id = _derive_run_id()
     try:
         report = asyncio.run(experiment.run_matrix(config, run_id=run_id))
     except Exception:  # noqa: BLE001 - summary scoring should not hide an exported optimizer artifact.
         return 0.0
-    return experiment.overall_mean(report)
+    return experiment.overall_correct_rate(report)
 
 
 def _derive_run_id() -> str:

@@ -35,6 +35,15 @@ sandbox-enforcement, malformed-input, or unit/integration-test cases.
 - Direct logbook and flat declarative-history no-data conclusions must name the
   exact resolved entity scope. The production response supplies
   `scope.entity_ids`; do not infer scope from raw selectors or call arguments.
+  Scope and emptiness must be established by the same successful event, never
+  by unioning fragments from separate events. History duration
+  aggregates derive intervals independently per declared entity, require
+  source rows for every entity, and extend a final matching interval through a
+  valid, non-conflicting production `window.start`/`window.end` pair; pages
+  are unioned only when that complete normalized window matches.
+- Conditional predicates are fully authored in the request, including true
+  action and false no-action behavior. Grounded antecedent facts plus the
+  action ledger validate the branch; no model-provided predicate field exists.
 - Keep production query behavior and fixture behavior aligned. Do not add an
   eval-only tool emulator or pass a live Home Assistant object, registry,
   recorder, service callable, filesystem, network, or OS/process API to the
@@ -53,7 +62,9 @@ are `incomplete` and are excluded from quality denominators. Tool calls,
 failed calls, repairs, model turns, parallel batches, elapsed time, token
 usage, cost, and cap exhaustion are diagnostics only. The hard tool-call cap
 remains a runaway safety stop; exhausting it without a valid final
-`EvalAnswer` is `incorrect`, not an efficiency penalty.
+`EvalAnswer` is `incorrect`, not an operational penalty.
+Read-only traces have no synthetic action result, and zero-completion pair,
+model, or category quality rates are `N/A` rather than zero.
 
 ## Non-negotiables
 
@@ -63,7 +74,8 @@ remains a runaway safety stop; exhausting it without a valid final
   `[project].dependencies`, `manifest.json`, or `custom_components/**`.
 - Keep `scripts/check` unchanged. The eval package has its own eval checks.
 - Keep DSPy imports in `optimize_dspy.py` and the lazy CLI optimize path so
-  offline eval and report commands do not require DSPy at import time.
+  offline eval and report commands do not require DSPy at import time. Contain
+  only DSPy's known field-prefix import warning at that lazy boundary.
 
 ## Commands
 
@@ -114,7 +126,7 @@ Pydantic AI Agent -> EvalAnswer(answer, claims)
 
 - `schema.py` — versioned `EvalAnswer`/claim models, v2 case oracles,
   `CaseOutcome`, `ConclusionResult`, action ledgers, diagnostics, and
-  self-contained `CaseTrace` records.
+  self-contained `CaseTrace` records with required scoring version 2.
 - `cases.py` and `data/cases.yaml` — native Dataset loading and the 80 authored
   cases; `data/cases_schema.json` is the focused v2 authoring schema.
 - `homes/` — frozen Python fixture modules and the `get_home()` registry.
@@ -142,7 +154,7 @@ Pydantic AI Agent -> EvalAnswer(answer, claims)
   summaries.
 - `reports.py` — v2 `report.json` persistence and strict artifact loading.
 - `html_report.py` — self-contained report dashboard with claims, grounding,
-  ledgers, evidence, diagnostics, and answer details.
+  ledgers, all chronological evidence, diagnostics, and answer details.
 - `optimize_dspy.py` — DSPy COPRO prompt export and binary harness metric.
 - `cli.py` / `__main__.py` — `eval`, `report`, and `optimize` commands.
 

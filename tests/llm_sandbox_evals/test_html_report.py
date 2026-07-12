@@ -53,6 +53,19 @@ def test_render_html_keeps_v2_detail_projection_and_raw_trace_fields() -> None:
         assert marker in rendered
     for value in ("grounded", "light", "turn_on", "sensor.living_temp", "normal", "provider-token"):
         assert value in rendered
+    assert "execute_home_code" in rendered
+    assert "get_logbook" in rendered
+    markers = (
+        "Authored expected conclusions and effects",
+        "Submitted claims and grounding",
+        "Action ledgers and results",
+        "Chronological tool evidence",
+        "Diagnostics",
+        "Unrestricted final answer",
+        "Raw case JSON",
+    )
+    assert [rendered.index(marker) for marker in markers] == sorted(rendered.index(marker) for marker in markers)
+    assert '.map((event, index) => toolCard(event.tool_name === "execute_home_code")(event, index))' in rendered
 
 
 def test_write_html_round_trip_preserves_v2_trace(tmp_path: Path) -> None:
@@ -86,13 +99,27 @@ def _case(*, answer_text: str = "The light is on.") -> dict[str, object]:
     }
     expected = {
         "conclusions": [{"claim": value_claim, "assertion": "equals", "tolerance": None}],
-        "actions": [{"domain": "light", "service": "turn_on", "target_entity_ids": ["light.living"], "service_data": None}],
+        "actions": [
+            {"domain": "light", "service": "turn_on", "target_entity_ids": ["light.living"], "service_data": None}
+        ],
         "blocked_outcome": None,
     }
     return {
         "name": "baseline/stub/case-v2",
-        "inputs": {"case_id": "case-v2", "candidate_id": "baseline", "model_id": "stub", "home": "home_minimal", "category": "state"},
-        "metadata": {"case_id": "case-v2", "candidate_id": "baseline", "model_id": "stub", "home": "home_minimal", "category": "state"},
+        "inputs": {
+            "case_id": "case-v2",
+            "candidate_id": "baseline",
+            "model_id": "stub",
+            "home": "home_minimal",
+            "category": "action",
+        },
+        "metadata": {
+            "case_id": "case-v2",
+            "candidate_id": "baseline",
+            "model_id": "stub",
+            "home": "home_minimal",
+            "category": "action",
+        },
         "output": {
             "case_id": "case-v2",
             "category": "state",
@@ -101,18 +128,69 @@ def _case(*, answer_text: str = "The light is on.") -> dict[str, object]:
             "answer": {"answer": answer_text, "claims": [value_claim]},
             "expected": expected,
             "outcome": {"state": "correct", "reason": "ok", "score": 1.0},
-            "conclusions": [{"expected": expected["conclusions"][0], "answer_claim": value_claim, "semantic_status": "matched", "grounding_status": "grounded", "reason": "ok"}],
+            "conclusions": [
+                {
+                    "expected": expected["conclusions"][0],
+                    "answer_claim": value_claim,
+                    "semantic_status": "matched",
+                    "grounding_status": "grounded",
+                    "reason": "ok",
+                }
+            ],
             "actions": [{"status": "allowed", "passed": True, "mismatches": []}],
             "action_ledger": {
                 "successful": [{"domain": "light", "service": "turn_on", "target": {"entity_id": "light.living"}}],
                 "rejected": [],
             },
-            "tool_events": [{"tool_name": "execute_home_code", "args": {"code": "return hass.states['sensor.living_temp']"}, "output": {"execution": {"status": "ok"}, "output": {"entity_id": "sensor.living_temp", "state": "on"}, "note": "provider-token"}, "call_index": 0, "turn_index": 0, "batch_index": 0, "batch_size": 1}],
-            "diagnostics": {"tool_calls": 2, "successful_tool_calls": 1, "failed_tool_calls": 1, "execute_repairs": 1, "model_turns": 2, "parallel_batches": 0, "max_batch_size": 1, "elapsed_seconds": 1.25, "cap_exhausted": False, "usage": {"requests": 2, "request_tokens": 10, "response_tokens": 20, "total_tokens": 30, "cost": None}, "failure": "normal"},
+            "tool_events": [
+                {
+                    "tool_name": "execute_home_code",
+                    "args": {"code": "return hass.states['sensor.living_temp']"},
+                    "output": {
+                        "execution": {"status": "ok"},
+                        "output": {"entity_id": "sensor.living_temp", "state": "on"},
+                        "note": "provider-token",
+                    },
+                    "call_index": 0,
+                    "turn_index": 0,
+                    "batch_index": 0,
+                    "batch_size": 1,
+                },
+                {
+                    "tool_name": "get_logbook",
+                    "args": {"entity_ids": ["light.living"]},
+                    "output": {"entries": []},
+                    "call_index": 1,
+                    "turn_index": 1,
+                    "batch_index": 0,
+                    "batch_size": 1,
+                },
+            ],
+            "diagnostics": {
+                "tool_calls": 2,
+                "successful_tool_calls": 1,
+                "failed_tool_calls": 1,
+                "execute_repairs": 1,
+                "model_turns": 2,
+                "parallel_batches": 0,
+                "max_batch_size": 1,
+                "elapsed_seconds": 1.25,
+                "cap_exhausted": False,
+                "usage": {
+                    "requests": 2,
+                    "request_tokens": 10,
+                    "response_tokens": 20,
+                    "total_tokens": 30,
+                    "cost": None,
+                },
+                "failure": "normal",
+            },
             "provider_error": None,
             "user_request": "What is the living room temperature?",
         },
-        "scores": {"score": {"name": "score", "value": 1.0, "reason": "ok", "source": "evaluator", "evaluator_version": "2"}},
+        "scores": {
+            "score": {"name": "score", "value": 1.0, "reason": "ok", "source": "evaluator", "evaluator_version": "2"}
+        },
         "labels": {"outcome": "correct", "incomplete": False, "failure_classification": "normal"},
         "assertions": {},
         "task_duration": 1.25,
@@ -125,7 +203,15 @@ def _report(case: dict[str, object]) -> dict[str, object]:
         "name": "matrix",
         "cases": [case],
         "failures": [],
-        "analyses": [{"type": "scalar", "title": "Overall correct rate", "description": "Correct rate", "value": 1.0, "unit": ""}],
+        "analyses": [
+            {
+                "type": "scalar",
+                "title": "Overall correct rate",
+                "description": "Correct rate",
+                "value": 1.0,
+                "unit": "",
+            }
+        ],
         "report_evaluator_failures": [],
         "experiment_metadata": None,
         "trace_id": "trace",

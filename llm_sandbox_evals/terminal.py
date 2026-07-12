@@ -196,7 +196,7 @@ class MatrixTerminalReporter:
         elif not self._console.is_terminal:
             self._print_line(event, diagnostic=diagnostic)
 
-    def finish(self, *, overall_mean: float, run_dir: str, report_html: str) -> None:
+    def finish(self, *, overall_correct_rate: float, run_dir: str, report_html: str) -> None:
         """Print the successful post-artifact summary after the Live display ends."""
         elapsed = _duration(perf_counter() - self._started_at)
         if self._console.is_terminal:
@@ -209,7 +209,7 @@ class MatrixTerminalReporter:
             _append_status(summary, "!", "incomplete", self._incomplete, _ERROR)
             summary.append(
                 f"\ncompleted {self._completed}/{self._total}  diagnostic tool calls {self._tool_calls}  "
-                f"elapsed {elapsed}  overall mean {overall_mean:.3f}"
+                f"elapsed {elapsed}  overall correct rate {overall_correct_rate:.3f}"
             )
             summary.append(f"\nreport.html {report_html}")
             summary.append(f"\nreport.json {run_dir}/report.json", style="dim")
@@ -220,7 +220,7 @@ class MatrixTerminalReporter:
             self._console.print(
                 f"matrix complete completed={self._completed}/{self._total} correct={self._passes} "
                 f"incorrect={self._failures} incomplete={self._incomplete} tool_calls={self._tool_calls} "
-                f"elapsed={elapsed} overall_mean={overall_mean:.3f} run_dir={run_dir} report_html={report_html}",
+                f"elapsed={elapsed} overall_correct_rate={overall_correct_rate:.3f} run_dir={run_dir} report_html={report_html}",
                 markup=False,
                 highlight=False,
                 soft_wrap=True,

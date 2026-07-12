@@ -18,6 +18,7 @@ _SCORING_VERSION = 2
 _CASE_TRACE_FIELDS = frozenset(
     {
         "case_id",
+        "scoring_version",
         "category",
         "candidate_id",
         "model_id",
@@ -63,6 +64,8 @@ def load_report(run_dir: Path) -> MatrixReport:
 
 def rescore_trace(trace: CaseTrace) -> CaseOutcome:
     """Rescore a v2 trace using only its persisted oracle, answer, evidence, and ledger."""
+    if trace.scoring_version != _SCORING_VERSION:
+        raise ValueError("legacy scoring artifact; rerun evaluation")
     if trace.answer is None:
         raise ValueError("cannot rescore a trace without an answer")
     recorded_actions = trace.action_ledger.successful + trace.action_ledger.rejected
@@ -91,7 +94,7 @@ def _contains_v2_trace(payload: object) -> bool:
         if not isinstance(report_case, dict) or not isinstance(report_case.get("output"), dict):
             return False
         output = report_case["output"]
-        if not _CASE_TRACE_FIELDS.issubset(output):
+        if not _CASE_TRACE_FIELDS.issubset(output) or output.get("scoring_version") != _SCORING_VERSION:
             return False
         outcome = output["outcome"]
         if not isinstance(outcome, dict) or outcome.get("state") not in {"correct", "incorrect", "incomplete"}:

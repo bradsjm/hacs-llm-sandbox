@@ -300,6 +300,7 @@ class CaseTrace:
     action_ledger: ActionLedger
     tool_events: tuple[ToolEvent, ...]
     diagnostics: EvalDiagnostics
+    scoring_version: Literal[2] = 2
     provider_error: str | None = None
     user_request: str = ""
     conversation_id: str | None = None

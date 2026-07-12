@@ -22,7 +22,9 @@ from llm_sandbox_evals import reports
 
 async def test_run_matrix_stub_persists_v2_trace_and_binary_rate(tmp_path: Path) -> None:
     report = await run_matrix(_config(tmp_path, cases=["state_living_temperature"]), run_id="stub-v2")
-    run_dir = reports.write_report_json(report, _config(tmp_path, cases=["state_living_temperature"]), run_id="stub-v2")
+    run_dir = reports.write_report_json(
+        report, _config(tmp_path, cases=["state_living_temperature"]), run_id="stub-v2"
+    )
     reloaded = reports.load_report(run_dir)
     trace = reloaded.cases[0].output
 
@@ -35,11 +37,19 @@ async def test_run_matrix_stub_persists_v2_trace_and_binary_rate(tmp_path: Path)
 
 async def test_run_matrix_emits_v2_lifecycle_events(tmp_path: Path) -> None:
     events = []
-    report = await run_matrix(_config(tmp_path, cases=["state_living_temperature"]), run_id="lifecycle-v2", on_event=events.append)
+    report = await run_matrix(
+        _config(tmp_path, cases=["state_living_temperature"]), run_id="lifecycle-v2", on_event=events.append
+    )
 
-    assert [event.state for event in events] == ["matrix_started", "cell_started", "tool_started", "tool_finished", "response_received", "cell_finished"]
+    assert [event.state for event in events] == [
+        "matrix_started",
+        "cell_started",
+        "tool_started",
+        "tool_finished",
+        "response_received",
+        "cell_finished",
+    ]
     assert events[-1].trace == report.cases[0].output
-    assert not hasattr(events[-1], "tool_call_par")
 
 
 async def test_report_excludes_incomplete_from_correct_rate_and_keeps_coverage(tmp_path: Path) -> None:
@@ -75,10 +85,19 @@ async def test_report_excludes_incomplete_from_correct_rate_and_keeps_coverage(t
     assert baseline_model_a[2:8] == [1, 1, 0, 2, 0.5, 1.0]
     baseline_model_b = next(row for row in pairs.rows if row[:2] == ["baseline", "model-b"])
     assert baseline_model_b[2:8] == [0, 0, 2, 0, None, 0.0]
+    assert baseline_model_b[14] is None
 
 
 def _config(runs_dir: Path, *, models: list[str] | None = None, cases: list[str] | None = None) -> EvalConfig:
-    return EvalConfig(models=models or ["stub"], candidates=["baseline"], prompt_profile=DEFAULT_PROMPT_PROFILE, cases=cases, homes=None, runs_dir=runs_dir, concurrency=1)
+    return EvalConfig(
+        models=models or ["stub"],
+        candidates=["baseline"],
+        prompt_profile=DEFAULT_PROMPT_PROFILE,
+        cases=cases,
+        homes=None,
+        runs_dir=runs_dir,
+        concurrency=1,
+    )
 
 
 def _candidate(candidate_id: str, *, api_prompt: str = "prompt") -> PromptCandidate:
@@ -86,11 +105,32 @@ def _candidate(candidate_id: str, *, api_prompt: str = "prompt") -> PromptCandid
 
 
 def _case(case_id: str, category: str) -> EvalCase:
-    return EvalCase(case_id, category, "home_default", "exercise native aggregation", False, Expected(blocked_outcome=BlockedOutcome()))
+    return EvalCase(
+        case_id,
+        category,
+        "home_default",
+        "exercise native aggregation",
+        False,
+        Expected(blocked_outcome=BlockedOutcome()),
+    )
 
 
 def _trace(cell: MatrixCellRef, state: str) -> CaseTrace:
-    return CaseTrace(cell.case_id, cell.category, cell.candidate_id, cell.model_id, None, Expected(blocked_outcome=BlockedOutcome()), CaseOutcome(state, state), (), (), ActionLedger(), (), EvalDiagnostics(), None)
+    return CaseTrace(
+        case_id=cell.case_id,
+        category=cell.category,
+        candidate_id=cell.candidate_id,
+        model_id=cell.model_id,
+        answer=None,
+        expected=Expected(blocked_outcome=BlockedOutcome()),
+        outcome=CaseOutcome(state, state),
+        conclusions=(),
+        actions=(),
+        action_ledger=ActionLedger(),
+        tool_events=(),
+        diagnostics=EvalDiagnostics(),
+        scoring_version=2,
+    )
 
 
 def _table(analyses: Sequence[object], title: str) -> TableResult:
