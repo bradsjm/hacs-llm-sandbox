@@ -189,7 +189,7 @@ def _render_readable_catalog() -> str:
             "instruction placeholders such as <entity_id> are not real IDs.\n"
             "- Await hass.history(...), hass.query(...), hass.logbook(...), and enabled hass.services.async_call(...). "
             "State, registry, config, repairs, notification, and service-catalog reads are synchronous despite async_-style names. "
-            "Final output must be JSON-safe: assign result or end with a bare expression. print() is captured in printed.",
+            "Final output must be serializable: assign result or end with a bare expression. print() is captured in printed.",
             "## Globals and frozen time\n"
             "- Pre-bound globals: hass (frozen facade with states, services, and config metadata), states (hass.states), "
             "now (ISO snapshot time), date, datetime, llm_context, "
@@ -266,7 +266,7 @@ def _render_compact_catalog() -> str:
             "- Fresh frozen visible snapshot per call; service calls do not update same-call reads. Discover visible IDs/names; "
             "<entity_id> is a placeholder. Await hass.history(...),hass.query(...),hass.logbook(...),enabled "
             "hass.services.async_call(...); state/registry/config/repairs/notification/service-catalog reads sync. "
-            "JSON-safe result or final bare expression; print()->printed.",
+            "Serializable result or final bare expression; print()->printed.",
             "## Globals/time\n"
             "- hass=frozen states/services/config facade; states=hass.states; now=ISO snapshot time; date/datetime; llm_context; "
             f"{_items(_REGISTRY_ALIASES)}; repairs; persistent_notifications; config_entries. config: location_name,latitude,longitude,"

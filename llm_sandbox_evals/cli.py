@@ -27,7 +27,7 @@ from pydantic_evals.reporting import EvaluationReport
 from rich.console import Console
 
 from llm_sandbox_evals import experiment, html_report, reports
-from llm_sandbox_evals.config import EvalConfig, load_config
+from llm_sandbox_evals.config import EvalConfig, EvalOutputMode, load_config
 from llm_sandbox_evals.experiment import MatrixCellMeta, MatrixCellRef
 from llm_sandbox_evals.harness import _select_cases
 from llm_sandbox_evals.schema import CaseTrace
@@ -268,6 +268,12 @@ def _add_eval_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPar
         "(default: unset; left to the provider so reasoning-capable models do not warn about "
         "unsupported sampling parameters). Ignored by 'stub'.",
     )
+    eval_parser.add_argument(
+        "--output-mode",
+        choices=("tool", "json-schema"),
+        metavar="MODE",
+        help="structured eval result protocol: tool (default) or json-schema (provider-native schema output).",
+    )
 
 
 def _add_report_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -408,6 +414,7 @@ def _run_eval(args: argparse.Namespace) -> int:
         cases=_csv_arg(args.cases) if args.cases is not None else base_config.cases,
         homes=base_config.homes,
         runs_dir=Path(args.runs_dir) if args.runs_dir else base_config.runs_dir,
+        output_mode=cast(EvalOutputMode, args.output_mode or base_config.output_mode),
         concurrency=args.concurrency if args.concurrency else base_config.concurrency,
         max_tool_calls=args.max_tool_calls if args.max_tool_calls else base_config.max_tool_calls,
         model_timeout=args.model_timeout if args.model_timeout else base_config.model_timeout,

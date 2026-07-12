@@ -52,7 +52,7 @@ async def run_case(
         snapshot = apply_scope(fixture.snapshot(), EVAL_SCOPE, anchor_device_id=case.llm_context.device_id)
         runtime = build_eval_runtime(case, candidate, profile, snapshot, fixture, on_tool_boundary=on_tool_boundary)
         proposed_actions = runtime.invoker.calls
-        agent = build_agent(runtime, model_id)
+        agent = build_agent(runtime, model_id, config.output_mode)
         with capture_run_messages() as captured:
             result = await asyncio.wait_for(
                 agent.run(

@@ -53,7 +53,7 @@ class ExecuteHomeCodeTool(llm.Tool):
         {
             vol.Required(
                 "code",
-                description="Python-like Monty code. Assign final JSON-safe data to result.",
+                description="Python-like Monty code. Assign final serializable data to result.",
             ): vol.All(str, vol.Length(min=1, max=MAX_MONTY_CODE_CHARS)),
         }
     )

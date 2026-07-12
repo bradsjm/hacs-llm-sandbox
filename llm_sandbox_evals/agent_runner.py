@@ -33,11 +33,12 @@ from custom_components.llm_sandbox.llm_api.tools.recorder import (
 )
 from homeassistant.helpers import llm
 from homeassistant.util.json import JsonObjectType
-from pydantic_ai import Agent, RunContext, Tool
+from pydantic_ai import Agent, NativeOutput, RunContext, Tool, ToolOutput
 from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
     ModelResponse,
+    TextPart,
     ToolCallPart,
     ToolReturnPart,
     UserPromptPart,
@@ -47,6 +48,7 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.settings import ModelSettings
 from voluptuous_openapi import convert
 
+from llm_sandbox_evals.config import EvalOutputMode
 from llm_sandbox_evals.runtime import EvalRuntime
 from llm_sandbox_evals.schema import AggregateClaim, AnswerClaim, EvalAnswer, EventClaim, ValueClaim
 
@@ -64,14 +66,18 @@ class _EvalTool(Protocol):
     def _normalize_args(self, args: Mapping[str, object]) -> dict[str, object]: ...
 
 
-def build_agent(runtime: EvalRuntime, model_id: str) -> Agent[EvalRuntime, EvalAnswer]:
+def build_agent(
+    runtime: EvalRuntime, model_id: str, output_mode: EvalOutputMode = "tool"
+) -> Agent[EvalRuntime, EvalAnswer]:
     """Build a Pydantic AI agent with production schemas and eval deps."""
     tools = build_agent_tools(runtime)
+    # Branch boundary: keep the default tool protocol explicit while allowing providers with native schemas.
+    output_type = ToolOutput(EvalAnswer) if output_mode == "tool" else NativeOutput(EvalAnswer)
     return Agent(
         model=make_model(model_id),
         tools=tools,
         system_prompt=render_eval_system_prompt(runtime, tools),
-        output_type=EvalAnswer,
+        output_type=output_type,
         deps_type=EvalRuntime,
         name="llm_sandbox_eval",
     )
@@ -327,10 +333,13 @@ async def _stub_respond(messages: list[ModelMessage], info: AgentInfo) -> ModelR
 
 
 def _stub_output_response(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
-    """Emit the same structured output-tool call that a provider must emit."""
+    """Emit a structured result using the request's configured output protocol."""
+    answer = EvalAnswer(answer=_all_tool_content(messages) or "", claims=_stub_claims(messages))
+    # Branch boundary: native output providers receive the structured payload as their response body.
+    if info.model_request_parameters.output_mode == "native":
+        return ModelResponse(parts=[TextPart(content=answer.model_dump_json())])
     if not info.output_tools:
         raise RuntimeError("structured eval output tool was not registered")
-    answer = EvalAnswer(answer=_all_tool_content(messages) or "", claims=_stub_claims(messages))
     output_tool = info.output_tools[0]
     return ModelResponse(
         parts=[

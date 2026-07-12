@@ -2,8 +2,11 @@
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from custom_components.llm_sandbox.const import DEFAULT_PROMPT_PROFILE
+
+type EvalOutputMode = Literal["tool", "json-schema"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -16,6 +19,7 @@ class EvalConfig:
     cases: list[str] | None
     homes: list[str] | None
     runs_dir: Path
+    output_mode: EvalOutputMode = "tool"
     concurrency: int = 5
     max_tool_calls: int = 10
     model_timeout: float = 75.0

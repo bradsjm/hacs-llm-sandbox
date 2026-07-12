@@ -25,7 +25,7 @@ paths and correct-rate summaries; interactive progress is written to stderr.
 python -m llm_sandbox_evals eval [--models id,...] [--candidates id,...]
   [--prompt-profile ID] [--cases id,...|category,...] [--concurrency N]
   [--max-tool-calls N] [--model-timeout SECONDS] [--reasoning LEVEL]
-  [--temperature FLOAT] [--runs-dir PATH]
+  [--temperature FLOAT] [--output-mode tool|json-schema] [--runs-dir PATH]
 
 python -m llm_sandbox_evals optimize --target-model ID [--proposer-model ID]
   [--prompt-profile ID] [--breadth N] [--depth N] [--length-penalty COEFF]
@@ -37,8 +37,9 @@ python -m llm_sandbox_evals report <run_id> [--html] [--runs-dir PATH]
 
 - `eval` runs every selected candidate/model/case cell. Defaults are the
   `stub` model, `baseline` candidate, `balanced` production profile, all cases,
-  concurrency 5, a 10-call safety cap, and a 75-second model-generation
-  timeout.
+  concurrency 5, a 10-call safety cap, a 75-second model-generation timeout,
+  and tool-based structured output. Use `--output-mode json-schema` to request
+  provider-native schema output instead.
 - `report` reloads a saved v2 report without model calls. `--html` regenerates
   only the self-contained HTML dashboard.
 - `--cases` accepts case IDs or `state`, `registry`, `history`, `statistics`,

@@ -30,7 +30,7 @@ def _guided_guidance() -> str:
     """Return explicit routing and compact examples for weaker models."""
     return """## Working route
 - Automation lookup, complete content, or recent-run questions use the standalone get_automation tool; direct history, statistics, or logbook retrieval uses the matching standalone tool. Current state, registry joins, computation, conditions, composed recorder data, or actions use one execute_home_code call. Independent direct reads may run in parallel. Stop after sufficient evidence; do not refetch it.
-- Await hass.history(...), hass.query(...), hass.logbook(...), and enabled hass.services.async_call(...). State, registry, config, repairs, notification, and service-catalog reads are synchronous despite async_-style names. Put the JSON-safe final answer in result or use a final bare expression.
+- Await hass.history(...), hass.query(...), hass.logbook(...), and enabled hass.services.async_call(...). State, registry, config, repairs, notification, and service-catalog reads are synchronous despite async_-style names. Put the serializable final answer in result or use a final bare expression.
 
 ### Current state
 ```python
@@ -66,13 +66,13 @@ def _balanced_guidance() -> str:
 Use the standalone get_automation tool for automation lookup, complete content, or recent-run questions, and the matching standalone tool for direct history, statistics, or logbook retrieval; use one execute_home_code call when current state, registry joins, computation, conditions, composed recorder data, or actions depend on each other. Independent direct reads may run in parallel; stop after sufficient evidence and do not refetch it.
 
 ## Execution and output
-Await hass.history(...), hass.query(...), hass.logbook(...), and enabled hass.services.async_call(...); state, registry, config, repairs, notification, and service-catalog reads are synchronous despite async_-style names. Return the useful JSON-safe answer in result or a final bare expression."""
+Await hass.history(...), hass.query(...), hass.logbook(...), and enabled hass.services.async_call(...); state, registry, config, repairs, notification, and service-catalog reads are synchronous despite async_-style names. Return the useful serializable answer in result or a final bare expression."""
 
 
 def _frontier_guidance() -> str:
     """Return the compact outcome contract for capable models."""
     return """## Outcome contract
-Use the least evidence needed for a grounded answer. Choose direct get_automation and recorder tools for independent automation or recorder retrieval, and one composed code call when dependencies require current snapshot data, joins, computation, conditions, recorder access, or actions. Return the useful JSON-safe result."""
+Use the least evidence needed for a grounded answer. Choose direct get_automation and recorder tools for independent automation or recorder retrieval, and one composed code call when dependencies require current snapshot data, joins, computation, conditions, recorder access, or actions. Return the useful serializable result."""
 
 
 def _base_prompt(detail: PromptDetail) -> str:

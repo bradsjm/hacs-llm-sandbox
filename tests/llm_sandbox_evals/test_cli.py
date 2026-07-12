@@ -100,6 +100,30 @@ def test_eval_keeps_stdout_factual_and_writes_artifacts(capsys: pytest.CaptureFi
     assert (run_dir / "report.html").is_file()
 
 
+def test_eval_native_output_mode_runs_through_cli_and_harness(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    exit_code = main(
+        [
+            "eval",
+            "--models",
+            "stub",
+            "--cases",
+            "state_living_temperature",
+            "--output-mode",
+            "json-schema",
+            "--runs-dir",
+            str(tmp_path),
+        ]
+    )
+
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    run_dir = Path(captured.out.splitlines()[0].removeprefix("run_dir: "))
+    assert (run_dir / "report.json").is_file()
+
+
 def test_eval_token_telemetry_does_not_pollute_terminal_output(
     capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
