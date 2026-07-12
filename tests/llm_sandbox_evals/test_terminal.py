@@ -1,4 +1,7 @@
+from io import StringIO
+
 from llm_sandbox_evals.experiment import MatrixCellRef, MatrixProgressEvent
+from llm_sandbox_evals.schema import CaseTrace, CheckResult
 from llm_sandbox_evals.terminal import _WARNING, MatrixTerminalReporter, _outcome_text
 import pytest
 from rich.console import Console
@@ -62,6 +65,35 @@ def test_needs_attention_outcome_uses_amber_detail_only(detail: str, expected: s
 
     assert outcome.plain == expected
     assert outcome.style == _WARNING
+
+
+def test_terminal_counts_tool_call_limit_as_failure_without_error_diagnostic() -> None:
+    stream = StringIO()
+    reporter = MatrixTerminalReporter()
+    reporter._console = Console(file=stream, force_terminal=False)
+    cell = MatrixCellRef("case", "candidate", "model", "home", "state_read")
+    trace = CaseTrace(
+        case_id=cell.case_id,
+        category=cell.category,
+        candidate_id=cell.candidate_id,
+        model_id=cell.model_id,
+        score=0.0,
+        output="",
+        tool_call_count=3,
+        recorded_actions=(),
+        checks=(CheckResult("tool_calls_exceeded", False, True, "limit reached"),),
+        error=None,
+    )
+
+    reporter.handle(MatrixProgressEvent("matrix_started", total=1))
+    reporter.handle(MatrixProgressEvent("cell_started", cell=cell, request="request"))
+    reporter.handle(MatrixProgressEvent("cell_finished", cell=cell, trace=trace, completion_index=1, total=1))
+    reporter.finish(overall_mean=0.0, run_dir="run", report_html="report.html")
+
+    output = stream.getvalue()
+    assert "failed=1" in output
+    assert "incomplete=0" in output
+    assert "error=" not in output
 
 
 def _column_widths(table: Table, console: Console) -> dict[str, int]:

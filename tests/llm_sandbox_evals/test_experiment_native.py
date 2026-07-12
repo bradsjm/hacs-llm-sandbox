@@ -279,6 +279,27 @@ async def test_sandbox_outcome_reports_score_required_gate_and_model_error_label
     assert report_case.labels["model_error"].value == "true"
 
 
+async def test_sandbox_outcome_reports_tool_call_limit_as_scored_failure(tmp_path: Path) -> None:
+    config = _config(tmp_path, cases=None)
+    dataset = build_dataset(config, [_candidate("candidate-a")], [_case("case-a", "state_read")], "test-run")
+
+    async def task(cell: MatrixCellRef) -> CaseTrace:
+        return _trace(
+            cell,
+            score=0.0,
+            checks=(CheckResult("tool_calls_exceeded", False, True, "limit reached"),),
+        )
+
+    report = await dataset.evaluate(task, name="sandbox-outcome", progress=False, retry_task=None)
+    report_case = report.cases[0]
+
+    assert report_case.scores["score"].value == 0.0
+    assert report_case.labels["model_error"].value == "false"
+    assert report_case.labels["error_type"].value == "none"
+    assert _scalar(report.analyses, "Overall mean score").value == 0.0
+    assert _scalar(report.analyses, "Incomplete cells").value == 0
+
+
 async def test_candidate_matrix_report_aggregates_candidate_model_and_category_means(tmp_path: Path) -> None:
     config = _config(tmp_path, models=["model-a", "model-b"], cases=None)
     candidates = [_candidate("baseline", api_prompt="baseline prompt"), _candidate("compact", api_prompt="short")]

@@ -52,14 +52,17 @@ async def test_run_case_does_not_force_final_answer_after_max_tool_calls(monkeyp
         return FunctionModel(_looping_model, model_name="looping-model")
 
     monkeypatch.setattr(agent_runner, "make_model", make_model)  # type: ignore[attr-defined]
-    trace = await run_case(candidate, "looping-model", CASES[0], config, profile=profile)
+    case = next(case for case in CASES if case.id == "action_turn_off_living_light")
+    trace = await run_case(candidate, "looping-model", case, config, profile=profile)
 
     assert trace.output == ""
     assert trace.score == 0.0
-    assert trace.error is not None
+    assert trace.error is None
     assert trace.tool_call_count == 3
     assert len(trace.tool_events) == 3
     assert trace.tool_events[-1].output == {}
+    assert len(trace.recorded_actions) == 2
+    assert all(action["domain"] == "light" and action["service"] == "turn_off" for action in trace.recorded_actions)
     assert [(check.name, check.passed, check.required) for check in trace.checks] == [
         ("tool_calls_exceeded", False, True)
     ]
@@ -74,7 +77,9 @@ async def _looping_model(_messages: list[ModelMessage], _info: AgentInfo) -> Mod
         parts=[
             ToolCallPart(
                 tool_name="execute_home_code",
-                args={"code": "result = 'ok'"},
+                args={
+                    "code": 'await hass.services.async_call("light", "turn_off", target={"entity_id": "light.living"})\nresult = "done"'
+                },
                 tool_call_id=f"loop-{len(_messages)}",
             )
         ]

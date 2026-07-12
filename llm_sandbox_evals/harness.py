@@ -86,13 +86,15 @@ async def run_case(
             expected_summary=_expected_summary(case.expected),
         )
     except UsageLimitExceeded as err:
+        # Branch boundary: the model exhausted its allowed tool calls, which is scored behavior rather than a harness error.
         tool_events = _tool_events(captured)
-        return _error_trace(
+        return _failure_trace(
             candidate,
             model_id,
             case,
             "tool_calls_exceeded",
             _format_exception(err),
+            diagnostic=False,
             tool_call_count=_tool_call_count(captured),
             tool_events=tool_events,
             recorded_actions=_recorded_actions_from_tool_events(tool_events, proposed_actions),
@@ -100,12 +102,13 @@ async def run_case(
         )
     except TimeoutError as err:
         tool_events = _tool_events(captured)
-        return _error_trace(
+        return _failure_trace(
             candidate,
             model_id,
             case,
             "model_error",
             _format_exception(err, timeout=config.model_timeout),
+            diagnostic=True,
             tool_call_count=_tool_call_count(captured),
             tool_events=tool_events,
             recorded_actions=_recorded_actions_from_tool_events(tool_events, proposed_actions),
@@ -113,12 +116,13 @@ async def run_case(
         )
     except UnexpectedModelBehavior as err:
         tool_events = _tool_events(captured)
-        return _error_trace(
+        return _failure_trace(
             candidate,
             model_id,
             case,
             "model_error",
             _format_exception(err),
+            diagnostic=True,
             tool_call_count=_tool_call_count(captured),
             tool_events=tool_events,
             recorded_actions=_recorded_actions_from_tool_events(tool_events, proposed_actions),
@@ -126,12 +130,13 @@ async def run_case(
         )
     except Exception as err:  # noqa: BLE001 - provider/harness failures are isolated to the current matrix cell.
         tool_events = _tool_events(captured)
-        return _error_trace(
+        return _failure_trace(
             candidate,
             model_id,
             case,
             "model_error",
             _format_exception(err),
+            diagnostic=True,
             tool_call_count=_tool_call_count(captured),
             tool_events=tool_events,
             recorded_actions=_recorded_actions_from_tool_events(tool_events, proposed_actions),
@@ -139,19 +144,20 @@ async def run_case(
         )
 
 
-def _error_trace(
+def _failure_trace(
     candidate: PromptCandidate,
     model_id: str,
     case: EvalCase,
     check_name: str,
     feedback: str,
     *,
+    diagnostic: bool,
     tool_call_count: int = 0,
     tool_events: tuple[ToolEvent, ...] = (),
     recorded_actions: tuple[dict[str, object], ...] = (),
     conversation_id: str | None = None,
 ) -> CaseTrace:
-    """Return a zero-score trace for an infrastructure, provider, or limit failure."""
+    """Return a zero-score trace, optionally retaining a provider/harness diagnostic."""
     return CaseTrace(
         case_id=case.id,
         category=case.category,
@@ -169,7 +175,7 @@ def _error_trace(
                 feedback=feedback,
             ),
         ),
-        error=f"{check_name}: {feedback}",
+        error=f"{check_name}: {feedback}" if diagnostic else None,
         tool_events=tool_events,
         conversation_id=conversation_id,
         user_request=case.user_request,
