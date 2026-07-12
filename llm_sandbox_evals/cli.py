@@ -27,7 +27,7 @@ from pydantic_evals.reporting import EvaluationReport
 from rich.console import Console
 
 from llm_sandbox_evals import experiment, html_report, reports
-from llm_sandbox_evals.config import EvalConfig, EvalOutputMode, load_config
+from llm_sandbox_evals.config import EvalConfig, load_config
 from llm_sandbox_evals.experiment import MatrixCellMeta, MatrixCellRef
 from llm_sandbox_evals.harness import _select_cases
 from llm_sandbox_evals.schema import CaseTrace
@@ -151,12 +151,11 @@ def _build_parser() -> argparse.ArgumentParser:
         description=(
             "Development-only eval harness for the llm_sandbox Home Assistant integration.\n"
             "It runs the integration's real LLM tools against frozen fixtures, evaluates\n"
-            "case-selected flat answers against grounded oracle evidence and action effects, and ranks candidates "
-            "by binary correctness."
+            "successful service effects against authored actions, and ranks candidates by binary correctness."
         ),
         epilog=(
             "Examples:\n"
-            "  # Offline, no API key — evaluates flat answers and action effects:\n"
+            "  # Offline, no API key — evaluates the four direct light actions:\n"
             "  python -m llm_sandbox_evals eval --models stub\n"
             "\n"
             "  # Score real models (keys read from env/.env):\n"
@@ -188,15 +187,13 @@ def _add_eval_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPar
         description=(
             "Run the eval matrix: for every (prompt candidate x language model x test case),\n"
             "ask the model to use the available tools over one or more turns against a\n"
-            "frozen Home Assistant snapshot, then evaluates one concrete answer shape, grounded oracle evidence, and "
-            "actions.\n"
+            "frozen Home Assistant snapshot, then compares successful service effects with the authored actions.\n"
             "Results are binary correct/incorrect; provider failures are incomplete. Artifacts are written under the\n"
             "runs directory; a native pydantic-evals summary is printed to stdout."
         ),
         epilog=(
             "Notes:\n"
-            "  - --cases accepts case ids OR category names: state, registry, history,\n"
-            "    statistics, logbook, automation, action, safety, system.\n"
+            "  - --cases accepts action case ids.\n"
             "  - --candidates accepts `baseline` and `optimized:<path>` (a saved\n"
             "    optimized_candidate.json from `optimize`).\n"
             "  - --prompt-profile selects one production base prompt profile for\n"
@@ -230,8 +227,8 @@ def _add_eval_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPar
     )
     eval_parser.add_argument(
         "--cases",
-        metavar="ID|CATEGORY,...",
-        help="comma-separated case ids or category names (default: all cases).",
+        metavar="ID,...",
+        help="comma-separated action case ids (default: all cases).",
     )
     eval_parser.add_argument(
         "--runs-dir",
@@ -269,12 +266,6 @@ def _add_eval_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPar
         help="sampling temperature forwarded to real models via Pydantic AI provider settings "
         "(default: unset; left to the provider so reasoning-capable models do not warn about "
         "unsupported sampling parameters). Ignored by 'stub'.",
-    )
-    eval_parser.add_argument(
-        "--output-mode",
-        choices=("tool", "json-schema"),
-        metavar="MODE",
-        help="structured eval result protocol: tool (default) or json-schema (provider-native schema output).",
     )
 
 
@@ -315,7 +306,7 @@ def _add_optimize_parser(subparsers: argparse._SubParsersAction[argparse.Argumen
         description=(
             "Use DSPy's COPRO instruction optimizer to rewrite the execute_home_code\n"
             "instruction. The REAL eval harness is the metric: each proposed instruction is\n"
-            "evaluated through case-selected flat answers, grounded oracle evidence, and action ledgers against the\n"
+            "evaluated through exact successful action ledgers against the\n"
             "target model. The winning instruction is exported for human review; production\n"
             "prompts.py is never auto-patched."
         ),
@@ -374,9 +365,8 @@ def _add_optimize_parser(subparsers: argparse._SubParsersAction[argparse.Argumen
     )
     optimize_parser.add_argument(
         "--cases",
-        metavar="ID|CATEGORY,...",
-        help="case ids or categories used as the optimization trainset (default: all cases). "
-        "Keep small to bound cost.",
+        metavar="ID,...",
+        help="action case ids used as the optimization trainset (default: all cases). Keep small to bound cost.",
     )
     optimize_parser.add_argument(
         "--prompt-profile",
@@ -416,7 +406,6 @@ def _run_eval(args: argparse.Namespace) -> int:
         cases=_csv_arg(args.cases) if args.cases is not None else base_config.cases,
         homes=base_config.homes,
         runs_dir=Path(args.runs_dir) if args.runs_dir else base_config.runs_dir,
-        output_mode=cast(EvalOutputMode, args.output_mode or base_config.output_mode),
         concurrency=args.concurrency if args.concurrency else base_config.concurrency,
         max_tool_calls=args.max_tool_calls if args.max_tool_calls else base_config.max_tool_calls,
         model_timeout=args.model_timeout if args.model_timeout else base_config.model_timeout,

@@ -1,191 +1,31 @@
-"""Versioned contracts for concrete eval answers, expectations, and scoring traces."""
-# The models below are deliberately field-oriented public schema; class-level
-# docstrings would add noise without improving the generated contract.
-# ruff: noqa: D101, D102, D105
+"""Action-only eval case, trace, and report contracts."""
 
 from dataclasses import dataclass, field
-from math import isfinite
-from typing import Annotated, Literal
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
-
-type JsonScalar = str | int | float | bool | None
-
-
-class _Expectation(BaseModel):
-    """Internal authored oracle specification; models never emit it."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-
-class EntityExpectation(_Expectation):
-    kind: Literal["entity"] = "entity"
-    source: Literal["states", "history", "logbook", "automation"]
-    entity_id: str = Field(min_length=1)
-    input_field: Literal["state", "attribute", "name", "enabled", "message", "value", "run"]
-    input_value: JsonScalar = None
-    value: JsonScalar
-    tolerance: float | None = None
-    unit: str | None = None
-
-    @model_validator(mode="after")
-    def validate_source_field(self) -> EntityExpectation:
-        allowed_fields = {
-            "states": {"state", "attribute", "name"},
-            "history": {"state", "attribute"},
-            "logbook": {"message"},
-            "automation": {"enabled", "name", "value", "run"},
-        }
-        if self.input_field not in allowed_fields[self.source]:
-            raise ValueError(f"{self.input_field} is not available from {self.source} entity evidence")
-        if self.input_field == "attribute":
-            if not isinstance(self.input_value, str) or not self.input_value:
-                raise ValueError("attribute expectations require a nonempty attribute name in input_value")
-        elif self.input_value is not None:
-            raise ValueError("input_value is only valid as the attribute name for attribute expectations")
-        _validate_tolerance(self.value, self.tolerance)
-        return self
-
-
-class EntityCollectionExpectation(_Expectation):
-    kind: Literal["entity_collection"] = "entity_collection"
-    entity_ids: list[str]
-    filter_kind: Literal["all", "area", "device", "floor", "label", "domain", "state"] | None = None
-    filter_value: str | None = None
-
-    @model_validator(mode="after")
-    def validate_ids(self) -> EntityCollectionExpectation:
-        _validate_sorted_ids(self.entity_ids, "collection entity ids")
-        if (self.filter_kind in {None, "all"}) != (self.filter_value is None):
-            raise ValueError("only a concrete collection filter accepts filter_value")
-        return self
-
-
-class AggregateExpectation(_Expectation):
-    kind: Literal["aggregate"] = "aggregate"
-    source: Literal["states", "history", "statistics", "logbook"]
-    operator: Literal[
-        "count",
-        "mean",
-        "minimum",
-        "maximum",
-        "sum",
-        "duration_seconds",
-        "time_in_state",
-        "convert",
-    ]
-    subject_ids: list[str]
-    input_field: Literal["none", "state", "mean", "min", "max", "sum", "event_message"]
-    input_value: JsonScalar = None
-    value: JsonScalar
-    tolerance: float | None = None
-    unit: str | None = None
-
-    @model_validator(mode="after")
-    def validate_inputs(self) -> AggregateExpectation:
-        _validate_sorted_ids(self.subject_ids, "aggregate subjects")
-        if (self.input_field == "none") != (self.input_value is None):
-            raise ValueError("input_field none requires null input_value and vice versa")
-        _validate_tolerance(self.value, self.tolerance)
-        return self
-
-
-class EntityRelationExpectation(_Expectation):
-    kind: Literal["entity_relation"] = "entity_relation"
-    relation: Literal["entity_device", "entity_area", "automation_target", "entity_service"]
-    entity_id: str = Field(min_length=1)
-    related_id: str = Field(min_length=1)
-    scope_entity_ids: list[str] | None = None
-
-    @model_validator(mode="after")
-    def validate_scope(self) -> EntityRelationExpectation:
-        if self.scope_entity_ids is not None:
-            _validate_sorted_ids(self.scope_entity_ids, "relation scope")
-        return self
-
-
-class NoDataExpectation(_Expectation):
-    kind: Literal["no_data"] = "no_data"
-    source: Literal["history", "statistics", "logbook"]
-    scope_entity_ids: list[str]
-
-    @model_validator(mode="after")
-    def validate_scope(self) -> NoDataExpectation:
-        _validate_sorted_ids(self.scope_entity_ids, "no-data scope")
-        return self
-
-
-type AnswerExpectation = Annotated[
-    EntityExpectation
-    | EntityCollectionExpectation
-    | AggregateExpectation
-    | EntityRelationExpectation
-    | NoDataExpectation,
-    Field(discriminator="kind"),
+type ActionOutcomeReason = Literal[
+    "ok",
+    "no_action",
+    "action_rejected",
+    "wrong_service",
+    "wrong_target",
+    "wrong_service_data",
+    "wrong_service_and_target",
+    "wrong_service_and_data",
+    "wrong_target_and_data",
+    "wrong_service_target_and_data",
+    "missing_action",
+    "unexpected_action",
+    "duplicate_action",
+    "multiple_action_mismatches",
+    "action_mismatch",
 ]
-
-
-def _validate_sorted_ids(values: list[str], label: str) -> None:
-    if any(not item for item in values) or values != sorted(set(values)):
-        raise ValueError(f"{label} must be unique sorted nonempty strings")
-
-
-def _validate_tolerance(value: JsonScalar, tolerance: float | None) -> None:
-    if tolerance is None:
-        return
-    if not isinstance(value, (int, float)) or isinstance(value, bool) or not isfinite(tolerance) or tolerance <= 0:
-        raise ValueError("tolerance requires a numeric value and must be finite and positive")
-
-
-class FinalAnswer(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    answer: str = Field(description="Unrestricted display-only answer text; it is never parsed or scored.")
-
-
-class EntityAnswer(FinalAnswer):
-    model_config = ConfigDict(extra="forbid")
-
-    entity_id: str = Field(description="Identifier of the entity whose value answers the request.")
-    value: JsonScalar = Field(description="Observed scalar value that answers the request.")
-
-
-class EntityCollectionAnswer(FinalAnswer):
-    model_config = ConfigDict(extra="forbid")
-
-    entity_ids: list[str] = Field(description="Entity identifiers comprising the requested collection.")
-
-
-class AggregateAnswer(FinalAnswer):
-    model_config = ConfigDict(extra="forbid")
-
-    value: JsonScalar = Field(description="Computed scalar value that answers the request.")
-
-
-class EntityRelationAnswer(FinalAnswer):
-    model_config = ConfigDict(extra="forbid")
-
-    entity_id: str = Field(description="Entity or automation identifier at the source of the relation.")
-    related_id: str = Field(description="Identifier related to the source entity or automation.")
-
-
-class NoDataAnswer(FinalAnswer):
-    model_config = ConfigDict(extra="forbid")
-
-    no_data: bool = Field(description="True when the requested scope produced no data.")
-
-
-class ActionAnswer(FinalAnswer):
-    model_config = ConfigDict(extra="forbid")
-
-
-type AnswerShape = (
-    EntityAnswer | EntityCollectionAnswer | AggregateAnswer | EntityRelationAnswer | NoDataAnswer | ActionAnswer
-)
 
 
 @dataclass(frozen=True, slots=True)
 class PromptCandidate:
+    """One prompt candidate evaluated across the model matrix."""
+
     id: str
     api_prompt: str
     execute_home_code_description: str
@@ -196,72 +36,63 @@ class PromptCandidate:
 
 
 @dataclass(frozen=True, slots=True)
-class CaseContext:
-    platform: str = "test"
-    device_id: str | None = None
-    language: str | None = "en"
-
-
-@dataclass(frozen=True, slots=True)
 class ExpectedAction:
+    """One successful service effect required by an eval case."""
+
     domain: str
     service: str
-    target_entity_ids: tuple[str, ...] = ()
+    target_entity_ids: tuple[str, ...]
     service_data: dict[str, object] | None = None
 
-
-@dataclass(frozen=True, slots=True)
-class BlockedOutcome:
-    error_keys: tuple[str, ...] = ()
-    actions: tuple[ExpectedAction, ...] = ()
-
-
-@dataclass(frozen=True, slots=True)
-class Expected:
-    expectation: AnswerExpectation | None = None
-    actions: tuple[ExpectedAction, ...] = ()
-    blocked_outcome: BlockedOutcome | None = None
-
     def __post_init__(self) -> None:
-        if self.expectation is None and not self.actions and self.blocked_outcome is None:
-            raise ValueError("expected oracle must declare an expectation, actions, or blocked_outcome")
-        if self.blocked_outcome is not None and (self.actions or self.expectation is not None):
-            raise ValueError("blocked cases cannot also declare an expectation or allowed actions")
-        if (
-            self.expectation is not None
-            and self.actions
-            and not isinstance(self.expectation, (EntityExpectation, AggregateExpectation))
-        ):
-            raise ValueError("conditional actions require an entity or aggregate expectation")
+        """Validate the required successful effect identity."""
+        if not self.domain or not self.service:
+            raise ValueError("expected action domain and service must be nonempty")
+        if not self.target_entity_ids or any(not entity_id for entity_id in self.target_entity_ids):
+            raise ValueError("expected action target_entity_ids must be nonempty strings")
 
 
-def select_answer_shape(expected: Expected) -> type[AnswerShape]:
-    """Select the one concrete model-facing shape for an authored oracle."""
-    registry: dict[type[_Expectation], type[AnswerShape]] = {
-        EntityExpectation: EntityAnswer,
-        EntityCollectionExpectation: EntityCollectionAnswer,
-        AggregateExpectation: AggregateAnswer,
-        EntityRelationExpectation: EntityRelationAnswer,
-        NoDataExpectation: NoDataAnswer,
-    }
-    return ActionAnswer if expected.expectation is None else registry[type(expected.expectation)]
+@dataclass(frozen=True, slots=True)
+class ObservedAction:
+    """One normalized successful service effect used for diagnostics."""
+
+    domain: str
+    service: str
+    target_entity_ids: tuple[str, ...]
+    service_data: dict[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class ActionComparison:
+    """Dimension-level assessment of one expected action and its closest effect."""
+
+    expected: ExpectedAction
+    actual: ObservedAction | None
+    service_matches: bool
+    target_matches: bool
+    service_data_matches: bool
+    matched: bool
 
 
 @dataclass(frozen=True, slots=True)
 class EvalCase:
+    """One direct action request and its successful service effects."""
+
     id: str
-    category: str
     home: str
     user_request: str
-    actions_enabled: bool
-    expected: Expected
-    oracle_version: Literal[3] = 3
-    llm_context: CaseContext = CaseContext()
-    action_domains: frozenset[str] = frozenset()
+    expected_actions: tuple[ExpectedAction, ...]
+
+    def __post_init__(self) -> None:
+        """Require at least one successful service effect."""
+        if not self.expected_actions:
+            raise ValueError("action eval cases require at least one expected action")
 
 
 @dataclass(frozen=True, slots=True)
 class ToolEvent:
+    """One production tool call and its JSON-safe return envelope."""
+
     tool_name: str
     args: dict[str, object]
     output: dict[str, object]
@@ -272,28 +103,27 @@ class ToolEvent:
 
 
 @dataclass(frozen=True, slots=True)
-class ConclusionResult:
-    expected: AnswerExpectation
-    matched: bool
-    grounded: bool
-    reason: Literal["answer_mismatch", "evidence_missing", "ok"]
-
-
-@dataclass(frozen=True, slots=True)
 class ActionResult:
-    status: Literal["allowed", "blocked", "no_action"]
+    """Exact successful-ledger comparison for one case."""
+
     passed: bool
-    mismatches: tuple[str, ...] = ()
+    reason: ActionOutcomeReason
+    comparisons: tuple[ActionComparison, ...] = ()
+    unexpected_actions: tuple[ObservedAction, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
 class ActionLedger:
+    """Successful effects used for scoring and rejected effects kept for diagnostics."""
+
     successful: tuple[dict[str, object], ...] = ()
     rejected: tuple[dict[str, object], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
 class EvalDiagnostics:
+    """Operational facts that never change action correctness."""
+
     tool_calls: int = 0
     successful_tool_calls: int = 0
     failed_tool_calls: int = 0
@@ -309,29 +139,32 @@ class EvalDiagnostics:
 
 @dataclass(frozen=True, slots=True)
 class CaseOutcome:
+    """Binary action quality outcome or an incomplete operational result."""
+
     state: Literal["correct", "incorrect", "incomplete"]
-    reason: str
+    reason: ActionOutcomeReason
     score: float = field(init=False)
 
     def __post_init__(self) -> None:
+        """Derive the binary score from the outcome state."""
         object.__setattr__(self, "score", 1.0 if self.state == "correct" else 0.0)
 
 
 @dataclass(frozen=True, slots=True)
 class CaseTrace:
+    """Self-contained scoring-v5 action eval trace."""
+
     case_id: str
-    category: str
     candidate_id: str
     model_id: str
-    answer: AnswerShape | None
-    expected: Expected
+    answer: str | None
+    expected_actions: tuple[ExpectedAction, ...]
     outcome: CaseOutcome
-    conclusions: tuple[ConclusionResult, ...]
-    actions: tuple[ActionResult, ...]
+    action_result: ActionResult
     action_ledger: ActionLedger
     tool_events: tuple[ToolEvent, ...]
     diagnostics: EvalDiagnostics
-    scoring_version: Literal[4] = 4
+    scoring_version: Literal[5] = 5
     provider_error: str | None = None
     user_request: str = ""
     conversation_id: str | None = None

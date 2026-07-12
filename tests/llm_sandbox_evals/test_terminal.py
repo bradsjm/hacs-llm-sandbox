@@ -2,7 +2,14 @@ from io import StringIO
 from typing import Literal
 
 from llm_sandbox_evals.experiment import MatrixCellRef, MatrixProgressEvent
-from llm_sandbox_evals.schema import ActionLedger, BlockedOutcome, CaseOutcome, CaseTrace, EvalDiagnostics, Expected
+from llm_sandbox_evals.schema import (
+    ActionLedger,
+    ActionResult,
+    CaseOutcome,
+    CaseTrace,
+    EvalDiagnostics,
+    ExpectedAction,
+)
 from llm_sandbox_evals.terminal import MatrixTerminalReporter, _cell_duration, _outcome_text
 import pytest
 from rich.console import Console
@@ -12,11 +19,13 @@ from rich.console import Console
     ("outcome", "detail", "expected"),
     [
         pytest.param("correct", "ok", "correct — ok", id="correct"),
-        pytest.param("incorrect", "claim_not_grounded", "claim_not_grounded", id="incorrect"),
+        pytest.param("incorrect", "action_mismatch", "action_mismatch", id="incorrect"),
         pytest.param("incomplete", "provider_error", "incomplete — provider_error", id="incomplete"),
     ],
 )
-def test_terminal_renders_v4_outcomes_without_operational_scoring(outcome: str, detail: str, expected: str) -> None:
+def test_terminal_renders_action_outcomes_without_operational_scoring(
+    outcome: str, detail: str, expected: str
+) -> None:
     rendered = _outcome_text(outcome, detail, "style")
 
     assert rendered.plain == expected
@@ -27,7 +36,7 @@ def test_terminal_reports_cap_as_incorrect_diagnostic() -> None:
     stream = StringIO()
     reporter = MatrixTerminalReporter()
     reporter._console = Console(file=stream, force_terminal=False)
-    cell = MatrixCellRef("case", "candidate", "model", "home", "state")
+    cell = MatrixCellRef("case", "candidate", "model", "home")
     trace = _trace("incorrect", cap_exhausted=True, tool_calls=3)
 
     reporter.handle(MatrixProgressEvent("matrix_started", total=1))
@@ -46,7 +55,7 @@ def test_terminal_recent_table_places_calls_and_elapsed_in_their_columns() -> No
     reporter = MatrixTerminalReporter()
     console = Console(width=200, force_terminal=False, record=True)
     reporter._console = console
-    cell = MatrixCellRef("case", "candidate", "model", "home", "state")
+    cell = MatrixCellRef("case", "candidate", "model", "home")
     reporter.handle(MatrixProgressEvent("cell_started", cell=cell, request="request"))
     reporter.handle(
         MatrixProgressEvent(
@@ -85,16 +94,13 @@ def _trace(
 ) -> CaseTrace:
     return CaseTrace(
         case_id="case",
-        category="state",
         candidate_id="candidate",
         model_id="model",
         answer=None,
-        expected=Expected(blocked_outcome=BlockedOutcome()),
-        outcome=CaseOutcome(state, "cap_exhausted" if cap_exhausted else state),
-        conclusions=(),
-        actions=(),
+        expected_actions=(ExpectedAction("light", "turn_on", ("light.bedroom",)),),
+        outcome=CaseOutcome(state, "ok" if state == "correct" else "action_mismatch"),
+        action_result=ActionResult(state == "correct", "ok" if state == "correct" else "action_mismatch"),
         action_ledger=ActionLedger(),
         tool_events=(),
         diagnostics=EvalDiagnostics(tool_calls=tool_calls, cap_exhausted=cap_exhausted, elapsed_seconds=elapsed),
-        scoring_version=4,
     )

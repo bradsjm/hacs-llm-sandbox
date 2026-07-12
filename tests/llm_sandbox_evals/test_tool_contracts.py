@@ -9,33 +9,8 @@ from llm_sandbox_evals.agent_runner import _validate_recorder_tool
 from llm_sandbox_evals.homes import get_home
 from llm_sandbox_evals.prompts import baseline_candidate
 from llm_sandbox_evals.runtime import build_eval_runtime, build_fixture_recorder_source
-from llm_sandbox_evals.schema import (
-    BlockedOutcome,
-    CaseContext,
-    EntityExpectation,
-    EvalCase,
-    Expected,
-    ExpectedAction,
-)
+from llm_sandbox_evals.schema import EvalCase, ExpectedAction
 from llm_sandbox_evals.tools import EVAL_SCOPE, apply_scope
-
-
-async def test_recorder_hidden_entity_returns_entity_not_visible_error() -> None:
-    snapshot = _scoped_snapshot()
-    tool = GetHistoryTool("eval")
-    data = cast(
-        dict[str, object],
-        tool.parameters({"entity_ids": ["switch.garage_opener"], "hours": 24}),
-    )
-
-    result = await tool.run_query(snapshot, data, _recorder_source(snapshot))
-
-    assert result["status"] == "error"
-    error = cast(dict[str, object], result["error"])
-    assert error["key"] == "entity_not_visible"
-    assert isinstance(error["message"], str)
-    assert error["message"] != error["key"]
-    assert "guidance" in error
 
 
 async def test_recorder_selector_no_match_returns_error_with_guidance() -> None:
@@ -56,7 +31,7 @@ async def test_recorder_selector_no_match_returns_error_with_guidance() -> None:
 def test_eval_recorder_validation_returns_invalid_tool_input_for_bad_iso() -> None:
     validation = _validate_recorder_tool(
         GetHistoryTool("eval"),
-        {"entity_ids": ["sensor.living_temp"], "start": "not-a-date"},
+        {"entity_ids": ["light.bedroom"], "start": "not-a-date"},
     )
 
     assert validation.data == {}
@@ -71,7 +46,7 @@ def test_eval_recorder_validation_returns_invalid_tool_input_for_bad_iso() -> No
 async def test_recorder_window_too_large_returns_stable_error_key() -> None:
     snapshot = _scoped_snapshot()
     tool = GetHistoryTool("eval")
-    data = cast(dict[str, object], tool.parameters({"entity_ids": ["sensor.living_temp"], "hours": 10_000}))
+    data = cast(dict[str, object], tool.parameters({"entity_ids": ["light.bedroom"], "hours": 10_000}))
 
     result = await tool.run_query(snapshot, data, _recorder_source(snapshot))
 
@@ -82,93 +57,20 @@ async def test_recorder_window_too_large_returns_stable_error_key() -> None:
     assert error["message"] != error["key"]
 
 
-async def test_eval_runtime_records_actions_disabled_without_invoking() -> None:
-    result, invoker_calls = await _run_execute(
-        _case(
-            actions_enabled=False,
-            expected=Expected(
-                blocked_outcome=BlockedOutcome(
-                    error_keys=("actions_disabled",),
-                    actions=(ExpectedAction("light", "turn_on", ("light.living",)),),
-                )
-            ),
-        ),
-        'await hass.services.async_call("light", "turn_on", target={"entity_id": "light.living"})\nresult = "done"',
-    )
-
-    assert result["execution"]["status"] == "ok"
-    assert result["execution"]["action_status"] == "error"
-    assert result["execution"]["action_failures"] == ["actions_disabled"]
-    assert result["output"] == "done"
-    action = _single_action(result)
-    assert action["status"] == "error"
-    assert cast(dict[str, object], action["error"])["key"] == "actions_disabled"
-    assert invoker_calls == []
-
-
-async def test_eval_runtime_records_service_target_not_visible_without_invoking() -> None:
-    result, invoker_calls = await _run_execute(
-        _case(
-            actions_enabled=True,
-            expected=Expected(
-                blocked_outcome=BlockedOutcome(
-                    error_keys=("service_target_not_visible",),
-                    actions=(ExpectedAction("switch", "toggle", ("switch.garage_opener",)),),
-                )
-            ),
-        ),
-        'await hass.services.async_call("switch", "toggle", target={"entity_id": "switch.garage_opener"})\n'
-        'result = "done"',
-    )
-
-    assert result["execution"]["status"] == "ok"
-    assert result["execution"]["action_status"] == "error"
-    assert result["execution"]["action_failures"] == ["service_target_not_visible"]
-    assert result["output"] == "done"
-    action = _single_action(result)
-    assert action["status"] == "error"
-    assert cast(dict[str, object], action["error"])["key"] == "service_target_not_visible"
-    assert invoker_calls == []
-
-
-async def test_eval_runtime_records_service_not_found_without_invoking() -> None:
-    result, invoker_calls = await _run_execute(
-        _case(
-            actions_enabled=True,
-            expected=Expected(
-                blocked_outcome=BlockedOutcome(
-                    error_keys=("service_not_found",),
-                    actions=(ExpectedAction("light", "missing", ("light.living",)),),
-                )
-            ),
-        ),
-        'await hass.services.async_call("light", "missing", target={"entity_id": "light.living"})\nresult = "done"',
-    )
-
-    assert result["execution"]["status"] == "ok"
-    assert result["execution"]["action_status"] == "error"
-    assert result["execution"]["action_failures"] == ["service_not_found"]
-    assert result["output"] == "done"
-    action = _single_action(result)
-    assert action["status"] == "error"
-    assert cast(dict[str, object], action["error"])["key"] == "service_not_found"
-    assert invoker_calls == []
-
-
 async def test_eval_sql_query_can_filter_visible_entities_by_domain() -> None:
     result, _invoker_calls = await _run_execute(
-        _case(actions_enabled=False),
+        _case(),
         "result = await hass.query(\"select entity_id from states where domain = 'light' order by entity_id\")",
     )
 
     assert result["execution"] == {"status": "ok"}
     entity_ids = [row["entity_id"] for row in cast(list[dict[str, object]], result["output"])]
-    assert entity_ids == ["light.bedroom", "light.living", "light.office_desk"]
+    assert entity_ids == ["light.bedroom", "light.living"]
 
 
 async def _run_execute(case: EvalCase, code: str) -> tuple[dict[str, object], list[dict[str, object]]]:
     fixture = get_home(case.home)
-    snapshot = _scoped_snapshot(anchor_device_id=case.llm_context.device_id)
+    snapshot = _scoped_snapshot()
     runtime = build_eval_runtime(
         case,
         baseline_candidate(),
@@ -183,40 +85,26 @@ async def _run_execute(case: EvalCase, code: str) -> tuple[dict[str, object], li
         await runtime.code_tool.run_execute(
             snapshot,
             data,
-            llm.LLMContext(
-                case.llm_context.platform, None, case.llm_context.language, None, case.llm_context.device_id
-            ),
+            llm.LLMContext("test", None, "en", None, None),
             runtime.runtime_context_factory(),
         ),
     )
     return result, runtime.invoker.calls
 
 
-def _case(*, actions_enabled: bool, expected: Expected | None = None) -> EvalCase:
+def _case() -> EvalCase:
     return EvalCase(
         id="tool-contract-unit",
-        category="unit",
-        home="home_default",
+        home="home_minimal",
         user_request="exercise production tool contract",
-        actions_enabled=actions_enabled,
-        llm_context=CaseContext(device_id="device_assist_living"),
-        expected=expected
-        or Expected(
-            expectation=EntityExpectation(source="states", entity_id="light.living", input_field="state", value="on")
-        ),
+        expected_actions=(ExpectedAction("light", "turn_on", ("light.living",)),),
     )
 
 
 def _scoped_snapshot(*, anchor_device_id: str | None = None) -> HomeSnapshot:
-    snapshot = cast(HomeSnapshot, get_home("home_default").snapshot())
+    snapshot = cast(HomeSnapshot, get_home("home_minimal").snapshot())
     return apply_scope(snapshot, EVAL_SCOPE, anchor_device_id=anchor_device_id)
 
 
 def _recorder_source(snapshot: HomeSnapshot) -> RecorderSource:
-    return build_fixture_recorder_source(snapshot, get_home("home_default"))
-
-
-def _single_action(result: dict[str, object]) -> dict[str, object]:
-    actions = cast(list[dict[str, object]], result["actions"])
-    assert len(actions) == 1
-    return actions[0]
+    return build_fixture_recorder_source(snapshot, get_home("home_minimal"))

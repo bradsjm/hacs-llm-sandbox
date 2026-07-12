@@ -1,105 +1,55 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "LLM Sandbox eval cases oracle v3",
+  "title": "LLM Sandbox action-only eval cases",
   "type": "object",
   "additionalProperties": false,
   "required": ["name", "cases"],
   "properties": {
     "name": {"type": "string"},
-    "cases": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/case_wrapper"}}
+    "cases": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "inputs"],
+        "properties": {
+          "name": {"type": "string"},
+          "inputs": {"$ref": "#/$defs/case"}
+        }
+      }
+    }
   },
   "$defs": {
-    "string_list": {"type": "array", "items": {"type": "string", "minLength": 1}},
-    "scalar": {"type": ["string", "number", "boolean", "null"]},
-    "case_wrapper": {
-      "type": "object", "additionalProperties": false, "required": ["name", "inputs"],
-      "properties": {"name": {"type": "string"}, "inputs": {"$ref": "#/$defs/case"}}
-    },
     "case": {
-      "type": "object", "additionalProperties": false,
-      "required": ["id", "category", "home", "user_request", "actions_enabled", "oracle_version", "expected"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "home", "user_request", "expected_actions"],
       "properties": {
-        "id": {"type": "string"},
-        "category": {"type": "string", "maxLength": 13, "enum": ["state", "registry", "history", "statistics", "logbook", "automation", "action", "safety", "system"]},
-        "home": {"type": "string"},
-        "user_request": {"type": "string"},
-        "actions_enabled": {"type": "boolean"},
-        "oracle_version": {"const": 3},
-        "llm_context": {"type": "object", "additionalProperties": false, "required": ["device_id"], "properties": {"device_id": {"type": "string"}}},
-        "action_domains": {"type": "array", "minItems": 1, "items": {"type": "string"}},
-        "expected": {"$ref": "#/$defs/expected"}
+        "id": {"type": "string", "minLength": 1},
+        "home": {"type": "string", "minLength": 1},
+        "user_request": {"type": "string", "minLength": 1},
+        "expected_actions": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/action"}
+        }
       }
-    },
-    "expected": {
-      "type": "object", "additionalProperties": false, "required": ["expectation", "actions", "blocked_outcome"],
-      "properties": {
-        "expectation": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/entity"}, {"$ref": "#/$defs/entity_collection"}, {"$ref": "#/$defs/aggregate"}, {"$ref": "#/$defs/entity_relation"}, {"$ref": "#/$defs/no_data"}]},
-        "actions": {"type": "array", "items": {"$ref": "#/$defs/action"}},
-        "blocked_outcome": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/blocked"}]}
-      }
-    },
-    "entity": {
-      "type": "object", "additionalProperties": false,
-      "required": ["kind", "source", "entity_id", "input_field", "input_value", "value", "tolerance", "unit"],
-      "properties": {
-        "kind": {"const": "entity"}, "source": {"enum": ["states", "history", "logbook", "automation"]},
-        "entity_id": {"type": "string", "minLength": 1}, "input_field": {"enum": ["state", "attribute", "name", "enabled", "message", "value", "run"]},
-        "input_value": {"$ref": "#/$defs/scalar"}, "value": {"$ref": "#/$defs/scalar"},
-        "tolerance": {"oneOf": [{"type": "null"}, {"type": "number", "exclusiveMinimum": 0}]},
-        "unit": {"oneOf": [{"type": "null"}, {"type": "string"}]}
-      },
-      "allOf": [
-        {"oneOf": [
-          {"properties": {"source": {"const": "states"}, "input_field": {"enum": ["state", "attribute", "name"]}}},
-          {"properties": {"source": {"const": "history"}, "input_field": {"enum": ["state", "attribute"]}}},
-          {"properties": {"source": {"const": "logbook"}, "input_field": {"const": "message"}}},
-          {"properties": {"source": {"const": "automation"}, "input_field": {"enum": ["enabled", "name", "value", "run"]}}}
-        ]},
-        {"if": {"properties": {"input_field": {"const": "attribute"}}}, "then": {"properties": {"input_value": {"type": "string", "minLength": 1}}}, "else": {"properties": {"input_value": {"type": "null"}}}}
-      ]
-    },
-    "entity_collection": {
-      "type": "object", "additionalProperties": false,
-      "required": ["kind", "entity_ids", "filter_kind", "filter_value"],
-      "properties": {
-        "kind": {"const": "entity_collection"}, "entity_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
-        "filter_kind": {"oneOf": [{"type": "null"}, {"enum": ["all", "area", "device", "floor", "label", "domain", "state"]}]},
-        "filter_value": {"oneOf": [{"type": "null"}, {"type": "string", "minLength": 1}]}
-      }
-    },
-    "aggregate": {
-      "type": "object", "additionalProperties": false,
-      "required": ["kind", "source", "operator", "subject_ids", "input_field", "input_value", "value", "tolerance", "unit"],
-      "properties": {
-        "kind": {"const": "aggregate"}, "source": {"enum": ["states", "history", "statistics", "logbook"]},
-        "operator": {"enum": ["count", "mean", "minimum", "maximum", "sum", "duration_seconds", "time_in_state", "convert"]},
-        "subject_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
-        "input_field": {"enum": ["none", "state", "mean", "min", "max", "sum", "event_message"]},
-        "input_value": {"$ref": "#/$defs/scalar"}, "value": {"$ref": "#/$defs/scalar"},
-        "tolerance": {"oneOf": [{"type": "null"}, {"type": "number", "exclusiveMinimum": 0}]},
-        "unit": {"oneOf": [{"type": "null"}, {"type": "string"}]}
-      }
-    },
-    "entity_relation": {
-      "type": "object", "additionalProperties": false,
-      "required": ["kind", "relation", "entity_id", "related_id", "scope_entity_ids"],
-      "properties": {
-        "kind": {"const": "entity_relation"}, "relation": {"enum": ["entity_device", "entity_area", "automation_target", "entity_service"]},
-        "entity_id": {"type": "string", "minLength": 1}, "related_id": {"type": "string", "minLength": 1},
-        "scope_entity_ids": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/string_list"}]}
-      }
-    },
-    "no_data": {
-      "type": "object", "additionalProperties": false, "required": ["kind", "source", "scope_entity_ids"],
-      "properties": {"kind": {"const": "no_data"}, "source": {"enum": ["history", "statistics", "logbook"]}, "scope_entity_ids": {"$ref": "#/$defs/string_list"}}
     },
     "action": {
-      "type": "object", "additionalProperties": false, "required": ["domain", "service"],
-      "properties": {"domain": {"type": "string"}, "service": {"type": "string"}, "target_entity_ids": {"$ref": "#/$defs/string_list"}, "service_data": {"type": "object", "additionalProperties": true}}
-    },
-    "blocked": {
-      "type": "object", "additionalProperties": false, "required": ["error_keys", "actions"],
-      "properties": {"error_keys": {"type": "array", "minItems": 1, "items": {"type": "string"}}, "actions": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/action"}}}
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["domain", "service", "target_entity_ids"],
+      "properties": {
+        "domain": {"type": "string", "minLength": 1},
+        "service": {"type": "string", "minLength": 1},
+        "target_entity_ids": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "service_data": {"type": "object"}
+      }
     }
   }
 }

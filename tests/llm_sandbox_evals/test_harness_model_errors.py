@@ -8,7 +8,7 @@ from llm_sandbox_evals.config import EvalConfig
 from llm_sandbox_evals.harness import _diagnostics, _usage, run_case
 from llm_sandbox_evals.prompts import load_candidates
 from llm_sandbox_evals.schema import ToolEvent
-from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart, ToolCallPart
+from pydantic_ai.messages import ModelMessage, ModelResponse, ToolCallPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 import pytest
 
@@ -96,36 +96,6 @@ async def test_run_case_records_provider_failure_as_incomplete(monkeypatch: obje
     assert trace.diagnostics.failure == "provider_error"
 
 
-async def test_failure_diagnostics_count_captured_tool_free_model_response(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    candidate = load_candidates(["baseline"], DEFAULT_PROMPT_PROFILE)[0]
-    config = EvalConfig(
-        models=["failing-after-response"],
-        candidates=[candidate.id],
-        prompt_profile=DEFAULT_PROMPT_PROFILE,
-        cases=None,
-        homes=None,
-        runs_dir=tmp_path,
-    )
-
-    def make_model(_model_id: str) -> FunctionModel:
-        return FunctionModel(_tool_free_response_then_failure, model_name="failing-after-response")
-
-    monkeypatch.setattr(agent_runner, "make_model", make_model)
-    trace = await run_case(
-        candidate,
-        "failing-after-response",
-        CASES[0],
-        config,
-        profile=resolve_profile(DEFAULT_PROMPT_PROFILE),
-    )
-
-    assert trace.outcome.state == "incomplete"
-    assert trace.diagnostics.model_turns == 1
-    assert trace.diagnostics.tool_calls == 0
-
-
 async def test_run_case_keeps_normal_completion_outside_failure_classification(tmp_path: Path) -> None:
     candidate = load_candidates(["baseline"], DEFAULT_PROMPT_PROFILE)[0]
     config = EvalConfig(
@@ -183,12 +153,6 @@ async def test_run_case_does_not_force_final_answer_after_max_tool_calls(monkeyp
 
 async def _failing_model(_messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
     raise RuntimeError("provider rejected model")
-
-
-async def _tool_free_response_then_failure(messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
-    if any(isinstance(message, ModelResponse) for message in messages):
-        raise RuntimeError("provider failed after a response")
-    return ModelResponse(parts=[TextPart("not structured output")])
 
 
 async def _looping_model(_messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:

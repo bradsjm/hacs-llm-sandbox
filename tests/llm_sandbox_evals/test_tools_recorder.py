@@ -20,36 +20,17 @@ from custom_components.llm_sandbox.llm_api.tools._recorder_runtime import (
 )
 from custom_components.llm_sandbox.llm_api.tools.recorder import GetHistoryTool, GetLogbookTool, GetStatisticsTool
 from custom_components.llm_sandbox.snapshot.models import HomeSnapshot
-from freezegun.api import FrozenDateTimeFactory
 from homeassistant.helpers import llm
 from llm_sandbox_evals.homes import get_home
 from llm_sandbox_evals.prompts import baseline_candidate
 from llm_sandbox_evals.runtime import build_eval_runtime, build_fixture_recorder_source
-from llm_sandbox_evals.schema import CaseContext, EntityExpectation, EvalCase, Expected
+from llm_sandbox_evals.schema import EvalCase, ExpectedAction
 from llm_sandbox_evals.tools import EVAL_SCOPE, apply_scope
 import pytest
 
 _CREATED_AT = datetime(2026, 6, 29, 12, tzinfo=UTC)
-_LIVING_TEMP = "sensor.living_temp"
+_LIVING_TEMP = "light.bedroom"
 _LIVING_LIGHT = "light.living"
-
-
-async def test_history_run_query_uses_production_aggregate_shape() -> None:
-    snapshot = _snapshot()
-    source = build_fixture_recorder_source(snapshot, get_home("home_default"))
-    tool = GetHistoryTool("eval")
-    data = cast(
-        dict[str, object],
-        tool.parameters({"entity_ids": [_LIVING_TEMP], "hours": 24, "aggregate": "state_counts"}),
-    )
-
-    result = await tool.run_query(snapshot, data, source)
-
-    assert result == {
-        "window": {"start": "2026-06-28T12:00:00+00:00", "end": "2026-06-29T12:00:00+00:00"},
-        "mode": "state_counts",
-        "summary": {_LIVING_TEMP: {"state_counts": {"24.4": 1, "24.9": 1, "25.2": 1}}},
-    }
 
 
 async def test_history_run_query_cursor_round_trip_uses_production_pagination() -> None:
@@ -578,8 +559,8 @@ async def test_statistics_duplicate_types_are_stably_deduplicated() -> None:
 
 async def test_execute_home_code_runs_with_eval_runtime_context() -> None:
     case = _case()
-    fixture = get_home("home_default")
-    snapshot = apply_scope(_snapshot(), EVAL_SCOPE, anchor_device_id=case.llm_context.device_id)
+    fixture = get_home("home_minimal")
+    snapshot = apply_scope(_snapshot(), EVAL_SCOPE)
     runtime = build_eval_runtime(
         case, baseline_candidate(), resolve_profile(DEFAULT_PROMPT_PROFILE), snapshot, fixture
     )
@@ -603,59 +584,17 @@ async def test_execute_home_code_runs_with_eval_runtime_context() -> None:
     assert result["output"] == [{"entity_id": "light.living", "state": "on"}]
 
 
-async def test_execute_home_code_logbook_uses_fresh_fixture_runtime_seam(freezer: FrozenDateTimeFactory) -> None:
-    freezer.move_to(_CREATED_AT)
-    case = _case()
-    fixture = get_home("home_default")
-    snapshot = apply_scope(_snapshot(), EVAL_SCOPE, anchor_device_id=case.llm_context.device_id)
-    runtime = build_eval_runtime(
-        case, baseline_candidate(), resolve_profile(DEFAULT_PROMPT_PROFILE), snapshot, fixture
-    )
-    data = cast(
-        dict[str, object],
-        runtime.code_tool.parameters({"code": 'result = await hass.logbook("light.living", hours=24)'}),
-    )
-
-    result = await runtime.code_tool.run_execute(
-        snapshot,
-        data,
-        llm.LLMContext("test", None, "en", None, None),
-        runtime.runtime_context_factory(),
-    )
-
-    assert result["execution"] == {"status": "ok"}
-    assert result["output"] == [
-        {
-            "entity_id": "light.living",
-            "when": "2026-06-29T08:00:00+00:00",
-            "name": "Living Room Light",
-            "message": "turned off",
-        },
-        {
-            "entity_id": "light.living",
-            "when": "2026-06-29T11:30:00+00:00",
-            "name": "Living Room Light",
-            "message": "turned on",
-        },
-    ]
-
-
 def _case() -> EvalCase:
     return EvalCase(
         id="production-core-unit",
-        category="unit",
-        home="home_default",
+        home="home_minimal",
         user_request="exercise production core",
-        actions_enabled=False,
-        llm_context=CaseContext(),
-        expected=Expected(
-            expectation=EntityExpectation(source="states", entity_id="light.living", input_field="state", value="on")
-        ),
+        expected_actions=(ExpectedAction("light", "turn_on", ("light.living",)),),
     )
 
 
 def _snapshot() -> HomeSnapshot:
-    return cast(HomeSnapshot, get_home("home_default").snapshot())
+    return cast(HomeSnapshot, get_home("home_minimal").snapshot())
 
 
 def _fixture(recorder_data: dict[str, object]) -> ModuleType:

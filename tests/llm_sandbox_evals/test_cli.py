@@ -81,7 +81,7 @@ def test_eval_keeps_stdout_factual_and_writes_artifacts(capsys: pytest.CaptureFi
             "--models",
             "stub",
             "--cases",
-            "state_living_temperature",
+            "action_turn_on_bedroom_light",
             "--runs-dir",
             str(tmp_path),
         ]
@@ -100,30 +100,6 @@ def test_eval_keeps_stdout_factual_and_writes_artifacts(capsys: pytest.CaptureFi
     assert (run_dir / "report.html").is_file()
 
 
-def test_eval_native_output_mode_runs_through_cli_and_harness(
-    capsys: pytest.CaptureFixture[str], tmp_path: Path
-) -> None:
-    exit_code = main(
-        [
-            "eval",
-            "--models",
-            "stub",
-            "--cases",
-            "state_living_temperature",
-            "--output-mode",
-            "json-schema",
-            "--runs-dir",
-            str(tmp_path),
-        ]
-    )
-
-    captured = capsys.readouterr()
-
-    assert exit_code == 0
-    run_dir = Path(captured.out.splitlines()[0].removeprefix("run_dir: "))
-    assert (run_dir / "report.json").is_file()
-
-
 def test_eval_token_telemetry_does_not_pollute_terminal_output(
     capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -137,7 +113,7 @@ def test_eval_token_telemetry_does_not_pollute_terminal_output(
             "--models",
             "stub",
             "--cases",
-            "state_living_temperature",
+            "action_turn_on_bedroom_light",
             "--runs-dir",
             str(tmp_path),
         ]
@@ -167,7 +143,7 @@ def test_eval_reports_completed_cell_error_on_redirected_stderr(
             "--models",
             "bad-model",
             "--cases",
-            "state_living_temperature",
+            "action_turn_on_bedroom_light",
             "--runs-dir",
             str(tmp_path),
         ]
@@ -176,7 +152,7 @@ def test_eval_reports_completed_cell_error_on_redirected_stderr(
 
     assert exit_code == 0
     assert "cell finished" in captured.err
-    assert "current living room temperature" in captured.err
+    assert "Turn on bedroom light" in captured.err
     assert "provider rejected model" in captured.err
     assert "provider rejected model" not in captured.out
 
@@ -193,7 +169,7 @@ def test_escape_cancels_interactive_eval_without_artifacts_or_stdout(
             "--models",
             "stub",
             "--cases",
-            "state_living_temperature",
+            "action_turn_on_bedroom_light",
             "--runs-dir",
             str(tmp_path),
         ]

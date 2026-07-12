@@ -39,7 +39,6 @@ class MatrixCellRef:
     candidate_id: str
     model_id: str
     home: str
-    category: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,7 +58,7 @@ class MatrixProgressEvent:
 
 @dataclass(slots=True)
 class SandboxOutcome(Evaluator[MatrixCellRef, CaseTrace, MatrixCellMeta]):
-    """Expose the v4 binary outcome as native pydantic-evals results."""
+    """Expose the v5 binary outcome as native pydantic-evals results."""
 
     def evaluate(
         self, ctx: EvaluatorContext[MatrixCellRef, CaseTrace, MatrixCellMeta]
@@ -85,9 +84,8 @@ class CandidateMatrixReport(ReportEvaluator[MatrixCellRef, CaseTrace, MatrixCell
     def evaluate(self, ctx: ReportEvaluatorContext[MatrixCellRef, CaseTrace, MatrixCellMeta]) -> list[ReportAnalysis]:
         """Return outcome rates, coverage, and non-ranking diagnostics."""
         cases = list(ctx.report.cases)
-        categories = _categories(cases)
-        pairs = _pair_rows(cases, self.candidate_ids, self.model_ids, categories, self.prompt_sizes)
-        ranking = _ranking_rows(pairs, self.candidate_ids, self.model_ids, categories)
+        pairs = _pair_rows(cases, self.candidate_ids, self.model_ids, self.prompt_sizes)
+        ranking = _ranking_rows(pairs, self.candidate_ids, self.model_ids)
         counts = _counts([case.output for case in cases])
         return [
             TableResult(
@@ -102,7 +100,6 @@ class CandidateMatrixReport(ReportEvaluator[MatrixCellRef, CaseTrace, MatrixCell
                     "Coverage",
                     "PromptChars",
                     "SizeRatio",
-                    *categories,
                 ],
                 rows=ranking,
             ),
@@ -123,7 +120,6 @@ class CandidateMatrixReport(ReportEvaluator[MatrixCellRef, CaseTrace, MatrixCell
                     "Elapsed",
                     "Tokens",
                     "Cost",
-                    *categories,
                 ],
                 rows=[
                     [
@@ -141,7 +137,6 @@ class CandidateMatrixReport(ReportEvaluator[MatrixCellRef, CaseTrace, MatrixCell
                         _round(row.mean_elapsed),
                         _optional_round(row.mean_tokens),
                         _optional_round(row.mean_cost),
-                        *[_optional_round(row.category_rates[category]) for category in categories],
                     ]
                     for row in pairs
                 ],
@@ -171,7 +166,6 @@ class _PairRow:
     mean_elapsed: float
     mean_tokens: float | None
     mean_cost: float | None
-    category_rates: dict[str, float | None]
     api_prompt_chars: int
     prompt_chars: int
 
@@ -184,14 +178,13 @@ def build_dataset(
     for candidate in candidates:
         for model_id in config.models:
             for case in selected_cases:
-                ref = MatrixCellRef(case.id, candidate.id, model_id, case.home, case.category)
+                ref = MatrixCellRef(case.id, candidate.id, model_id, case.home)
                 metadata: MatrixCellMeta = {
                     "run_id": run_id,
                     "case_id": ref.case_id,
                     "candidate_id": ref.candidate_id,
                     "model_id": ref.model_id,
                     "home": ref.home,
-                    "category": ref.category,
                 }
                 cases.append(
                     Case(
@@ -342,7 +335,6 @@ def _pair_rows(
     report_cases: Sequence[ReportCase[MatrixCellRef, CaseTrace, MatrixCellMeta]],
     candidate_ids: Sequence[str],
     model_ids: Sequence[str],
-    categories: Sequence[str],
     prompt_sizes: dict[str, tuple[int, int]],
 ) -> list[_PairRow]:
     rows: list[_PairRow] = []
@@ -355,15 +347,6 @@ def _pair_rows(
             ]
             counts = _counts(selected)
             diagnostics = [trace.diagnostics for trace in selected]
-            category_rates = {
-                category: _nullable_rate(
-                    sum(t.outcome.state == "correct" for t in selected if t.category == category),
-                    sum(t.outcome.state != "incomplete" for t in selected if t.category == category),
-                )
-                if any(t.category == category for t in selected)
-                else None
-                for category in categories
-            }
             api_chars, authored_chars = prompt_sizes.get(candidate_id, (0, 0))
             rows.append(
                 _PairRow(
@@ -381,7 +364,6 @@ def _pair_rows(
                     _mean([d.elapsed_seconds for d in diagnostics]),
                     _optional_mean([_usage_value(d, "total_tokens") for d in diagnostics]),
                     _optional_mean([_usage_value(d, "cost") for d in diagnostics]),
-                    category_rates,
                     api_chars,
                     authored_chars,
                 )
@@ -390,7 +372,7 @@ def _pair_rows(
 
 
 def _ranking_rows(
-    pair_rows: list[_PairRow], candidate_ids: Sequence[str], model_ids: Sequence[str], categories: Sequence[str]
+    pair_rows: list[_PairRow], candidate_ids: Sequence[str], model_ids: Sequence[str]
 ) -> list[list[str | int | float | bool | None]]:
     baseline = max(
         1,
@@ -408,7 +390,6 @@ def _ranking_rows(
         model_rates = [r.correct_rate for r in rows if r.correct_rate is not None]
         min_model = min(model_rates, default=-1.0)
         prompt_chars = rows[0].prompt_chars if rows else 0
-        categories_rate = [_nullable_mean([r.category_rates[c] for r in rows]) for c in categories]
         total_cells = sum(r.correct + r.incorrect + r.incomplete for r in rows)
         rendered.append(
             (
@@ -425,16 +406,11 @@ def _ranking_rows(
                     _round(_rate(completed, total_cells)),
                     prompt_chars,
                     _round(prompt_chars / baseline),
-                    *[_optional_round(v) for v in categories_rate],
                 ],
             )
         )
     rendered.sort(key=lambda row: (-row[0], -row[1], row[2], str(row[3][0])))
     return [row[3] for row in rendered if row[0] >= 0]
-
-
-def _categories(report_cases: Sequence[ReportCase[MatrixCellRef, CaseTrace, MatrixCellMeta]]) -> list[str]:
-    return list(dict.fromkeys(_metadata_str(case, "category") for case in report_cases))
 
 
 def _counts(traces: Sequence[CaseTrace]) -> dict[str, int]:
@@ -466,10 +442,6 @@ def _mean(values: Sequence[float | int | None]) -> float:
 def _optional_mean(values: Sequence[float | int | None]) -> float | None:
     present = [float(value) for value in values if value is not None]
     return sum(present) / len(present) if present else None
-
-
-def _nullable_mean(values: Sequence[float | None]) -> float | None:
-    return _optional_mean(values)
 
 
 def _usage_value(trace_diagnostics: object, key: str) -> float | None:

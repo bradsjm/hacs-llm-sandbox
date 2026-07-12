@@ -18,6 +18,7 @@ from llm_sandbox_evals.config import EvalConfig
 from llm_sandbox_evals.homes import get_home
 from llm_sandbox_evals.runtime import ToolBoundaryCallback, build_eval_runtime
 from llm_sandbox_evals.schema import (
+    ActionResult,
     CaseOutcome,
     CaseTrace,
     EvalCase,
@@ -25,12 +26,11 @@ from llm_sandbox_evals.schema import (
     PromptCandidate,
     ToolEvent,
 )
-from llm_sandbox_evals.scoring import evaluate_case, successful_events
+from llm_sandbox_evals.scoring import evaluate_case, score_actions
 from llm_sandbox_evals.scoring.actions import build_action_ledger
 from llm_sandbox_evals.tools import EVAL_SCOPE, _for_scoring, apply_scope
 
 _TOOL_EXECUTE_HOME_CODE = "execute_home_code"
-_OUTPUT_TOOL = "final_result"
 
 
 async def run_case(
@@ -49,10 +49,10 @@ async def run_case(
     proposed_actions: Sequence[dict[str, object]] = ()
     try:
         fixture = get_home(case.home)
-        snapshot = apply_scope(fixture.snapshot(), EVAL_SCOPE, anchor_device_id=case.llm_context.device_id)
+        snapshot = apply_scope(fixture.snapshot(), EVAL_SCOPE)
         runtime = build_eval_runtime(case, candidate, profile, snapshot, fixture, on_tool_boundary=on_tool_boundary)
         proposed_actions = runtime.invoker.calls
-        agent = build_agent(runtime, model_id, config.output_mode)
+        agent = build_agent(runtime, model_id)
         with capture_run_messages() as captured:
             result = await asyncio.wait_for(
                 agent.run(
@@ -71,23 +71,21 @@ async def run_case(
         if on_response is not None:
             # Safety constraint: an observer cannot alter a completed model result or scoring.
             with suppress(Exception):
-                on_response(output.answer)
+                on_response(output)
         messages = result.all_messages()
         tool_events = _tool_events(messages)
         recorded_actions = _recorded_actions_from_tool_events(tool_events, runtime.invoker.calls)
         conversation_id = _conversation_id(messages)
-        outcome, conclusions, action_results = evaluate_case(case, output, tool_events, recorded_actions)
+        outcome, action_result, action_ledger = evaluate_case(case, recorded_actions)
         return CaseTrace(
             case_id=case.id,
-            category=case.category,
             candidate_id=candidate.id,
             model_id=model_id,
             answer=output,
-            expected=case.expected,
+            expected_actions=case.expected_actions,
             outcome=outcome,
-            conclusions=conclusions,
-            actions=action_results,
-            action_ledger=build_action_ledger(recorded_actions),
+            action_result=action_result,
+            action_ledger=action_ledger,
             tool_events=tool_events,
             diagnostics=_diagnostics(
                 tool_events,
@@ -178,17 +176,26 @@ def _failure_trace(
     conversation_id: str | None = None,
 ) -> CaseTrace:
     """Return an incomplete or cap-exhausted trace with captured diagnostics."""
+    action_ledger = build_action_ledger(recorded_actions)
+    scored_actions = score_actions(case.expected_actions, action_ledger)
+    action_result = ActionResult(
+        False,
+        "action_mismatch",
+        scored_actions.comparisons,
+        scored_actions.unexpected_actions,
+    )
     return CaseTrace(
         case_id=case.id,
-        category=case.category,
         candidate_id=candidate.id,
         model_id=model_id,
         answer=None,
-        expected=case.expected,
-        outcome=CaseOutcome("incorrect" if failure == "cap_exhausted" else "incomplete", failure),
-        conclusions=(),
-        actions=(),
-        action_ledger=build_action_ledger(recorded_actions),
+        expected_actions=case.expected_actions,
+        outcome=CaseOutcome(
+            "incorrect" if failure == "cap_exhausted" else "incomplete",
+            "action_mismatch",
+        ),
+        action_result=action_result,
+        action_ledger=action_ledger,
         tool_events=tool_events,
         diagnostics=_diagnostics(
             tool_events,
@@ -237,18 +244,18 @@ def _exception_message(err: BaseException) -> str:
 
 
 def _select_cases(case_filters: list[str] | None, home_filters: list[str] | None) -> list[EvalCase]:
-    """Select cases by id/category and optional home name, preserving CASES order."""
+    """Select cases by id and optional home name, preserving CASES order."""
     selected = cases.CASES
     if home_filters is not None:
         home_names = set(home_filters)
         selected = [case for case in selected if case.home in home_names]
 
-    # Branch boundary: no case/category filter means all remaining cases are selected.
+    # Branch boundary: no case filter means all remaining cases are selected.
     if case_filters is None:
         return list(selected)
 
     requested = set(case_filters)
-    return [case for case in selected if case.id in requested or case.category in requested]
+    return [case for case in selected if case.id in requested]
 
 
 def _tool_call_count(messages: Sequence[object]) -> int:
@@ -289,10 +296,6 @@ def _tool_events(messages: Sequence[object]) -> tuple[ToolEvent, ...]:
             response_calls = [part for part in message.parts if isinstance(part, ToolCallPart)]
             batch_size = len(response_calls)
             for batch_index, call in enumerate(response_calls):
-                # The structured final-result tool is an agent protocol message,
-                # not a production tool event or evidence source.
-                if call.tool_name == _OUTPUT_TOOL:
-                    continue
                 output = returns_by_id.get(call.tool_call_id)
                 events.append(
                     ToolEvent(
@@ -320,7 +323,7 @@ def _diagnostics(
     cap_exhausted: bool = False,
 ) -> EvalDiagnostics:
     """Build diagnostics without turning attempts, timing, or usage into score."""
-    successful = successful_events(events)
+    successful = tuple(event for event in events if _tool_succeeded(event))
     repairs = 0
     had_execute_error = False
     for event in events:
@@ -347,6 +350,22 @@ def _diagnostics(
         usage=usage,
         failure=failure,
     )
+
+
+def _tool_succeeded(event: ToolEvent) -> bool:
+    """Classify production-shaped tool success for diagnostics only."""
+    if event.output.get("status") == "error":
+        return False
+    if event.tool_name == _TOOL_EXECUTE_HOME_CODE:
+        execution = event.output.get("execution")
+        return isinstance(execution, dict) and execution.get("status") == "ok" and "output" in event.output
+    expected_keys = {
+        "get_history": {"entities", "rows", "summary"},
+        "get_statistics": {"statistics", "summary"},
+        "get_logbook": {"entries"},
+        "get_automation": {"automations"},
+    }.get(event.tool_name)
+    return expected_keys is not None and not expected_keys.isdisjoint(event.output)
 
 
 def _usage(result: object) -> dict[str, int | float | None] | None:

@@ -14,19 +14,17 @@ from llm_sandbox_evals.scoring import evaluate_case
 type MatrixReport = EvaluationReport[MatrixCellRef, CaseTrace, MatrixCellMeta]
 
 _REPORT_ADAPTER: TypeAdapter[MatrixReport] = TypeAdapter(MatrixReport)
-_SCORING_VERSION = 4
+_SCORING_VERSION = 5
 _CASE_TRACE_FIELDS = frozenset(
     {
         "case_id",
         "scoring_version",
-        "category",
         "candidate_id",
         "model_id",
         "answer",
-        "expected",
+        "expected_actions",
         "outcome",
-        "conclusions",
-        "actions",
+        "action_result",
         "action_ledger",
         "tool_events",
         "diagnostics",
@@ -55,7 +53,7 @@ def write_report_json(
 def load_report(run_dir: Path) -> MatrixReport:
     """Load a saved native pydantic-evals report artifact."""
     payload = json.loads((run_dir / "report.json").read_bytes())
-    if not _contains_v4_trace(payload):
+    if not _contains_v5_trace(payload):
         # Deliberately reject before Pydantic validation so legacy artifacts cannot
         # be silently reinterpreted by a future schema-compatible decoder.
         raise ValueError("legacy scoring artifact; rerun evaluation")
@@ -63,26 +61,22 @@ def load_report(run_dir: Path) -> MatrixReport:
 
 
 def rescore_trace(trace: CaseTrace) -> CaseOutcome:
-    """Rescore a v4 trace using only its persisted oracle, answer, evidence, and ledger."""
+    """Rescore a v5 trace using only its persisted expected actions and ledger."""
     if trace.scoring_version != _SCORING_VERSION:
         raise ValueError("legacy scoring artifact; rerun evaluation")
-    if trace.answer is None:
-        raise ValueError("cannot rescore a trace without an answer")
     recorded_actions = trace.action_ledger.successful + trace.action_ledger.rejected
     case = EvalCase(
         id=trace.case_id,
-        category=trace.category,
         home="stored-trace",
         user_request=trace.user_request,
-        actions_enabled=True,
-        expected=trace.expected,
+        expected_actions=trace.expected_actions,
     )
-    outcome, _, _ = evaluate_case(case, trace.answer, trace.tool_events, recorded_actions)
+    outcome, _, _ = evaluate_case(case, recorded_actions)
     return outcome
 
 
-def _contains_v4_trace(payload: object) -> bool:
-    """Check the serialized report envelope for the self-contained v4 trace shape."""
+def _contains_v5_trace(payload: object) -> bool:
+    """Check the serialized report envelope for the self-contained v5 trace shape."""
     if (
         not isinstance(payload, dict)
         or payload.get("scoring_version") != _SCORING_VERSION

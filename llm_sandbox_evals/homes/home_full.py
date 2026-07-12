@@ -1,4 +1,4 @@
-"""Large frozen home fixture for inventory-scale discovery eval cases."""
+"""Full frozen home fixture for inventory-scale discovery eval cases."""
 
 from collections.abc import Mapping
 from datetime import datetime
@@ -19,7 +19,7 @@ from custom_components.llm_sandbox.snapshot.models import (
 )
 from homeassistant.core import SupportsResponse
 
-NAME: str = "home_large"
+NAME: str = "home_full"
 CREATED_AT: str = "2026-06-29T12:00:00+00:00"
 
 type RecorderData = dict[str, object]
@@ -220,7 +220,7 @@ _STATES: tuple[StateRecord, ...] = tuple(_state_record(entity) for entity in _EN
 
 
 def snapshot() -> HomeSnapshot:
-    """Return a fresh frozen large home snapshot."""
+    """Return a fresh frozen full home snapshot."""
     states = {
         entity_id: _state(entity_id, state, name, changed, attrs) for entity_id, state, name, changed, attrs in _STATES
     }
@@ -270,7 +270,7 @@ def snapshot() -> HomeSnapshot:
 
 
 def recorder() -> RecorderData:
-    """Return modest recorder rows for representative large-home entities."""
+    """Return modest recorder rows for representative full-home entities."""
     return {
         "history": {
             "sensor.area_1_1_temperature": [

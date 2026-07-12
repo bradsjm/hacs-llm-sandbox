@@ -1,98 +1,150 @@
-"""Exact successful and rejected action ledgers."""
-# ruff: noqa: D103
+"""Exact successful action-ledger construction and scoring."""
 
 from collections.abc import Mapping, Sequence
 import json
 
-from llm_sandbox_evals.schema import ActionLedger, ActionResult, BlockedOutcome, ExpectedAction
+from llm_sandbox_evals.schema import (
+    ActionComparison,
+    ActionLedger,
+    ActionOutcomeReason,
+    ActionResult,
+    ExpectedAction,
+    ObservedAction,
+)
 
 
 def build_action_ledger(actions: Sequence[Mapping[str, object]]) -> ActionLedger:
+    """Split copied action records into successful and rejected diagnostics."""
     copied = tuple(dict(action) for action in actions)
     return ActionLedger(
-        tuple(action for action in copied if action.get("status") != "error"),
-        tuple(action for action in copied if action.get("status") == "error"),
+        successful=tuple(action for action in copied if action.get("status") != "error"),
+        rejected=tuple(action for action in copied if action.get("status") == "error"),
     )
 
 
-def score_actions(
-    expected: tuple[ExpectedAction, ...], blocked: BlockedOutcome | None, ledger: ActionLedger
-) -> ActionResult | None:
-    if blocked is not None:
-        mismatches: list[str] = []
-        if ledger.successful:
-            mismatches.append("successful_effect")
-        wanted = {_effect_key(action): _targets(action.target_entity_ids) for action in blocked.actions}
-        actual = _ledger_effects(ledger.rejected, mismatches)
-        if not ledger.rejected:
-            mismatches.append("missing_rejected_effect")
-        expected_keys = set(blocked.error_keys)
-        actual_keys = {_error_key(action) for action in ledger.rejected}
-        if expected_keys != actual_keys:
-            if expected_keys - actual_keys:
-                mismatches.append("missing_error_key")
-            if actual_keys - expected_keys:
-                mismatches.append("unexpected_error_key")
-        mismatches.extend(key for key in wanted if key not in actual)
-        mismatches.extend(key for key in actual if key not in wanted)
-        for key, targets in wanted.items():
-            if key in actual and actual[key] != targets:
-                mismatches.append(f"target:{key}")
-        return ActionResult("blocked", not mismatches, tuple(dict.fromkeys(mismatches)))
-    if not expected:
-        return None
-    mismatches = []
-    wanted = {_effect_key(action): _targets(action.target_entity_ids) for action in expected}
-    actual = _ledger_effects(ledger.successful, mismatches)
-    mismatches.extend(key for key in wanted if key not in actual)
-    mismatches.extend(key for key in actual if key not in wanted)
-    for key, targets in wanted.items():
-        if key in actual and actual[key] != targets:
-            mismatches.append(f"target:{key}")
-    return ActionResult("allowed", not mismatches, tuple(dict.fromkeys(mismatches)))
+def score_actions(expected: tuple[ExpectedAction, ...], ledger: ActionLedger) -> ActionResult:
+    """Require the successful effect multiset to equal the authored effect multiset."""
+    actual = tuple(_normalize_action(action) for action in ledger.successful)
+    unmatched_expected = set(range(len(expected)))
+    unmatched_actual = set(range(len(actual)))
+    comparisons: list[ActionComparison | None] = [None] * len(expected)
 
+    # Authored service data is matched first so an unspecified action cannot consume
+    # the only effect that satisfies a more specific duplicate expectation.
+    for expected_index in sorted(unmatched_expected, key=lambda index: expected[index].service_data is None):
+        wanted = expected[expected_index]
+        match = next(
+            (index for index in sorted(unmatched_actual) if _comparison(wanted, actual[index]).matched),
+            None,
+        )
+        if match is not None:
+            comparisons[expected_index] = _comparison(wanted, actual[match])
+            unmatched_expected.remove(expected_index)
+            unmatched_actual.remove(match)
 
-def _ledger_effects(
-    actions: Sequence[Mapping[str, object]], mismatches: list[str]
-) -> dict[str, frozenset[str] | None]:
-    result: dict[str, frozenset[str] | None] = {}
-    seen: dict[str, set[str]] = {}
-    for action in actions:
-        key = _recorded_key(action)
-        action_targets = _action_targets(action)
-        if len(action_targets) != len(set(action_targets)):
-            mismatches.append(f"duplicate:{key}")
-        targets = set(action_targets)
-        if key in result and (result[key] is None or not targets.isdisjoint(seen.get(key, set()))):
-            mismatches.append(f"duplicate:{key}")
-        if not targets:
-            if key in result:
-                mismatches.append(f"duplicate:{key}")
-            result[key] = None
+    # Pair each remaining expectation with the still-available effect sharing the
+    # most dimensions. Authored order and ledger order resolve equal-distance ties.
+    for expected_index in sorted(unmatched_expected):
+        wanted = expected[expected_index]
+        if unmatched_actual:
+            actual_index = max(
+                sorted(unmatched_actual),
+                key=lambda index: _match_count(_comparison(wanted, actual[index])),
+            )
+            comparisons[expected_index] = _comparison(wanted, actual[actual_index])
+            unmatched_actual.remove(actual_index)
         else:
-            seen.setdefault(key, set()).update(targets)
-            result[key] = frozenset(seen[key])
-    return result
+            comparisons[expected_index] = ActionComparison(wanted, None, False, False, False, False)
+
+    complete_comparisons = tuple(comparison for comparison in comparisons if comparison is not None)
+    unexpected = tuple(actual[index] for index in sorted(unmatched_actual))
+    passed = all(comparison.matched for comparison in complete_comparisons) and not unexpected
+    reason = _reason(complete_comparisons, unexpected, expected, ledger)
+    return ActionResult(passed, reason, complete_comparisons, unexpected)
 
 
-def _effect_key(action: ExpectedAction) -> str:
-    return _key(action.domain, action.service, action.service_data)
-
-
-def _recorded_key(action: Mapping[str, object]) -> str:
+def _normalize_action(action: Mapping[str, object]) -> ObservedAction:
+    """Normalize a successful ledger record into a stable diagnostic shape."""
     domain = str(action.get("domain", ""))
     service = str(action.get("service", ""))
     if "." in service and not domain:
         domain, service = service.split(".", 1)
     data = action.get("service_data")
-    return _key(domain, service, data if isinstance(data, Mapping) else None)
+    comparable_data = {
+        str(key): _canonical(value)
+        for key, value in (data.items() if isinstance(data, Mapping) else ())
+        if key not in {"entity_id", "entity_ids"}
+    }
+    return ObservedAction(domain, service, tuple(sorted(_action_targets(action))), comparable_data)
 
 
-def _key(domain: str, service: str, data: Mapping[str, object] | None) -> str:
-    comparable = {
+def _comparison(expected: ExpectedAction, actual: ObservedAction) -> ActionComparison:
+    service_matches = (expected.domain, expected.service) == (actual.domain, actual.service)
+    target_matches = tuple(sorted(expected.target_entity_ids)) == actual.target_entity_ids
+    service_data_matches = expected.service_data is None or _data_key(expected.service_data) == _data_key(
+        actual.service_data
+    )
+    return ActionComparison(
+        expected,
+        actual,
+        service_matches,
+        target_matches,
+        service_data_matches,
+        service_matches and target_matches and service_data_matches,
+    )
+
+
+def _match_count(comparison: ActionComparison) -> int:
+    return sum((comparison.service_matches, comparison.target_matches, comparison.service_data_matches))
+
+
+def _reason(
+    comparisons: tuple[ActionComparison, ...],
+    unexpected: tuple[ObservedAction, ...],
+    expected: tuple[ExpectedAction, ...],
+    ledger: ActionLedger,
+) -> ActionOutcomeReason:
+    """Classify a structured comparison without weakening exact correctness."""
+    if not ledger.successful:
+        return "action_rejected" if ledger.rejected else "no_action"
+    if all(comparison.matched for comparison in comparisons):
+        if not unexpected:
+            return "ok"
+        if all(any(_comparison(wanted, action).matched for wanted in expected) for action in unexpected):
+            return "duplicate_action"
+        return "unexpected_action"
+
+    missing = tuple(comparison for comparison in comparisons if comparison.actual is None)
+    paired_mismatches = tuple(
+        comparison for comparison in comparisons if comparison.actual is not None and not comparison.matched
+    )
+    if missing:
+        return "missing_action" if not paired_mismatches and not unexpected else "multiple_action_mismatches"
+    if len(paired_mismatches) != 1 or unexpected:
+        return "multiple_action_mismatches"
+
+    mismatch = paired_mismatches[0]
+    dimensions = (mismatch.service_matches, mismatch.target_matches, mismatch.service_data_matches)
+    if dimensions == (False, True, True):
+        return "wrong_service"
+    if dimensions == (True, False, True):
+        return "wrong_target"
+    if dimensions == (True, True, False):
+        return "wrong_service_data"
+    if dimensions == (False, False, True):
+        return "wrong_service_and_target"
+    if dimensions == (False, True, False):
+        return "wrong_service_and_data"
+    if dimensions == (True, False, False):
+        return "wrong_target_and_data"
+    return "wrong_service_target_and_data"
+
+
+def _data_key(data: Mapping[str, object] | None) -> str:
+    comparable_data = {
         key: _canonical(value) for key, value in (data or {}).items() if key not in {"entity_id", "entity_ids"}
     }
-    return f"{domain}.{service}:{json.dumps(comparable, sort_keys=True)}"
+    return json.dumps(comparable_data, sort_keys=True, separators=(",", ":"))
 
 
 def _canonical(value: object) -> object:
@@ -100,28 +152,19 @@ def _canonical(value: object) -> object:
         return int(value)
     if isinstance(value, list):
         return [_canonical(item) for item in value]
-    if isinstance(value, dict):
-        return {key: _canonical(item) for key, item in value.items()}
+    if isinstance(value, Mapping):
+        return {str(key): _canonical(item) for key, item in value.items()}
     return value
 
 
 def _action_targets(action: Mapping[str, object]) -> tuple[str, ...]:
     values: list[str] = []
-    for container in (action.get("target"), action.get("service_data")):
-        if isinstance(container, Mapping):
-            for key in ("entity_id", "entity_ids"):
-                value = container.get(key)
-                if isinstance(value, str):
-                    values.append(value)
-                elif isinstance(value, list):
-                    values.extend(item for item in value if isinstance(item, str))
+    target = action.get("target")
+    if isinstance(target, Mapping):
+        for key in ("entity_id", "entity_ids"):
+            value = target.get(key)
+            if isinstance(value, str):
+                values.append(value)
+            elif isinstance(value, list):
+                values.extend(item for item in value if isinstance(item, str))
     return tuple(values)
-
-
-def _targets(values: tuple[str, ...]) -> frozenset[str] | None:
-    return frozenset(values) if values else None
-
-
-def _error_key(action: Mapping[str, object]) -> str:
-    error = action.get("error")
-    return str(error.get("key", "action_error")) if isinstance(error, Mapping) else "action_error"

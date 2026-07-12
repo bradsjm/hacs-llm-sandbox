@@ -71,8 +71,8 @@ def build_eval_runtime(
         execution_timeout_seconds=10,
         service_call_limit=DEFAULT_SERVICE_CALL_LIMIT,
         scope=EVAL_SCOPE,
-        actions_enabled=case.actions_enabled,
-        action_domains=case.action_domains,
+        actions_enabled=True,
+        action_domains=frozenset(),
         prompt_profile=profile,
     )
     entry_id = "eval"
@@ -85,7 +85,7 @@ def build_eval_runtime(
         automation_tool=GetAutomationTool(entry_id),
         automation_source=build_fixture_automation_source(snapshot, fixture),
         invoker=invoker,
-        runtime_context_factory=_eval_runtime_context_factory(case, snapshot, settings, invoker, fixture),
+        runtime_context_factory=_eval_runtime_context_factory(snapshot, settings, invoker, fixture),
         code_tool=ExecuteHomeCodeTool(entry_id),
         recorder_tools=(GetHistoryTool(entry_id), GetStatisticsTool(entry_id), GetLogbookTool(entry_id)),
         entry_id=entry_id,
@@ -175,7 +175,6 @@ def build_fixture_automation_source(snapshot: HomeSnapshot, fixture: ModuleType)
 
 
 def _eval_runtime_context_factory(
-    case: EvalCase,
     snapshot: HomeSnapshot,
     settings: SandboxSettings,
     invoker: RecordingInvoker,
@@ -204,7 +203,6 @@ def _eval_runtime_context_factory(
             memory=ResolutionMemory(),
         )
 
-    _ = case
     return factory
 
 

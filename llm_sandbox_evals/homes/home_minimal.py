@@ -1,4 +1,4 @@
-"""Small frozen home fixture for simple state and action eval cases."""
+"""Minimal frozen home fixture for the action-only eval cases."""
 
 from collections.abc import Mapping
 from datetime import datetime
@@ -28,27 +28,23 @@ type DeviceRecord = tuple[str, str, str | None]
 type AreaRecord = tuple[str, str, str | None, str | None, str | None]
 
 _STATES: tuple[StateRecord, ...] = (
-    ("light.living", "on", "Living Light", "2026-06-29T12:00:00+00:00", {"brightness": 180}),
-    ("light.kitchen", "off", "Kitchen Light", "2026-06-29T12:00:00+00:00", {}),
-    (
-        "sensor.living_temp",
-        "23.4",
-        "Living Temperature",
-        "2026-06-29T12:00:00+00:00",
-        {"device_class": "temperature", "unit_of_measurement": "°C"},
-    ),
-    ("switch.fan", "off", "Fan", "2026-06-29T12:00:00+00:00", {}),
+    ("light.bedroom", "off", "Bedroom Light", "2026-06-29T12:00:00+00:00", {}),
+    ("light.living", "on", "Living Room Light", "2026-06-29T12:00:00+00:00", {"brightness": 180}),
 )
 
 _ENTITIES: tuple[EntityRecord, ...] = (
+    ("light.bedroom", "uid-light-bedroom", "device_bedroom", None, None, None),
     ("light.living", "uid-light-living", "device_living", None, None, None),
-    ("light.kitchen", "uid-light-kitchen", "device_living", None, None, None),
-    ("sensor.living_temp", "uid-sensor-living-temp", "device_living", None, None, "temperature"),
-    ("switch.fan", "uid-switch-fan", "device_living", None, None, None),
 )
 
-_DEVICES: tuple[DeviceRecord, ...] = (("device_living", "Living Room Hub", "area_living"),)
-_AREAS: tuple[AreaRecord, ...] = (("area_living", "Living Room", None, "sensor.living_temp", None),)
+_DEVICES: tuple[DeviceRecord, ...] = (
+    ("device_bedroom", "Bedroom Light", "area_bedroom"),
+    ("device_living", "Living Room Light", "area_living"),
+)
+_AREAS: tuple[AreaRecord, ...] = (
+    ("area_bedroom", "Bedroom", None, None, None),
+    ("area_living", "Living Room", None, None, None),
+)
 
 
 def snapshot() -> HomeSnapshot:
@@ -76,11 +72,9 @@ def snapshot() -> HomeSnapshot:
         config=_config(),
         services={
             "light": ("turn_off", "turn_on"),
-            "switch": ("toggle",),
         },
         services_supports_response={
             "light": {"turn_off": SupportsResponse.NONE.value, "turn_on": SupportsResponse.NONE.value},
-            "switch": {"toggle": SupportsResponse.NONE.value},
         },
         indexes=_indexes(entities, devices, areas, floors={}),
         labels={},
@@ -94,32 +88,7 @@ def snapshot() -> HomeSnapshot:
 
 def recorder() -> RecorderData:
     """Return canned recorder rows for the minimal home."""
-    return {
-        "history": {
-            "sensor.living_temp": [
-                {
-                    "state": "22.8",
-                    "attributes": {"unit_of_measurement": "°C"},
-                    "last_changed": "2026-06-28T12:00:00+00:00",
-                    "last_updated": "2026-06-28T12:00:00+00:00",
-                },
-                {
-                    "state": "23.1",
-                    "attributes": {"unit_of_measurement": "°C"},
-                    "last_changed": "2026-06-29T06:00:00+00:00",
-                    "last_updated": "2026-06-29T06:00:00+00:00",
-                },
-                {
-                    "state": "23.4",
-                    "attributes": {"unit_of_measurement": "°C"},
-                    "last_changed": "2026-06-29T12:00:00+00:00",
-                    "last_updated": "2026-06-29T12:00:00+00:00",
-                },
-            ]
-        },
-        "statistics": {},
-        "logbook": {},
-    }
+    return {"history": {}, "statistics": {}, "logbook": {}}
 
 
 def _config() -> SafeConfig:
