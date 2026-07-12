@@ -845,14 +845,11 @@ _HTML_TEMPLATE = """<!doctype html>
       // ("all evidence found") instead of a cryptic blank.
       const GATE_INFO = {
         meaningful_oracle: { title: "Test is meaningful", what: "The case defines real evidence to score against, not just an answer string." },
-        answer_evidence_present: { title: "Answer mentions expected values", what: "Diagnostic only: does the reply text mention the expected value(s)? Never affects the score." },
         provenance_evidence_present: { title: "Answer backed by real data", what: "The tool results actually contained the expected proof values." },
         tool_result_check: { title: "Correct tool result", what: "The expected tool returned a valid, non-empty, relevant result." },
-        answer_excludes_absent: { title: "No forbidden content", what: "Diagnostic only: the reply avoided values it must not contain." },
         execution_ok: { title: "Ran without error", what: "The agent's final tool call completed without an error envelope." },
         actions_match: { title: "Exactly the right actions", what: "The service calls performed matched the task exactly — no extras, no duplicates." },
-        blocked_outcome: { title: "Correctly refused", what: "The agent did not perform the disallowed action." },
-        guidance_quality: { title: "Helpful failure guidance", what: "On a failed call, the tool suggested the right entity/fix." },
+        blocked_outcome: { title: "Expected rejection observed", what: "The agent attempted the blocked action, received an allowed rejection, and performed no successful action." },
         tool_calls_within_max: { title: "Within tool-call budget", what: "The agent stayed under the hard 10-call limit." },
         tool_call_efficiency: { title: "Tool-call efficiency", what: "How few calls were used versus par. This sets the passing score (1.0 at par)." },
         model_error: { title: "Provider error", what: "The run failed from an infra/provider error, not the model's answer. The cell is incomplete." },
@@ -865,7 +862,6 @@ _HTML_TEMPLATE = """<!doctype html>
         action_blocked: "Correctly refuse a disallowed action.",
         complex: "Multi-step task combining reads and/or actions.",
         automation_read: "Answer a question about automations.",
-        recovery: "Recover from an initial failure in a follow-up call.",
       };
       const gateBase = name => name.replace(/_\\d+$/, "");
       const fbList = value => (value || "").split(",").filter(Boolean);
@@ -926,12 +922,6 @@ _HTML_TEMPLATE = """<!doctype html>
           case "provenance_evidence_present":
             return passed ? "All expected evidence was found in the tool results."
               : `Tool results were missing: ${fbList(fb.missing).map(v => `"${v}"`).join(", ")}.`;
-          case "answer_evidence_present":
-            return passed ? "The reply text mentioned every expected value."
-              : `The reply text didn't mention: ${fbList(fb.missing).map(v => `"${v}"`).join(", ")} (diagnostic — not scored).`;
-          case "answer_excludes_absent":
-            return passed ? "The reply avoided all forbidden values."
-              : `The reply contained forbidden value(s): ${fbList(fb.present).map(v => `"${v}"`).join(", ")} (diagnostic — not scored).`;
           case "tool_result_check": {
             const tool = fb.tool || "The tool";
             if (passed) return `${tool} returned the expected result.`;
@@ -945,10 +935,7 @@ _HTML_TEMPLATE = """<!doctype html>
             if (passed) return fb.unexpected !== undefined ? "No actions were performed, and none were expected." : "Performed exactly the expected action(s).";
             return `Actions didn't match — ${humanizeActionsFail(check.feedback)}.`;
           case "blocked_outcome":
-            return passed ? "The agent correctly performed no disallowed action." : `Refusal was not clean — ${check.feedback}.`;
-          case "guidance_quality":
-            if (passed) return check.feedback.startsWith("no_failure") ? "No failing call needed guidance." : "The failing call suggested the right candidate.";
-            return `A failing call did not suggest the expected fix (${fb.missing || check.feedback}).`;
+            return passed ? "The expected rejected action was observed with no successful action." : `Blocked action did not match — ${check.feedback}.`;
           case "meaningful_oracle":
             return passed ? "This case defines real evidence to score against." : "This case has no scoring evidence defined.";
           case "tool_calls_within_max":

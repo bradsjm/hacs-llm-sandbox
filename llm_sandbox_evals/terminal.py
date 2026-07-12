@@ -593,9 +593,6 @@ def _humanize_required_failure(check: CheckResult) -> str:
         return _humanize_action_failure(check.feedback)
     if base == "blocked_outcome":
         return _humanize_blocked_failure(check.feedback)
-    if base == "guidance_quality":
-        missing = _feedback_value(check.feedback, "missing")
-        return f"Missing failure guidance for {missing}" if missing else "Missing failure guidance"
     if base == "tool_calls_within_max":
         calls = _feedback_value(check.feedback, "calls")
         maximum = _feedback_value(check.feedback, "max")
@@ -652,6 +649,8 @@ def _humanize_blocked_failure(feedback: str) -> str:
     key, _, value = feedback.partition("=")
     if key == "successful_actions":
         return "Disallowed action succeeded"
+    if key == "missing_rejected_action":
+        return "No rejected action was observed"
     if key == "attempts":
         return f"Too many blocked attempts ({value.replace(' max=', '/')})"
     if key == "error_keys":

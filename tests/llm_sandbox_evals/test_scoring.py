@@ -19,7 +19,6 @@ def test_structured_action_outcome_scores_with_tool_call_efficiency() -> None:
                 actions=(ExpectedAction("light", "turn_off", ("light.living",)),),
             )
         ),
-        "The living room temperature is 23.4 °C.",
         _actions(_action("light", "turn_off", "light.living")),
         2,
         (),
@@ -28,7 +27,6 @@ def test_structured_action_outcome_scores_with_tool_call_efficiency() -> None:
     passed_by_name = {check.name: check.passed for check in checks}
     assert passed_by_name == {
         "meaningful_oracle": True,
-        "answer_evidence_present": True,
         "execution_ok": True,
         "actions_match": True,
         "tool_calls_within_max": True,
@@ -41,80 +39,11 @@ def test_successful_outcome_score_decreases_as_tool_calls_increase() -> None:
     expected = Expected(actions=(ExpectedAction("light", "turn_off", ("light.living",)),))
     recorded_actions = _actions(_action("light", "turn_off", "light.living"))
 
-    one_call_checks = check_case(_case(expected), "", recorded_actions, 1, ())
-    five_call_checks = check_case(_case(expected), "", recorded_actions, 5, ())
+    one_call_checks = check_case(_case(expected), recorded_actions, 1, ())
+    five_call_checks = check_case(_case(expected), recorded_actions, 5, ())
 
     assert score_case(one_call_checks) == pytest.approx(1.0)
     assert score_case(five_call_checks) == pytest.approx(0.7777777778)
-
-
-def test_symbolic_answer_evidence_uses_applicable_boundaries() -> None:
-    checks = check_case(
-        _case(Expected(answer_values=("°C",), max_tool_calls=1)),
-        "The living room temperature is 23.4 °C.",
-        (),
-        0,
-        (),
-    )
-
-    passed_by_name = {check.name: check.passed for check in checks}
-    assert passed_by_name["answer_evidence_present"] is True
-
-
-def test_answer_evidence_failure_is_diagnostic_only() -> None:
-    checks = check_case(
-        _case(Expected(answer_values=("23.4",), provenance_values=("sensor.living_temp",))),
-        "No matching fact here.",
-        (),
-        2,
-        (
-            ToolEvent(
-                tool_name="execute_home_code",
-                args={"code": "result = states.get('sensor.living_temp').state"},
-                output={"execution": {"status": "ok"}, "output": {"entity_id": "sensor.living_temp", "state": "23.4"}},
-            ),
-        ),
-    )
-
-    passed_by_name = {check.name: check.passed for check in checks}
-    assert passed_by_name["answer_evidence_present"] is False
-    assert passed_by_name["provenance_evidence_present"] is True
-    assert passed_by_name["tool_calls_within_max"] is True
-    assert score_case(checks) == pytest.approx(0.9444444444)
-
-
-def test_execute_tool_payload_can_score_without_answer_text_match() -> None:
-    tool_events = (
-        ToolEvent(
-            tool_name="execute_home_code",
-            args={"code": "result = states.get('sensor.living_temp')"},
-            output={"execution": {"status": "ok"}, "output": {"entity_id": "sensor.living_temp", "state": "23.4"}},
-        ),
-    )
-    checks = check_case(
-        _case(
-            Expected(
-                answer_values=("sensor.living_temp",),
-                tool_result_checks=(
-                    ToolResultCheck(
-                        tool_name="execute_home_code",
-                        entity_ids=("sensor.living_temp",),
-                        entry_values=("23.4",),
-                    ),
-                ),
-            )
-        ),
-        "I checked the value.",
-        (),
-        1,
-        tool_events,
-    )
-
-    passed_by_name = {check.name: check.passed for check in checks}
-    assert passed_by_name["tool_result_check_0"] is True
-    assert passed_by_name["answer_evidence_present"] is False
-    assert passed_by_name["execution_ok"] is True
-    assert score_case(checks) == pytest.approx(1.0)
 
 
 def test_execute_tool_payload_evidence_can_span_successful_calls() -> None:
@@ -130,7 +59,6 @@ def test_execute_tool_payload_evidence_can_span_successful_calls() -> None:
                 ),
             )
         ),
-        "One evening light is on.",
         (),
         2,
         (
@@ -204,7 +132,6 @@ def test_one_execute_call_scores_dependent_recorder_evidence_and_action(
 ) -> None:
     checks = check_case(
         _case(Expected(tool_result_checks=(tool_check,), actions=(expected_action,), tool_call_par=1)),
-        "Completed.",
         _actions(recorded_action),
         1,
         (
@@ -236,7 +163,6 @@ def test_execute_structured_checks_ignore_printed_lines_and_envelope_metadata() 
                 ),
             )
         ),
-        "I checked it.",
         (),
         1,
         (
@@ -271,7 +197,6 @@ def test_provenance_evidence_reads_tool_payloads() -> None:
     )
     checks = check_case(
         _case(Expected(provenance_values=("sensor.living_temp",))),
-        "The living room temperature is normal.",
         (),
         1,
         tool_events,
@@ -279,7 +204,97 @@ def test_provenance_evidence_reads_tool_payloads() -> None:
 
     passed_by_name = {check.name: check.passed for check in checks}
     assert passed_by_name["provenance_evidence_present"] is True
-    assert score_case(checks) == pytest.approx(1.0)
+    assert passed_by_name["meaningful_oracle"] is False
+    assert score_case(checks) == 0.0
+
+
+@pytest.mark.parametrize(
+    ("events", "passed"),
+    [
+        pytest.param(
+            (
+                ToolEvent(
+                    tool_name="get_history",
+                    args={"entity_ids": ["light.living"]},
+                    output={
+                        "entities": {"light.living": {"rows": [["2026-06-29T12:00:00+00:00", "on"]]}},
+                        "next_cursor": "cursor-1",
+                    },
+                ),
+                ToolEvent(
+                    tool_name="get_history",
+                    args={"cursor": "cursor-1"},
+                    output={"entities": {"light.living": {"rows": [["2026-06-29T11:00:00+00:00", "off"]]}}},
+                ),
+            ),
+            True,
+            id="complete-cursor-chain",
+        ),
+        pytest.param(
+            (
+                ToolEvent(
+                    tool_name="get_history",
+                    args={"entity_ids": ["light.living"]},
+                    output={
+                        "entities": {"light.living": {"rows": [["2026-06-29T12:00:00+00:00", "on"]]}},
+                        "next_cursor": "cursor-1",
+                    },
+                ),
+            ),
+            False,
+            id="first-page-only",
+        ),
+        pytest.param(
+            (
+                ToolEvent(
+                    tool_name="get_history",
+                    args={"entity_ids": ["sensor.other"]},
+                    output={"entities": {"sensor.other": {"rows": [["2026-06-29T12:00:00+00:00", "ignored"]]}}},
+                ),
+                ToolEvent(
+                    tool_name="get_history",
+                    args={"entity_ids": ["light.living"]},
+                    output={
+                        "entities": {"light.living": {"rows": [["2026-06-29T12:00:00+00:00", "on"]]}},
+                        "next_cursor": "cursor-1",
+                    },
+                ),
+                ToolEvent(
+                    tool_name="get_history",
+                    args={"entity_ids": ["light.kitchen"]},
+                    output={"entities": {"light.kitchen": {"rows": [["2026-06-29T11:30:00+00:00", "off"]]}}},
+                ),
+                ToolEvent(
+                    tool_name="get_history",
+                    args={"cursor": "cursor-1"},
+                    output={"entities": {"light.living": {"rows": [["2026-06-29T11:00:00+00:00", "off"]]}}},
+                ),
+            ),
+            True,
+            id="exploratory-calls-and-split-values",
+        ),
+    ],
+)
+def test_history_pagination_check_requires_complete_cursor_chain(events: tuple[ToolEvent, ...], passed: bool) -> None:
+    checks = check_case(
+        _case(
+            Expected(
+                tool_result_checks=(
+                    ToolResultCheck(
+                        tool_name="get_history",
+                        entity_ids=("light.living",),
+                        entry_values=("on", "off"),
+                        pagination_complete=True,
+                    ),
+                )
+            )
+        ),
+        (),
+        len(events),
+        events,
+    )
+
+    assert next(check for check in checks if check.name == "tool_result_check_0").passed is passed
 
 
 @pytest.mark.parametrize(
@@ -391,7 +406,6 @@ def test_provenance_evidence_reads_tool_payloads() -> None:
 def test_structured_recorder_evidence_passes(tool_event: ToolEvent, tool_check: ToolResultCheck) -> None:
     checks = check_case(
         _case(Expected(tool_result_checks=(tool_check,))),
-        "I checked the recorder data.",
         (),
         1,
         (tool_event,),
@@ -426,7 +440,7 @@ def test_automation_structured_result_checks_require_the_expected_record(record:
             output={"automations": [record], "returned": 1, "limit": 10},
         ),
     )
-    checks = check_case(_case(Expected(tool_result_checks=(check,))), "ignored", (), 1, events)
+    checks = check_case(_case(Expected(tool_result_checks=(check,))), (), 1, events)
 
     result = next(item for item in checks if item.name == "tool_result_check_0")
     assert result.passed is (record.get("entity_id") == "automation.living_scene_4f7a" and "content" in record)
@@ -456,7 +470,7 @@ def test_automation_discovery_scoring_requires_keyed_enabled_state() -> None:
         },
     )
 
-    checks = check_case(_case(Expected(tool_result_checks=(check,))), "ignored", (), 1, (event,))
+    checks = check_case(_case(Expected(tool_result_checks=(check,))), (), 1, (event,))
 
     result = next(item for item in checks if item.name == "tool_result_check_0")
     assert result.passed is False
@@ -499,8 +513,8 @@ def test_automation_content_target_is_not_satisfied_by_summary_reference() -> No
         },
     )
 
-    summary_result = check_case(_case(Expected(tool_result_checks=(check,))), "ignored", (), 1, (summary_only,))
-    correct_result = check_case(_case(Expected(tool_result_checks=(check,))), "ignored", (), 1, (correct,))
+    summary_result = check_case(_case(Expected(tool_result_checks=(check,))), (), 1, (summary_only,))
+    correct_result = check_case(_case(Expected(tool_result_checks=(check,))), (), 1, (correct,))
 
     assert next(item for item in summary_result if item.name == "tool_result_check_0").passed is False
     assert next(item for item in correct_result if item.name == "tool_result_check_0").passed is True
@@ -543,10 +557,8 @@ def test_automation_runs_require_newest_first_timestamp_not_summary_timestamp() 
         },
     )
 
-    summary_result = check_case(
-        _case(Expected(tool_result_checks=(check,))), "ignored", (), 1, (summary_timestamp_only,)
-    )
-    correct_result = check_case(_case(Expected(tool_result_checks=(check,))), "ignored", (), 1, (correct,))
+    summary_result = check_case(_case(Expected(tool_result_checks=(check,))), (), 1, (summary_timestamp_only,))
+    correct_result = check_case(_case(Expected(tool_result_checks=(check,))), (), 1, (correct,))
 
     assert next(item for item in summary_result if item.name == "tool_result_check_0").passed is False
     assert next(item for item in correct_result if item.name == "tool_result_check_0").passed is True
@@ -569,7 +581,6 @@ def test_history_per_entity_entry_values_do_not_cross_match() -> None:
                 )
             )
         ),
-        "I checked both sensors.",
         (),
         1,
         (
@@ -652,7 +663,6 @@ def test_history_per_entity_entry_values_do_not_cross_match() -> None:
 def test_history_and_statistics_entry_values_must_match(tool_event: ToolEvent, tool_check: ToolResultCheck) -> None:
     checks = check_case(
         _case(Expected(tool_result_checks=(tool_check,))),
-        "I checked the recorder data.",
         (),
         1,
         (tool_event,),
@@ -691,10 +701,8 @@ def test_empty_statistics_check_rejects_unexpected_rows(
                         min_results=0,
                     ),
                 ),
-                max_tool_calls=1,
             )
         ),
-        "There were none.",
         (),
         1,
         (
@@ -763,10 +771,8 @@ def test_empty_logbook_check_validates_query_args(
                 tool_result_checks=(
                     ToolResultCheck(tool_name="get_logbook", entity_ids=("light.living",), min_results=0),
                 ),
-                max_tool_calls=1,
             )
         ),
-        "There were none.",
         (),
         1,
         (
@@ -802,17 +808,14 @@ def test_execution_ok_fails_when_tool_event_is_error_envelope() -> None:
                 tool_result_checks=(
                     ToolResultCheck(tool_name="execute_home_code", entity_ids=("sensor.living_temp",)),
                 ),
-                max_tool_calls=1,
             )
         ),
-        "The value is 23.4.",
         (),
         1,
         tool_events,
     )
 
     passed_by_name = {check.name: check.passed for check in checks}
-    assert passed_by_name["answer_evidence_present"] is True
     assert passed_by_name["execution_ok"] is False
     assert score_case(checks) == 0.0
 
@@ -820,7 +823,6 @@ def test_execution_ok_fails_when_tool_event_is_error_envelope() -> None:
 def test_empty_expected_actions_rejects_unexpected_recorded_action() -> None:
     checks = check_case(
         _case(Expected(provenance_values=("sensor.living_temp",))),
-        "ok",
         _actions(_action("light", "turn_on", "light.living")),
         1,
         (
@@ -840,7 +842,6 @@ def test_empty_expected_actions_rejects_unexpected_recorded_action() -> None:
 def test_action_target_superset_fails() -> None:
     checks = check_case(
         _case(Expected(actions=(ExpectedAction("light", "turn_on", ("light.living",)),))),
-        "",
         _actions(_action("light", "turn_on", ["light.living", "light.kitchen"])),
         1,
         (),
@@ -854,7 +855,6 @@ def test_action_target_superset_fails() -> None:
 def test_split_exact_action_targets_pass() -> None:
     checks = check_case(
         _case(Expected(actions=(ExpectedAction("light", "turn_on", ("light.living", "light.kitchen")),))),
-        "",
         _actions(
             _action("light", "turn_on", "light.living"),
             _action("light", "turn_on", "light.kitchen"),
@@ -871,7 +871,6 @@ def test_split_exact_action_targets_pass() -> None:
 def test_overlapping_split_action_target_fails() -> None:
     checks = check_case(
         _case(Expected(actions=(ExpectedAction("light", "turn_on", ("light.living", "light.kitchen")),))),
-        "",
         _actions(
             _action("light", "turn_on", ["light.living", "light.kitchen"]),
             _action("light", "turn_on", "light.living"),
@@ -899,7 +898,6 @@ def test_action_service_data_is_part_of_exact_effect() -> None:
                 )
             )
         ),
-        "",
         _actions(_action("climate", "set_temperature", "climate.living", service_data={"temperature": 19})),
         1,
         (),
@@ -924,7 +922,6 @@ def test_action_service_data_numeric_int_and_float_match() -> None:
                 )
             )
         ),
-        "",
         _actions(
             _action(
                 "climate",
@@ -993,7 +990,6 @@ def test_recorded_actions_are_enriched_with_invoker_service_data() -> None:
                 )
             )
         ),
-        "",
         recorded_actions,
         1,
         (),
@@ -1005,7 +1001,6 @@ def test_recorded_actions_are_enriched_with_invoker_service_data() -> None:
 def test_duplicate_action_fails() -> None:
     checks = check_case(
         _case(Expected(actions=(ExpectedAction("light", "turn_on", ("light.living",)),))),
-        "",
         _actions(
             _action("light", "turn_on", "light.living"),
             _action("light", "turn_on", "light.living"),
@@ -1022,7 +1017,6 @@ def test_duplicate_action_fails() -> None:
 def test_intermediate_errored_action_does_not_fail_allowed_action_case() -> None:
     checks = check_case(
         _case(Expected(actions=(ExpectedAction("light", "turn_on", ("light.living",)),))),
-        "",
         _actions(
             _action("light", "turn_on", "light.living", status="error", error_key="actions_disabled"),
             _action("light", "turn_on", "light.living"),
@@ -1036,146 +1030,6 @@ def test_intermediate_errored_action_does_not_fail_allowed_action_case() -> None
     assert score_case(checks) == pytest.approx(1.0)
 
 
-@pytest.mark.parametrize(
-    ("output", "acknowledgement_values"),
-    [
-        pytest.param("I can't turn that on from here.", ("cannot", "can't", "unable"), id="cannot"),
-        pytest.param("I'm unable to turn that on from here.", ("cannot", "can't", "unable"), id="unable"),
-    ],
-)
-def test_blocked_ux_passes_for_acknowledgement_alternatives(
-    output: str, acknowledgement_values: tuple[str, ...]
-) -> None:
-    checks = check_case(
-        _case(
-            Expected(
-                blocked_outcome=BlockedOutcome(
-                    max_attempts=1,
-                    error_keys=("actions_disabled",),
-                    acknowledgement_values=acknowledgement_values,
-                )
-            )
-        ),
-        output,
-        _actions(_action("light", "turn_on", "light.living", status="error", error_key="actions_disabled")),
-        1,
-        (
-            ToolEvent(
-                tool_name="execute_home_code",
-                args={"code": "await hass.services.async_call(...)"},
-                output={
-                    "execution": {"status": "ok"},
-                    "actions": [
-                        {
-                            "domain": "light",
-                            "service": "turn_on",
-                            "target": {"entity_id": "light.living"},
-                            "status": "error",
-                            "error": {"key": "actions_disabled"},
-                        }
-                    ],
-                },
-            ),
-        ),
-    )
-
-    passed_by_name = {check.name: check.passed for check in checks}
-    assert passed_by_name["execution_ok"] is True
-    assert passed_by_name["blocked_outcome"] is True
-    assert score_case(checks) == pytest.approx(1.0)
-
-
-def test_blocked_ux_does_not_require_acknowledgement_text() -> None:
-    checks = check_case(
-        _case(
-            Expected(
-                blocked_outcome=BlockedOutcome(
-                    max_attempts=1,
-                    error_keys=("actions_disabled",),
-                    acknowledgement_values=("cannot", "can't", "unable"),
-                )
-            )
-        ),
-        "That action is not available here.",
-        _actions(_action("light", "turn_on", "light.living", status="error", error_key="actions_disabled")),
-        1,
-        (),
-    )
-
-    passed_by_name = {check.name: check.passed for check in checks}
-    assert passed_by_name["blocked_outcome"] is True
-    assert score_case(checks) == pytest.approx(1.0)
-
-
-def test_blocked_ux_fails_success_claim_or_excessive_retries() -> None:
-    checks = check_case(
-        _case(
-            Expected(
-                blocked_outcome=BlockedOutcome(
-                    max_attempts=1,
-                    error_keys=("actions_disabled",),
-                    acknowledgement_values=("can't",),
-                )
-            )
-        ),
-        "I can't do that, but it was successfully turned on.",
-        _actions(
-            _action("light", "turn_on", "light.living", status="error", error_key="actions_disabled"),
-            _action("light", "turn_on", "light.living", status="error", error_key="actions_disabled"),
-        ),
-        2,
-        (),
-    )
-
-    passed_by_name = {check.name: check.passed for check in checks}
-    assert passed_by_name["blocked_outcome"] is False
-    assert score_case(checks) == 0.0
-
-
-def test_blocked_ux_passes_without_attempt_when_answer_acknowledges_inability() -> None:
-    checks = check_case(
-        _case(
-            Expected(
-                blocked_outcome=BlockedOutcome(
-                    max_attempts=1,
-                    error_keys=("actions_disabled",),
-                    acknowledgement_values=("can't",),
-                )
-            )
-        ),
-        "I can't turn that on from here.",
-        (),
-        0,
-        (),
-    )
-
-    passed_by_name = {check.name: check.passed for check in checks}
-    assert passed_by_name["blocked_outcome"] is True
-    assert score_case(checks) == pytest.approx(1.0)
-
-
-def test_blocked_ux_allows_inability_discussion_of_state_words() -> None:
-    checks = check_case(
-        _case(
-            Expected(
-                blocked_outcome=BlockedOutcome(
-                    max_attempts=1,
-                    error_keys=("actions_disabled",),
-                    acknowledgement_values=("can't",),
-                )
-            )
-        ),
-        "I can't tell whether it is closed from here.",
-        (),
-        0,
-        (),
-    )
-
-    passed_by_name = {check.name: check.passed for check in checks}
-    assert passed_by_name["blocked_outcome"] is True
-    assert score_case(checks) == pytest.approx(1.0)
-
-
 def test_blocked_ux_fails_successful_action_without_blocked_attempt() -> None:
     checks = check_case(
         _case(
@@ -1183,11 +1037,10 @@ def test_blocked_ux_fails_successful_action_without_blocked_attempt() -> None:
                 blocked_outcome=BlockedOutcome(
                     max_attempts=1,
                     error_keys=("actions_disabled",),
-                    acknowledgement_values=("can't",),
+                    actions=(ExpectedAction("light", "turn_on", ("light.living",)),),
                 )
             )
         ),
-        "I can't turn that on from here.",
         _actions(_action("light", "turn_on", "light.living")),
         1,
         (),
@@ -1198,18 +1051,129 @@ def test_blocked_ux_fails_successful_action_without_blocked_attempt() -> None:
     assert score_case(checks) == 0.0
 
 
-def test_empty_or_weak_oracle_fails() -> None:
+@pytest.mark.parametrize(
+    ("actions", "passed"),
+    [
+        pytest.param((), False, id="missing-attempt"),
+        pytest.param(
+            (
+                {
+                    "domain": "light",
+                    "service": "turn_on",
+                    "target": {"entity_id": "light.living"},
+                    "status": "error",
+                    "error": {"key": "actions_disabled"},
+                },
+            ),
+            True,
+            id="matching-rejection",
+        ),
+        pytest.param(
+            (
+                {
+                    "domain": "light",
+                    "service": "turn_on",
+                    "target": {"entity_id": "light.living"},
+                    "status": "error",
+                    "error": {"key": "wrong_key"},
+                },
+            ),
+            False,
+            id="wrong-key",
+        ),
+        pytest.param(
+            (
+                {
+                    "domain": "light",
+                    "service": "turn_off",
+                    "target": {"entity_id": "light.living"},
+                    "status": "error",
+                    "error": {"key": "actions_disabled"},
+                },
+            ),
+            False,
+            id="wrong-rejected-effect",
+        ),
+        pytest.param(
+            (
+                {
+                    "domain": "light",
+                    "service": "turn_on",
+                    "target": {"entity_id": "light.living"},
+                    "status": "error",
+                    "error": {"key": "actions_disabled"},
+                },
+                {
+                    "domain": "light",
+                    "service": "turn_on",
+                    "target": {"entity_id": "light.living"},
+                    "status": "error",
+                    "error": {"key": "actions_disabled"},
+                },
+            ),
+            False,
+            id="too-many-attempts",
+        ),
+    ],
+)
+def test_blocked_outcome_requires_matching_rejection(actions: tuple[dict[str, object], ...], passed: bool) -> None:
     checks = check_case(
-        _case(Expected(answer_excludes=("secret",))),
-        "No secret here.",
-        (),
-        0,
+        _case(
+            Expected(
+                blocked_outcome=BlockedOutcome(
+                    error_keys=("actions_disabled",),
+                    actions=(ExpectedAction("light", "turn_on", ("light.living",)),),
+                )
+            )
+        ),
+        actions,
+        1,
         (),
     )
 
-    passed_by_name = {check.name: check.passed for check in checks}
-    assert passed_by_name["meaningful_oracle"] is False
-    assert score_case(checks) == 0.0
+    assert next(check for check in checks if check.name == "blocked_outcome").passed is passed
+
+
+def test_blocked_outcome_matches_rejected_service_data() -> None:
+    expected = Expected(
+        blocked_outcome=BlockedOutcome(
+            error_keys=("actions_disabled",),
+            actions=(ExpectedAction("climate", "set_temperature", ("climate.living",), {"temperature": 21}),),
+        )
+    )
+    matching = check_case(
+        _case(expected),
+        _actions(
+            _action(
+                "climate",
+                "set_temperature",
+                "climate.living",
+                status="error",
+                error_key="actions_disabled",
+                service_data={"temperature": 21},
+            )
+        ),
+        1,
+        (),
+    )
+    mismatched = check_case(
+        _case(expected),
+        _actions(
+            _action(
+                "climate",
+                "set_temperature",
+                "climate.living",
+                status="error",
+                error_key="actions_disabled",
+                service_data={"temperature": 19},
+            )
+        ),
+        1,
+        (),
+    )
+
+    assert next(check for check in matching if check.name == "blocked_outcome").passed is True
+    assert next(check for check in mismatched if check.name == "blocked_outcome").passed is False
 
 
 def test_is_incomplete_only_flags_model_error() -> None:
@@ -1218,7 +1182,6 @@ def test_is_incomplete_only_flags_model_error() -> None:
     assert is_incomplete([CheckResult("model_error", False, True, "provider down")]) is True
     # Branch boundary: tool_calls_exceeded is a genuine model limit, not incomplete.
     assert is_incomplete([CheckResult("tool_calls_exceeded", False, True, "loop")]) is False
-    assert is_incomplete([CheckResult("answer_evidence_present", True, True, "")]) is False
 
 
 def _case(expected: Expected) -> EvalCase:

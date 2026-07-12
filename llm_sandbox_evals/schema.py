@@ -60,59 +60,27 @@ class ToolResultCheck:
     first_run_when_by_entity: dict[str, str] = field(default_factory=dict)
     entry_values: tuple[str, ...] = ()
     min_results: int = 1
+    pagination_complete: bool = False
 
 
 @dataclass(frozen=True, slots=True)
 class BlockedOutcome:
-    """Structured expectations for a deliberately blocked action attempt."""
+    """Structured expectations for one deliberately rejected requested action."""
 
     max_attempts: int = 1
     error_keys: tuple[str, ...] = ()
-    acknowledgement_values: tuple[str, ...] = ()
-    """Diagnostic-only prose hints retained for report context."""
-    answer_excludes: tuple[str, ...] = ()
-    success_claim_excludes: tuple[str, ...] = (
-        "successfully",
-        "completed successfully",
-        "i turned",
-        "i have turned",
-        "i opened",
-        "i have opened",
-        "i closed",
-        "i have closed",
-        "i unlocked",
-        "i have unlocked",
-        "i locked",
-        "i have locked",
-        "it is now",
-        "it's now",
-        "has been turned",
-        "was turned",
-    )
+    actions: tuple[ExpectedAction, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
 class Expected:
-    """Outcome-evidence expectations: salient facts, exclusions, and side effects.
+    """Structured outcome evidence and successful-call efficiency expectations."""
 
-    ``answer_values`` and ``expected_values`` are diagnostic report hints only.
-    Scoring is grounded in structured tool outputs, successful recorded action
-    effects, recorder checks, and blocked-action side effects instead of parsing
-    model prose. Failed intermediate actions are visible diagnostics and tool-call
-    cost, not direct allowed-action failures. Successful cases score at full value
-    up to ``tool_call_par`` and then decay as additional tool calls accumulate.
-    """
-
-    expected_values: tuple[str, ...] = ()
-    answer_values: tuple[str, ...] = ()
     provenance_values: tuple[str, ...] = ()
     tool_result_checks: tuple[ToolResultCheck, ...] = ()
     blocked_outcome: BlockedOutcome | None = None
-    answer_excludes: tuple[str, ...] = ()
     actions: tuple[ExpectedAction, ...] = ()
-    guidance_candidate: str | None = None
     tool_call_par: int | None = None
-    max_tool_calls: int = 10
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,8 +92,8 @@ class EvalCase:
     home: str
     user_request: str
     actions_enabled: bool
-    llm_context: CaseContext
     expected: Expected
+    llm_context: CaseContext = CaseContext()
     action_domains: frozenset[str] = frozenset()
 
 

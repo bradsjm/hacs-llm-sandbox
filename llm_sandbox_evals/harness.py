@@ -68,7 +68,7 @@ async def run_case(
         tool_events = _tool_events(messages)
         recorded_actions = _recorded_actions_from_tool_events(tool_events, runtime.invoker.calls)
         conversation_id = _conversation_id(messages)
-        checks = check_case(case, output, recorded_actions, tool_call_count, tool_events)
+        checks = check_case(case, recorded_actions, tool_call_count, tool_events)
         return CaseTrace(
             case_id=case.id,
             category=case.category,
@@ -189,11 +189,16 @@ def _expected_summary(expected: Expected) -> tuple[str, ...]:
     for action in expected.actions:
         targets = ", ".join(action.target_entity_ids) if action.target_entity_ids else "the referenced target"
         bullets.append(f"Perform {action.domain}.{action.service} on {targets}")
-    # Blocked-action expectation: no successful action, bounded blocked attempts.
+    # Blocked-action expectation: the policy rejection itself must be observed.
     if expected.blocked_outcome is not None:
         attempts = expected.blocked_outcome.max_attempts
         plural = "" if attempts == 1 else "s"
-        bullets.append(f"Refuse to act — perform no successful action (\u2264{attempts} blocked attempt{plural})")
+        keys = ", ".join(expected.blocked_outcome.error_keys)
+        for action in expected.blocked_outcome.actions:
+            targets = ", ".join(action.target_entity_ids) if action.target_entity_ids else "the referenced target"
+            bullets.append(
+                f"Observe rejected {action.domain}.{action.service} on {targets} with {keys} (\u2264{attempts} attempt{plural})"
+            )
     # Structured tool-result expectations: which tool must return which evidence.
     for check in expected.tool_result_checks:
         scope = ", ".join(check.entity_ids or check.statistic_ids) or "a relevant result"

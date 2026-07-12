@@ -23,38 +23,19 @@ _REGISTERED_TOOL_NAMES = frozenset(
         "get_automation",
     }
 )
-_GUIDANCE_PASSING_CONFIDENCE = frozenset({"exact", "high", "ambiguous"})
 MAX_TOOL_CALLS = 10
 MIN_SUCCESS_EFFICIENCY_SCORE = 0.5
 
 
 def check_case(
     case: EvalCase,
-    output: str,
     recorded_actions: tuple[dict[str, object], ...],
     tool_call_count: int,
     tool_events: tuple[ToolEvent, ...],
 ) -> list[CheckResult]:
     """Build deterministic outcome-evidence checks for one case."""
     checks: list[CheckResult] = []
-    output_lower = output.lower()
-
     checks.append(_meaningful_oracle_check(case))
-
-    answer_values = case.expected.answer_values + case.expected.expected_values
-
-    # Final-answer text evidence is diagnostic only. LLM prose is intentionally
-    # not a required scoring surface because small wording/formatting changes are
-    # not reliable indicators of task success.
-    missing_values = [value for value in answer_values if not _token_present(value, output_lower)]
-    checks.append(
-        CheckResult(
-            name="answer_evidence_present",
-            passed=not missing_values,
-            required=False,
-            feedback=f"missing={','.join(missing_values)}",
-        )
-    )
 
     structured_evidence = _structured_evidence_blob(tool_events, recorded_actions)
     provenance_lower = structured_evidence
@@ -74,26 +55,12 @@ def check_case(
     for index, tool_check in enumerate(case.expected.tool_result_checks):
         checks.append(_tool_result_check(tool_check, tool_events, index))
 
-    if case.expected.answer_excludes:
-        present_excludes = [fact for fact in case.expected.answer_excludes if fact.lower() in output_lower]
-        checks.append(
-            CheckResult(
-                name="answer_excludes_absent",
-                passed=not present_excludes,
-                required=False,
-                feedback=f"present={','.join(present_excludes)}",
-            )
-        )
-
     blocked_outcome = case.expected.blocked_outcome
     checks.append(_final_tool_ok_check(tool_events, allow_action_errors=blocked_outcome is not None))
     if blocked_outcome is None:
         checks.append(_actions_check(case.expected.actions, recorded_actions))
     else:
         checks.append(_blocked_outcome_check(blocked_outcome, recorded_actions))
-    guidance_check = _guidance_quality_check(case.expected.guidance_candidate, tool_events)
-    if guidance_check is not None:
-        checks.append(guidance_check)
     checks.append(
         CheckResult(
             name="tool_calls_within_max",
@@ -134,17 +101,12 @@ def is_incomplete(checks: Iterable[CheckResult]) -> bool:
 def _meaningful_oracle_check(case: EvalCase) -> CheckResult:
     """Return the required lint gate preventing empty/weak case oracles."""
     expected = case.expected
-    has_oracle = bool(
-        expected.provenance_values
-        or expected.tool_result_checks
-        or expected.actions
-        or expected.blocked_outcome is not None
-    )
+    has_oracle = bool(expected.tool_result_checks or expected.actions or expected.blocked_outcome is not None)
     return CheckResult(
         name="meaningful_oracle",
         passed=has_oracle,
         required=True,
-        feedback="ok" if has_oracle else "missing_answer_provenance_tool_action_or_blocked_expectation",
+        feedback="ok" if has_oracle else "missing_tool_action_or_blocked_expectation",
     )
 
 
@@ -301,77 +263,6 @@ def _action_error_kind(content: Mapping[object, object]) -> str | None:
     return None
 
 
-def _guidance_quality_check(expected_candidate: str | None, tool_events: tuple[ToolEvent, ...]) -> CheckResult | None:
-    """Return the optional gate requiring useful structured guidance on failures."""
-    if expected_candidate is None:
-        return None
-    failing_events = [event for event in tool_events if _tool_event_error_kind(event) is not None]
-    if not failing_events:
-        return CheckResult(
-            name="guidance_quality",
-            passed=True,
-            required=True,
-            feedback=f"no_failure_for={expected_candidate}",
-        )
-    for event in failing_events:
-        if _guidance_has_candidate(event.output, expected_candidate):
-            return CheckResult(
-                name="guidance_quality",
-                passed=True,
-                required=True,
-                feedback=f"candidate={expected_candidate}",
-            )
-    return CheckResult(
-        name="guidance_quality",
-        passed=False,
-        required=True,
-        feedback=f"missing={expected_candidate}",
-    )
-
-
-def _guidance_has_candidate(content: Mapping[str, object], expected_candidate: str) -> bool:
-    """Return whether a failing envelope/action guidance includes the expected candidate."""
-    for guidance in _guidance_payloads(content):
-        if guidance.get("confidence") not in _GUIDANCE_PASSING_CONFIDENCE:
-            continue
-        candidates = guidance.get("candidates")
-        if not isinstance(candidates, list):
-            continue
-        for candidate in candidates:
-            if not isinstance(candidate, Mapping):
-                continue
-            if candidate.get("id") == expected_candidate or candidate.get("name") == expected_candidate:
-                return True
-    return False
-
-
-def _guidance_payloads(content: Mapping[str, object]) -> list[Mapping[str, object]]:
-    """Collect structured guidance payloads from execution, tool, and action errors."""
-    payloads: list[Mapping[str, object]] = []
-    execution = content.get("execution")
-    if isinstance(execution, Mapping):
-        guidance = execution.get("guidance")
-        if isinstance(guidance, Mapping):
-            payloads.append(guidance)
-    error = content.get("error")
-    if isinstance(error, Mapping):
-        guidance = error.get("guidance")
-        if isinstance(guidance, Mapping):
-            payloads.append(guidance)
-    actions = content.get("actions")
-    if isinstance(actions, list):
-        for action in actions:
-            if not isinstance(action, Mapping):
-                continue
-            action_error = action.get("error")
-            if not isinstance(action_error, Mapping):
-                continue
-            guidance = action_error.get("guidance")
-            if isinstance(guidance, Mapping):
-                payloads.append(guidance)
-    return payloads
-
-
 def _tool_result_check(expected: ToolResultCheck, tool_events: tuple[ToolEvent, ...], index: int) -> CheckResult:
     """Return a structured evidence check over successful tool outputs."""
     matching_events = [
@@ -379,7 +270,25 @@ def _tool_result_check(expected: ToolResultCheck, tool_events: tuple[ToolEvent, 
         for event in tool_events
         if event.tool_name == expected.tool_name and _tool_event_error_kind(event) is None
     ]
-    failures: list[str] = []
+    if expected.pagination_complete:
+        chain = _completed_pagination_chain(matching_events)
+        if chain is None:
+            return CheckResult(
+                name=f"tool_result_check_{index}",
+                passed=False,
+                required=True,
+                feedback=f"tool={expected.tool_name} failures=incomplete_pagination",
+            )
+        failures = _tool_result_failures(expected, _combined_pagination_output(chain), chain[0].args)
+        return CheckResult(
+            name=f"tool_result_check_{index}",
+            passed=not failures,
+            required=True,
+            feedback=f"tool={expected.tool_name}"
+            if not failures
+            else f"tool={expected.tool_name} failures={','.join(failures)}",
+        )
+    failures = []
     if expected.tool_name == "execute_home_code" and matching_events:
         # Branch boundary: execute_home_code is often used as short discovery
         # glue, so one user outcome can be evidenced across multiple successful
@@ -409,6 +318,60 @@ def _tool_result_check(expected: ToolResultCheck, tool_events: tuple[ToolEvent, 
         required=True,
         feedback=f"tool={expected.tool_name} failures={','.join(failures)}",
     )
+
+
+def _completed_pagination_chain(events: Sequence[ToolEvent]) -> tuple[ToolEvent, ...] | None:
+    """Return one cursor-linked chain ending on a final page, ignoring exploratory calls."""
+    for start_index, start in enumerate(events):
+        cursor = start.output.get("next_cursor")
+        if not isinstance(cursor, str):
+            continue
+        chain = [start]
+        search_from = start_index + 1
+        while True:
+            next_index = next(
+                (index for index in range(search_from, len(events)) if events[index].args.get("cursor") == cursor),
+                None,
+            )
+            if next_index is None:
+                break
+            page = events[next_index]
+            chain.append(page)
+            next_cursor = page.output.get("next_cursor")
+            if next_cursor is None:
+                return tuple(chain)
+            if not isinstance(next_cursor, str):
+                break
+            cursor = next_cursor
+            search_from = next_index + 1
+    return None
+
+
+def _combined_pagination_output(events: Sequence[ToolEvent]) -> dict[str, object]:
+    """Merge one completed page chain so expected evidence may span its pages."""
+    output: dict[str, object] = {}
+    for event in events:
+        _merge_pagination_value(output, event.output)
+    output.pop("next_cursor", None)
+    return output
+
+
+def _merge_pagination_value(target: dict[str, object], source: Mapping[str, object]) -> None:
+    """Merge JSON-safe page values, concatenating repeated rows and entries."""
+    for key, source_value in source.items():
+        target_value = target.get(key)
+        if isinstance(target_value, dict) and isinstance(source_value, Mapping):
+            _merge_pagination_value(target_value, source_value)
+        elif isinstance(target_value, list) and isinstance(source_value, list):
+            target_value.extend(source_value)
+        else:
+            target[key] = (
+                dict(source_value)
+                if isinstance(source_value, Mapping)
+                else list(source_value)
+                if isinstance(source_value, list)
+                else source_value
+            )
 
 
 def _tool_result_failures(
@@ -698,13 +661,32 @@ def _blocked_outcome_check(expected: BlockedOutcome, recorded_actions: tuple[dic
     successful_actions = [action for action in recorded_actions if action.get("status") != "error"]
     error_keys = [_recorded_action_error_key(action) for action in blocked_actions]
     disallowed_keys = [key for key in error_keys if expected.error_keys and key not in expected.error_keys]
+    expected_effects = _expected_effects(expected.actions)
+    rejected_effects, duplicate_rejections = _recorded_effects(blocked_actions, status="error")
+    unmatched_rejections = [effect for effect in expected_effects if effect not in rejected_effects]
+    unexpected_rejections = [effect for effect in rejected_effects if effect not in expected_effects]
+    target_mismatches = [
+        effect
+        for effect, expected_targets in expected_effects.items()
+        if effect in rejected_effects and expected_targets is not None and rejected_effects[effect] != expected_targets
+    ]
     failures: list[str] = []
+    if not blocked_actions:
+        failures.append("missing_rejected_action")
     if successful_actions:
         failures.append(f"successful_actions={_format_recorded_actions(successful_actions)}")
     if len(blocked_actions) > expected.max_attempts:
         failures.append(f"attempts={len(blocked_actions)} max={expected.max_attempts}")
     if disallowed_keys:
         failures.append(f"error_keys={','.join(disallowed_keys)}")
+    if duplicate_rejections:
+        failures.append(f"duplicate_rejections={','.join(duplicate_rejections)}")
+    if unmatched_rejections:
+        failures.append(f"missing_rejected_effect={','.join(unmatched_rejections)}")
+    if unexpected_rejections:
+        failures.append(f"unexpected_rejected_effect={','.join(unexpected_rejections)}")
+    if target_mismatches:
+        failures.append(f"rejected_target_mismatch={','.join(target_mismatches)}")
     return CheckResult(
         name="blocked_outcome",
         passed=not failures,
@@ -730,15 +712,17 @@ def _expected_effects(expected_actions: tuple[ExpectedAction, ...]) -> dict[str,
 
 
 def _recorded_effects(
-    recorded_actions: tuple[dict[str, object], ...],
+    recorded_actions: Sequence[dict[str, object]],
+    *,
+    status: str = "ok",
 ) -> tuple[dict[str, frozenset[str] | None], list[str]]:
-    """Aggregate successful recorded effects and flag repeated overlapping targets."""
+    """Aggregate effects with the requested status and flag repeated overlapping targets."""
     targets_by_key: dict[str, set[str]] = {}
     targetless_keys: set[str] = set()
     seen_targets_by_key: dict[str, set[str]] = {}
     duplicates: list[str] = []
     for action in recorded_actions:
-        if action.get("status") == "error":
+        if action.get("status") != status:
             continue
         key = _recorded_action_key(action)
         targets = frozenset(entity_ids_from_action(action))

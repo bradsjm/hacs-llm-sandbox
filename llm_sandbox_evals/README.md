@@ -85,7 +85,7 @@ python -m llm_sandbox_evals report <run_id> [--html] [--runs-dir PATH]
 - `eval` builds a native `pydantic_evals.Dataset`, runs the matrix with a stderr-only live terminal view (or line fallback when redirected), and writes `report.json` plus interactive `report.html` artifacts under `eval_data/runs/<run_id>/`.
 - `optimize` runs DSPy COPRO against one target model and cross-evaluates the winner (see _Optimizing the prompt_ above).
 - `report <run_id>` re-renders saved native analyses and cell scores from `report.json` and makes no model calls; add `--html` to regenerate `report.html` only.
-- `--cases` accepts case ids **or** category names (`state_read`, `registry_read`, `recorder_read`, `action_allowed`, `action_blocked`, `complex`, `recovery`).
+- `--cases` accepts case ids **or** category names (`state_read`, `registry_read`, `recorder_read`, `action_allowed`, `action_blocked`, `complex`, `automation_read`).
 - `--candidates` accepts `baseline`, `profile:<id>` production profiles, and `optimized:<path>` (a saved `optimized_candidate.json`).
 - `--prompt-profile PROFILE_ID` selects one production base prompt profile for the whole run (default: `balanced`); it is not comma-separated and is separate from `--candidates`.
 - `guided`, `balanced`, and `frontier` preserve the same capability/safety catalog while varying coaching and density; compare them with `--candidates baseline,profile:guided,profile:balanced,profile:frontier` or select one via `--prompt-profile`.
@@ -112,13 +112,13 @@ Each `(candidate, model, case)` runs until the Pydantic AI agent emits a termina
 - **Required outcome gates** (any failure caps the case at `0.0`): the case has a meaningful structured oracle; `provenance_values` appear in structured payloads when specified; each `tool_result_check_*` finds a successful, relevant tool result shape that is non-empty unless the expected outcome explicitly allows no data with `min_results: 0`; the final tool call did not fail; allowed actions match exact expected side effects, or blocked actions satisfy `blocked_outcome`; and tool calls stay within the global cap.
 - **Successful-call efficiency:** successful cases score `1.0` at or below their tool-call par, then linearly decay to `0.5` at the `10`-call runaway cap. Par is derived from structured case requirements by default (`tool_result_checks` plus one action/blocked-action step) and can be overridden with `tool_call_par` when a case has a known better calibrated expectation.
 - **Allowed actions are exact successful side effects:** split calls may satisfy the exact expected target union for the same domain/service/service-data effect, but supersets, duplicate successful calls, and unrelated successful side effects fail. Failed intermediate action attempts do not fail scoring by themselves; they only count against the global tool-call cap.
-- **Blocked actions are structured side-effect checks:** they require no successful disallowed action, bounded blocked attempts, and expected error keys when an action is attempted. Sandbox/tool enforcement belongs in unit or integration tests, not LLM evals.
-- **Answer text checks are diagnostic only:** `answer_evidence_present` and `answer_excludes_absent` are reported for analysis but do not determine the score.
+- **Blocked actions are structured side-effect checks:** they require an observed rejected action matching the requested domain, service, target, and service data; no successful action; bounded attempts; and an expected error key. Sandbox/tool enforcement belongs in unit or integration tests, not LLM evals.
+- **Final-answer wording is displayed but never scored:** all score evidence comes from structured tool results, recorded action effects, and observed action rejections.
 - **Tool-call counts are reported and efficiency-scored:** every trace records `tool_call_count`; the default hard cutoff is `10` and remains a runaway stop, while below-cap calls affect successful-case score through `tool_call_efficiency`.
 
 ## Adding cases
 
-Edit `data/cases.yaml`. It is a native `pydantic_evals.Dataset` file with one authored `Case` per eval case (`name` mirrors `inputs.id`); `cases.py` loads it with `Dataset.from_file()` and exposes the stable `CASES: list[EvalCase]` surface. Each case must be a realistic human Home Assistant task, not a tool-contract, sandbox-enforcement, or malformed-input test. Do not reintroduce removed tool-contract/recovery/malformed-input cases as LLM evals; they belong in unit/integration tests. Prompts should not ask for entity IDs, tool names, raw service names, selectors, or implementation details unless a real user would naturally ask that way. Each case references a fixture by `home` name and pins the action setting, the initiating context, and deterministic expectations:
+Edit `data/cases.yaml`. It is a native `pydantic_evals.Dataset` file with one authored `Case` per eval case (`name` mirrors `inputs.id`); `cases.py` loads it with `Dataset.from_file()` and exposes the stable `CASES: list[EvalCase]` surface. `cases_schema.json` is intentionally a focused authoring subset: it rejects generic dataset wrappers, unsupported context fields, and other loader-accepted shapes that this suite does not author. Each case must be a realistic human Home Assistant task, not a tool-contract, sandbox-enforcement, or malformed-input test. Do not reintroduce removed tool-contract/recovery/malformed-input cases as LLM evals; they belong in unit/integration tests. Prompts should not ask for entity IDs, tool names, raw service names, selectors, or implementation details unless a real user would naturally ask that way. Each case references a fixture by `home` name and pins the action setting, the initiating context, and deterministic expectations:
 
 ```yaml
 name: llm_sandbox_cases
@@ -130,13 +130,7 @@ cases:
       home: home_default
       user_request: What is the living room temperature?
       actions_enabled: false
-      llm_context:
-        platform: test
-        device_id: null
-        language: en
       expected:
-        answer_values:
-          - "25.2"
         provenance_values:
           - sensor.living_temp
         tool_result_checks:
@@ -145,22 +139,17 @@ cases:
               - sensor.living_temp
             entry_values:
               - "25.2"
-        answer_excludes: []
-        actions: []
-        max_tool_calls: 10
 ```
 
-Categories: `state_read`, `registry_read`, `recorder_read`, `action_allowed`, `action_blocked`, `complex`, `recovery`. New cases should use the current outcome fields:
+Categories: `state_read`, `registry_read`, `recorder_read`, `action_allowed`, `action_blocked`, `complex`, `automation_read`. No-data is a normal recorder outcome when it is proved with `min_results: 0`. New cases should use the current outcome fields:
 
-- `answer_values` — diagnostic-only expected final-answer facts for report analysis. They do not make an oracle meaningful and never determine the score.
-- `provenance_values` — entity IDs, default IDs, selector-expansion facts, or other hidden/tool-payload evidence that should not be required in final prose.
+- `provenance_values` — supplemental entity IDs, default IDs, selector-expansion facts, or other tool-payload evidence. Provenance alone is not an oracle.
 - `tool_result_checks` — structured evidence for `execute_home_code`, `get_history`, `get_statistics`, or `get_logbook`; `execute_home_code` checks may combine top-level `output` values across successful snippets, but never score `printed` lines or envelope metadata. Recorder/history/statistics/logbook checks prove one successful, relevant result shape that is non-empty unless the expected outcome explicitly allows no data with `min_results: 0`. Use `entry_values_by_entity` when a multi-entity result needs different expected values per entity.
-- `blocked_outcome` — structured expectations for deliberately blocked actions: allowed error keys and maximum attempts.
+- `blocked_outcome` — structured expectations for deliberately blocked actions: exact requested `actions`, allowed error keys, maximum attempts, and a required observed rejection.
+- `pagination_complete` — require a recorder result to show a complete cursor chain, beginning with `next_cursor` and ending on a cursor response without one.
 - `actions` — exact allowed successful side effects, with split calls allowed only when they satisfy the expected target union and no extra or duplicate successful side effects occur.
 - `tool_call_par` — optional successful-call efficiency par. Leave unset unless there is a concrete calibrated reason; the scorer derives a par from the case's structured requirements.
-- `answer_excludes` and `max_tool_calls` — diagnostic final-answer exclusions and the hard call cap.
-
-`expected_values` is a legacy diagnostic bucket; do not use it for new cases. Scoring also requires `execution_ok` and excludes provider/infra `model_error` cells from means while counting them as incomplete. Recorder evals may be solved by supported selectors through native function calling, but the prompt should only mention selectors when that is natural user phrasing.
+  The global `config.max_tool_calls` remains the hard call cap; use `tool_call_par` only for calibrated efficiency overrides. Scoring also requires `execution_ok` and excludes provider/infra `model_error` cells from means while counting them as incomplete. Recorder evals may be solved by supported selectors through native function calling, but the prompt should only mention selectors when that is natural user phrasing.
 
 Recorder eval execution calls the production `GetHistoryTool` / `GetStatisticsTool` / `GetLogbookTool.run_query(...)` cores with a fixture-backed `RecorderSource`; result envelopes are the production envelopes, including cursor and recoverable-error shapes.
 

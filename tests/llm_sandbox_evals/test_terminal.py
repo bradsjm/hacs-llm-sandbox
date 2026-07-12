@@ -67,4 +67,4 @@ def test_needs_attention_outcome_uses_amber_detail_only(detail: str, expected: s
 def _column_widths(table: Table, console: Console) -> dict[str, int]:
     """Return Rich's actual terminal allocation, including each column's padding."""
     widths = table._calculate_column_widths(console, console.options)
-    return dict(zip((column.header for column in table.columns), widths, strict=True))
+    return dict(zip((str(column.header) for column in table.columns), widths, strict=True))
