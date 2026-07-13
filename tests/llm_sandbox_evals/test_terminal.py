@@ -12,7 +12,7 @@ from llm_sandbox_evals.schema import (
     RequiredAction,
     ToolEvent,
 )
-from llm_sandbox_evals.terminal import MatrixTerminalReporter, _duration
+from llm_sandbox_evals.terminal import MatrixTerminalReporter, _duration, _left_ellipsis, _token_total
 import pytest
 from rich.console import Console
 
@@ -50,11 +50,14 @@ def _trace(
     elapsed: float | None = None,
     request: str = "Turn on bedroom light",
     answer: str | None = None,
+    model_id: str = "stub",
+    reasoning_effort: str | None = None,
 ) -> CaseTrace:
     return CaseTrace(
         case_id="case",
         candidate_id="baseline",
-        model_id="stub",
+        model_id=model_id,
+        reasoning_effort=reasoning_effort,
         answer=answer,
         required_actions=(RequiredAction("light", "turn_on", ("light.bedroom",)),),
         outcome=CaseOutcome(state, action_reason),
@@ -167,9 +170,7 @@ def test_machine_events_emit_stable_kv_without_raw_payload() -> None:
 
     reporter.handle(MatrixProgressEvent("matrix_started", total=1))
     reporter.handle(MatrixProgressEvent("cell_started", cell=cell, request="secret request body"))
-    reporter.handle(
-        MatrixProgressEvent("cell_finished", cell=cell, trace=trace, completion_index=1, total=1)
-    )
+    reporter.handle(MatrixProgressEvent("cell_finished", cell=cell, trace=trace, completion_index=1, total=1))
 
     output = stream.file.getvalue()
     assert "matrix_started total=1" in output
@@ -193,6 +194,62 @@ def test_durable_final_emits_counts_and_artifact_path_once() -> None:
     # The artifact directory and report.html each appear on one dedicated line in the durable final.
     assert "Artifacts: runs/run-1" in output
     assert "report.html: runs/run-1/report.html" in output
+
+
+def test_recent_variant_keeps_meaningful_suffix_not_head() -> None:
+    reporter = _reporter(human=True)
+    long_model = "openai-chat:oc/deepseek-v4-flash-free"
+    _feed(reporter, (_cell(), _trace(model_id=long_model, reasoning_effort="xhigh")))
+
+    console = Console(width=160, force_terminal=False, record=True)
+    console.print(reporter._recent_table())
+    output = console.export_text()
+
+    # The variant column is left-truncated, so the meaningful reasoning suffix survives.
+    assert "(xhigh)" in output
+    # The uninformative provider prefix is dropped rather than kept with a trailing ellipsis.
+    assert "openai-chat" not in output
+
+
+def test_render_includes_overall_progress_bar() -> None:
+    reporter = _reporter(human=True)
+    reporter._state.total = 2
+    _feed_completed = MatrixProgressEvent("cell_finished", cell=_cell(), trace=_trace(), completion_index=1, total=2)
+    reporter.handle(MatrixProgressEvent("cell_started", cell=_cell(), request="Turn on light", total=2))
+    reporter.handle(_feed_completed)
+
+    console = Console(width=160, force_terminal=False, record=True)
+    console.print(reporter._render())
+    output = console.export_text()
+
+    # The restored overall progress bar reports completion against the planned matrix total.
+    assert "Overall" in output
+    assert "1/2" in output
+
+
+def test_left_ellipsis_returns_value_when_it_fits() -> None:
+    assert _left_ellipsis("stub(high)", 22) == "stub(high)"
+
+
+def test_left_ellipsis_truncates_head_and_keeps_suffix() -> None:
+    value = "openai-chat:oc/model(xhigh)"
+    result = _left_ellipsis(value, 12)
+    # Overflow drops the head with a leading ellipsis while preserving the exact suffix.
+    assert len(result) == 12
+    assert result.startswith("…")
+    assert result[1:] == value[-11:]
+
+
+@pytest.mark.parametrize(
+    ("tokens", "expected"),
+    [
+        pytest.param(None, "tokens unavailable", id="unavailable"),
+        pytest.param(299_499, "tokens 299k", id="rounds-down"),
+        pytest.param(299_500, "tokens 300k", id="rounds-up"),
+    ],
+)
+def test_token_total_uses_rounded_thousands(tokens: float | None, expected: str) -> None:
+    assert _token_total(tokens) == expected
 
 
 @pytest.mark.parametrize(
@@ -220,17 +277,19 @@ def test_cancel_hint_distinguishes_escape_from_ctrl_c_only(
     interactive = _reporter(human=True, escape_available=escape_available)
     redirected = _reporter(human=False, escape_available=escape_available)
 
-    # The orientation panel surfaces the correct cancellation mechanism for the active stream mode.
+    # The cancellation hint appears once, in the live frame footer, not duplicated in the header.
     orientation = Console(width=160, force_terminal=False, record=True)
     orientation.print(interactive._orientation())
     orientation_text = orientation.export_text()
-    assert expected_hint in orientation_text
-    assert absent_hint not in orientation_text
+    assert "Escape" not in orientation_text
+    assert "Ctrl+C" not in orientation_text
 
-    # The transient Live frame carries the same hint while a run is active.
+    # The transient Live frame carries the correct mechanism for the active stream mode.
     frame = Console(width=160, force_terminal=False, record=True)
     frame.print(interactive._render())
-    assert expected_hint in frame.export_text()
+    frame_text = frame.export_text()
+    assert expected_hint in frame_text
+    assert absent_hint not in frame_text
 
     # Redirected (non-TTY) runs emit deterministic KV only and never print a human cancel hint.
     stream = StringIO()
