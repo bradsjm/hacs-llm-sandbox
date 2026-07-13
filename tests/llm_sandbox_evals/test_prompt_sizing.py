@@ -44,7 +44,7 @@ def test_load_candidates_accepts_profile_candidate() -> None:
         fixture,
     )
     tools = build_agent_tools(runtime)
-    prompt = render_eval_system_prompt(runtime, tools)
+    _prompt = render_eval_system_prompt(runtime, tools)
 
     # Candidate descriptions flow through as the provider tool schemas, not as
     # duplicated first-sentence summaries in the system prompt.

@@ -24,8 +24,8 @@ Assistant fixtures. It evaluates only successful service invocation effects.
 - Rejected records are diagnostics only. Action results preserve normalized
   observed effects, one-to-one dimension comparisons, unexpected actions, and
   stable reason codes without weakening exact matching.
-- Traces and reports remain scoring version 5. Version 4 and older artifacts,
-  and prior v5 artifacts with the former trace contract, are rejected as legacy
+- Traces and reports use scoring version 6. Version 5 and older artifacts,
+  including prior v5 artifacts with the former trace contract, are rejected as legacy
   because the trace field changed; there is no compatibility path.
 
 Do not add read scoring, evidence normalization, answer schemas, collections,
@@ -88,9 +88,24 @@ checks and uses `home_full` for the corpus and its complete 288-entity fixture.
   and exact effect matching.
 - `harness.py` — lifecycle, tool events, action extraction, minimal successful
   tool diagnostics, and trace assembly.
-- `experiment.py`, `reports.py`, `terminal.py`, `html_report.py` — overall model
-  comparison, v5 persistence, diagnostics, and action-ledger display without
+- `experiment.py`, `reports.py`, `presentation.py`, `terminal.py`, `html_report.py` — overall model
+  comparison, v6 persistence, immutable and runtime presentation projections, diagnostics, and action-ledger display without
   category analysis.
+
+## Eval UX and artifacts
+
+- Keep `model_id` as the provider id. Persist the run-wide resolved reasoning
+  and temperature fields and derive display-only variant labels.
+- `action_reason` is scored-action-only. Incomplete operational failures carry
+  `diagnostics.failure`; presentation must use the shared effective cause.
+- Count `total`, `finished`, and `scored`; quality is correct/scored and
+  coverage is scored/total. Do not reintroduce user-facing `completed` counts.
+- Create an atomic `manifest.json` before model calls. A cancelled or failed run
+  writes the typed `partial.json` journal, which is explicitly not a report and
+  has no HTML/resume path.
+- Interactive output is Rich on stderr; redirected or `--machine` output is
+  deterministic stdout KV. Non-zero exits have empty stdout. Terminal lanes do
+  not have phase/Activity/Waiting or response rows; streaming is deferred.
 
 Production read tools may remain registered because they are part of the product
 surface. Their eval-specific scoring and stub routes must not return.

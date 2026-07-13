@@ -1,9 +1,17 @@
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 
 from custom_components.llm_sandbox.const import DEFAULT_PROMPT_PROFILE
 from llm_sandbox_evals.config import EvalConfig
-from llm_sandbox_evals.experiment import MatrixCellRef, build_dataset, run_matrix
+from llm_sandbox_evals.experiment import (
+    MatrixCellRef,
+    _record_trace_metrics,
+    build_dataset,
+    matrix_summary_lines,
+    run_matrix,
+)
+from llm_sandbox_evals.presentation import ReportPresentationModel
 from llm_sandbox_evals.schema import (
     ActionLedger,
     ActionResult,
@@ -20,24 +28,36 @@ import pytest
 from llm_sandbox_evals import reports
 
 
-async def test_run_matrix_stub_persists_v5_action_trace_and_binary_rate(tmp_path: Path) -> None:
-    config = _config(tmp_path, cases=["direct_turn_on_utility_room_ceiling"])
-    report = await run_matrix(config, run_id="stub-v5")
-    reloaded = reports.load_report(reports.write_report_json(report, config, run_id="stub-v5-written"))
+async def test_run_matrix_stub_persists_v6_action_trace_and_variant_identity(tmp_path: Path) -> None:
+    config = EvalConfig(
+        models=["stub"],
+        candidates=["baseline"],
+        prompt_profile=DEFAULT_PROMPT_PROFILE,
+        cases=["direct_turn_on_utility_room_ceiling"],
+        homes=None,
+        runs_dir=tmp_path,
+        reasoning_effort="low",
+    )
+    report = await run_matrix(config, run_id="stub-v6")
+    reloaded = reports.load_report(reports.write_report_json(report, config, run_id="stub-v6-written"))
     trace = reloaded.cases[0].output
 
     assert trace.outcome.state == "correct"
     assert trace.outcome.score == 1.0
     assert trace.answer == "Done."
-    assert trace.scoring_version == 5
-    assert _scalar(reloaded.analyses, "Overall correct rate").value == 1.0
+    assert trace.scoring_version == 6
+    assert trace.reasoning_effort == "low"
+    assert _scalar(reloaded.analyses, "Quality rate").value == 1.0
+    # The run descriptor rides on native experiment_metadata and survives reload.
+    models = reloaded.experiment_metadata["models"]
+    assert models[0]["variant_label"] == "stub(low)"
 
 
 async def test_run_matrix_emits_plain_text_lifecycle_response(tmp_path: Path) -> None:
     events = []
     report = await run_matrix(
         _config(tmp_path, cases=["direct_turn_on_utility_room_ceiling"]),
-        run_id="lifecycle-v5",
+        run_id="lifecycle-v6",
         on_event=events.append,
     )
 
@@ -53,11 +73,11 @@ async def test_run_matrix_emits_plain_text_lifecycle_response(tmp_path: Path) ->
     assert events[-1].trace == report.cases[0].output
 
 
-async def test_report_excludes_incomplete_from_correct_rate_and_keeps_coverage(tmp_path: Path) -> None:
+async def test_report_uses_scored_vocabulary_and_excludes_completed(tmp_path: Path) -> None:
     config = _config(tmp_path, models=["model-a", "model-b"])
     candidates = [_candidate("baseline", api_prompt="long authored prompt"), _candidate("compact", api_prompt="short")]
     selected_cases = [_case("case-a"), _case("case-b")]
-    dataset = build_dataset(config, candidates, selected_cases, "aggregation-v5")
+    dataset = build_dataset(config, candidates, selected_cases, "aggregation-v6")
     states = {
         ("baseline", "model-a", "case-a"): "correct",
         ("baseline", "model-a", "case-b"): "incorrect",
@@ -72,17 +92,95 @@ async def test_report_excludes_incomplete_from_correct_rate_and_keeps_coverage(t
     async def task(cell: MatrixCellRef) -> CaseTrace:
         return _trace(cell, states[(cell.candidate_id, cell.model_id, cell.case_id)])
 
-    report = await dataset.evaluate(task, name="aggregation-v5", progress=False, retry_task=None)
+    report = await dataset.evaluate(task, name="aggregation-v6", progress=False, retry_task=None)
     ranking = _table(report.analyses, "Candidate ranking")
     pairs = _table(report.analyses, "Candidate x model outcomes")
 
-    assert _scalar(report.analyses, "Overall correct rate").value == pytest.approx(0.5)
-    assert _scalar(report.analyses, "Completed cells").value == 6
-    assert ranking.rows[0][0] == "compact"
+    # Quality rate = correct / scored; completed is gone from the vocabulary.
+    assert _scalar(report.analyses, "Quality rate").value == pytest.approx(0.5)
+    assert _scalar(report.analyses, "Scored cells").value == 6
+    assert _scalar(report.analyses, "Coverage rate").value == pytest.approx(0.75)
+    with pytest.raises(StopIteration):
+        next(a for a in report.analyses if isinstance(a, ScalarResult) and "Completed" in a.title)
+    # Ranking columns: Candidate, Correct, Incorrect, Incomplete, Scored, Quality rate, Coverage rate, ...
+    assert "Completed" not in ranking.columns
+    assert "Scored" in ranking.columns
+    compact_ranking = next(row for row in ranking.rows if row[0] == "compact")
+    assert compact_ranking[0] == "compact"
     baseline_ranking = next(row for row in ranking.rows if row[0] == "baseline")
+    # baseline: correct=1, incorrect=1, incomplete=2, scored=2, quality=0.5, coverage=0.5
     assert baseline_ranking[1:7] == [1, 1, 2, 2, 0.5, 0.5]
-    baseline_model_b = next(row for row in pairs.rows if row[:2] == ["baseline", "model-b"])
+    baseline_model_b = next(row for row in pairs.rows if row[0] == "baseline" and row[1] == "model-b(default)")
+    # baseline/model-b: correct=0, incorrect=0, incomplete=2, scored=0, quality=None, coverage=0.0
     assert baseline_model_b[2:8] == [0, 0, 2, 0, None, 0.0]
+
+
+async def test_matrix_summary_lines_emit_scored_vocabulary(tmp_path: Path) -> None:
+    config = _config(tmp_path, models=["model-a"])
+    candidates = [_candidate("baseline")]
+    selected_cases = [_case("case-a"), _case("case-b")]
+    dataset = build_dataset(config, candidates, selected_cases, "summary-v6")
+
+    async def task(cell: MatrixCellRef) -> CaseTrace:
+        return _trace(cell, "correct")
+
+    report = await dataset.evaluate(task, name="summary-v6", progress=False, retry_task=None)
+    lines = matrix_summary_lines(report)
+
+    assert lines[0].startswith("quality_rate: ")
+    assert lines[1].startswith("coverage_rate: ")
+    assert lines[2].startswith("scored: ")
+    assert not any("completed=" in line for line in lines)
+    per_pair = [line for line in lines if line.startswith("baseline/")]
+    assert per_pair
+    assert "quality_rate=" in per_pair[0]
+    assert "coverage_rate=" in per_pair[0]
+    assert "scored=" in per_pair[0]
+
+
+async def test_report_case_metrics_carry_tool_calls_for_stub_and_no_tokens(tmp_path: Path) -> None:
+    config = _config(tmp_path, cases=["direct_turn_on_utility_room_ceiling"])
+    report = await run_matrix(config, run_id="metrics-v6")
+
+    metrics = report.cases[0].metrics
+    # The stub emits tool activity but no provider usage, so tokens stay unavailable.
+    assert metrics["tool_calls"] == 1
+    assert metrics.get("total_tokens") is None
+    assert metrics.get("cost") is None
+
+
+async def test_native_metrics_omit_cost_and_presentation_uses_trace_cost_fallback(tmp_path: Path) -> None:
+    config = _config(tmp_path, models=["model-a"])
+    dataset = build_dataset(config, [_candidate("baseline")], [_case("case-a")], "metric-cost-fallback")
+
+    async def task(cell: MatrixCellRef) -> CaseTrace:
+        trace = replace(
+            _trace(cell, "correct"),
+            diagnostics=EvalDiagnostics(
+                tool_calls=4,
+                successful_tool_calls=3,
+                failed_tool_calls=1,
+                model_turns=2,
+                elapsed_seconds=1.5,
+                usage={"total_tokens": 21, "cost": 0.03},
+            ),
+        )
+        _record_trace_metrics(trace)
+        return trace
+
+    report = await dataset.evaluate(task, name="metric-cost-fallback", progress=False, retry_task=None)
+    metrics = report.cases[0].metrics
+
+    # Native task metrics retain operational counts, elapsed time, and token usage.
+    assert metrics["tool_calls"] == 4
+    assert metrics["successful_tool_calls"] == 3
+    assert metrics["failed_tool_calls"] == 1
+    assert metrics["model_turns"] == 2
+    assert metrics["elapsed_seconds"] == 1.5
+    assert metrics["total_tokens"] == 21.0
+    # Cost stays in the self-contained provider usage trace rather than a custom eval metric.
+    assert "cost" not in metrics
+    assert ReportPresentationModel.from_report(report).aggregates[0].total_cost == 0.03
 
 
 def _config(runs_dir: Path, *, models: list[str] | None = None, cases: list[str] | None = None) -> EvalConfig:
@@ -112,17 +210,18 @@ def _case(case_id: str) -> EvalCase:
 
 def _trace(cell: MatrixCellRef, state: str) -> CaseTrace:
     expected = (RequiredAction("light", "turn_on", ("light.bedroom",)),)
+    action_reason = "ok" if state == "correct" else "action_mismatch"
     return CaseTrace(
         case_id=cell.case_id,
         candidate_id=cell.candidate_id,
         model_id=cell.model_id,
         answer="Done.",
         required_actions=expected,
-        outcome=CaseOutcome(state, "ok" if state == "correct" else "action_mismatch"),
-        action_result=ActionResult(state == "correct", "ok" if state == "correct" else "action_mismatch"),
+        outcome=CaseOutcome(state, action_reason if state != "incomplete" else None),
+        action_result=ActionResult(state == "correct", action_reason),
         action_ledger=ActionLedger(),
         tool_events=(),
-        diagnostics=EvalDiagnostics(),
+        diagnostics=EvalDiagnostics(elapsed_seconds=0.5),
     )
 
 

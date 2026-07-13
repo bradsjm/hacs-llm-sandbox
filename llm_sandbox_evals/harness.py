@@ -91,12 +91,14 @@ async def run_case(
                 tool_events,
                 messages,
                 elapsed=perf_counter() - started,
-                usage=_usage(result),
+                usage=None if model_id == "stub" else _usage(result, messages),
                 failure=None,
             ),
             provider_error=None,
             conversation_id=conversation_id,
             user_request=case.user_request,
+            reasoning_effort=config.reasoning_effort,
+            temperature=config.temperature,
         )
     except UsageLimitExceeded as err:
         # Branch boundary: the model exhausted its allowed tool calls, which is scored behavior rather than a harness error.
@@ -113,6 +115,8 @@ async def run_case(
             messages=captured,
             recorded_actions=_recorded_actions_from_tool_events(tool_events, proposed_actions),
             conversation_id=_conversation_id(captured),
+            reasoning_effort=config.reasoning_effort,
+            temperature=config.temperature,
         )
     except TimeoutError as err:
         tool_events = _tool_events(captured)
@@ -128,6 +132,8 @@ async def run_case(
             messages=captured,
             recorded_actions=_recorded_actions_from_tool_events(tool_events, proposed_actions),
             conversation_id=_conversation_id(captured),
+            reasoning_effort=config.reasoning_effort,
+            temperature=config.temperature,
         )
     except UnexpectedModelBehavior as err:
         tool_events = _tool_events(captured)
@@ -143,6 +149,8 @@ async def run_case(
             messages=captured,
             recorded_actions=_recorded_actions_from_tool_events(tool_events, proposed_actions),
             conversation_id=_conversation_id(captured),
+            reasoning_effort=config.reasoning_effort,
+            temperature=config.temperature,
         )
     except Exception as err:  # noqa: BLE001 - provider/harness failures are isolated to the current matrix cell.
         tool_events = _tool_events(captured)
@@ -158,6 +166,8 @@ async def run_case(
             messages=captured,
             recorded_actions=_recorded_actions_from_tool_events(tool_events, proposed_actions),
             conversation_id=_conversation_id(captured),
+            reasoning_effort=config.reasoning_effort,
+            temperature=config.temperature,
         )
 
 
@@ -174,16 +184,16 @@ def _failure_trace(
     messages: Sequence[object] = (),
     recorded_actions: tuple[dict[str, object], ...] = (),
     conversation_id: str | None = None,
+    reasoning_effort: str | None = None,
+    temperature: float | None = None,
 ) -> CaseTrace:
     """Return an incomplete or cap-exhausted trace with captured diagnostics."""
     action_ledger = build_action_ledger(recorded_actions)
     scored_actions = score_actions(case.required_actions, action_ledger)
     action_result = ActionResult(
-        False,
-        "action_mismatch",
-        scored_actions.comparisons,
-        scored_actions.unexpected_actions,
+        False, scored_actions.reason, scored_actions.comparisons, scored_actions.unexpected_actions
     )
+    is_cap_exhausted = failure == "cap_exhausted"
     return CaseTrace(
         case_id=case.id,
         candidate_id=candidate.id,
@@ -191,8 +201,7 @@ def _failure_trace(
         answer=None,
         required_actions=case.required_actions,
         outcome=CaseOutcome(
-            "incorrect" if failure == "cap_exhausted" else "incomplete",
-            "action_mismatch",
+            "incorrect" if is_cap_exhausted else "incomplete", scored_actions.reason if is_cap_exhausted else None
         ),
         action_result=action_result,
         action_ledger=action_ledger,
@@ -201,13 +210,16 @@ def _failure_trace(
             tool_events,
             messages,
             elapsed=elapsed,
-            usage=None,
+            # Branch boundary: preserve response-level provider usage captured before a failed terminal result.
+            usage=None if model_id == "stub" else _partial_usage(messages),
             failure=failure,
-            cap_exhausted=failure == "cap_exhausted",
+            cap_exhausted=is_cap_exhausted,
         ),
         provider_error=feedback if diagnostic else None,
         conversation_id=conversation_id,
         user_request=case.user_request,
+        reasoning_effort=reasoning_effort,
+        temperature=temperature,
     )
 
 
@@ -368,14 +380,16 @@ def _tool_succeeded(event: ToolEvent) -> bool:
     return expected_keys is not None and not expected_keys.isdisjoint(event.output)
 
 
-def _usage(result: object) -> dict[str, int | float | None] | None:
-    """Copy provider usage fields when the completed result exposes them."""
-    usage_method = getattr(result, "usage", None)
-    if not callable(usage_method):
-        return None
-    usage = usage_method()
+def _usage(result: object, messages: Sequence[object] = ()) -> dict[str, int | float | bool | None] | None:
+    """Copy final usage or sum ModelResponse usage when final usage is unavailable."""
+    usage = getattr(result, "usage", None)
+    if usage is None:
+        return _partial_usage(messages)
     input_tokens = getattr(usage, "input_tokens", None)
     output_tokens = getattr(usage, "output_tokens", None)
+    # Branch boundary: some providers expose a final result usage shell without token components.
+    if input_tokens is None and output_tokens is None:
+        return _partial_usage(messages)
     values: dict[str, int | float | None] = {
         "requests": getattr(usage, "requests", None),
         "request_tokens": input_tokens,
@@ -388,6 +402,37 @@ def _usage(result: object) -> dict[str, int | float | None] | None:
     if isinstance(details, dict) and isinstance(details.get("cost"), int | float):
         values["cost"] = details["cost"]
     return values
+
+
+def _partial_usage(messages: Sequence[object]) -> dict[str, int | float | bool | None] | None:
+    """Aggregate response-level usage retained in captured messages after an incomplete run."""
+    responses = [message for message in messages if isinstance(message, ModelResponse)]
+    if not responses:
+        return None
+    fields = {
+        "requests": "requests",
+        "request_tokens": "input_tokens",
+        "response_tokens": "output_tokens",
+    }
+    values: dict[str, int | float | bool | None] = dict.fromkeys(fields)
+    found = False
+    for name, field_name in fields.items():
+        present = [getattr(response.usage, field_name, None) for response in responses]
+        numeric = [value for value in present if isinstance(value, int | float) and not isinstance(value, bool)]
+        if numeric:
+            values[name] = sum(numeric)
+            found = True
+    request_tokens = values["request_tokens"]
+    response_tokens = values["response_tokens"]
+    values["total_tokens"] = (
+        request_tokens + response_tokens
+        if isinstance(request_tokens, int | float) and isinstance(response_tokens, int | float)
+        else None
+    )
+    if values["total_tokens"] is not None:
+        found = True
+    values["partial"] = True
+    return values if found else None
 
 
 def _conversation_id(messages: Sequence[object]) -> str | None:

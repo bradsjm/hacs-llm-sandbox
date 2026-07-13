@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Improve eval harness lifecycle and presentation
+
+- Bumped `llm_sandbox_evals` artifacts to scoring v6 with persisted model
+  variants, strict legacy rejection, separate action reasons and operational
+  causes, and corrected native usage metrics.
+- Added atomic run manifests and typed cancellation/failure journals that are
+  explicitly not reports, plus pre-flight matrix validation.
+- Added Auto TTY / `--machine` output behavior, a durable terminal final with
+  no simulated activity phase, and report-model-driven HTML/CSV presentation.
+
 ### Restore safe configuration minima
 
 - Restored the minimum execution timeout to 3 seconds and the minimum camera/image target width to 384 pixels.

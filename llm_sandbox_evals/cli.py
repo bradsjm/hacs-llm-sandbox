@@ -10,6 +10,7 @@ artifact explanations, and next steps — is written to ``stderr`` so piping
 import argparse
 import asyncio
 from collections.abc import Callable
+from dataclasses import asdict
 from datetime import UTC, datetime
 import os
 from pathlib import Path
@@ -18,7 +19,7 @@ import sys
 import termios
 import tty
 from types import FrameType, ModuleType
-from typing import cast
+from typing import Literal, cast
 import warnings
 
 from custom_components.llm_sandbox.llm_api.prompts import resolve_profile
@@ -26,11 +27,18 @@ from dotenv import load_dotenv
 from pydantic_evals.reporting import EvaluationReport
 from rich.console import Console
 
-from llm_sandbox_evals import experiment, html_report, reports
+from llm_sandbox_evals import cases, experiment, html_report, prompts, reports
 from llm_sandbox_evals.config import EvalConfig, load_config
 from llm_sandbox_evals.experiment import MatrixCellMeta, MatrixCellRef
 from llm_sandbox_evals.harness import _select_cases
-from llm_sandbox_evals.schema import CaseTrace
+from llm_sandbox_evals.schema import (
+    CaseTrace,
+    CompletedCellRecord,
+    EvalCase,
+    PartialRunArtifact,
+    PromptCandidate,
+    RunDescriptor,
+)
 from llm_sandbox_evals.terminal import MatrixTerminalReporter
 
 type _TermiosSettings = list[int | list[bytes | int]]
@@ -200,7 +208,7 @@ def _add_eval_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPar
             "    the whole run; it is separate from --candidates.\n"
             "  - A failing provider call (bad key, network) is incomplete and excluded\n"
             "    from the correctness denominator; it never aborts the run.\n"
-            "  - Press Escape to cancel an interactive eval run."
+            "  - Press Escape when stdin and stderr are terminals; otherwise press Ctrl+C to cancel."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -245,7 +253,7 @@ def _add_eval_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPar
         "--max-tool-calls",
         type=int,
         metavar="N",
-        help="max tool calls per case before recording a limit failure (default: 8).",
+        help="max tool calls per case before recording a limit failure (default: 10).",
     )
     eval_parser.add_argument(
         "--model-timeout",
@@ -266,6 +274,11 @@ def _add_eval_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPar
         help="sampling temperature forwarded to real models via Pydantic AI provider settings "
         "(default: unset; left to the provider so reasoning-capable models do not warn about "
         "unsupported sampling parameters). Ignored by 'stub'.",
+    )
+    eval_parser.add_argument(
+        "--machine",
+        action="store_true",
+        help="force deterministic machine KV on stdout even when stderr is a terminal.",
     )
 
 
@@ -406,46 +419,118 @@ def _run_eval(args: argparse.Namespace) -> int:
         cases=_csv_arg(args.cases) if args.cases is not None else base_config.cases,
         homes=base_config.homes,
         runs_dir=Path(args.runs_dir) if args.runs_dir else base_config.runs_dir,
-        concurrency=args.concurrency if args.concurrency else base_config.concurrency,
-        max_tool_calls=args.max_tool_calls if args.max_tool_calls else base_config.max_tool_calls,
-        model_timeout=args.model_timeout if args.model_timeout else base_config.model_timeout,
+        concurrency=args.concurrency if args.concurrency is not None else base_config.concurrency,
+        max_tool_calls=args.max_tool_calls if args.max_tool_calls is not None else base_config.max_tool_calls,
+        model_timeout=args.model_timeout if args.model_timeout is not None else base_config.model_timeout,
         reasoning_effort=args.reasoning,
         temperature=args.temperature,
     )
+    try:
+        selected_cases, _selected_candidates = _validate_run_config(config)
+    except ValueError as err:
+        _say(f"error: invalid_eval_config:{err}")
+        return 2
     run_id = _derive_run_id()
+    run_dir = config.runs_dir / run_id
+    descriptor = experiment.build_run_descriptor(config, run_id, selected_cases)
+    manifest_path = run_dir / "manifest.json"
+    # State mutation point: establish the durable run identity before any model task can start.
+    reports.write_manifest(manifest_path, _manifest_payload("running", descriptor))
+    records: list[CompletedCellRecord] = []
+    output_mode = _output_mode(args)
+
+    def on_event(event: experiment.MatrixProgressEvent) -> None:
+        if event.state == "cell_finished" and event.cell is not None and event.trace is not None:
+            # State mutation point: the journal records only terminal cells delivered by the matrix event stream.
+            records.append(
+                CompletedCellRecord(
+                    {
+                        "case_id": event.cell.case_id,
+                        "candidate_id": event.cell.candidate_id,
+                        "model_id": event.cell.model_id,
+                        "home": event.cell.home,
+                        "reasoning_effort": event.cell.reasoning_effort,
+                        "temperature": event.cell.temperature,
+                    },
+                    event.trace,
+                    event.completion_index or len(records) + 1,
+                    datetime.now(UTC).isoformat(),
+                )
+            )
+        reporter.handle(event)
+
+    escape_available = _is_interactive_eval()
     previous_sigint = signal.getsignal(signal.SIGINT)
     signal.signal(signal.SIGINT, _raise_keyboard_interrupt)
     try:
-        with MatrixTerminalReporter() as reporter:
-            report = asyncio.run(_run_eval_matrix(config, run_id, reporter))
-    except _EvalCancelled:
+        reporter = MatrixTerminalReporter(
+            config,
+            run_id=run_id,
+            run_dir=str(run_dir),
+            human=output_mode == "interactive",
+            escape_available=escape_available,
+        )
+        with reporter:
+            report = asyncio.run(_run_eval_matrix(config, descriptor, on_event))
+    except _EvalCancelled, asyncio.CancelledError, KeyboardInterrupt:
+        for diagnostic in _persist_terminal_artifacts(
+            run_dir, manifest_path, descriptor, "cancelled", records, _matrix_total(config, selected_cases)
+        ):
+            _say(diagnostic)
         sys.stderr.write("eval cancelled\n")
         return 130
+    except Exception as err:  # noqa: BLE001 - persist a failure journal for every operational error.
+        failure = _bounded_error(err)
+        for diagnostic in _persist_terminal_artifacts(
+            run_dir, manifest_path, descriptor, "failed", records, _matrix_total(config, selected_cases), failure
+        ):
+            _say(diagnostic)
+        _say(_format_unexpected_error(err))
+        return 1
     else:
-        run_dir = reports.write_report_json(report, config, run_id=run_id)
-        report_html = html_report.write_html(run_dir)
+        try:
+            run_dir = reports.write_report_json(report, config, run_id=run_id)
+            report_html = html_report.write_html(run_dir)
+            reports.write_manifest(manifest_path, _manifest_payload("complete", descriptor))
+        except _EvalCancelled, asyncio.CancelledError, KeyboardInterrupt:
+            # Branch boundary: an interruption during persistence leaves a cancellation journal, never a running manifest.
+            for diagnostic in _persist_terminal_artifacts(
+                run_dir, manifest_path, descriptor, "cancelled", records, _matrix_total(config, selected_cases)
+            ):
+                _say(diagnostic)
+            sys.stderr.write("eval cancelled\n")
+            return 130
+        except Exception as err:  # noqa: BLE001 - persist terminal traces if post-evaluation artifact writing fails.
+            failure = _bounded_error(err)
+            for diagnostic in _persist_terminal_artifacts(
+                run_dir, manifest_path, descriptor, "failed", records, _matrix_total(config, selected_cases), failure
+            ):
+                _say(diagnostic)
+            _say(_format_unexpected_error(err))
+            return 1
         reporter.finish(
-            overall_correct_rate=experiment.overall_correct_rate(report),
             run_dir=str(run_dir),
             report_html=str(report_html),
         )
-    finally:
-        signal.signal(signal.SIGINT, previous_sigint)
 
-    # stdout stays machine-readable: the run directory and compact native analysis facts.
-    sys.stdout.write(f"run_dir: {run_dir}\n")
-    sys.stdout.write(f"report_html: {report_html}\n")
-    sys.stdout.write("\n".join(experiment.matrix_summary_lines(report)) + "\n")
-    return 0
+        # Branch boundary: interactive runs have one human final on stderr; all other success paths emit KV only.
+        if output_mode == "machine":
+            sys.stdout.write(f"run_dir: {run_dir}\n")
+            sys.stdout.write(f"report_html: {report_html}\n")
+            sys.stdout.write("\n".join(experiment.matrix_summary_lines(report)) + "\n")
+        return 0
+    finally:
+        # State cleanup point: restore the caller's handler only after evaluation and persistence have reached a terminal state.
+        signal.signal(signal.SIGINT, previous_sigint)
 
 
 async def _run_eval_matrix(
-    config: EvalConfig, run_id: str, reporter: MatrixTerminalReporter
+    config: EvalConfig, descriptor: RunDescriptor, on_event: experiment.MatrixEventCallback
 ) -> EvaluationReport[MatrixCellRef, CaseTrace, MatrixCellMeta]:
     """Run one matrix, allowing Escape to cancel only interactive terminal sessions."""
     # Branch boundary: redirected streams retain their existing non-interactive behavior.
     if not _is_interactive_eval():
-        return await experiment.run_matrix(config, run_id=run_id, on_event=reporter.handle)
+        return await experiment.run_matrix(config, descriptor=descriptor, on_event=on_event)
     current_task = asyncio.current_task()
     assert current_task is not None
     loop = asyncio.get_running_loop()
@@ -453,7 +538,7 @@ async def _run_eval_matrix(
     try:
         with _EscapeWatcher(current_task.cancel) as watcher:
             try:
-                return await experiment.run_matrix(config, run_id=run_id, on_event=reporter.handle)
+                return await experiment.run_matrix(config, descriptor=descriptor, on_event=on_event)
             except asyncio.CancelledError:
                 if watcher.cancelled:
                     raise _EvalCancelled from None
@@ -465,6 +550,111 @@ async def _run_eval_matrix(
 def _is_interactive_eval() -> bool:
     """Return whether both streams support the cbreak Escape interaction."""
     return sys.stdin.isatty() and sys.stderr.isatty()
+
+
+def _output_mode(args: argparse.Namespace) -> str:
+    """Resolve explicit machine output before automatic terminal presentation."""
+    return "machine" if args.machine or not sys.stderr.isatty() else "interactive"
+
+
+def _validate_run_config(config: EvalConfig) -> tuple[list[EvalCase], list[PromptCandidate]]:
+    """Validate all static matrix inputs before creating artifacts or model tasks."""
+    if not config.models:
+        raise ValueError("models_empty")
+    if config.concurrency < 1:
+        raise ValueError("concurrency_invalid")
+    if config.model_timeout <= 0:
+        raise ValueError("model_timeout_invalid")
+    if config.max_tool_calls <= 0:
+        raise ValueError("max_tool_calls_invalid")
+    if config.reasoning_effort not in {None, "none", "minimal", "low", "medium", "high", "xhigh"}:
+        raise ValueError("reasoning_invalid")
+    known_case_ids = {case.id for case in cases.CASES}
+    if config.cases is not None and any(case_id not in known_case_ids for case_id in config.cases):
+        raise ValueError("unknown_case")
+    selected_cases = _select_cases(config.cases, config.homes)
+    if not selected_cases:
+        raise ValueError("cases_empty")
+    try:
+        selected_candidates = prompts.load_candidates(config.candidates, config.prompt_profile)
+    except Exception as err:
+        raise ValueError("candidates_unresolvable") from err
+    if not selected_candidates:
+        raise ValueError("candidates_empty")
+    if len(selected_cases) * len(selected_candidates) * len(config.models) == 0:
+        raise ValueError("matrix_empty")
+    return selected_cases, selected_candidates
+
+
+def _manifest_payload(status: str, descriptor: RunDescriptor, error: str | None = None) -> dict[str, object]:
+    """Build the small lifecycle envelope shared by every manifest state."""
+    payload: dict[str, object] = {
+        "artifact_type": "llm_sandbox_eval_manifest",
+        "status": status,
+        "descriptor": asdict(descriptor),
+    }
+    if error is not None:
+        payload["error"] = error
+    return payload
+
+
+def _write_partial(
+    run_dir: Path,
+    descriptor: RunDescriptor,
+    status: Literal["cancelled", "failed"],
+    records: list[CompletedCellRecord],
+    total: int,
+    error: str | None = None,
+) -> None:
+    """Persist the typed non-report journal for cancellation or operational failure."""
+    reports.write_partial_artifact(
+        run_dir / "partial.json",
+        PartialRunArtifact(
+            "llm_sandbox_partial_run",
+            descriptor.run_id,
+            descriptor,
+            status,
+            len(records),
+            total,
+            tuple(records),
+            error,
+            datetime.now(UTC).isoformat(),
+        ),
+    )
+
+
+def _persist_terminal_artifacts(
+    run_dir: Path,
+    manifest_path: Path,
+    descriptor: RunDescriptor,
+    status: Literal["cancelled", "failed"],
+    records: list[CompletedCellRecord],
+    total: int,
+    error: str | None = None,
+) -> list[str]:
+    """Best-effort terminal persistence that never retries its own failures."""
+    diagnostics: list[str] = []
+    try:
+        _write_partial(run_dir, descriptor, status, records, total, error)
+    except Exception as err:  # noqa: BLE001 - retain the manifest state even when a journal write fails.
+        diagnostics.append(f"error: partial_journal_write_failed:{_bounded_error(err)}")
+    try:
+        reports.write_manifest(manifest_path, _manifest_payload(status, descriptor, error))
+    except Exception as err:  # noqa: BLE001 - surface an atomic-manifest failure without recursive recovery.
+        diagnostics.append(f"error: manifest_write_failed:{_bounded_error(err)}")
+    return diagnostics
+
+
+def _matrix_total(config: EvalConfig, selected_cases: list[EvalCase]) -> int:
+    """Return the validated planned matrix size for partial lifecycle metadata."""
+    return len(config.models) * len(config.candidates) * len(selected_cases)
+
+
+def _bounded_error(error: BaseException) -> str:
+    """Return one bounded failure description suitable for a durable journal."""
+    return _format_unexpected_error(error if isinstance(error, Exception) else Exception(str(error)))[
+        7:_CLI_ERROR_MAX_CHARS
+    ]
 
 
 def _run_report(args: argparse.Namespace) -> int:

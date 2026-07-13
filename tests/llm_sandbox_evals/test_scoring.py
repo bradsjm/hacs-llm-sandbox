@@ -72,7 +72,7 @@ async def test_each_authored_direct_action_passes(case: EvalCase, tmp_path: Path
     )
 
     assert trace.outcome.state == "correct"
-    assert trace.outcome.reason == trace.action_result.reason == "ok"
+    assert trace.outcome.action_reason == trace.action_result.reason == "ok"
     assert trace.answer == "Done."
     assert trace.action_result.passed is True
 
@@ -367,7 +367,7 @@ def test_action_assessment_failure_taxonomy(
     outcome, result, _ledger = evaluate_case(case, recorded)
 
     assert result == expected_result
-    assert outcome.reason == result.reason
+    assert outcome.action_reason == result.reason
     assert outcome.state == ("correct" if result.passed else "incorrect")
 
 

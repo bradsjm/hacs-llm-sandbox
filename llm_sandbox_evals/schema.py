@@ -22,6 +22,11 @@ type ActionOutcomeReason = Literal[
 ]
 
 
+def variant_label(model_id: str, reasoning_effort: str | None) -> str:
+    """Return the display-only identity for one resolved model variant."""
+    return f"{model_id}({reasoning_effort or 'default'})"
+
+
 @dataclass(frozen=True, slots=True)
 class PromptCandidate:
     """One prompt candidate evaluated across the model matrix."""
@@ -33,6 +38,31 @@ class PromptCandidate:
     get_statistics_description: str
     get_logbook_description: str
     get_automation_description: str
+
+
+@dataclass(frozen=True, slots=True)
+class ModelDescriptor:
+    """Resolved run-wide settings for one provider model."""
+
+    model_id: str
+    reasoning_effort: str | None
+    temperature: float | None
+    variant_label: str
+
+
+@dataclass(frozen=True, slots=True)
+class RunDescriptor:
+    """Reload-safe snapshot of the configuration that defines one matrix run."""
+
+    run_id: str
+    created_at: str
+    models: tuple[ModelDescriptor, ...]
+    candidates: tuple[str, ...]
+    cases: tuple[str, ...]
+    prompt_profile: str
+    concurrency: int
+    model_timeout: float
+    max_tool_calls: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,7 +158,7 @@ class EvalDiagnostics:
     max_batch_size: int = 1
     elapsed_seconds: float | None = None
     cap_exhausted: bool = False
-    usage: dict[str, int | float | None] | None = None
+    usage: dict[str, int | float | bool | None] | None = None
     failure: str | None = None
 
 
@@ -137,7 +167,7 @@ class CaseOutcome:
     """Binary action quality outcome or an incomplete operational result."""
 
     state: Literal["correct", "incorrect", "incomplete"]
-    reason: ActionOutcomeReason
+    action_reason: ActionOutcomeReason | None
     score: float = field(init=False)
 
     def __post_init__(self) -> None:
@@ -147,7 +177,7 @@ class CaseOutcome:
 
 @dataclass(frozen=True, slots=True)
 class CaseTrace:
-    """Self-contained scoring-v5 action eval trace."""
+    """Self-contained scoring-v6 action eval trace."""
 
     case_id: str
     candidate_id: str
@@ -159,7 +189,34 @@ class CaseTrace:
     action_ledger: ActionLedger
     tool_events: tuple[ToolEvent, ...]
     diagnostics: EvalDiagnostics
-    scoring_version: Literal[5] = 5
+    reasoning_effort: str | None = None
+    temperature: float | None = None
+    scoring_version: Literal[6] = 6
     provider_error: str | None = None
     user_request: str = ""
     conversation_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CompletedCellRecord:
+    """One terminal cell captured in a partial-run journal, never a report."""
+
+    cell: dict[str, str | float | None]
+    trace: CaseTrace
+    completion_index: int
+    finished_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class PartialRunArtifact:
+    """Typed cancellation/failure journal; intentionally not an EvaluationReport."""
+
+    artifact_type: Literal["llm_sandbox_partial_run"]
+    run_id: str
+    descriptor: RunDescriptor
+    status: Literal["cancelled", "failed"]
+    finished: int
+    total: int
+    records: tuple[CompletedCellRecord, ...]
+    error: str | None
+    saved_at: str

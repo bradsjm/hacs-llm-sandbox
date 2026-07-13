@@ -44,9 +44,19 @@ async def _raise_cancelled_error(*_args: object) -> object:
     raise asyncio.CancelledError
 
 
+async def _raise_runtime_error(*_args: object) -> object:
+    """Raise a deterministic operational failure from the running eval coroutine."""
+    raise RuntimeError("matrix runtime failed")
+
+
 def _raise_artifact_error(*_args: object, **_kwargs: object) -> object:
     """Raise a deterministic report artifact failure."""
     raise RuntimeError("artifact write failed")
+
+
+def _raise_keyboard_interrupt_sync(*_args: object, **_kwargs: object) -> object:
+    """Raise a synchronous interruption from the post-evaluation persistence path."""
+    raise KeyboardInterrupt
 
 
 def _raise_report_error(*_args: object, **_kwargs: object) -> object:
@@ -94,10 +104,16 @@ def test_eval_keeps_stdout_factual_and_writes_artifacts(capsys: pytest.CaptureFi
     run_dir = Path(lines[0].removeprefix("run_dir: "))
     assert lines[0] == f"run_dir: {run_dir}"
     assert lines[1] == f"report_html: {run_dir / 'report.html'}"
-    assert lines[2].startswith("correct_rate: ")
+    assert lines[2].startswith("quality_rate: ")
+    assert lines[3].startswith("coverage_rate: ")
+    assert lines[4].startswith("scored: ")
+    # Machine KV stays ANSI-free and free of human Rich duplication.
     assert "\x1b" not in captured.out
     assert (run_dir / "report.json").is_file()
     assert (run_dir / "report.html").is_file()
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["artifact_type"] == "llm_sandbox_eval_manifest"
+    assert manifest["status"] == "complete"
 
 
 def test_eval_token_telemetry_does_not_pollute_terminal_output(
@@ -151,13 +167,15 @@ def test_eval_reports_completed_cell_error_on_redirected_stderr(
     captured = capsys.readouterr()
 
     assert exit_code == 0
-    assert "cell finished" in captured.err
-    assert "Turn on the Utility Room ceiling light." in captured.err
-    assert "provider rejected model" in captured.err
+    # Redirected stderr keeps deterministic KV lifecycle lines with the real operational cause.
+    assert "cell_finished" in captured.err
+    assert "incomplete·provider_error" in captured.err
+    assert "matrix_started total=" in captured.err
+    # stdout stays factual and free of provider error detail.
     assert "provider rejected model" not in captured.out
 
 
-def test_escape_cancels_interactive_eval_without_artifacts_or_stdout(
+def test_escape_cancels_interactive_eval_writing_typed_partial_journal(
     capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setattr(cli, "_is_interactive_eval", lambda: True)
@@ -177,24 +195,32 @@ def test_escape_cancels_interactive_eval_without_artifacts_or_stdout(
     captured = capsys.readouterr()
 
     assert exit_code == 130
+    # Non-zero exit keeps stdout empty; diagnostics and the partial journal go to stderr/disk.
     assert captured.out == ""
     assert "eval cancelled" in captured.err
-    assert not list(tmp_path.iterdir())
+    [run_dir] = list(tmp_path.iterdir())
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["status"] == "cancelled"
+    # The typed partial journal is explicitly not a report (no report.json is written).
+    assert (run_dir / "partial.json").is_file()
+    assert not (run_dir / "report.json").exists()
+    partial = reports.load_partial_artifact(run_dir / "partial.json")
+    assert partial.artifact_type == "llm_sandbox_partial_run"
+    assert partial.status == "cancelled"
 
 
 @pytest.mark.parametrize(
-    ("matrix_failure", "expected_message"),
+    "matrix_failure",
     [
-        pytest.param(_raise_keyboard_interrupt, "eval interrupted", id="keyboard-interrupt"),
-        pytest.param(_raise_cancelled_error, "eval interrupted", id="cancelled-error"),
+        pytest.param(_raise_keyboard_interrupt, id="keyboard-interrupt"),
+        pytest.param(_raise_cancelled_error, id="cancelled-error"),
     ],
 )
-def test_eval_cancellation_is_clean_without_artifacts_or_stdout(
+def test_eval_cancellation_writes_partial_journal_and_keeps_stdout_clean(
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     matrix_failure: Callable[..., object],
-    expected_message: str,
 ) -> None:
     monkeypatch.setattr(cli, "_run_eval_matrix", matrix_failure)
 
@@ -202,10 +228,17 @@ def test_eval_cancellation_is_clean_without_artifacts_or_stdout(
     captured = capsys.readouterr()
 
     assert exit_code == 130
+    # Non-zero exit keeps stdout empty in all modes.
     assert captured.out == ""
-    assert expected_message in captured.err
+    assert "eval cancelled" in captured.err
     assert "Traceback" not in captured.err
-    assert not list(tmp_path.iterdir())
+    # Cancellation persists the typed partial journal and a cancelled manifest.
+    [run_dir] = list(tmp_path.iterdir())
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["status"] == "cancelled"
+    partial = reports.load_partial_artifact(run_dir / "partial.json")
+    assert partial.status == "cancelled"
+    assert not (run_dir / "report.json").exists()
 
 
 @pytest.mark.parametrize(
@@ -264,12 +297,89 @@ def test_unexpected_command_failures_are_concise_and_keep_stdout_clean(
     assert "Traceback" not in captured.err
 
 
-def test_debug_mode_reraises_unexpected_exception(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("LLM_SANDBOX_EVALS_DEBUG", "1")
+def test_post_evaluation_write_failure_writes_failed_partial_preserving_records(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Fix #1: a report/HTML/manifest write failure after the matrix completes leaves a failed
+    # manifest plus a failed partial journal that preserves the completed cells, with empty stdout.
     monkeypatch.setattr(reports, "write_report_json", _raise_artifact_error)
 
-    with pytest.raises(RuntimeError, match="artifact write failed"):
-        main(["eval", "--models", "stub", "--runs-dir", str(tmp_path)])
+    exit_code = main(
+        [
+            "eval",
+            "--models",
+            "stub",
+            "--cases",
+            "direct_turn_on_utility_room_ceiling",
+            "--runs-dir",
+            str(tmp_path),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    # Non-zero exit keeps stdout empty in all output modes.
+    assert captured.out == ""
+    assert "artifact write failed" in captured.err
+    [run_dir] = list(tmp_path.iterdir())
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["status"] == "failed"
+    partial = reports.load_partial_artifact(run_dir / "partial.json")
+    assert partial.status == "failed"
+    assert partial.error is not None
+    # The matrix completed before the write failed, so the journal preserves its records.
+    assert partial.finished == 1
+    assert partial.total == 1
+    assert len(partial.records) == 1
+    assert partial.records[0].trace.case_id == "direct_turn_on_utility_room_ceiling"
+    # No report is written when the post-evaluation write fails.
+    assert not (run_dir / "report.json").exists()
+
+
+def test_cancellation_during_post_evaluation_persistence_writes_cancelled_journal(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # An interruption during post-evaluation persistence leaves a cancelled manifest plus a
+    # cancelled partial journal preserving the completed cells, exit 130, and empty stdout.
+    monkeypatch.setattr(reports, "write_report_json", _raise_keyboard_interrupt_sync)
+
+    exit_code = main(
+        [
+            "eval",
+            "--models",
+            "stub",
+            "--cases",
+            "direct_turn_on_utility_room_ceiling",
+            "--runs-dir",
+            str(tmp_path),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 130
+    assert captured.out == ""
+    assert "eval cancelled" in captured.err
+    [run_dir] = list(tmp_path.iterdir())
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["status"] == "cancelled"
+    partial = reports.load_partial_artifact(run_dir / "partial.json")
+    assert partial.status == "cancelled"
+    # The matrix completed before the interruption, so the journal preserves its records.
+    assert partial.finished == 1
+    assert partial.total == 1
+    assert len(partial.records) == 1
+    assert partial.records[0].trace.case_id == "direct_turn_on_utility_room_ceiling"
+    assert not (run_dir / "report.json").exists()
+
+
+def test_debug_mode_reraises_unexpected_exception(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # Debug reraise still covers failures that escape _run_eval (e.g. the report subcommand).
+    monkeypatch.setenv("LLM_SANDBOX_EVALS_DEBUG", "1")
+    monkeypatch.setattr(reports, "load_report", _raise_report_error)
+    _prepare_saved_report(tmp_path)
+
+    with pytest.raises(RuntimeError, match="report load failed"):
+        main(["report", "saved-run", "--runs-dir", str(tmp_path)])
 
 
 @pytest.mark.parametrize("debug_value", [pytest.param("0", id="zero"), pytest.param("false", id="false")])
@@ -352,7 +462,7 @@ def test_report_html_rejects_legacy_artifacts(
 
     assert exit_code == 1
     assert captured.out == ""
-    assert "legacy scoring artifact" in captured.err
+    assert "legacy scoring-v6 artifact" in captured.err
     assert not (run_dir / "report.html").exists()
 
 
@@ -415,10 +525,15 @@ def test_pty_sigint_interrupts_real_stub_eval_without_traceback_or_artifacts(tmp
 
     assert process.returncode == 130
     assert stdout == b""
-    assert b"eval interrupted" in stderr
+    assert b"eval cancelled" in stderr
     assert b"Traceback" not in stderr
     assert restored_settings == initial_settings
-    assert not list(tmp_path.iterdir())
+    # Cancellation persists a typed partial journal and manifest rather than leaving nothing.
+    [run_dir] = list(tmp_path.iterdir())
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["status"] == "cancelled"
+    assert (run_dir / "partial.json").is_file()
+    assert not (run_dir / "report.json").exists()
 
 
 @pytest.mark.parametrize(
@@ -472,3 +587,158 @@ class _ImmediateEscapeWatcher:
 
     def __exit__(self, _exc_type: object, _exc_value: object, _traceback: object) -> None:
         """Mirror the production watcher's non-suppressing context exit."""
+
+
+@pytest.mark.parametrize(
+    ("extra_args", "reason_key"),
+    [
+        pytest.param(["--cases", "no-such-case"], "unknown_case", id="unknown-case"),
+        pytest.param(["--concurrency", "0"], "concurrency_invalid", id="bad-concurrency"),
+        pytest.param(["--max-tool-calls", "0"], "max_tool_calls_invalid", id="bad-tool-cap"),
+        pytest.param(["--model-timeout", "0"], "model_timeout_invalid", id="bad-timeout"),
+        pytest.param(["--reasoning", "bogus"], "reasoning_invalid", id="bad-reasoning"),
+        pytest.param(["--candidates", "no-such-candidate"], "candidates_unresolvable", id="bad-candidate"),
+    ],
+)
+def test_eval_preflight_rejects_invalid_config_before_model_calls(
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    extra_args: list[str],
+    reason_key: str,
+) -> None:
+    model_calls: list[str] = []
+
+    def _record_model(model_id: str) -> Model:
+        model_calls.append(model_id)
+        return FunctionModel(_raise_provider_error, model_name=model_id)
+
+    # Scoped spy: if preflight fails to gate, the model factory would record a call.
+    monkeypatch.setattr(agent_runner, "make_model", _record_model)
+
+    exit_code = main(["eval", "--models", "stub", "--runs-dir", str(tmp_path), *extra_args])
+    captured = capsys.readouterr()
+
+    assert exit_code == 2
+    assert f"invalid_eval_config:{reason_key}" in captured.err
+    # Validation happens before any run directory or model call is created.
+    assert captured.out == ""
+    assert not list(tmp_path.iterdir())
+    assert model_calls == []
+
+
+def test_eval_interactive_mode_emits_human_summary_on_stderr_and_keeps_stdout_clean(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Simulate an interactive TTY on stderr while stdin stays non-interactive, so the
+    # non-interactive matrix path runs but the output mode resolves to human presentation.
+    monkeypatch.setattr(sys.stderr, "isatty", lambda: True)
+
+    exit_code = main(
+        [
+            "eval",
+            "--models",
+            "stub",
+            "--cases",
+            "direct_turn_on_utility_room_ceiling",
+            "--runs-dir",
+            str(tmp_path),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    # Interactive mode never duplicates the machine KV block on stdout.
+    assert captured.out == ""
+    assert "quality_rate:" not in captured.out
+    # The durable human final lands on stderr with the artifact location shown exactly once.
+    assert captured.err.count("Artifacts:") == 1
+
+
+def test_eval_machine_flag_forces_deterministic_kv_on_stdout_with_tty(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Even with stderr reporting a TTY, --machine forces deterministic KV on stdout.
+    monkeypatch.setattr(sys.stderr, "isatty", lambda: True)
+
+    exit_code = main(
+        [
+            "eval",
+            "--models",
+            "stub",
+            "--cases",
+            "direct_turn_on_utility_room_ceiling",
+            "--runs-dir",
+            str(tmp_path),
+            "--machine",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert captured.out.startswith("run_dir: ")
+    assert "quality_rate: " in captured.out
+    assert "coverage_rate: " in captured.out
+    # Machine mode prints no human durable final on stderr.
+    assert "Artifacts:" not in captured.err
+
+
+def test_eval_failure_keeps_stdout_empty_and_writes_failed_partial_journal(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(cli, "_run_eval_matrix", _raise_runtime_error)
+
+    exit_code = main(
+        [
+            "eval",
+            "--models",
+            "stub",
+            "--cases",
+            "direct_turn_on_utility_room_ceiling",
+            "--runs-dir",
+            str(tmp_path),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    # Non-zero exit keeps stdout empty in all output modes.
+    assert captured.out == ""
+    [run_dir] = list(tmp_path.iterdir())
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["status"] == "failed"
+    partial = reports.load_partial_artifact(run_dir / "partial.json")
+    assert partial.status == "failed"
+    assert partial.error is not None
+
+
+def test_manifest_descriptor_equals_report_experiment_metadata_including_created_at(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    # Fix #7: one caller-owned descriptor drives both the manifest and the report's
+    # experiment_metadata, so created_at and every field stay identical across artifacts.
+    exit_code = main(
+        [
+            "eval",
+            "--models",
+            "stub",
+            "--cases",
+            "direct_turn_on_utility_room_ceiling",
+            "--runs-dir",
+            str(tmp_path),
+        ]
+    )
+    captured = capsys.readouterr()
+    assert exit_code == 0
+
+    run_dir = Path(captured.out.splitlines()[0].removeprefix("run_dir: "))
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    report = reports.load_report(run_dir)
+
+    manifest_descriptor = manifest["descriptor"]
+    experiment_metadata = report.experiment_metadata
+    # The created_at timestamp is the load-bearing field that proves a single descriptor instance.
+    assert manifest_descriptor["created_at"] == experiment_metadata["created_at"]
+    assert manifest_descriptor["run_id"] == experiment_metadata["run_id"]
+    # The full descriptor payload is identical across the manifest and the persisted report.
+    assert manifest_descriptor == experiment_metadata

@@ -24,6 +24,14 @@ uv run --group dev --group evals python -m llm_sandbox_evals report <run_id> --h
 
 Real Pydantic AI model IDs may replace `stub`; provider credentials come from
 the environment. Artifacts are written below `eval_data/runs/<run_id>/`.
+Interactive terminals receive one Rich summary on stderr and the artifact
+location once. Redirected output, or `--machine`, emits deterministic KV on
+stdout. Non-zero exits leave stdout empty.
+
+Each run creates `manifest.json` before model calls. Its status moves from
+`running` to `complete`, `cancelled`, or `failed`. Cancellation and operational
+failure also write `partial.json`: a typed journal of terminal cells, **not** a
+native Pydantic Evals report. Partials cannot be rendered as HTML or resumed.
 
 ## Case contract
 
@@ -103,7 +111,7 @@ cases are valid no-action stub smoke cases, while the non-empty discovery,
 condition, and ambiguity-with-logic cases are intentionally not routed by the
 stub. This documents stub coverage only; it does not claim real-model results.
 
-## Scoring v5
+## Scoring v6
 
 Only the successful action ledger is scored. Required and actual effects are
 compared as exact multisets of:
@@ -118,15 +126,38 @@ fails on any successful effect, including a different fallback service. Rejected
 action records remain diagnostic and cannot satisfy or invalidate an otherwise
 exact successful ledger. Service-data matching is deferred; the current
 brightness/color cases assert service and target only. Structured action
-comparisons preserve unexpected effects and expose stable reason codes;
-`action_mismatch` is reserved for operational fallback traces.
-Operational provider, timeout, and harness failures remain `incomplete` and are
-classified in diagnostics rather than the scoring reason.
+comparisons preserve unexpected effects and expose stable action reason codes.
+`CaseOutcome.action_reason` is present only for scored correct/incorrect cells.
+Operational provider, timeout, and harness failures remain `incomplete`, have
+`action_reason: null`, and use `diagnostics.failure` as their effective cause.
+Cap exhaustion is scored incorrect with its real action reason and the distinct
+effective cause `cap_exhausted`.
 
-Reports use scoring version 5. Version 4 and older artifacts are rejected. The
-required-action trace-field rename also makes prior v5 artifacts using the old
-trace contract fail validation and be rejected as legacy. There is no
-compatibility decoder or rescoring shim.
+Reports use scoring version 6. All prior artifacts, including v5, are rejected
+as legacy; there is no compatibility decoder or rescoring shim. `model_id`
+remains the provider id, while every trace and descriptor persist the resolved
+run-wide `reasoning_effort` and `temperature`. Presentation derives labels such
+as `luna(high)` or `luna(default)` without changing provider routing.
+
+User-facing counts are `total` cells, `finished` terminal cells, and `scored`
+correct plus incorrect cells. `quality_rate = correct / scored`; `coverage_rate
+= scored / total`. Incomplete operational cells are excluded from quality but
+remain visible in coverage and cause groupings. Stub usage and cost are
+unavailable rather than zero; real-model task metrics take precedence over the
+self-contained trace usage fallback.
+
+## Presentation
+
+Live lanes contain only request, variant, elapsed/timeout, and tools/cap. There
+is no phase or Activity column, no `Waiting` state, and no model response,
+reasoning, tool arguments, or payloads in the terminal. After the transient
+Live frame ends, one durable final compares candidate × variant quality,
+coverage, operational issues, and usage.
+
+`report.html`, CSV export, and `report <run_id> --html` are all rebuilt from an
+immutable saved-report presentation model. The HTML hero shows quality,
+coverage, incomplete cells, and resolved variant configuration; incomplete
+inspectors show their operational cause rather than an action mismatch.
 
 ## Architecture
 

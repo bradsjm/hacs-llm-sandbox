@@ -150,7 +150,15 @@ This is a community integration. To contribute, set up a dev environment, or rep
 
 Documentation source lives under [`docs-site/docs/`](docs-site/docs/). Build it with `pnpm build` from `docs-site/` before changing docs navigation, Docusaurus config, or source-grounded behavior pages.
 
-Eval runs for the dev-only `llm_sandbox_evals` package write `report.json` and an interactive `report.html` under `eval_data/runs/<run_id>/`; open `report.html` in a browser to navigate the candidate × model × case matrix. `eval` emits it automatically, and `python -m llm_sandbox_evals report <run_id> --html` regenerates it from the saved `report.json` without model calls.
+Eval runs for the dev-only `llm_sandbox_evals` package create `manifest.json`
+under `eval_data/runs/<run_id>/` before model calls. Complete scoring-v6 runs
+write `report.json` and `report.html`; cancelled or failed runs write a typed
+`partial.json` journal instead, which is not a report and has no HTML/resume
+path. Reports preserve provider model IDs and show resolved reasoning variants,
+quality (`correct/scored`), coverage (`scored/total`), and operational causes.
+TTY runs render one human stderr summary; redirected runs or `--machine` emit
+deterministic KV. `python -m llm_sandbox_evals report <run_id> --html`
+regenerates the complete report without model calls.
 
 ## Support
 

@@ -8,7 +8,7 @@ from time import perf_counter
 from typing import Literal
 
 from custom_components.llm_sandbox.llm_api.prompts import PromptProfile, resolve_profile
-from pydantic_evals import Case, Dataset
+from pydantic_evals import Case, Dataset, increment_eval_metric
 from pydantic_evals.evaluators import (
     EvaluationReason,
     Evaluator,
@@ -22,9 +22,16 @@ from pydantic_evals.reporting.analyses import ReportAnalysis, ScalarResult, Tabl
 from llm_sandbox_evals import prompts
 from llm_sandbox_evals.config import EvalConfig
 from llm_sandbox_evals.harness import _select_cases, run_case
-from llm_sandbox_evals.schema import CaseTrace, EvalCase, PromptCandidate
+from llm_sandbox_evals.schema import (
+    CaseTrace,
+    EvalCase,
+    ModelDescriptor,
+    PromptCandidate,
+    RunDescriptor,
+    variant_label,
+)
 
-type MatrixCellMeta = dict[str, str | int]
+type MatrixCellMeta = dict[str, str | int | float | None]
 type MatrixEventCallback = Callable[[MatrixProgressEvent], None]
 type MatrixProgressState = Literal[
     "matrix_started", "cell_started", "tool_started", "tool_finished", "response_received", "cell_finished"
@@ -39,6 +46,8 @@ class MatrixCellRef:
     candidate_id: str
     model_id: str
     home: str
+    reasoning_effort: str | None = None
+    temperature: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,7 +67,7 @@ class MatrixProgressEvent:
 
 @dataclass(slots=True)
 class SandboxOutcome(Evaluator[MatrixCellRef, CaseTrace, MatrixCellMeta]):
-    """Expose the v5 binary outcome as native pydantic-evals results."""
+    """Expose scoring-v6 quality and operational labels as native eval results."""
 
     def evaluate(
         self, ctx: EvaluatorContext[MatrixCellRef, CaseTrace, MatrixCellMeta]
@@ -66,7 +75,7 @@ class SandboxOutcome(Evaluator[MatrixCellRef, CaseTrace, MatrixCellMeta]):
         """Publish binary quality and provider classification labels."""
         trace = ctx.output
         return {
-            "score": EvaluationReason(value=trace.outcome.score, reason=trace.outcome.reason),
+            "score": EvaluationReason(value=trace.outcome.score, reason=trace.outcome.action_reason),
             "outcome": trace.outcome.state,
             "incomplete": trace.outcome.state == "incomplete",
             "failure_classification": trace.diagnostics.failure or "none",
@@ -95,9 +104,9 @@ class CandidateMatrixReport(ReportEvaluator[MatrixCellRef, CaseTrace, MatrixCell
                     "Correct",
                     "Incorrect",
                     "Incomplete",
-                    "Completed",
-                    "Correct rate",
-                    "Coverage",
+                    "Scored",
+                    "Quality rate",
+                    "Coverage rate",
                     "PromptChars",
                     "SizeRatio",
                 ],
@@ -107,46 +116,50 @@ class CandidateMatrixReport(ReportEvaluator[MatrixCellRef, CaseTrace, MatrixCell
                 title="Candidate x model outcomes",
                 columns=[
                     "Candidate",
-                    "Model",
+                    "Variant",
                     "Correct",
                     "Incorrect",
                     "Incomplete",
-                    "Completed",
-                    "Correct rate",
-                    "Coverage",
+                    "Scored",
+                    "Quality rate",
+                    "Coverage rate",
                     "Calls",
                     "FailedCalls",
                     "Turns",
                     "Elapsed",
+                    "P50 elapsed",
+                    "P95 elapsed",
                     "Tokens",
                     "Cost",
                 ],
                 rows=[
                     [
                         row.candidate_id,
-                        row.model_id,
+                        row.variant,
                         row.correct,
                         row.incorrect,
                         row.incomplete,
-                        row.completed,
-                        _optional_round(row.correct_rate),
-                        _round(row.coverage),
+                        row.scored,
+                        _optional_round(row.quality_rate),
+                        _round(row.coverage_rate),
                         _round(row.mean_calls),
                         _round(row.mean_failed_calls),
                         _round(row.mean_turns),
                         _round(row.mean_elapsed),
-                        _optional_round(row.mean_tokens),
-                        _optional_round(row.mean_cost),
+                        _round(row.p50_elapsed),
+                        _round(row.p95_elapsed),
+                        _render_optional(row.total_tokens),
+                        _render_optional(row.total_cost),
                     ]
                     for row in pairs
                 ],
             ),
-            ScalarResult(title="Overall correct rate", value=_round(_rate(counts["correct"], counts["completed"]))),
+            ScalarResult(title="Quality rate", value=_round(_rate(counts["correct"], counts["scored"]))),
             ScalarResult(title="Correct cells", value=counts["correct"]),
             ScalarResult(title="Incorrect cells", value=counts["incorrect"]),
             ScalarResult(title="Incomplete cells", value=counts["incomplete"]),
-            ScalarResult(title="Completed cells", value=counts["completed"]),
-            ScalarResult(title="Coverage", value=_round(_rate(counts["completed"], len(cases)))),
+            ScalarResult(title="Scored cells", value=counts["scored"]),
+            ScalarResult(title="Coverage rate", value=_round(_rate(counts["scored"], len(cases)))),
         ]
 
 
@@ -154,18 +167,21 @@ class CandidateMatrixReport(ReportEvaluator[MatrixCellRef, CaseTrace, MatrixCell
 class _PairRow:
     candidate_id: str
     model_id: str
+    variant: str
     correct: int
     incorrect: int
     incomplete: int
-    completed: int
-    correct_rate: float | None
-    coverage: float
+    scored: int
+    quality_rate: float | None
+    coverage_rate: float
     mean_calls: float
     mean_failed_calls: float
     mean_turns: float
     mean_elapsed: float
-    mean_tokens: float | None
-    mean_cost: float | None
+    p50_elapsed: float
+    p95_elapsed: float
+    total_tokens: float | None
+    total_cost: float | None
     api_prompt_chars: int
     prompt_chars: int
 
@@ -178,13 +194,23 @@ def build_dataset(
     for candidate in candidates:
         for model_id in config.models:
             for case in selected_cases:
-                ref = MatrixCellRef(case.id, candidate.id, model_id, case.home)
+                ref = MatrixCellRef(
+                    case.id,
+                    candidate.id,
+                    model_id,
+                    case.home,
+                    config.reasoning_effort,
+                    config.temperature,
+                )
                 metadata: MatrixCellMeta = {
                     "run_id": run_id,
                     "case_id": ref.case_id,
                     "candidate_id": ref.candidate_id,
                     "model_id": ref.model_id,
                     "home": ref.home,
+                    "reasoning_effort": ref.reasoning_effort,
+                    "temperature": ref.temperature,
+                    "variant_label": variant_label(ref.model_id, ref.reasoning_effort),
                 }
                 cases.append(
                     Case(
@@ -249,6 +275,7 @@ def make_matrix_task(
             on_tool_boundary=on_tool_boundary,
             on_response=on_response,
         )
+        _record_trace_metrics(trace)
         completed += 1
         _emit_event(
             on_event,
@@ -268,10 +295,17 @@ def make_matrix_task(
 
 
 async def run_matrix(
-    config: EvalConfig, *, run_id: str | None = None, on_event: MatrixEventCallback | None = None
+    config: EvalConfig,
+    *,
+    run_id: str | None = None,
+    descriptor: RunDescriptor | None = None,
+    on_event: MatrixEventCallback | None = None,
 ) -> EvaluationReport[MatrixCellRef, CaseTrace, MatrixCellMeta]:
     """Run the full matrix through one native pydantic-evals experiment."""
-    if run_id is None:
+    if descriptor is not None:
+        # Branch boundary: the caller-owned descriptor is the single lifecycle identity for a CLI run.
+        run_id = descriptor.run_id
+    elif run_id is None:
         run_id = datetime.now(UTC).strftime("%Y%m%d-%H%M%S-%f")
     if os.environ.get("LOGFIRE_TOKEN"):
         from llm_sandbox_evals.logfire_config import configure_logfire
@@ -282,6 +316,8 @@ async def run_matrix(
     selected_cases = _select_cases(config.cases, config.homes)
     dataset = build_dataset(config, candidates, selected_cases, run_id)
     _emit_event(on_event, MatrixProgressEvent("matrix_started", total=len(dataset.cases)))
+    if descriptor is None:
+        descriptor = build_run_descriptor(config, run_id, selected_cases)
     return await dataset.evaluate(
         make_matrix_task(
             config,
@@ -295,6 +331,7 @@ async def run_matrix(
         max_concurrency=max(1, config.concurrency),
         progress=False,
         retry_task=None,
+        metadata=_descriptor_metadata(descriptor),
     )
 
 
@@ -312,20 +349,25 @@ def _presentation_request(request: str) -> str:
 
 
 def overall_correct_rate(report: EvaluationReport[MatrixCellRef, CaseTrace, MatrixCellMeta]) -> float:
-    """Return the completed-cell correct rate."""
+    """Return the scored-cell quality rate retained under the legacy helper name."""
     for analysis in report.analyses:
-        if isinstance(analysis, ScalarResult) and analysis.title == "Overall correct rate":
+        if isinstance(analysis, ScalarResult) and analysis.title == "Quality rate":
             return float(analysis.value)
-    raise ValueError("report is missing the Overall correct rate analysis")
+    raise ValueError("report is missing the Quality rate analysis")
 
 
 def matrix_summary_lines(report: EvaluationReport[MatrixCellRef, CaseTrace, MatrixCellMeta]) -> list[str]:
     """Return concise machine-readable outcome summaries."""
-    lines = [f"correct_rate: {overall_correct_rate(report):.3f}"]
+    counts = _counts([case.output for case in report.cases])
+    lines = [
+        f"quality_rate: {overall_correct_rate(report):.3f}",
+        f"coverage_rate: {_rate(counts['scored'], counts['total']):.3f}",
+        f"scored: {counts['scored']}",
+    ]
     for analysis in report.analyses:
         if isinstance(analysis, TableResult) and analysis.title == "Candidate x model outcomes":
             lines.extend(
-                f"{row[0]}/{row[1]}: correct_rate={row[6]} completed={row[5]} coverage={row[7]}"
+                f"{row[0]}/{row[1]}: quality_rate={row[6]} scored={row[5]} coverage_rate={row[7]}"
                 for row in analysis.rows
             )
     return lines
@@ -341,29 +383,67 @@ def _pair_rows(
     for candidate_id in candidate_ids:
         for model_id in model_ids:
             selected = [
-                c.output
+                c
                 for c in report_cases
                 if _metadata_str(c, "candidate_id") == candidate_id and _metadata_str(c, "model_id") == model_id
             ]
-            counts = _counts(selected)
-            diagnostics = [trace.diagnostics for trace in selected]
+            traces = [case.output for case in selected]
+            counts = _counts(traces)
+            diagnostics = [trace.diagnostics for trace in traces]
             api_chars, authored_chars = prompt_sizes.get(candidate_id, (0, 0))
             rows.append(
                 _PairRow(
                     candidate_id,
                     model_id,
+                    variant_label(
+                        model_id, _metadata_str_or_none(selected[0], "reasoning_effort") if selected else None
+                    ),
                     counts["correct"],
                     counts["incorrect"],
                     counts["incomplete"],
-                    counts["completed"],
-                    _nullable_rate(counts["correct"], counts["completed"]),
-                    _rate(counts["completed"], len(selected)),
-                    _mean([d.tool_calls for d in diagnostics]),
-                    _mean([d.failed_tool_calls for d in diagnostics]),
-                    _mean([d.model_turns for d in diagnostics]),
-                    _mean([d.elapsed_seconds for d in diagnostics]),
-                    _optional_mean([_usage_value(d, "total_tokens") for d in diagnostics]),
-                    _optional_mean([_usage_value(d, "cost") for d in diagnostics]),
+                    counts["scored"],
+                    _nullable_rate(counts["correct"], counts["scored"]),
+                    _rate(counts["scored"], len(selected)),
+                    _mean(
+                        [
+                            _metric_value(case, "tool_calls", d.tool_calls)
+                            for case, d in zip(selected, diagnostics, strict=True)
+                        ]
+                    ),
+                    _mean(
+                        [
+                            _metric_value(case, "failed_tool_calls", d.failed_tool_calls)
+                            for case, d in zip(selected, diagnostics, strict=True)
+                        ]
+                    ),
+                    _mean(
+                        [
+                            _metric_value(case, "model_turns", d.model_turns)
+                            for case, d in zip(selected, diagnostics, strict=True)
+                        ]
+                    ),
+                    _mean(
+                        [
+                            _metric_value(case, "elapsed_seconds", d.elapsed_seconds)
+                            for case, d in zip(selected, diagnostics, strict=True)
+                        ]
+                    ),
+                    _percentile(
+                        [
+                            _metric_value(case, "elapsed_seconds", d.elapsed_seconds)
+                            for case, d in zip(selected, diagnostics, strict=True)
+                        ],
+                        0.5,
+                    ),
+                    _percentile(
+                        [
+                            _metric_value(case, "elapsed_seconds", d.elapsed_seconds)
+                            for case, d in zip(selected, diagnostics, strict=True)
+                        ],
+                        0.95,
+                    ),
+                    _optional_total([_metric_or_usage(case, "total_tokens") for case in selected]),
+                    _optional_total([_metric_or_usage(case, "cost") for case in selected]),
                     api_chars,
                     authored_chars,
                 )
@@ -384,10 +464,10 @@ def _ranking_rows(
     rendered: list[tuple[float, float, int, list[str | int | float | bool | None]]] = []
     for candidate_id in candidate_ids:
         rows = [r for r in pair_rows if r.candidate_id == candidate_id and r.model_id in model_ids]
-        completed = sum(r.completed for r in rows)
+        scored = sum(r.scored for r in rows)
         correct = sum(r.correct for r in rows)
-        rate = _nullable_rate(correct, completed)
-        model_rates = [r.correct_rate for r in rows if r.correct_rate is not None]
+        rate = _nullable_rate(correct, scored)
+        model_rates = [r.quality_rate for r in rows if r.quality_rate is not None]
         min_model = min(model_rates, default=-1.0)
         prompt_chars = rows[0].prompt_chars if rows else 0
         total_cells = sum(r.correct + r.incorrect + r.incomplete for r in rows)
@@ -401,9 +481,9 @@ def _ranking_rows(
                     correct,
                     sum(r.incorrect for r in rows),
                     sum(r.incomplete for r in rows),
-                    completed,
+                    scored,
                     _optional_round(rate),
-                    _round(_rate(completed, total_cells)),
+                    _round(_rate(scored, total_cells)),
                     prompt_chars,
                     _round(prompt_chars / baseline),
                 ],
@@ -418,12 +498,19 @@ def _counts(traces: Sequence[CaseTrace]) -> dict[str, int]:
         "correct": sum(t.outcome.state == "correct" for t in traces),
         "incorrect": sum(t.outcome.state == "incorrect" for t in traces),
         "incomplete": sum(t.outcome.state == "incomplete" for t in traces),
-        "completed": sum(t.outcome.state != "incomplete" for t in traces),
+        "scored": sum(t.outcome.state != "incomplete" for t in traces),
+        "total": len(traces),
     }
 
 
 def _metadata_str(report_case: ReportCase[MatrixCellRef, CaseTrace, MatrixCellMeta], key: str) -> str:
     return str((report_case.metadata or {})[key])
+
+
+def _metadata_str_or_none(report_case: ReportCase[MatrixCellRef, CaseTrace, MatrixCellMeta], key: str) -> str | None:
+    """Read nullable metadata without stringifying an absent resolved setting."""
+    value = (report_case.metadata or {}).get(key)
+    return str(value) if value is not None else None
 
 
 def _rate(numerator: int, denominator: int) -> float:
@@ -444,14 +531,117 @@ def _optional_mean(values: Sequence[float | int | None]) -> float | None:
     return sum(present) / len(present) if present else None
 
 
+def _optional_total(values: Sequence[float | int | None]) -> float | None:
+    """Return the total known value, preserving unavailable provider metrics."""
+    present = [float(value) for value in values if value is not None]
+    return sum(present) if present else None
+
+
+def _percentile(values: Sequence[float | int | None], fraction: float) -> float:
+    """Return a linear-interpolated percentile for elapsed timing diagnostics."""
+    present = sorted(float(value) for value in values if value is not None)
+    if not present:
+        return 0.0
+    position = (len(present) - 1) * fraction
+    lower = int(position)
+    upper = min(lower + 1, len(present) - 1)
+    return present[lower] + (present[upper] - present[lower]) * (position - lower)
+
+
+def _metric_value(
+    report_case: ReportCase[MatrixCellRef, CaseTrace, MatrixCellMeta], key: str, fallback: float | int | None
+) -> float | int | None:
+    """Prefer native task metrics while retaining trace diagnostics for old provider values."""
+    value = report_case.metrics.get(key)
+    return value if isinstance(value, int | float) and not isinstance(value, bool) else fallback
+
+
+def _metric_or_usage(report_case: ReportCase[MatrixCellRef, CaseTrace, MatrixCellMeta], key: str) -> float | None:
+    """Read persisted task metrics first, then the self-contained trace usage fallback."""
+    metric = report_case.metrics.get(key)
+    if isinstance(metric, int | float) and not isinstance(metric, bool):
+        return float(metric)
+    usage = report_case.output.diagnostics.usage
+    value = usage.get(key) if isinstance(usage, dict) else None
+    return float(value) if isinstance(value, int | float) and not isinstance(value, bool) else None
+
+
+def _record_trace_metrics(trace: CaseTrace) -> None:
+    """Record per-cell native metrics while the pydantic-evals task context is active."""
+    diagnostics = trace.diagnostics
+    for name, value in {
+        "tool_calls": diagnostics.tool_calls,
+        "successful_tool_calls": diagnostics.successful_tool_calls,
+        "failed_tool_calls": diagnostics.failed_tool_calls,
+        "model_turns": diagnostics.model_turns,
+        "elapsed_seconds": diagnostics.elapsed_seconds,
+        "total_tokens": _usage_value(diagnostics, "total_tokens"),
+    }.items():
+        # Branch boundary: unavailable provider usage must remain unavailable, not become zero.
+        if isinstance(value, int | float) and not isinstance(value, bool):
+            increment_eval_metric(name, value)
+
+
 def _usage_value(trace_diagnostics: object, key: str) -> float | None:
+    """Read one optional numeric usage field from diagnostics."""
     usage = getattr(trace_diagnostics, "usage", None)
     value = usage.get(key) if isinstance(usage, dict) else None
     return float(value) if isinstance(value, int | float) and not isinstance(value, bool) else None
 
 
+def build_run_descriptor(config: EvalConfig, run_id: str, selected_cases: Sequence[EvalCase]) -> RunDescriptor:
+    """Build the native reload-safe run configuration snapshot."""
+    return RunDescriptor(
+        run_id,
+        datetime.now(UTC).isoformat(),
+        tuple(
+            ModelDescriptor(
+                model_id,
+                config.reasoning_effort,
+                config.temperature,
+                variant_label(model_id, config.reasoning_effort),
+            )
+            for model_id in config.models
+        ),
+        tuple(config.candidates),
+        tuple(case.id for case in selected_cases),
+        config.prompt_profile,
+        config.concurrency,
+        config.model_timeout,
+        config.max_tool_calls,
+    )
+
+
+def _descriptor_metadata(descriptor: RunDescriptor) -> dict[str, object]:
+    """Convert the frozen descriptor to the JSON-native Dataset metadata contract."""
+    return {
+        "run_id": descriptor.run_id,
+        "created_at": descriptor.created_at,
+        "models": [
+            {
+                "model_id": model.model_id,
+                "reasoning_effort": model.reasoning_effort,
+                "temperature": model.temperature,
+                "variant_label": model.variant_label,
+            }
+            for model in descriptor.models
+        ],
+        "candidates": list(descriptor.candidates),
+        "cases": list(descriptor.cases),
+        "prompt_profile": descriptor.prompt_profile,
+        "concurrency": descriptor.concurrency,
+        "model_timeout": descriptor.model_timeout,
+        "max_tool_calls": descriptor.max_tool_calls,
+    }
+
+
 def _optional_round(value: float | None) -> float | None:
     return None if value is None else _round(value)
+
+
+def _render_optional(value: float | None) -> float | str:
+    """Render unavailable usage and cost as an explicit em dash."""
+    return "—" if value is None else _round(value)
 
 
 def _round(value: float) -> float:

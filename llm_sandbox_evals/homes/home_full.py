@@ -140,7 +140,7 @@ def _device_records() -> tuple[DeviceRecord, ...]:
     """Generate deterministic area-local devices."""
     records: list[DeviceRecord] = []
     for floor_index in range(1, _FLOOR_COUNT + 1):
-        for area_index, slug in enumerate(_ROOM_SLUGS[floor_index - 1], start=1):
+        for _area_index, slug in enumerate(_ROOM_SLUGS[floor_index - 1], start=1):
             area_name = slug.replace("_", " ").title()
             records.extend(
                 (
@@ -223,7 +223,7 @@ def _area_entity_records(floor_index: int, area_index: int) -> tuple[EntityRecor
     )
 
 
-# Generate 312 visible entities (39 areas × 8 entities each); the inventory digest cannot enumerate them usefully.
+# Generate 312 visible entities (39 areas x 8 entities each); the inventory digest cannot enumerate them usefully.
 _ENTITIES: tuple[EntityRecord, ...] = tuple(
     entity
     for floor_index in range(1, _FLOOR_COUNT + 1)
