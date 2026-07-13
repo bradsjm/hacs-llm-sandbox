@@ -65,7 +65,7 @@ async def test_api_prompt_uses_default_profile_and_one_action_section(hass: Home
     )
     api_instance = await api.async_get_api_instance(llm_context)
 
-    assert api_instance.api_prompt.startswith("# LLM Sandbox tools")
+    assert api_instance.api_prompt.startswith(resolve_profile(DEFAULT_PROMPT_PROFILE).base_prompt)
     assert resolve_profile(DEFAULT_PROMPT_PROFILE).base_prompt in api_instance.api_prompt
     assert api_instance.api_prompt.count("## Service calls") == 1
     assert "## Service calls (disabled)" in api_instance.api_prompt

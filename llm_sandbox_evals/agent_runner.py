@@ -237,8 +237,8 @@ def render_eval_system_prompt(runtime: EvalRuntime, tools: list[Tool[EvalRuntime
         runtime.settings.prompt_profile,
         True,
         base_prompt=runtime.candidate.api_prompt,
-        # The same available Pydantic tools provide both provider schemas and the
-        # prompt summary, so candidate descriptions cannot diverge between them.
+        # Recorder-routing guidance is derived from the same available tools so
+        # it stays consistent with the provider schemas.
         tool_section=render_tool_capabilities(cast(list[llm.Tool], tools)),
         location_section=None,
         inventory_section=inventory_section,

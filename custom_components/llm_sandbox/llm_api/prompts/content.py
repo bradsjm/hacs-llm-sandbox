@@ -2,11 +2,12 @@
 
 from homeassistant.helpers import llm
 
-from ...snapshot.models import HomeSnapshot
+from ...snapshot.models import HomeSnapshot, SafeAreaEntry
 from ..data.home_db import render_query_schema_prompt
 from .profiles import PromptDetail, PromptProfile
 
-_INVENTORY_AREA_NAME_CAP = 30
+_INVENTORY_AREAS_PER_FLOOR = 10
+_INVENTORY_FLOOR_CAP = 10
 _DOMAIN_COUNT_SEPARATOR = "\N{MULTIPLICATION SIGN}"
 
 
@@ -84,28 +85,24 @@ def _render_error_guidance(detail: PromptDetail) -> str:
 
 
 def render_tool_capabilities(tools: list[llm.Tool]) -> str:
-    """Render the prompt tool summary from the actual per-request tool objects."""
+    """Render cross-tool decision guidance not covered by provider tool schemas.
+
+    Each tool's full description is already sent as a provider function schema,
+    so this returns only the recorder-routing guidance — which tool to pick for
+    a given recorder need — that no single tool description can express alone.
+    """
     tool_names = {tool.name for tool in tools}
-    lines = ["# LLM Sandbox tools"]
-    for tool in tools:
-        description = tool.description or ""
-        first_sentence = description.split(". ", 1)[0].strip()
-        if first_sentence and not first_sentence.endswith("."):
-            first_sentence = f"{first_sentence}."
-        lines.append(f"- {tool.name}: {first_sentence}")
-    recorder_tools = tool_names & {"get_history", "get_statistics", "get_logbook"}
-    if recorder_tools:
-        lines.extend(
-            (
-                "",
-                "## Recorder routing",
-                "- For direct history, statistics, or logbook retrieval/summarization, use the matching standalone tool.",
-                "- For recorder data combined with current state/registries, computation, conditional reasoning, or actions, use one "
-                "execute_home_code call with await hass.history(...), hass.query(...), or hass.logbook(...).",
-                "- Run independent direct reads in parallel. Scope them with selectors instead of discovery calls, and never retrieve the same evidence twice.",
-            )
+    if not (tool_names & {"get_history", "get_statistics", "get_logbook"}):
+        return ""
+    return "\n".join(
+        (
+            "## Recorder routing",
+            "- For direct history, statistics, or logbook retrieval/summarization, use the matching standalone tool.",
+            "- For recorder data combined with current state/registries, computation, conditional reasoning, or actions, use one "
+            "execute_home_code call with await hass.history(...), hass.query(...), or hass.logbook(...).",
+            "- Run independent direct reads in parallel. Scope them with selectors instead of discovery calls, and never retrieve the same evidence twice.",
         )
-    return "\n".join(lines)
+    )
 
 
 def render_home_inventory(
@@ -144,29 +141,55 @@ def render_home_inventory(
 
 
 def _render_areas_by_floor(snapshot: HomeSnapshot) -> str:
-    """Render visible area names grouped by floor with a large-home cap."""
-    if len(snapshot.areas) > _INVENTORY_AREA_NAME_CAP:
-        return (
-            f"- {len(snapshot.areas)} visible areas across {len(snapshot.floors)} floor(s); "
-            "use area_registry.async_list_areas() to enumerate."
-        )
+    """Render visible area names grouped by floor, capped per floor.
 
-    names_by_floor: dict[str | None, list[str]] = {}
+    Areas within each floor are ranked by visible entity count (descending) so
+    the most relevant areas appear first. The per-floor cap prevents a single
+    large floor from displacing all floor names — the failure mode of the
+    previous overall-area cap. Floors are capped separately at
+    ``_INVENTORY_FLOOR_CAP``.
+    """
+    # Count visible state-bearing entities per area for importance ranking.
+    entity_counts: dict[str, int] = {}
+    for state in snapshot.states.values():
+        if state.area_id is not None:
+            entity_counts[state.area_id] = entity_counts.get(state.area_id, 0) + 1
+
+    areas_by_floor: dict[str | None, list[SafeAreaEntry]] = {}
     for area in snapshot.areas.values():
-        # State mutation: accumulate only visibility-filtered area names from the
-        # snapshot; entity ids stay behind tools.
-        names_by_floor.setdefault(area.floor_id, []).append(area.name)
+        # State mutation: accumulate only visibility-filtered area entries from
+        # the snapshot; entity ids stay behind tools.
+        areas_by_floor.setdefault(area.floor_id, []).append(area)
 
+    def _format_group(label: str, areas: list[SafeAreaEntry]) -> str:
+        """Render one floor group with top areas by entity count and a truncation tail."""
+        ranked = sorted(areas, key=lambda a: (-entity_counts.get(a.area_id, 0), a.name.lower()))
+        shown = ranked[:_INVENTORY_AREAS_PER_FLOOR]
+        names = ", ".join(area.name for area in shown)
+        if len(ranked) > _INVENTORY_AREAS_PER_FLOOR:
+            remaining = len(ranked) - _INVENTORY_AREAS_PER_FLOOR
+            names += f", +{remaining} more (area_registry.async_list_areas())"
+        return f"{label} ({names})"
+
+    sorted_floors = sorted(snapshot.floors.values(), key=lambda item: (item.level is None, item.level or 0, item.name))
     parts: list[str] = []
-    for floor in sorted(snapshot.floors.values(), key=lambda item: (item.level is None, item.level or 0, item.name)):
-        if floor.floor_id not in names_by_floor:
-            continue
-        names = sorted(names_by_floor.pop(floor.floor_id))
-        parts.append(f"{floor.name} ({', '.join(names)})")
+    for floor in sorted_floors[:_INVENTORY_FLOOR_CAP]:
+        floor_areas = areas_by_floor.pop(floor.floor_id, None)
+        if floor_areas is not None:
+            parts.append(_format_group(floor.name, floor_areas))
 
-    for floor_id, names in sorted(names_by_floor.items(), key=lambda item: (item[0] is not None, item[0] or "")):
+    if len(sorted_floors) > _INVENTORY_FLOOR_CAP:
+        remaining_floors = len(sorted_floors) - _INVENTORY_FLOOR_CAP
+        parts.append(f"+{remaining_floors} more floors (floor_registry.async_list_floors())")
+        # Discard areas belonging to truncated floors so the tail loop renders
+        # only genuinely un-floorable areas (None or orphaned floor ids).
+        for floor in sorted_floors[_INVENTORY_FLOOR_CAP:]:
+            areas_by_floor.pop(floor.floor_id, None)
+
+    # Render areas with no floor (or an orphaned floor id) last.
+    for floor_id, areas in sorted(areas_by_floor.items(), key=lambda item: (item[0] is not None, item[0] or "")):
         label = "No floor" if floor_id is None else floor_id
-        parts.append(f"{label} ({', '.join(sorted(names))})")
+        parts.append(_format_group(label, areas))
 
     return f"- Areas by floor: {', '.join(parts)}"
 

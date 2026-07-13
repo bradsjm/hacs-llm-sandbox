@@ -46,6 +46,8 @@ def test_load_candidates_accepts_profile_candidate() -> None:
     tools = build_agent_tools(runtime)
     prompt = render_eval_system_prompt(runtime, tools)
 
+    # Candidate descriptions flow through as the provider tool schemas, not as
+    # duplicated first-sentence summaries in the system prompt.
     assert {tool.name: tool.description for tool in tools} == {
         "execute_home_code": candidate.execute_home_code_description,
         "get_history": candidate.get_history_description,
@@ -53,8 +55,6 @@ def test_load_candidates_accepts_profile_candidate() -> None:
         "get_logbook": candidate.get_logbook_description,
         "get_automation": candidate.get_automation_description,
     }
-    for tool in tools:
-        assert f"- {tool.name}: {tool.description.split('. ', 1)[0]}." in prompt
 
     no_logbook_case = replace(case, home="home_minimal")
     no_logbook_fixture = get_home(no_logbook_case.home)

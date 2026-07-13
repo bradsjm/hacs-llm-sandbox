@@ -41,7 +41,6 @@ type FloorRecord = tuple[str, str, int | None]
 type LabelRecord = tuple[str, str, str, str]
 
 _FLOOR_COUNT: int = 4
-_AREAS_PER_FLOOR: int = 9
 
 _LABELS: tuple[LabelRecord, ...] = (
     ("label_evening", "Evening", "evening", "Evening lighting and comfort controls"),
@@ -69,6 +68,9 @@ _ROOM_SLUGS: tuple[tuple[str, ...], ...] = (
         "laundry_room",
         "basement_bathroom",
         "playroom",
+        "wine_tasting_room",
+        "basement_hallway",
+        "server_room",
     ),
     (
         "kitchen",
@@ -118,7 +120,8 @@ def _area_labels(floor_index: int, area_index: int) -> tuple[str, ...]:
     return tuple(labels)
 
 
-# Generate 36 areas (> _INVENTORY_AREA_NAME_CAP) across four floors so prompts must use registries.
+# Generate 39 areas across four floors; the Basement has 12 (> _INVENTORY_AREAS_PER_FLOOR)
+# so the per-floor truncation tail and floor names are both exercised.
 _AREAS: tuple[AreaRecord, ...] = tuple(
     (
         slug,
@@ -137,8 +140,7 @@ def _device_records() -> tuple[DeviceRecord, ...]:
     """Generate deterministic area-local devices."""
     records: list[DeviceRecord] = []
     for floor_index in range(1, _FLOOR_COUNT + 1):
-        for area_index in range(1, _AREAS_PER_FLOOR + 1):
-            slug = _ROOM_SLUGS[floor_index - 1][area_index - 1]
+        for area_index, slug in enumerate(_ROOM_SLUGS[floor_index - 1], start=1):
             area_name = slug.replace("_", " ").title()
             records.extend(
                 (
@@ -221,11 +223,11 @@ def _area_entity_records(floor_index: int, area_index: int) -> tuple[EntityRecor
     )
 
 
-# Generate 288 visible entities; the inventory digest cannot enumerate them usefully.
+# Generate 312 visible entities (39 areas × 8 entities each); the inventory digest cannot enumerate them usefully.
 _ENTITIES: tuple[EntityRecord, ...] = tuple(
     entity
     for floor_index in range(1, _FLOOR_COUNT + 1)
-    for area_index in range(1, _AREAS_PER_FLOOR + 1)
+    for area_index in range(1, len(_ROOM_SLUGS[floor_index - 1]) + 1)
     for entity in _area_entity_records(floor_index, area_index)
 )
 

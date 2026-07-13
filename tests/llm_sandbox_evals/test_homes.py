@@ -24,11 +24,11 @@ def test_minimal_home_has_only_the_action_case_surface() -> None:
     assert fixture.recorder() == {"history": {}, "statistics": {}, "logbook": {}}
 
 
-def test_full_home_preserves_288_entity_inventory() -> None:
+def test_full_home_preserves_312_entity_inventory() -> None:
     snapshot = get_home("home_full").snapshot()
 
-    assert len(snapshot.states) == 288
-    assert len(snapshot.entities) == 288
+    assert len(snapshot.states) == 312
+    assert len(snapshot.entities) == 312
 
 
 @pytest.mark.parametrize("name", ["home_default", "home_large", "home_real"])

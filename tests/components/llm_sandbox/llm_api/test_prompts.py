@@ -59,8 +59,8 @@ def test_profile_describes_awaitable_facades(profile: PromptProfile) -> None:
     assert "sync" in profile.base_prompt.lower()
 
 
-def test_tool_capability_summary_matches_registered_tools() -> None:
-    """Generated overview names exactly the registered per-request tools."""
+def test_recorder_routing_guidance_present_with_recorder_tools() -> None:
+    """Recorder-routing decision guidance appears when recorder tools are registered."""
     tools = [
         ExecuteHomeCodeTool("entry-id"),
         GetAutomationTool("entry-id"),
@@ -72,19 +72,22 @@ def test_tool_capability_summary_matches_registered_tools() -> None:
 
     summary = render_tool_capabilities(tools)
 
-    assert [
-        line.split(":", 1)[0].removeprefix("- ")
-        for line in summary.splitlines()
-        if line.startswith("- ") and ":" in line
-    ] == [tool.name for tool in tools]
-    assert "get_camera_image" in summary
-    automation_line = next(line for line in summary.splitlines() if line.startswith("- get_automation:"))
-    assert all(term in automation_line.lower() for term in ("search", "summaries", "content", "run activity"))
     assert "direct history, statistics, or logbook retrieval/summarization" in summary
     assert "one execute_home_code call" in summary
     assert "in parallel" in summary
     assert "selectors instead of discovery calls" in summary
     assert "never retrieve the same evidence twice" in summary
+
+
+def test_recorder_routing_absent_without_recorder_tools() -> None:
+    """No routing section is emitted when no recorder tools are registered."""
+    tools = [
+        ExecuteHomeCodeTool("entry-id"),
+        GetAutomationTool("entry-id"),
+        GetCameraImageTool("entry-id"),
+    ]
+
+    assert render_tool_capabilities(tools) == ""
 
 
 def test_automation_description_states_projection_and_run_limits() -> None:
