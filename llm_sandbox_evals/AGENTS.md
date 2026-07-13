@@ -8,42 +8,79 @@ Assistant fixtures. It evaluates only successful service invocation effects.
 
 ## Current contract
 
-- Cases contain only `id`, `home`, `user_request`, and nonempty
-  `expected_actions`.
-- Expected actions contain `domain`, `service`, required nonempty
-  `target_entity_ids`, and optional `service_data`.
+- Cases contain only `id`, `home`, `user_request`, and `required_actions`.
+- `required_actions` may be empty. An empty list is correct only when the
+  successful action ledger is also empty.
+- Required actions contain `domain`, `service`, and required nonempty
+  `target_entity_ids`. The current corpus does not author `service_data`;
+  service-data matching remains deferred.
 - Runtime actions are always enabled without a domain allowlist.
 - Agent output is plain text (`Agent[EvalRuntime, str]`). Prose is display-only
   and is never parsed or scored.
-- Correctness is exact multiset equality between expected actions and successful
-  ledger effects. Missing, wrong, extra, and duplicate successes fail.
+- Correctness is exact multiset equality between required actions and successful
+  ledger effects. Missing, wrong, extra, and duplicate successes fail; any extra
+  successful action fails even when it is a different fallback service. Thus an
+  empty `required_actions` list rejects every successful action.
 - Rejected records are diagnostics only. Action results preserve normalized
   observed effects, one-to-one dimension comparisons, unexpected actions, and
   stable reason codes without weakening exact matching.
-- Traces and reports are scoring version 5. Reject v4 and older artifacts with
-  no compatibility path.
+- Traces and reports remain scoring version 5. Version 4 and older artifacts,
+  and prior v5 artifacts with the former trace contract, are rejected as legacy
+  because the trace field changed; there is no compatibility path.
 
 Do not add read scoring, evidence normalization, answer schemas, collections,
-aggregates, relations, no-data, recorder scoring, blocked actions, or
-conditional action behavior to this baseline.
+aggregates, relations, no-data, recorder-answer scoring, service-data matching,
+policy/rejection scoring, disabled-action behavior, or clarification-quality
+scoring to this baseline. Conditional state/history/logbook cases, true
+no-action cases, and multi-target selector resolution are now part of the
+action corpus.
 
 ## Dataset and stub
 
-The dataset is exactly four `home_minimal` cases: bedroom and living-room light
-turn-on/turn-off. The stub supports exactly those four requests, calls
-`execute_home_code`, and then emits plain text.
+The corpus is 14 `home_full` cases progressing from direct actions to discovery,
+brightness/color service selection, state/history/logbook conditions including
+true no-action, and ambiguity plus ambiguity-with-logic:
 
-The homes package contains only `home_minimal` for the current two-light action
-surface and `home_full` for the complete 288-entity inventory fixture.
+| Stage | Cases | Coverage |
+| --- | --- | --- |
+| Direct (3) | `direct_turn_on_utility_room_ceiling`, `direct_turn_off_utility_room_accent`, `direct_toggle_utility_room_outlet` | Utility Room single-target light and switch actions |
+| Discovery (2) | `discover_utility_room_lights`, `discover_basement_ceiling_lights` | Multi-target selection of two Utility Room lights, then nine Basement ceiling lights |
+| Brightness/color (2) | `brightness_utility_room_ceiling`, `color_utility_room_accent` | Utility Room `light.turn_on` service selection; no service data is authored |
+| Conditions (4) | `no_action_light_already_on`, `condition_turn_off_living_room_ceiling`, `condition_history_change_turn_off`, `no_action_history_no_recent_change` | Living Room current state and recent history, Hallway no-recent-change logic, and valid no-op outcomes |
+| Ambiguity (3) | `ambiguous_bare_light`, `ambiguous_ceiling_no_area`, `ambiguous_logic_living_room_recent` | No-op ambiguity and Living Room recorder-based disambiguation |
+
+Each multi-target discovery case has one required action whose target list
+contains every resolved entity. Separate successful calls for those entities do
+not equal that single action and therefore score incorrectly.
+
+The offline stub is intentionally limited to the five exact, normalized
+`home_full` phrases below. It calls `execute_home_code` and then emits plain
+text only for these routes:
+
+| Request | Stub action |
+| --- | --- |
+| `Turn on the Utility Room ceiling light.` | `light.turn_on` → `light.utility_room_ceiling` |
+| `Turn off the Utility Room accent light.` | `light.turn_off` → `light.utility_room_accent` |
+| `Toggle the Utility Room outlet.` | `switch.toggle` → `switch.utility_room_outlet` |
+| `Set the Utility Room ceiling light to 50% brightness.` | `light.turn_on` → `light.utility_room_ceiling` |
+| `Make the Utility Room accent light warm white.` | `light.turn_on` → `light.utility_room_accent` |
+
+Unmatched requests produce no tool call. That makes the four empty-required
+cases valid no-action stub smoke cases; non-empty discovery, condition, and
+ambiguity-with-logic cases are intentionally outside the stub route surface.
+This stub behavior is not a claim about real-model results.
+
+The homes package retains `home_minimal` for small synthetic tool-contract
+checks and uses `home_full` for the corpus and its complete 288-entity fixture.
 
 ## Architecture
 
-- `schema.py` — minimal case, action, trace, ledger, diagnostic, and outcome
+- `schema.py` — case, action, trace, ledger, diagnostic, and outcome
   records.
-- `data/cases.yaml` / `cases_schema.json` — four direct action cases and their
+- `data/cases.yaml` / `cases_schema.json` — 14 `home_full` cases and their
   focused authoring schema.
 - `agent_runner.py` — plain-text agent, production tool registration, and the
-  four-route offline stub.
+  five-route direct/brightness/color offline stub.
 - `runtime.py` — fresh fixture runtime with actions enabled.
 - `tools.py` — visibility scoping, non-live `RecordingInvoker`, and compact
   action normalization.
@@ -60,10 +97,13 @@ surface. Their eval-specific scoring and stub routes must not return.
 
 ## Staged future work
 
-Expand only through explicit plans and observable action contracts: service
-data, explicit multi-target actions, selector resolution, conditional actions,
-then policy rejection. Read-answer scoring requires a separate design rather
-than restoration of v4 models or evidence modules.
+Expand only through explicit plans and observable action contracts. Service-data
+matching, policy/rejection behavior, disabled-action behavior, and
+response/clarification-quality scoring remain deferred. Conditional
+state/history/logbook behavior, true no-action outcomes, and multi-target
+selector resolution are already represented in the current corpus. Read-answer
+scoring requires a separate design rather than restoration of v4 models or
+evidence modules.
 
 ## Safety and commands
 

@@ -132,7 +132,7 @@ async def test_run_case_does_not_force_final_answer_after_max_tool_calls(monkeyp
         return FunctionModel(_looping_model, model_name="looping-model")
 
     monkeypatch.setattr(agent_runner, "make_model", make_model)  # type: ignore[attr-defined]
-    case = next(case for case in CASES if case.id == "action_turn_off_living_light")
+    case = next(case for case in CASES if case.id == "direct_turn_off_utility_room_accent")
     trace = await run_case(candidate, "looping-model", case, config, profile=profile)
 
     assert trace.answer is None
@@ -161,7 +161,7 @@ async def _looping_model(_messages: list[ModelMessage], _info: AgentInfo) -> Mod
             ToolCallPart(
                 tool_name="execute_home_code",
                 args={
-                    "code": 'await hass.services.async_call("light", "turn_off", target={"entity_id": "light.living"})\nresult = "done"'
+                    "code": 'await hass.services.async_call("light", "turn_off", target={"entity_id": "light.utility_room_accent"})\nresult = "done"'
                 },
                 tool_call_id=f"loop-{len(_messages)}",
             )

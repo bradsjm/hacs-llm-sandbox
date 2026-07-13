@@ -23,7 +23,7 @@ def _v5_report() -> dict[str, object]:
                     "candidate_id": "baseline",
                     "model_id": "stub",
                     "answer": "Done. </script><script>alert(1)</script>",
-                    "expected_actions": [
+                    "required_actions": [
                         {
                             "domain": "light",
                             "service": "turn_on",
@@ -117,7 +117,7 @@ def _v5_report() -> dict[str, object]:
                     "candidate_id": "baseline",
                     "model_id": "stub",
                     "answer": "Turned on the bedroom light.",
-                    "expected_actions": [
+                    "required_actions": [
                         {
                             "domain": "light",
                             "service": "turn_on",

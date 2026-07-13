@@ -10,8 +10,8 @@ from llm_sandbox_evals.schema import (
     ActionComparison,
     ActionResult,
     EvalCase,
-    ExpectedAction,
     ObservedAction,
+    RequiredAction,
 )
 from llm_sandbox_evals.scoring import evaluate_case
 import pytest
@@ -45,7 +45,16 @@ def _observed(
     return ObservedAction(domain, service, (entity_id,), service_data or {})
 
 
-@pytest.mark.parametrize("case", CASES, ids=lambda case: case.id)
+@pytest.mark.parametrize(
+    "case",
+    # The offline stub routes only direct_*/brightness_*/color_* requests. Every
+    # other family (no_action_*, ambiguous_*, discover_*, condition_*) is
+    # intentionally outside this stub smoke and is exercised by real-model runs;
+    # do not broaden this allow-list — non-routed non-empty cases would no-op
+    # and score incorrect under the stub.
+    [case for case in CASES if case.id.startswith(("direct_", "brightness_", "color_"))],
+    ids=lambda case: case.id,
+)
 async def test_each_authored_direct_action_passes(case: EvalCase, tmp_path: Path) -> None:
     trace = await run_case(
         baseline_candidate(),
@@ -68,12 +77,12 @@ async def test_each_authored_direct_action_passes(case: EvalCase, tmp_path: Path
     assert trace.action_result.passed is True
 
 
-_BEDROOM_ON = ExpectedAction("light", "turn_on", ("light.bedroom",))
-_LIVING_OFF = ExpectedAction("light", "turn_off", ("light.living",))
-_BRIGHT_BEDROOM = ExpectedAction("light", "turn_on", ("light.bedroom",), {"brightness": 100})
+_BEDROOM_ON = RequiredAction("light", "turn_on", ("light.bedroom",))
+_LIVING_OFF = RequiredAction("light", "turn_off", ("light.living",))
+_BRIGHT_BEDROOM = RequiredAction("light", "turn_on", ("light.bedroom",), {"brightness": 100})
 
 
-def _case(*actions: ExpectedAction) -> EvalCase:
+def _case(*actions: RequiredAction) -> EvalCase:
     return EvalCase("action-case", "home_minimal", "Perform actions", actions)
 
 

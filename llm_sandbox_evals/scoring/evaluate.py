@@ -12,7 +12,7 @@ def evaluate_case(
 ) -> tuple[CaseOutcome, ActionResult, ActionLedger]:
     """Compare one case's authored actions with its successful recorded effects."""
     ledger = build_action_ledger(recorded_actions)
-    result = score_actions(case.expected_actions, ledger)
+    result = score_actions(case.required_actions, ledger)
     return (
         CaseOutcome("correct" if result.passed else "incorrect", result.reason),
         result,

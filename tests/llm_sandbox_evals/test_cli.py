@@ -81,7 +81,7 @@ def test_eval_keeps_stdout_factual_and_writes_artifacts(capsys: pytest.CaptureFi
             "--models",
             "stub",
             "--cases",
-            "action_turn_on_bedroom_light",
+            "direct_turn_on_utility_room_ceiling",
             "--runs-dir",
             str(tmp_path),
         ]
@@ -113,7 +113,7 @@ def test_eval_token_telemetry_does_not_pollute_terminal_output(
             "--models",
             "stub",
             "--cases",
-            "action_turn_on_bedroom_light",
+            "direct_turn_on_utility_room_ceiling",
             "--runs-dir",
             str(tmp_path),
         ]
@@ -143,7 +143,7 @@ def test_eval_reports_completed_cell_error_on_redirected_stderr(
             "--models",
             "bad-model",
             "--cases",
-            "action_turn_on_bedroom_light",
+            "direct_turn_on_utility_room_ceiling",
             "--runs-dir",
             str(tmp_path),
         ]
@@ -152,7 +152,7 @@ def test_eval_reports_completed_cell_error_on_redirected_stderr(
 
     assert exit_code == 0
     assert "cell finished" in captured.err
-    assert "Turn on bedroom light" in captured.err
+    assert "Turn on the Utility Room ceiling light." in captured.err
     assert "provider rejected model" in captured.err
     assert "provider rejected model" not in captured.out
 
@@ -169,7 +169,7 @@ def test_escape_cancels_interactive_eval_without_artifacts_or_stdout(
             "--models",
             "stub",
             "--cases",
-            "action_turn_on_bedroom_light",
+            "direct_turn_on_utility_room_ceiling",
             "--runs-dir",
             str(tmp_path),
         ]

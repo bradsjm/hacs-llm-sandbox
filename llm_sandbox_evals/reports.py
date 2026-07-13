@@ -22,7 +22,7 @@ _CASE_TRACE_FIELDS = frozenset(
         "candidate_id",
         "model_id",
         "answer",
-        "expected_actions",
+        "required_actions",
         "outcome",
         "action_result",
         "action_ledger",
@@ -61,7 +61,7 @@ def load_report(run_dir: Path) -> MatrixReport:
 
 
 def rescore_trace(trace: CaseTrace) -> CaseOutcome:
-    """Rescore a v5 trace using only its persisted expected actions and ledger."""
+    """Rescore a v5 trace using only its persisted required actions and ledger."""
     if trace.scoring_version != _SCORING_VERSION:
         raise ValueError("legacy scoring artifact; rerun evaluation")
     recorded_actions = trace.action_ledger.successful + trace.action_ledger.rejected
@@ -69,7 +69,7 @@ def rescore_trace(trace: CaseTrace) -> CaseOutcome:
         id=trace.case_id,
         home="stored-trace",
         user_request=trace.user_request,
-        expected_actions=trace.expected_actions,
+        required_actions=trace.required_actions,
     )
     outcome, _, _ = evaluate_case(case, recorded_actions)
     return outcome

@@ -258,7 +258,7 @@ def stub_function_model() -> FunctionModel:
 
 
 async def _stub_respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
-    """Invoke one of the four authored light actions, then return plain prose."""
+    """Invoke one stub-routable home_full action, then return plain prose."""
     _ = info
     user_request = _first_user_content(messages)
     if any(
@@ -271,12 +271,12 @@ async def _stub_respond(messages: list[ModelMessage], info: AgentInfo) -> ModelR
     action = _stub_action(user_request)
     if action is None:
         return ModelResponse(parts=[TextPart(content="Unsupported stub request.")])
-    service, entity_id = action
+    domain, service, entity_id = action
     return ModelResponse(
         parts=[
             _tool_call_part(
                 TOOL_EXECUTE_HOME_CODE,
-                {"code": _service_code("light", service, entity_id)},
+                {"code": _service_code(domain, service, entity_id)},
                 1,
             )
         ]
@@ -288,13 +288,14 @@ def _tool_call_part(tool_name: str, tool_args: dict[str, object], index: int) ->
     return ToolCallPart(tool_name=tool_name, args=tool_args, tool_call_id=f"stub-call-{index}")
 
 
-def _stub_action(user_request: str) -> tuple[str, str] | None:
-    """Map exactly the four authored direct light requests to service effects."""
+def _stub_action(user_request: str) -> tuple[str, str, str] | None:
+    """Map only stub-routable home_full direct, brightness, and color requests."""
     return {
-        "turn on bedroom light": ("turn_on", "light.bedroom"),
-        "turn off bedroom light": ("turn_off", "light.bedroom"),
-        "turn on living room light": ("turn_on", "light.living"),
-        "turn off living room light": ("turn_off", "light.living"),
+        "turn on the utility room ceiling light.": ("light", "turn_on", "light.utility_room_ceiling"),
+        "turn off the utility room accent light.": ("light", "turn_off", "light.utility_room_accent"),
+        "toggle the utility room outlet.": ("switch", "toggle", "switch.utility_room_outlet"),
+        "set the utility room ceiling light to 50% brightness.": ("light", "turn_on", "light.utility_room_ceiling"),
+        "make the utility room accent light warm white.": ("light", "turn_on", "light.utility_room_accent"),
     }.get(user_request.strip().lower())
 
 

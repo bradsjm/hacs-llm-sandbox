@@ -51,8 +51,58 @@ _LABELS: tuple[LabelRecord, ...] = (
     ("label_guest", "Guest", "guest", "Guest-accessible rooms and devices"),
 )
 
-_FLOORS: tuple[FloorRecord, ...] = tuple(
-    (f"floor_{floor_index}", f"Floor {floor_index}", floor_index) for floor_index in range(1, _FLOOR_COUNT + 1)
+_FLOORS: tuple[FloorRecord, ...] = (
+    ("floor_basement", "Basement", -1),
+    ("floor_ground", "Ground Floor", 0),
+    ("floor_first", "First Floor", 1),
+    ("floor_second", "Second Floor", 2),
+)
+
+_ROOM_SLUGS: tuple[tuple[str, ...], ...] = (
+    (
+        "utility_room",
+        "storage_room",
+        "workshop",
+        "wine_cellar",
+        "home_gym",
+        "media_room",
+        "laundry_room",
+        "basement_bathroom",
+        "playroom",
+    ),
+    (
+        "kitchen",
+        "dining_room",
+        "family_room",
+        "living_room",
+        "guest_bathroom",
+        "den",
+        "garage",
+        "pantry",
+        "sunroom",
+    ),
+    (
+        "primary_bedroom",
+        "primary_bathroom",
+        "bedroom_1",
+        "bedroom_2",
+        "main_bathroom",
+        "hallway",
+        "nursery",
+        "home_office",
+        "walk_in_closet",
+    ),
+    (
+        "attic",
+        "loft",
+        "teen_bedroom",
+        "guest_bedroom",
+        "reading_nook",
+        "upper_bathroom",
+        "games_room",
+        "hobby_room",
+        "balcony",
+    ),
 )
 
 
@@ -71,15 +121,15 @@ def _area_labels(floor_index: int, area_index: int) -> tuple[str, ...]:
 # Generate 36 areas (> _INVENTORY_AREA_NAME_CAP) across four floors so prompts must use registries.
 _AREAS: tuple[AreaRecord, ...] = tuple(
     (
-        f"area_{floor_index}_{area_index}",
-        f"Floor {floor_index} Area {area_index:02d}",
-        f"floor_{floor_index}",
+        slug,
+        slug.replace("_", " ").title(),
+        floor_id,
         _area_labels(floor_index, area_index),
-        f"sensor.area_{floor_index}_{area_index}_temperature",
-        f"sensor.area_{floor_index}_{area_index}_humidity",
+        f"sensor.{slug}_temperature",
+        f"sensor.{slug}_humidity",
     )
-    for floor_index in range(1, _FLOOR_COUNT + 1)
-    for area_index in range(1, _AREAS_PER_FLOOR + 1)
+    for floor_index, (floor_id, _, _) in enumerate(_FLOORS, start=1)
+    for area_index, slug in enumerate(_ROOM_SLUGS[floor_index - 1], start=1)
 )
 
 
@@ -88,36 +138,36 @@ def _device_records() -> tuple[DeviceRecord, ...]:
     records: list[DeviceRecord] = []
     for floor_index in range(1, _FLOOR_COUNT + 1):
         for area_index in range(1, _AREAS_PER_FLOOR + 1):
-            area_id = f"area_{floor_index}_{area_index}"
-            area_name = f"Floor {floor_index} Area {area_index:02d}"
+            slug = _ROOM_SLUGS[floor_index - 1][area_index - 1]
+            area_name = slug.replace("_", " ").title()
             records.extend(
                 (
                     (
-                        f"device_{floor_index}_{area_index}_lighting",
+                        f"device_{slug}_lighting",
                         f"{area_name} Lighting",
-                        area_id,
+                        slug,
                         ("label_evening",),
                     ),
-                    (f"device_{floor_index}_{area_index}_outlet", f"{area_name} Outlet", area_id, ()),
+                    (f"device_{slug}_outlet", f"{area_name} Outlet", slug, ()),
                     (
-                        f"device_{floor_index}_{area_index}_climate",
+                        f"device_{slug}_climate",
                         f"{area_name} Climate",
-                        area_id,
+                        slug,
                         ("label_climate",),
                     ),
                     (
-                        f"device_{floor_index}_{area_index}_environment",
+                        f"device_{slug}_environment",
                         f"{area_name} Environment",
-                        area_id,
+                        slug,
                         ("label_climate",),
                     ),
                     (
-                        f"device_{floor_index}_{area_index}_security",
+                        f"device_{slug}_security",
                         f"{area_name} Security",
-                        area_id,
+                        slug,
                         ("label_security",),
                     ),
-                    (f"device_{floor_index}_{area_index}_energy", f"{area_name} Energy", area_id, ("label_energy",)),
+                    (f"device_{slug}_energy", f"{area_name} Energy", slug, ("label_energy",)),
                 )
             )
     return tuple(records)
@@ -143,24 +193,24 @@ def _entity_labels(domain: str, floor_index: int, area_index: int) -> tuple[str,
 
 def _area_entity_records(floor_index: int, area_index: int) -> tuple[EntityRecord, ...]:
     """Generate eight entities per area with device-derived effective areas."""
-    slug = f"area_{floor_index}_{area_index}"
-    climate_device = f"device_{floor_index}_{area_index}_climate"
+    slug = _ROOM_SLUGS[floor_index - 1][area_index - 1]
+    climate_device = f"device_{slug}_climate"
     entity_specs: tuple[tuple[str, str, str, str | None, str | None], ...] = (
-        ("light", f"{slug}_ceiling", f"device_{floor_index}_{area_index}_lighting", None, None),
-        ("light", f"{slug}_accent", f"device_{floor_index}_{area_index}_lighting", None, None),
-        ("switch", f"{slug}_outlet", f"device_{floor_index}_{area_index}_outlet", None, None),
+        ("light", f"{slug}_ceiling", f"device_{slug}_lighting", None, None),
+        ("light", f"{slug}_accent", f"device_{slug}_lighting", None, None),
+        ("switch", f"{slug}_outlet", f"device_{slug}_outlet", None, None),
         ("climate", slug, climate_device, None, None),
-        ("sensor", f"{slug}_temperature", f"device_{floor_index}_{area_index}_environment", "temperature", None),
-        ("sensor", f"{slug}_humidity", f"device_{floor_index}_{area_index}_environment", "humidity", None),
-        ("binary_sensor", f"{slug}_motion", f"device_{floor_index}_{area_index}_security", "motion", None),
-        ("sensor", f"{slug}_power", f"device_{floor_index}_{area_index}_energy", "power", None),
+        ("sensor", f"{slug}_temperature", f"device_{slug}_environment", "temperature", None),
+        ("sensor", f"{slug}_humidity", f"device_{slug}_environment", "humidity", None),
+        ("binary_sensor", f"{slug}_motion", f"device_{slug}_security", "motion", None),
+        ("sensor", f"{slug}_power", f"device_{slug}_energy", "power", None),
     )
     return tuple(
         (
             f"{domain}.{object_id}",
             f"uid-{domain}-{object_id.replace('_', '-')}",
             device_id,
-            f"area_{floor_index}_{area_index}" if domain == "climate" and area_index % 5 == 0 else None,
+            slug if domain == "climate" and area_index % 5 == 0 else None,
             _entity_labels(domain, floor_index, area_index),
             None,
             None,
@@ -273,7 +323,7 @@ def recorder() -> RecorderData:
     """Return modest recorder rows for representative full-home entities."""
     return {
         "history": {
-            "sensor.area_1_1_temperature": [
+            "sensor.utility_room_temperature": [
                 {
                     "state": "20.8",
                     "attributes": {"unit_of_measurement": "°C"},
@@ -293,7 +343,7 @@ def recorder() -> RecorderData:
                     "last_updated": "2026-06-29T12:00:00+00:00",
                 },
             ],
-            "light.area_2_4_ceiling": [
+            "light.living_room_ceiling": [
                 {
                     "state": "off",
                     "attributes": {"brightness": 0},
@@ -307,9 +357,23 @@ def recorder() -> RecorderData:
                     "last_updated": "2026-06-29T11:45:00+00:00",
                 },
             ],
+            "light.living_room_accent": [
+                {
+                    "state": "off",
+                    "attributes": {"brightness": 0},
+                    "last_changed": "2026-06-29T07:00:00+00:00",
+                    "last_updated": "2026-06-29T07:00:00+00:00",
+                },
+                {
+                    "state": "on",
+                    "attributes": {"brightness": 180},
+                    "last_changed": "2026-06-29T11:50:00+00:00",
+                    "last_updated": "2026-06-29T11:50:00+00:00",
+                },
+            ],
         },
         "statistics": {
-            "sensor.area_4_9_power": [
+            "sensor.balcony_power": [
                 {
                     "start": "2026-06-29T10:00:00+00:00",
                     "end": "2026-06-29T11:00:00+00:00",
@@ -331,12 +395,16 @@ def recorder() -> RecorderData:
             ]
         },
         "logbook": {
-            "light.area_2_4_ceiling": [
-                {"when": "2026-06-29T07:30:00+00:00", "name": "Area 2 4 Ceiling", "message": "turned off"},
-                {"when": "2026-06-29T11:45:00+00:00", "name": "Area 2 4 Ceiling", "message": "turned on"},
+            "light.living_room_ceiling": [
+                {"when": "2026-06-29T07:30:00+00:00", "name": "Living Room Ceiling", "message": "turned off"},
+                {"when": "2026-06-29T11:45:00+00:00", "name": "Living Room Ceiling", "message": "turned on"},
             ],
-            "switch.area_3_6_outlet": [
-                {"when": "2026-06-29T09:00:00+00:00", "name": "Area 3 6 Outlet", "message": "turned off"},
+            "light.living_room_accent": [
+                {"when": "2026-06-29T07:00:00+00:00", "name": "Living Room Accent", "message": "turned off"},
+                {"when": "2026-06-29T11:50:00+00:00", "name": "Living Room Accent", "message": "turned on"},
+            ],
+            "switch.hallway_outlet": [
+                {"when": "2026-06-29T09:00:00+00:00", "name": "Hallway Outlet", "message": "turned off"},
             ],
         },
     }

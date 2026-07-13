@@ -8,7 +8,7 @@ from llm_sandbox_evals.schema import (
     CaseOutcome,
     CaseTrace,
     EvalDiagnostics,
-    ExpectedAction,
+    RequiredAction,
 )
 from llm_sandbox_evals.terminal import MatrixTerminalReporter, _cell_duration, _outcome_text
 import pytest
@@ -97,7 +97,7 @@ def _trace(
         candidate_id="candidate",
         model_id="model",
         answer=None,
-        expected_actions=(ExpectedAction("light", "turn_on", ("light.bedroom",)),),
+        required_actions=(RequiredAction("light", "turn_on", ("light.bedroom",)),),
         outcome=CaseOutcome(state, "ok" if state == "correct" else "action_mismatch"),
         action_result=ActionResult(state == "correct", "ok" if state == "correct" else "action_mismatch"),
         action_ledger=ActionLedger(),

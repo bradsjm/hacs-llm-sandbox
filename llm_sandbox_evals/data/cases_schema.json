@@ -24,14 +24,14 @@
     "case": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "home", "user_request", "expected_actions"],
+      "required": ["id", "home", "user_request", "required_actions"],
       "properties": {
         "id": {"type": "string", "minLength": 1},
         "home": {"type": "string", "minLength": 1},
         "user_request": {"type": "string", "minLength": 1},
-        "expected_actions": {
+        "required_actions": {
           "type": "array",
-          "minItems": 1,
+          "minItems": 0,
           "items": {"$ref": "#/$defs/action"}
         }
       }

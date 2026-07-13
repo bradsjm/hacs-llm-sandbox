@@ -24,7 +24,7 @@ from homeassistant.helpers import llm
 from llm_sandbox_evals.homes import get_home
 from llm_sandbox_evals.prompts import baseline_candidate
 from llm_sandbox_evals.runtime import build_eval_runtime, build_fixture_recorder_source
-from llm_sandbox_evals.schema import EvalCase, ExpectedAction
+from llm_sandbox_evals.schema import EvalCase, RequiredAction
 from llm_sandbox_evals.tools import EVAL_SCOPE, apply_scope
 import pytest
 
@@ -41,7 +41,13 @@ async def test_history_run_query_cursor_round_trip_uses_production_pagination() 
     tool = GetHistoryTool("eval")
     first_data = cast(
         dict[str, object],
-        tool.parameters({"entity_ids": [_LIVING_TEMP], "start": timestamps[0], "end": timestamps[-1]}),
+        tool.parameters(
+            {
+                "entity_ids": [_LIVING_TEMP],
+                "start": (datetime.fromisoformat(timestamps[0]) - timedelta(minutes=1)).isoformat(),
+                "end": (datetime.fromisoformat(timestamps[-1]) + timedelta(minutes=1)).isoformat(),
+            }
+        ),
     )
 
     first_result = await tool.run_query(snapshot, first_data, source)
@@ -75,7 +81,13 @@ async def test_logbook_source_injects_entity_id_and_production_paginates() -> No
     tool = GetLogbookTool("eval")
     data = cast(
         dict[str, object],
-        tool.parameters({"entity_ids": [_LIVING_LIGHT], "start": timestamps[0], "end": timestamps[-1]}),
+        tool.parameters(
+            {
+                "entity_ids": [_LIVING_LIGHT],
+                "start": (datetime.fromisoformat(timestamps[0]) - timedelta(minutes=1)).isoformat(),
+                "end": (datetime.fromisoformat(timestamps[-1]) + timedelta(minutes=1)).isoformat(),
+            }
+        ),
     )
 
     result = await tool.run_query(snapshot, data, source)
@@ -168,8 +180,8 @@ async def test_history_byte_rejected_fixture_stream_continues(
         tool.parameters(
             {
                 "entity_ids": entity_ids,
-                "start": timestamps[0],
-                "end": timestamps[-1],
+                "start": (datetime.fromisoformat(timestamps[0]) - timedelta(minutes=1)).isoformat(),
+                "end": (datetime.fromisoformat(timestamps[-1]) + timedelta(minutes=1)).isoformat(),
             }
         ),
     )
@@ -243,7 +255,7 @@ async def test_statistics_pagination_fits_utf8_rows_and_advances() -> None:
             {
                 "statistic_ids": [_LIVING_TEMP],
                 "start": timestamps[0],
-                "end": timestamps[-1],
+                "end": (datetime.fromisoformat(timestamps[-1]) + timedelta(minutes=1)).isoformat(),
                 "types": ["state"],
             }
         ),
@@ -292,7 +304,7 @@ async def test_statistics_oversized_first_row_is_intact_and_cursor_advances() ->
             {
                 "statistic_ids": [_LIVING_TEMP],
                 "start": timestamps[0],
-                "end": timestamps[-1],
+                "end": (datetime.fromisoformat(timestamps[-1]) + timedelta(minutes=1)).isoformat(),
                 "types": ["state"],
             }
         ),
@@ -346,7 +358,13 @@ async def test_history_byte_cursor_preserves_exhausted_stream_and_narrows_fetch(
     entity_ids = [_LIVING_TEMP, _LIVING_LIGHT]
     first_data = cast(
         dict[str, object],
-        tool.parameters({"entity_ids": entity_ids, "start": timestamps[0], "end": timestamps[-1]}),
+        tool.parameters(
+            {
+                "entity_ids": entity_ids,
+                "start": (datetime.fromisoformat(timestamps[0]) - timedelta(minutes=1)).isoformat(),
+                "end": (datetime.fromisoformat(timestamps[-1]) + timedelta(minutes=1)).isoformat(),
+            }
+        ),
     )
 
     first = await tool.run_query(snapshot, first_data, source)
@@ -415,8 +433,8 @@ async def test_history_continuation_groups_fetches_and_merges_rows() -> None:
         Cursor(
             kind="history",
             scope_ids=tuple(sorted(entity_ids)),
-            start=datetime.fromisoformat(timestamps[0]),
-            end=datetime.fromisoformat(timestamps[-1]),
+            start=datetime.fromisoformat(timestamps[0]) - timedelta(minutes=1),
+            end=datetime.fromisoformat(timestamps[-1]) + timedelta(minutes=1),
             cutoffs={_LIVING_TEMP: timestamps[-1], _LIVING_LIGHT: timestamps[-2]},
         )
     )
@@ -462,7 +480,13 @@ async def test_history_byte_cursor_walk_returns_each_unique_timestamp_once() -> 
     tool = GetHistoryTool("eval")
     data = cast(
         dict[str, object],
-        tool.parameters({"entity_ids": [_LIVING_TEMP], "start": timestamps[0], "end": timestamps[-1]}),
+        tool.parameters(
+            {
+                "entity_ids": [_LIVING_TEMP],
+                "start": (datetime.fromisoformat(timestamps[0]) - timedelta(minutes=1)).isoformat(),
+                "end": (datetime.fromisoformat(timestamps[-1]) + timedelta(minutes=1)).isoformat(),
+            }
+        ),
     )
     seen: list[str] = []
 
@@ -501,7 +525,13 @@ async def test_logbook_cursor_narrows_continuation_fetch() -> None:
     tool = GetLogbookTool("eval")
     first_data = cast(
         dict[str, object],
-        tool.parameters({"entity_ids": [_LIVING_LIGHT], "start": timestamps[0], "end": timestamps[-1]}),
+        tool.parameters(
+            {
+                "entity_ids": [_LIVING_LIGHT],
+                "start": (datetime.fromisoformat(timestamps[0]) - timedelta(minutes=1)).isoformat(),
+                "end": (datetime.fromisoformat(timestamps[-1]) + timedelta(minutes=1)).isoformat(),
+            }
+        ),
     )
 
     first = await tool.run_query(snapshot, first_data, source)
@@ -539,7 +569,7 @@ async def test_statistics_duplicate_types_are_stably_deduplicated() -> None:
             {
                 "statistic_ids": [_LIVING_TEMP],
                 "start": timestamps[0],
-                "end": timestamps[-1],
+                "end": (datetime.fromisoformat(timestamps[-1]) + timedelta(minutes=1)).isoformat(),
                 "types": requested_types,
             }
         ),
@@ -589,7 +619,7 @@ def _case() -> EvalCase:
         id="production-core-unit",
         home="home_minimal",
         user_request="exercise production core",
-        expected_actions=(ExpectedAction("light", "turn_on", ("light.living",)),),
+        required_actions=(RequiredAction("light", "turn_on", ("light.living",)),),
     )
 
 

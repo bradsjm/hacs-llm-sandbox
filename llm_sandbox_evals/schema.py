@@ -36,7 +36,7 @@ class PromptCandidate:
 
 
 @dataclass(frozen=True, slots=True)
-class ExpectedAction:
+class RequiredAction:
     """One successful service effect required by an eval case."""
 
     domain: str
@@ -47,9 +47,9 @@ class ExpectedAction:
     def __post_init__(self) -> None:
         """Validate the required successful effect identity."""
         if not self.domain or not self.service:
-            raise ValueError("expected action domain and service must be nonempty")
+            raise ValueError("required action domain and service must be nonempty")
         if not self.target_entity_ids or any(not entity_id for entity_id in self.target_entity_ids):
-            raise ValueError("expected action target_entity_ids must be nonempty strings")
+            raise ValueError("required action target_entity_ids must be nonempty strings")
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,7 +66,7 @@ class ObservedAction:
 class ActionComparison:
     """Dimension-level assessment of one expected action and its closest effect."""
 
-    expected: ExpectedAction
+    expected: RequiredAction
     actual: ObservedAction | None
     service_matches: bool
     target_matches: bool
@@ -76,17 +76,12 @@ class ActionComparison:
 
 @dataclass(frozen=True, slots=True)
 class EvalCase:
-    """One direct action request and its successful service effects."""
+    """One action request and its required successful service effects."""
 
     id: str
     home: str
     user_request: str
-    expected_actions: tuple[ExpectedAction, ...]
-
-    def __post_init__(self) -> None:
-        """Require at least one successful service effect."""
-        if not self.expected_actions:
-            raise ValueError("action eval cases require at least one expected action")
+    required_actions: tuple[RequiredAction, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,7 +153,7 @@ class CaseTrace:
     candidate_id: str
     model_id: str
     answer: str | None
-    expected_actions: tuple[ExpectedAction, ...]
+    required_actions: tuple[RequiredAction, ...]
     outcome: CaseOutcome
     action_result: ActionResult
     action_ledger: ActionLedger

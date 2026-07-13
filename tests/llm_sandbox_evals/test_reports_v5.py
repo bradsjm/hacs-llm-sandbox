@@ -17,7 +17,7 @@ async def test_v5_report_round_trip_rescores_from_stored_ledger(tmp_path: Path) 
     restored = load_report(run_dir).cases[0].output
 
     assert rescore_trace(restored) == restored.outcome
-    assert restored.expected_actions == original.expected_actions
+    assert restored.required_actions == original.required_actions
     assert restored.answer == original.answer
     assert restored.action_ledger == original.action_ledger
     assert restored.action_result == original.action_result
@@ -64,7 +64,7 @@ def _config(runs_dir: Path) -> EvalConfig:
         models=["stub"],
         candidates=["baseline"],
         prompt_profile=DEFAULT_PROMPT_PROFILE,
-        cases=["action_turn_on_bedroom_light"],
+        cases=["direct_turn_on_utility_room_ceiling"],
         homes=None,
         runs_dir=runs_dir,
     )

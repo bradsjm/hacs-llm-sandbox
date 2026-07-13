@@ -8,8 +8,8 @@ from llm_sandbox_evals.schema import (
     ActionLedger,
     ActionOutcomeReason,
     ActionResult,
-    ExpectedAction,
     ObservedAction,
+    RequiredAction,
 )
 
 
@@ -22,7 +22,7 @@ def build_action_ledger(actions: Sequence[Mapping[str, object]]) -> ActionLedger
     )
 
 
-def score_actions(expected: tuple[ExpectedAction, ...], ledger: ActionLedger) -> ActionResult:
+def score_actions(expected: tuple[RequiredAction, ...], ledger: ActionLedger) -> ActionResult:
     """Require the successful effect multiset to equal the authored effect multiset."""
     actual = tuple(_normalize_action(action) for action in ledger.successful)
     unmatched_expected = set(range(len(expected)))
@@ -78,7 +78,7 @@ def _normalize_action(action: Mapping[str, object]) -> ObservedAction:
     return ObservedAction(domain, service, tuple(sorted(_action_targets(action))), comparable_data)
 
 
-def _comparison(expected: ExpectedAction, actual: ObservedAction) -> ActionComparison:
+def _comparison(expected: RequiredAction, actual: ObservedAction) -> ActionComparison:
     service_matches = (expected.domain, expected.service) == (actual.domain, actual.service)
     target_matches = tuple(sorted(expected.target_entity_ids)) == actual.target_entity_ids
     service_data_matches = expected.service_data is None or _data_key(expected.service_data) == _data_key(
@@ -101,7 +101,7 @@ def _match_count(comparison: ActionComparison) -> int:
 def _reason(
     comparisons: tuple[ActionComparison, ...],
     unexpected: tuple[ObservedAction, ...],
-    expected: tuple[ExpectedAction, ...],
+    expected: tuple[RequiredAction, ...],
     ledger: ActionLedger,
 ) -> ActionOutcomeReason:
     """Classify a structured comparison without weakening exact correctness."""

@@ -399,7 +399,7 @@ _HTML_TEMPLATE = """<!doctype html>
              tokens: diagnostics.usage?.total_tokens ?? null,
              cost: diagnostics.usage?.cost ?? null,
              user_request: t.user_request,
-             expected_actions: t.expected_actions,
+              required_actions: t.required_actions,
              action_result: t.action_result,
              ledger: t.action_ledger,
              tool_events: t.tool_events,
@@ -879,7 +879,7 @@ _HTML_TEMPLATE = """<!doctype html>
           ? `<div class="detail-sub"><h4>The task</h4></div>`
             + `<p class="task-prompt">“${escapeHtml(cell.user_request)}”</p>`
           : "";
-         const expectedBlock = `<div class="detail-sub"><h4>Expected actions</h4></div>${codeBlock(json(trace.expected_actions), "json")}`;
+          const requiredBlock = `<div class="detail-sub"><h4>Required actions</h4></div>${codeBlock(json(trace.required_actions), "json")}`;
           // Detail order moves from outcome through the scored action evidence and
           // ledgers to unrestricted output.
          panel.innerHTML =
@@ -887,7 +887,7 @@ _HTML_TEMPLATE = """<!doctype html>
           + `<p class="verdict ${verdictClass}">${escapeHtml(verdict)}</p>`
           + `<p class="detail-headline"><b>${escapeHtml(cell.candidate_id)}</b> / <b>${escapeHtml(cell.model_id)}</b> · score <b>${escapeHtml(fmtNumber(cell.score))}</b> · tools <b>${escapeHtml(cell.tool_calls)}</b> · <b>${escapeHtml(fmtDuration(cell.duration))}</b></p>`
            + taskBlock
-           + expectedBlock
+            + requiredBlock
              + actionAssessment(trace.action_result)
             + `<div class="detail-sub"><h4>Action ledger</h4><span class="meta">${successful.length} successful · ${rejected.length} rejected</span></div>${codeBlock(json({successful, rejected}), "json")}`
             + `<div class="detail-sub"><h4>Chronological tool evidence</h4><span class="meta">${toolEvents.length} calls, in order</span></div>`

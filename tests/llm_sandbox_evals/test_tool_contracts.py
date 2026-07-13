@@ -9,7 +9,7 @@ from llm_sandbox_evals.agent_runner import _validate_recorder_tool
 from llm_sandbox_evals.homes import get_home
 from llm_sandbox_evals.prompts import baseline_candidate
 from llm_sandbox_evals.runtime import build_eval_runtime, build_fixture_recorder_source
-from llm_sandbox_evals.schema import EvalCase, ExpectedAction
+from llm_sandbox_evals.schema import EvalCase, RequiredAction
 from llm_sandbox_evals.tools import EVAL_SCOPE, apply_scope
 
 
@@ -97,7 +97,7 @@ def _case() -> EvalCase:
         id="tool-contract-unit",
         home="home_minimal",
         user_request="exercise production tool contract",
-        expected_actions=(ExpectedAction("light", "turn_on", ("light.living",)),),
+        required_actions=(RequiredAction("light", "turn_on", ("light.living",)),),
     )
 
 

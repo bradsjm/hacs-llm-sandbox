@@ -1,6 +1,7 @@
 """Shared eval-only seams that do not emulate production tools."""
 
 from collections.abc import Mapping
+from dataclasses import replace
 
 from custom_components.llm_sandbox.snapshot import finalize_snapshot
 from custom_components.llm_sandbox.snapshot.models import HomeSnapshot, SnapshotScope
@@ -54,7 +55,15 @@ def apply_scope(
             continue
         visible.add(entity_id)
 
-    return finalize_snapshot(snapshot, visible=visible, anchor_device_id=anchor_device_id)
+    finalized = finalize_snapshot(snapshot, visible=visible, anchor_device_id=anchor_device_id)
+    # Preserve fixture insertion order; the finalizer rebuilds these collections from a set.
+    ordered_states = {
+        entity_id: finalized.states[entity_id] for entity_id in snapshot.states if entity_id in finalized.states
+    }
+    ordered_entities = {
+        entity_id: finalized.entities[entity_id] for entity_id in snapshot.entities if entity_id in finalized.entities
+    }
+    return replace(finalized, states=ordered_states, entities=ordered_entities)
 
 
 class RecordingInvoker:

@@ -7,6 +7,8 @@ from datetime import datetime
 import math
 from typing import Any, Protocol
 
+from homeassistant.util import dt as dt_util
+
 from ..runtime import SandboxSettings
 from ..snapshot.models import HomeSnapshot
 from ..types import ProposedAction
@@ -26,6 +28,7 @@ type HistoryFetcher = Callable[[Sequence[str], datetime, datetime], Awaitable[li
 type StatisticsFetcher = Callable[[Sequence[str], datetime, datetime], Awaitable[list[dict[str, object]]]]
 type LogbookFetcher = Callable[[Sequence[str], datetime, datetime], Awaitable[list[dict[str, object]]]]
 type BlockingRunner = Callable[[Callable[[], object]], Awaitable[object]]
+type UtcNow = Callable[[], datetime]
 
 
 async def _unavailable_history_fetcher(
@@ -72,6 +75,7 @@ class RuntimeContext:
     fetch_short_term_statistics: StatisticsFetcher = _unavailable_statistics_fetcher
     fetch_logbook: LogbookFetcher = _unavailable_logbook_fetcher
     run_blocking: BlockingRunner = _unavailable_blocking_runner
+    _utcnow: UtcNow = dt_util.utcnow
     deadline: float = math.inf
     memory: ResolutionMemory | None = None
 

@@ -1,39 +1,126 @@
 # yaml-language-server: $schema=cases_schema.json
 name: llm_sandbox_action_cases
 cases:
-  - name: action_turn_on_bedroom_light
+  - name: direct_turn_on_utility_room_ceiling
     inputs:
-      id: action_turn_on_bedroom_light
-      home: home_minimal
-      user_request: Turn on bedroom light
-      expected_actions:
+      id: direct_turn_on_utility_room_ceiling
+      home: home_full
+      user_request: Turn on the Utility Room ceiling light.
+      required_actions:
         - domain: light
           service: turn_on
-          target_entity_ids: [light.bedroom]
-  - name: action_turn_off_bedroom_light
+          target_entity_ids: [light.utility_room_ceiling]
+  - name: direct_turn_off_utility_room_accent
     inputs:
-      id: action_turn_off_bedroom_light
-      home: home_minimal
-      user_request: Turn off bedroom light
-      expected_actions:
+      id: direct_turn_off_utility_room_accent
+      home: home_full
+      user_request: Turn off the Utility Room accent light.
+      required_actions:
         - domain: light
           service: turn_off
-          target_entity_ids: [light.bedroom]
-  - name: action_turn_on_living_light
+          target_entity_ids: [light.utility_room_accent]
+  - name: direct_toggle_utility_room_outlet
     inputs:
-      id: action_turn_on_living_light
-      home: home_minimal
-      user_request: Turn on living room light
-      expected_actions:
+      id: direct_toggle_utility_room_outlet
+      home: home_full
+      user_request: Toggle the Utility Room outlet.
+      required_actions:
+        - domain: switch
+          service: toggle
+          target_entity_ids: [switch.utility_room_outlet]
+  - name: discover_utility_room_lights
+    inputs:
+      id: discover_utility_room_lights
+      home: home_full
+      user_request: Turn on all the lights in the Utility Room.
+      required_actions:
         - domain: light
           service: turn_on
-          target_entity_ids: [light.living]
-  - name: action_turn_off_living_light
+          target_entity_ids: [light.utility_room_accent, light.utility_room_ceiling]
+  - name: discover_basement_ceiling_lights
     inputs:
-      id: action_turn_off_living_light
-      home: home_minimal
-      user_request: Turn off living room light
-      expected_actions:
+      id: discover_basement_ceiling_lights
+      home: home_full
+      user_request: Turn on every ceiling light in the Basement.
+      required_actions:
+        - domain: light
+          service: turn_on
+          target_entity_ids:
+            - light.utility_room_ceiling
+            - light.storage_room_ceiling
+            - light.workshop_ceiling
+            - light.wine_cellar_ceiling
+            - light.home_gym_ceiling
+            - light.media_room_ceiling
+            - light.laundry_room_ceiling
+            - light.basement_bathroom_ceiling
+            - light.playroom_ceiling
+  - name: brightness_utility_room_ceiling
+    inputs:
+      id: brightness_utility_room_ceiling
+      home: home_full
+      user_request: Set the Utility Room ceiling light to 50% brightness.
+      required_actions:
+        - domain: light
+          service: turn_on
+          target_entity_ids: [light.utility_room_ceiling]
+  - name: color_utility_room_accent
+    inputs:
+      id: color_utility_room_accent
+      home: home_full
+      user_request: Make the Utility Room accent light warm white.
+      required_actions:
+        - domain: light
+          service: turn_on
+          target_entity_ids: [light.utility_room_accent]
+  - name: no_action_light_already_on
+    inputs:
+      id: no_action_light_already_on
+      home: home_full
+      user_request: Turn on the Living Room ceiling light if it is off.
+      required_actions: []
+  - name: condition_turn_off_living_room_ceiling
+    inputs:
+      id: condition_turn_off_living_room_ceiling
+      home: home_full
+      user_request: The Living Room ceiling light is currently on. Turn it off.
+      required_actions:
         - domain: light
           service: turn_off
-          target_entity_ids: [light.living]
+          target_entity_ids: [light.living_room_ceiling]
+  - name: condition_history_change_turn_off
+    inputs:
+      id: condition_history_change_turn_off
+      home: home_full
+      user_request: If the Living Room ceiling light changed state in the last two hours, turn it off.
+      required_actions:
+        - domain: light
+          service: turn_off
+          target_entity_ids: [light.living_room_ceiling]
+  - name: no_action_history_no_recent_change
+    inputs:
+      id: no_action_history_no_recent_change
+      home: home_full
+      user_request: If the Hallway outlet changed state in the last hour, toggle it; otherwise do nothing.
+      required_actions: []
+  - name: ambiguous_bare_light
+    inputs:
+      id: ambiguous_bare_light
+      home: home_full
+      user_request: Turn on the light.
+      required_actions: []
+  - name: ambiguous_ceiling_no_area
+    inputs:
+      id: ambiguous_ceiling_no_area
+      home: home_full
+      user_request: Turn on the ceiling light.
+      required_actions: []
+  - name: ambiguous_logic_living_room_recent
+    inputs:
+      id: ambiguous_logic_living_room_recent
+      home: home_full
+      user_request: Turn off the Living Room light that was switched on most recently.
+      required_actions:
+        - domain: light
+          service: turn_off
+          target_entity_ids: [light.living_room_accent]

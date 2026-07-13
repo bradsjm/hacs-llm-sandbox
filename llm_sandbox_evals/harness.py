@@ -82,7 +82,7 @@ async def run_case(
             candidate_id=candidate.id,
             model_id=model_id,
             answer=output,
-            expected_actions=case.expected_actions,
+            required_actions=case.required_actions,
             outcome=outcome,
             action_result=action_result,
             action_ledger=action_ledger,
@@ -177,7 +177,7 @@ def _failure_trace(
 ) -> CaseTrace:
     """Return an incomplete or cap-exhausted trace with captured diagnostics."""
     action_ledger = build_action_ledger(recorded_actions)
-    scored_actions = score_actions(case.expected_actions, action_ledger)
+    scored_actions = score_actions(case.required_actions, action_ledger)
     action_result = ActionResult(
         False,
         "action_mismatch",
@@ -189,7 +189,7 @@ def _failure_trace(
         candidate_id=candidate.id,
         model_id=model_id,
         answer=None,
-        expected_actions=case.expected_actions,
+        required_actions=case.required_actions,
         outcome=CaseOutcome(
             "incorrect" if failure == "cap_exhausted" else "incomplete",
             "action_mismatch",

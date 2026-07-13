@@ -11,8 +11,8 @@ from llm_sandbox_evals.schema import (
     CaseTrace,
     EvalCase,
     EvalDiagnostics,
-    ExpectedAction,
     PromptCandidate,
+    RequiredAction,
 )
 from pydantic_evals.reporting.analyses import ScalarResult, TableResult
 import pytest
@@ -21,7 +21,7 @@ from llm_sandbox_evals import reports
 
 
 async def test_run_matrix_stub_persists_v5_action_trace_and_binary_rate(tmp_path: Path) -> None:
-    config = _config(tmp_path, cases=["action_turn_on_bedroom_light"])
+    config = _config(tmp_path, cases=["direct_turn_on_utility_room_ceiling"])
     report = await run_matrix(config, run_id="stub-v5")
     reloaded = reports.load_report(reports.write_report_json(report, config, run_id="stub-v5-written"))
     trace = reloaded.cases[0].output
@@ -36,7 +36,7 @@ async def test_run_matrix_stub_persists_v5_action_trace_and_binary_rate(tmp_path
 async def test_run_matrix_emits_plain_text_lifecycle_response(tmp_path: Path) -> None:
     events = []
     report = await run_matrix(
-        _config(tmp_path, cases=["action_turn_on_bedroom_light"]),
+        _config(tmp_path, cases=["direct_turn_on_utility_room_ceiling"]),
         run_id="lifecycle-v5",
         on_event=events.append,
     )
@@ -106,18 +106,18 @@ def _case(case_id: str) -> EvalCase:
         case_id,
         "home_minimal",
         "Turn on bedroom light",
-        (ExpectedAction("light", "turn_on", ("light.bedroom",)),),
+        (RequiredAction("light", "turn_on", ("light.bedroom",)),),
     )
 
 
 def _trace(cell: MatrixCellRef, state: str) -> CaseTrace:
-    expected = (ExpectedAction("light", "turn_on", ("light.bedroom",)),)
+    expected = (RequiredAction("light", "turn_on", ("light.bedroom",)),)
     return CaseTrace(
         case_id=cell.case_id,
         candidate_id=cell.candidate_id,
         model_id=cell.model_id,
         answer="Done.",
-        expected_actions=expected,
+        required_actions=expected,
         outcome=CaseOutcome(state, "ok" if state == "correct" else "action_mismatch"),
         action_result=ActionResult(state == "correct", "ok" if state == "correct" else "action_mismatch"),
         action_ledger=ActionLedger(),

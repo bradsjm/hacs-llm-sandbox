@@ -103,7 +103,8 @@ def build_fixture_recorder_source(snapshot: HomeSnapshot, fixture: ModuleType) -
     async def fetch_history(entity_ids: list[str], start: datetime, end: datetime) -> dict[str, list[HistoryRow]]:
         return {
             entity_id: cast(
-                list[HistoryRow], _windowed_rows(history.get(entity_id, []), start, end, _history_timestamp)
+                list[HistoryRow],
+                _windowed_history_rows(history.get(entity_id, []), start, end, _history_timestamp),
             )
             for entity_id in entity_ids
         }
@@ -117,7 +118,9 @@ def build_fixture_recorder_source(snapshot: HomeSnapshot, fixture: ModuleType) -
     ) -> Mapping[str, list[dict[str, object]]]:
         _ = (period, types)
         return {
-            statistic_id: _windowed_rows(statistics.get(statistic_id, []), start, end, _statistics_timestamp)
+            statistic_id: _windowed_statistics_rows(
+                statistics.get(statistic_id, []), start, end, _statistics_timestamp
+            )
             for statistic_id in statistic_ids
         }
 
@@ -185,6 +188,7 @@ def _eval_runtime_context_factory(
     def factory() -> RuntimeContext:
         # State mutation point: each execute_home_code call gets fresh service/action accounting.
         state = ExecutionState(service_call_limit=settings.service_call_limit)
+        fixture_now = _parse_datetime(snapshot.created_at)
         return RuntimeContext(
             state=state,
             settings=settings,
@@ -199,6 +203,7 @@ def _eval_runtime_context_factory(
             # cached from a prior execute_home_code invocation.
             fetch_logbook=lambda entity_ids, start, end: _eval_fetch_logbook(fixture, entity_ids, start, end),
             run_blocking=_eval_run_blocking,
+            _utcnow=lambda: fixture_now,
             deadline=time.monotonic() + settings.execution_timeout_seconds,
             memory=ResolutionMemory(),
         )
@@ -221,7 +226,7 @@ async def _eval_fetch_history(
     """Return fixture history as production flat rows for hass.history/query in evals."""
     history = _recorder_section(_recorder_data(fixture), "history")
     scoped = {
-        entity_id: _windowed_rows(history.get(entity_id, []), start, end, _history_timestamp)
+        entity_id: _windowed_history_rows(history.get(entity_id, []), start, end, _history_timestamp)
         for entity_id in entity_ids
     }
     return flat_history_rows(scoped, snapshot)
@@ -248,7 +253,7 @@ async def _eval_fetch_statistics(
                 "state": row.get("state"),
                 "sum": row.get("sum"),
             }
-            for row in _windowed_rows(statistics.get(statistic_id, []), start, end, _statistics_timestamp)
+            for row in _windowed_statistics_rows(statistics.get(statistic_id, []), start, end, _statistics_timestamp)
         )
     return rows
 
@@ -264,7 +269,7 @@ async def _eval_fetch_logbook(
     entries = [
         _logbook_entry(entity_id, row)
         for entity_id in entity_ids
-        for row in _windowed_rows(logbook.get(entity_id, []), start, end, _logbook_timestamp)
+        for row in _windowed_logbook_rows(logbook.get(entity_id, []), start, end, _logbook_timestamp)
     ]
     return sorted(entries, key=_logbook_timestamp)
 
@@ -279,19 +284,45 @@ def _recorder_section(recorder: Mapping[str, object], section: str) -> dict[str,
     return cast(dict[str, list[dict[str, object]]], recorder[section])
 
 
-def _windowed_rows(
+def _windowed_statistics_rows(
     rows: list[dict[str, object]],
     start: datetime,
     end: datetime,
     timestamp: Callable[[Mapping[str, object]], datetime],
 ) -> list[dict[str, object]]:
-    """Keep fixture rows whose timestamp falls inside the computed inclusive window."""
-    return [row for row in rows if start <= timestamp(row) <= end]
+    """Mirror recorder statistics selection with a half-open time window."""
+    return [row for row in rows if start <= timestamp(row) < end]
+
+
+def _windowed_logbook_rows(
+    rows: list[dict[str, object]],
+    start: datetime,
+    end: datetime,
+    timestamp: Callable[[Mapping[str, object]], datetime],
+) -> list[dict[str, object]]:
+    """Mirror logbook event selection with an open time window."""
+    return [row for row in rows if start < timestamp(row) < end]
+
+
+def _windowed_history_rows(
+    rows: list[dict[str, object]],
+    start: datetime,
+    end: datetime,
+    timestamp: Callable[[Mapping[str, object]], datetime],
+) -> list[dict[str, object]]:
+    """Mirror significant-state history with a retained start-time baseline."""
+    in_window = [row for row in rows if start < timestamp(row) < end]
+    before = [row for row in rows if timestamp(row) < start]
+    # Branch boundary: no earlier state exists to establish the window's starting value.
+    if not before:
+        return in_window
+    baseline = max(before, key=timestamp)
+    return [baseline, *in_window]
 
 
 def _history_timestamp(row: Mapping[str, object]) -> datetime:
-    """Return the UTC timestamp of a fixture history row."""
-    return _parse_datetime(row.get("last_changed") or row.get("last_updated"))
+    """Return the recorder selection timestamp of a fixture history row."""
+    return _parse_datetime(row.get("last_updated") or row.get("last_changed"))
 
 
 def _statistics_timestamp(row: Mapping[str, object]) -> datetime:
