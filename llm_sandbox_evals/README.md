@@ -72,7 +72,7 @@ The corpus contains 14 cases in this progression:
    `direct_turn_off_utility_room_accent`, and
    `direct_toggle_utility_room_outlet` act on Utility Room lights and a switch.
 2. **Discovery (2):** `discover_utility_room_lights` selects the two lights in
-   the Utility Room, and `discover_basement_ceiling_lights` selects the nine
+   the Utility Room, and `discover_basement_ceiling_lights` selects the twelve
    ceiling lights in the Basement. Each is authored as one multi-target action.
 3. **Brightness/color service selection (2):**
    `brightness_utility_room_ceiling` and `color_utility_room_accent` both

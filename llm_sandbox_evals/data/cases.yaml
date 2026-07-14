@@ -55,6 +55,9 @@ cases:
             - light.laundry_room_ceiling
             - light.basement_bathroom_ceiling
             - light.playroom_ceiling
+            - light.wine_tasting_room_ceiling
+            - light.basement_hallway_ceiling
+            - light.server_room_ceiling
   - name: brightness_utility_room_ceiling
     inputs:
       id: brightness_utility_room_ceiling

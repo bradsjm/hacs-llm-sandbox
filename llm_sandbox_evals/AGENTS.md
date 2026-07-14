@@ -44,7 +44,7 @@ true no-action, and ambiguity plus ambiguity-with-logic:
 | Stage | Cases | Coverage |
 | --- | --- | --- |
 | Direct (3) | `direct_turn_on_utility_room_ceiling`, `direct_turn_off_utility_room_accent`, `direct_toggle_utility_room_outlet` | Utility Room single-target light and switch actions |
-| Discovery (2) | `discover_utility_room_lights`, `discover_basement_ceiling_lights` | Multi-target selection of two Utility Room lights, then nine Basement ceiling lights |
+| Discovery (2) | `discover_utility_room_lights`, `discover_basement_ceiling_lights` | Multi-target selection of two Utility Room lights, then twelve Basement ceiling lights |
 | Brightness/color (2) | `brightness_utility_room_ceiling`, `color_utility_room_accent` | Utility Room `light.turn_on` service selection; no service data is authored |
 | Conditions (4) | `no_action_light_already_on`, `condition_turn_off_living_room_ceiling`, `condition_history_change_turn_off`, `no_action_history_no_recent_change` | Living Room current state and recent history, Hallway no-recent-change logic, and valid no-op outcomes |
 | Ambiguity (3) | `ambiguous_bare_light`, `ambiguous_ceiling_no_area`, `ambiguous_logic_living_room_recent` | No-op ambiguity and Living Room recorder-based disambiguation |
