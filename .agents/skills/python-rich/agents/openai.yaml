@@ -1,0 +1,4 @@
+interface:
+  display_name: "Python Rich"
+  short_description: "Build polished terminal interfaces with Rich"
+  default_prompt: "Use $python-rich to build a polished Python terminal interface."

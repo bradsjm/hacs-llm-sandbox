@@ -1,7 +1,6 @@
 .DS_Store
 .mex/
 .codebase-memory/
-.agents/
 .env
 .idea/
 .mypy_cache/
