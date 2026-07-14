@@ -21,6 +21,7 @@ _ACTIVE = "#38b6ca"
 _SUCCESS = "#55c97c"
 _WARNING = "#d9a514"
 _ERROR = "#f2705f"
+_TOOL = "#e89b4f"
 _TRACK = "grey37"
 _PERCENT = "#b8a1e8"
 _RECENT_RESULTS = 10
@@ -73,6 +74,18 @@ _ACTIVITY_LABELS: dict[str, str] = {
     "scoring": "scoring",
     "finished": "finished",
 }
+# Phase → semantic terminal style. Unknown/missing phases fall back to the neutral track color.
+_ACTIVITY_STYLES: dict[str, str] = {
+    "queued": _WARNING,
+    "awaiting_model": _WARNING,
+    "thinking": _ACTIVE,
+    "preparing_tool_call": _TOOL,
+    "running_tool": _TOOL,
+    "processing_tool_result": _TOOL,
+    "responding": _SUCCESS,
+    "scoring": _PERCENT,
+    "finished": _SUCCESS,
+}
 # Only the authoritative running/processing phases append the safe tool name; preparing_tool_call
 # carries a provider-supplied name and stays a bare label.
 _TOOL_PHASES: frozenset[str] = frozenset({"running_tool", "processing_tool_result"})
@@ -88,6 +101,12 @@ def _activity_label(phase: str | None, tool_name: str | None) -> str:
     if phase in _TOOL_PHASES and tool_name:
         return f"{base} \u00b7 {tool_name}"
     return base
+
+
+def _activity_style(phase: str | None) -> str:
+    """Return the semantic Activity color, falling back safely for absent or future phases."""
+    # Branch boundary: absent or unrecognized phases stay neutral instead of raising or implying progress.
+    return _ACTIVITY_STYLES.get(phase, _TRACK) if phase is not None else _TRACK
 
 
 class _LeftEllipsisText:
@@ -276,14 +295,16 @@ class MatrixTerminalReporter:
         table.add_column("Elapsed / timeout", width=_ELAPSED_WIDTH, justify="right", no_wrap=True)
         table.add_column("Tools / cap", width=_TOOLS_WIDTH, justify="right", no_wrap=True)
         for lane in self._state.lanes.values():
+            # Branch boundary: before Activity is revealed, preserve the original always-cyan spinner.
+            activity_style = _activity_style(lane.phase) if activity else _ACTIVE
             row: list[RenderableType] = [
                 # A live Spinner renderable animates every refresh without any simulated phase text.
-                Spinner("dots", style=_ACTIVE),
+                Spinner("dots", style=activity_style),
                 Text(lane.request),
             ]
             # Branch boundary: Activity text is derived only from stored phase facts, never model content.
             if activity:
-                row.append(Text(_activity_label(lane.phase, lane.tool_name)))
+                row.append(Text(_activity_label(lane.phase, lane.tool_name), style=activity_style))
             # Branch boundary: Variant renders only when the wide layout is in effect.
             if show_variant:
                 row.append(

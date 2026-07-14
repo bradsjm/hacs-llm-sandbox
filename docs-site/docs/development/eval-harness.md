@@ -14,9 +14,14 @@ The eval README is [`llm_sandbox_evals/README.md`](https://github.com/bradsjm/ha
 ```bash
 scripts/setup-evals
 scripts/check-evals
+uv run --group dev --group evals python -m llm_sandbox_evals eval --models gpt-4o-mini,stub
 ```
 
 Eval runs write artifacts under `eval_data/runs/<run_id>/`. That output directory is gitignored.
+For `eval --models` and `optimize --cross-eval-models`, bare Pydantic AI model
+IDs resolve to the `openai-chat` provider (for example, `gpt-4o-mini` becomes
+`openai-chat:gpt-4o-mini`). `stub` and IDs containing `:` are preserved.
+Optimizer `--target-model` and `--proposer-model` remain DSPy/LiteLLM IDs.
 Every run creates an atomic `manifest.json` before model calls. Completed runs
 contain native `report.json` and `report.html`; cancelled or failed runs contain
 the typed `partial.json` journal instead. A partial journal is explicitly not a

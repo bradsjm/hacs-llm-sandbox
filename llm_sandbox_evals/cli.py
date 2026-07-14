@@ -46,6 +46,7 @@ type _TermiosSettings = list[int | list[bytes | int]]
 _ESCAPE_DELAY_SECONDS = 0.05
 _CLI_ERROR_MAX_CHARS = 500
 _DEBUG_ENV_VAR = "LLM_SANDBOX_EVALS_DEBUG"
+_DEFAULT_BARE_MODEL_PROVIDER = "openai-chat"
 
 
 class _EvalCancelled(Exception):
@@ -166,8 +167,8 @@ def _build_parser() -> argparse.ArgumentParser:
             "  # Offline, no API key — evaluates the four direct light actions:\n"
             "  python -m llm_sandbox_evals eval --models stub\n"
             "\n"
-            "  # Score real models (keys read from env/.env):\n"
-            "  python -m llm_sandbox_evals eval --models openai:gpt-4o-mini,anthropic:claude-haiku-4-5,stub\n"
+            "  # Score real models (bare ids use openai-chat; keys read from env/.env):\n"
+            "  python -m llm_sandbox_evals eval --models gpt-4o-mini,anthropic:claude-haiku-4-5,stub\n"
             "\n"
             "  # Re-render a saved run's leaderboard (no model calls):\n"
             "  python -m llm_sandbox_evals report 20260630-164326-318981\n"
@@ -216,10 +217,10 @@ def _add_eval_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPar
         "--models",
         metavar="ID,ID,...",
         help=(
-            "comma-separated model ids to evaluate (default: stub). Any Pydantic AI model id works "
-            "(e.g. openai:gpt-4o-mini, anthropic:claude-haiku-4-5, "
-            "openrouter:anthropic/claude-sonnet-4.6); API keys come from the environment. "
-            "'stub' is offline and keyless."
+            "comma-separated model ids to evaluate (default: stub). Bare ids such as gpt-4o-mini "
+            "resolve to openai-chat:gpt-4o-mini; provider-prefixed Pydantic AI ids containing ':' "
+            "are preserved (e.g. anthropic:claude-haiku-4-5, openrouter:anthropic/claude-sonnet-4.6). "
+            "API keys come from the environment. 'stub' is offline and keyless."
         ),
     )
     eval_parser.add_argument(
@@ -328,7 +329,12 @@ def _add_optimize_parser(subparsers: argparse._SubParsersAction[argparse.Argumen
             "baseline and an optimized eval, plus the optional cross-eval. Keep --breadth,\n"
             "--depth, and --cases small to bound spend.\n"
             "\n"
-            "Reasoning levels: minimal/low/medium/high, or none to disable a reasoning model."
+            "Reasoning levels: minimal/low/medium/high, or none to disable a reasoning model.\n"
+            "Cross-eval model ids follow eval --models: bare ids use openai-chat, while ids "
+            "containing ':' and stub are preserved.\n"
+            "Example: python -m llm_sandbox_evals optimize --target-model "
+            "openrouter/openai/gpt-4o-mini "
+            "--cross-eval-models gpt-4o-mini,stub"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -394,7 +400,11 @@ def _add_optimize_parser(subparsers: argparse._SubParsersAction[argparse.Argumen
     optimize_parser.add_argument(
         "--cross-eval-models",
         metavar="ID,ID,...",
-        help="comma-separated model ids for a baseline-vs-optimized leaderboard (default: off; no cross-eval is run).",
+        help=(
+            "comma-separated model ids for a baseline-vs-optimized leaderboard (default: off; no cross-eval is run). "
+            "Bare ids such as gpt-4o-mini resolve to openai-chat:gpt-4o-mini; ids containing ':' "
+            "and 'stub' are preserved."
+        ),
     )
     optimize_parser.add_argument(
         "--runs-dir",
@@ -413,7 +423,7 @@ def _run_eval(args: argparse.Namespace) -> int:
         sys.stderr.write(f"error: {err}\n")
         return 2
     config = EvalConfig(
-        models=_csv_arg(args.models) or base_config.models,
+        models=_resolve_pydantic_eval_model_ids(_csv_arg(args.models)) or base_config.models,
         candidates=_csv_arg(args.candidates) or base_config.candidates,
         prompt_profile=prompt_profile,
         cases=_csv_arg(args.cases) if args.cases is not None else base_config.cases,
@@ -719,7 +729,7 @@ def _run_optimize(args: argparse.Namespace) -> int:
         breadth=args.breadth or 5,
         depth=args.depth or 2,
         length_penalty=args.length_penalty if args.length_penalty is not None else base_config.length_penalty,
-        cross_eval_models=_csv_arg(args.cross_eval_models),
+        cross_eval_models=_resolve_pydantic_eval_model_ids(_csv_arg(args.cross_eval_models)),
     )
     _say(_optimize_banner(config))
     try:
@@ -886,3 +896,17 @@ def _csv_arg(value: str | None) -> list[str] | None:
     if value is None:
         return None
     return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _resolve_pydantic_eval_model_ids(model_ids: list[str] | None) -> list[str] | None:
+    """Resolve CLI eval model ids to the provider ids persisted by the harness."""
+    if model_ids is None:
+        return None
+    resolved: list[str] = []
+    for model_id in model_ids:
+        # Branch boundary: explicit providers and the offline stub keep their exact routing.
+        if model_id == "stub" or ":" in model_id:
+            resolved.append(model_id)
+        else:
+            resolved.append(f"{_DEFAULT_BARE_MODEL_PROVIDER}:{model_id}")
+    return resolved

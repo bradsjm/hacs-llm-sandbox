@@ -19,14 +19,22 @@ scripts/setup-evals
 scripts/check-evals
 scripts/format-evals
 uv run --group dev --group evals python -m llm_sandbox_evals eval --models stub
+uv run --group dev --group evals python -m llm_sandbox_evals eval --models gpt-4o-mini,stub
 uv run --group dev --group evals python -m llm_sandbox_evals report <run_id> --html
 ```
 
-Real Pydantic AI model IDs may replace `stub`; provider credentials come from
-the environment. Artifacts are written below `eval_data/runs/<run_id>/`.
+Real Pydantic AI model IDs may replace `stub`; bare IDs such as `gpt-4o-mini`
+are resolved to `openai-chat:gpt-4o-mini`, while `stub` and explicit
+provider-prefixed IDs containing `:` are preserved. Provider credentials come
+from the environment. Artifacts are written below `eval_data/runs/<run_id>/`.
 Interactive terminals receive one Rich summary on stderr and the artifact
 location once. Redirected output, or `--machine`, emits deterministic KV on
 stdout. Non-zero exits leave stdout empty.
+
+`optimize --cross-eval-models` uses the same Pydantic AI model ID behavior for
+its baseline-vs-optimized leaderboard. `optimize --target-model` and
+`--proposer-model` remain DSPy/LiteLLM IDs, for example
+`openrouter/openai/gpt-4o-mini`.
 
 Each run creates `manifest.json` before model calls. Its status moves from
 `running` to `complete`, `cancelled`, or `failed`. Cancellation and operational

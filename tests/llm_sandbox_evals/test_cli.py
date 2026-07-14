@@ -1,4 +1,5 @@
 import asyncio
+from collections import Counter
 from collections.abc import Callable
 from contextlib import nullcontext
 import json
@@ -156,6 +157,127 @@ def test_eval_token_telemetry_does_not_pollute_terminal_output(
 def test_eval_parser_does_not_accept_logfire_flag() -> None:
     with pytest.raises(SystemExit, match="2"):
         cli._build_parser().parse_args(["eval", "--logfire"])
+
+
+@pytest.mark.parametrize(
+    ("model_args", "expected_models"),
+    [
+        pytest.param([], ["stub"], id="default-stub"),
+        pytest.param(
+            [
+                "--models",
+                ",".join(
+                    [
+                        "gpt-5.4",
+                        "anthropic:claude-sonnet-4-6",
+                        "openai:gpt-5.4",
+                        "openai-chat:gpt-4.1",
+                        "openrouter:openai/gpt-5.4",
+                        "stub",
+                    ]
+                ),
+            ],
+            [
+                "openai-chat:gpt-5.4",
+                "anthropic:claude-sonnet-4-6",
+                "openai:gpt-5.4",
+                "openai-chat:gpt-4.1",
+                "openrouter:openai/gpt-5.4",
+                "stub",
+            ],
+            id="explicit-models",
+        ),
+    ],
+)
+def test_eval_resolves_cli_model_ids_for_provider_and_manifest(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    model_args: list[str],
+    expected_models: list[str],
+) -> None:
+    provider_models: list[str] = []
+
+    def record_provider_model(model_id: str) -> Model:
+        provider_models.append(model_id)
+        return FunctionModel(_raise_provider_error, model_name=model_id)
+
+    monkeypatch.setattr(agent_runner, "infer_model", record_provider_model)
+
+    exit_code = main(
+        [
+            "eval",
+            *model_args,
+            "--cases",
+            "direct_turn_on_utility_room_ceiling",
+            "--runs-dir",
+            str(tmp_path),
+        ]
+    )
+
+    assert exit_code == 0
+    assert Counter(provider_models) == Counter(expected_models) - Counter(["stub"])
+    [run_dir] = list(tmp_path.iterdir())
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert [model["model_id"] for model in manifest["descriptor"]["models"]] == expected_models
+
+
+def test_optimize_normalizes_only_cross_eval_model_ids(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    captured_configs: list[EvalConfig] = []
+
+    def record_optimize(config: EvalConfig) -> SimpleNamespace:
+        captured_configs.append(config)
+        return SimpleNamespace(
+            target_model=config.target_model,
+            proposer_model=config.proposer_model,
+            baseline_correct_rate=0.5,
+            optimized_correct_rate=0.75,
+            baseline_prompt_chars=100,
+            optimized_prompt_chars=90,
+            size_ratio=0.9,
+            optimized_full_correct_rate=0.7,
+            candidate_path=tmp_path / "optimize-run" / "optimized_candidate.json",
+            cross_eval_run_dir=None,
+        )
+
+    monkeypatch.setattr(cli, "_load_optimizer", lambda: SimpleNamespace(run_optimize=record_optimize))
+
+    target_model = "openrouter/openai/gpt-5.4"
+    proposer_model = "anthropic/claude-sonnet-4-6"
+    exit_code = main(
+        [
+            "optimize",
+            "--target-model",
+            target_model,
+            "--proposer-model",
+            proposer_model,
+            "--cross-eval-models",
+            ",".join(
+                [
+                    "gpt-5.4",
+                    "anthropic:claude-sonnet-4-6",
+                    "openai:gpt-5.4",
+                    "openai-chat:gpt-4.1",
+                    "openrouter:openai/gpt-5.4",
+                    "stub",
+                ]
+            ),
+            "--runs-dir",
+            str(tmp_path),
+        ]
+    )
+
+    assert exit_code == 0
+    [config] = captured_configs
+    assert config.cross_eval_models == [
+        "openai-chat:gpt-5.4",
+        "anthropic:claude-sonnet-4-6",
+        "openai:gpt-5.4",
+        "openai-chat:gpt-4.1",
+        "openrouter:openai/gpt-5.4",
+        "stub",
+    ]
+    assert config.target_model == target_model
+    assert config.proposer_model == proposer_model
 
 
 def test_eval_reports_completed_cell_error_on_redirected_stderr(
