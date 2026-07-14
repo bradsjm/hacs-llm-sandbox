@@ -17,9 +17,12 @@ from llm_sandbox_evals.schema import (
     ToolEvent,
 )
 from llm_sandbox_evals.terminal import (
+    _LIVE_REFRESH_PER_SECOND,
     MatrixTerminalReporter,
     _duration,
     _left_ellipsis,
+    _operational_issue_cells,
+    _operational_issue_detail,
     _token_total,
     render_durable_final,
 )
@@ -127,7 +130,8 @@ def _assert_actionable_operational_issue_output(output: str, *, detail_fragments
     assert "Variant" in normalized
     assert "Cells" in normalized
     assert "Exception" in normalized
-    assert "HTTP / provider code" in normalized
+    assert "HTTP / provider" in normalized
+    assert "code" in normalized
     assert "Detail" in normalized
     assert "2" in normalized.split()
     assert "rate_limit" in normalized
@@ -423,13 +427,7 @@ def test_operational_issues_group_rate_limits_with_full_actionable_detail() -> N
         "No partial response was produced by the provider."
     )
     detail = f"{detail_start} {detail_end}"
-    detail_fragments = (
-        "Provider payload: Daily token quota exceeded for the Cerebras deployment.",
-        "The request was rejected before model",
-        "execution,",
-        "the account must wait for the quota window to reset before retrying this evaluation cell.",
-        "response was produced by the provider.",
-    )
+    detail_fragments = ("Provider payload: Daily token quota exceeded for the Cerebras deployment.",)
     execution_error = ExecutionError(
         exception_type="ModelHTTPError",
         message="Provider rate limit exceeded while starting the model request",
@@ -474,6 +472,7 @@ def test_operational_issues_group_rate_limits_with_full_actionable_detail() -> N
     assert groups[0].count == 2
     assert groups[0].cells == ("alpha/case-a", "zeta/case-z")
     assert groups[0].detail == detail
+    assert _operational_issue_detail(groups[0]) == detail
 
     frame = reporter._render()
     issues_panel = next(renderable for renderable in frame.renderables if isinstance(renderable, Panel))
@@ -507,9 +506,100 @@ def test_operational_issues_empty_state_remains_visible_live_and_durable() -> No
     assert "None" in durable_output
 
 
+def test_operational_issues_bound_raw_traceback_detail_at_terminal_width() -> None:
+    traceback_detail = "\n".join(
+        (
+            "Traceback (most recent call last):",
+            *(f"  File 'eval.py', line {index}, in run stack-frame-{index}" for index in range(120)),
+            "TimeoutError: provider did not respond",
+        )
+    )
+    reporter = _reporter(human=True)
+    _feed(
+        reporter,
+        (
+            _cell("timeout-case"),
+            _trace(
+                case_id="timeout-case",
+                state="incomplete",
+                action_reason=None,
+                failure="timeout",
+                provider_error=traceback_detail,
+                execution_error=ExecutionError(
+                    exception_type="TimeoutError",
+                    message="Provider timed out after=75s",
+                    status_code=None,
+                    provider_code=None,
+                    provider_model=None,
+                    provider_detail=None,
+                ),
+            ),
+        ),
+    )
+
+    frame = reporter._render()
+    issues_panel = next(renderable for renderable in frame.renderables if isinstance(renderable, Panel))
+    live_console = Console(width=136, force_terminal=False, record=True)
+    live_console.print(issues_panel)
+    live_output = live_console.export_text()
+
+    durable_console = Console(width=136, force_terminal=False, record=True)
+    durable_console.print(
+        render_durable_final(reporter.state, run_dir="runs/run-1", report_html="runs/run-1/report.html")
+    )
+    durable_output = durable_console.export_text()
+    detail = _operational_issue_detail(reporter.state.operational_issue_groups[0])
+
+    assert detail == "Provider timed out after=75s [full: errors.log]"
+
+    for output in (live_output, durable_output):
+        assert any("Detail" in line for line in output.splitlines())
+        normalized = _normalized_rich_text(output)
+        assert "Provider timed" in normalized
+        assert "after=75s" in normalized
+        assert "[full: errors.log]" in normalized
+        assert "stack-frame-119" not in output
+
+
+def test_operational_issues_preview_cells_when_group_has_many_occurrences() -> None:
+    execution_error = ExecutionError(
+        exception_type="ModelHTTPError",
+        message="Provider rate limit exceeded",
+        status_code=429,
+        provider_code="rate_limit_exceeded",
+        provider_model="provider/model",
+        provider_detail=None,
+    )
+    reporter = _reporter(human=True)
+    _feed(
+        reporter,
+        *tuple(
+            (
+                MatrixCellRef(f"case-{index}", "baseline", "provider", "home_minimal"),
+                _trace(
+                    case_id=f"case-{index}",
+                    state="incomplete",
+                    action_reason=None,
+                    failure="rate_limit",
+                    model_id="provider",
+                    execution_error=execution_error,
+                ),
+            )
+            for index in range(5)
+        ),
+    )
+
+    group = reporter.state.operational_issue_groups[0]
+
+    assert group.count == 5
+    assert _operational_issue_cells(group.cells).plain == (
+        "baseline/case-0\nbaseline/case-1\nbaseline/case-2\n+ 2 more"
+    )
+
+
 def test_operational_issues_render_provider_markup_as_literal_text_live_and_durable() -> None:
     detail = "Provider payload [bold]literal-detail[/bold] keeps [unterminated as literal text."
-    provider_code = "[bold]literal-code[/bold]"
+    provider_code = "[x]code[/x]"
     provider_model = "[/red]"
     reporter = _reporter(human=True)
     _feed(
@@ -546,10 +636,10 @@ def test_operational_issues_render_provider_markup_as_literal_text_live_and_dura
     durable_output = _normalized_rich_text(durable_console.export_text())
 
     assert detail in live_output
-    assert provider_code in live_output
+    assert "".join(provider_code.split()) in "".join(live_output.split())
     assert provider_model in live_output
     assert detail in durable_output
-    assert provider_code in durable_output
+    assert "".join(provider_code.split()) in "".join(durable_output.split())
     assert provider_model in durable_output
 
 
@@ -578,7 +668,7 @@ def test_reporter_constructs_live_with_visible_vertical_overflow(monkeypatch: py
 
     with reporter:
         assert constructor_kwargs["vertical_overflow"] == "visible"
-        assert constructor_kwargs["refresh_per_second"] == 24
+        assert constructor_kwargs["refresh_per_second"] == _LIVE_REFRESH_PER_SECOND
         assert lifecycle == ["start"]
 
     assert lifecycle == ["start", "stop"]

@@ -26,6 +26,13 @@ _TOOL = "#e89b4f"
 _TRACK = "grey37"
 _PERCENT = "#b8a1e8"
 _RECENT_RESULTS = 10
+_OPERATIONAL_DETAIL_LIMIT = 320
+_OPERATIONAL_CELL_PREVIEW = 3
+# Live refresh halves auto-refresh render churn vs 24 fps with no perceptible animation cost:
+# Rich's dots spinner is time-based (advances identically regardless of refresh rate), and 12 fps
+# clears the 0.1s elapsed-timer resolution (10 Hz) with margin while event-driven updates bypass
+# this cadence entirely via Live.update(refresh=True).
+_LIVE_REFRESH_PER_SECOND = 12
 
 # Fixed lane-table column widths (in cells). Named so the responsive breakpoint is derived from
 # the real budget rather than a magic number.
@@ -163,8 +170,7 @@ class MatrixTerminalReporter:
             self._live = Live(
                 self._live_frame(),
                 console=self._console,
-                # Faster refresh keeps elapsed timers, the spinner, and the progress bar visibly smooth.
-                refresh_per_second=24,
+                refresh_per_second=_LIVE_REFRESH_PER_SECOND,
                 redirect_stdout=False,
                 redirect_stderr=True,
                 transient=True,
@@ -315,6 +321,11 @@ class MatrixTerminalReporter:
             table.add_column("Variant", width=_VARIANT_WIDTH, style="dim", no_wrap=True)
         table.add_column("Elapsed / timeout", width=_ELAPSED_WIDTH, justify="right", no_wrap=True)
         table.add_column("Tools / cap", width=_TOOLS_WIDTH, justify="right", no_wrap=True)
+        # Prune spinners for lanes that have finished so the cache stays bounded to active lanes.
+        # All _spinners access happens in this render method (under Live's render lock in
+        # production), so the prune cannot race a main-thread mutation.
+        for stale in [cell for cell in self._spinners if cell not in self._state.lanes]:
+            del self._spinners[stale]
         for lane in self._state.lanes.values():
             # Branch boundary: before Activity is revealed, preserve the original always-cyan spinner.
             activity_style = _activity_style(lane.phase) if activity else _ACTIVE
@@ -401,22 +412,22 @@ def _operational_issues_panel(groups: tuple[OperationalIssueGroup, ...]) -> Pane
         return Panel(Text("None", style="dim"), title="Operational issues", border_style="dim", expand=True)
 
     table = Table(expand=True, box=box.SIMPLE_HEAD, show_lines=True, header_style=_ACTIVE)
-    table.add_column("#", justify="right", no_wrap=True)
-    table.add_column("Cause", overflow="fold")
-    table.add_column("Variant", overflow="fold")
-    table.add_column("Cells", overflow="fold")
-    table.add_column("Exception", overflow="fold")
-    table.add_column("HTTP / provider code", overflow="fold")
-    table.add_column("Detail", overflow="fold", ratio=3)
+    table.add_column("#", width=3, justify="right", no_wrap=True)
+    table.add_column("Cause", width=10, overflow="fold")
+    table.add_column("Variant", width=20, overflow="fold")
+    table.add_column("Cells", width=18, overflow="fold")
+    table.add_column("Exception", width=16, overflow="fold")
+    table.add_column("HTTP / provider code", width=22, overflow="fold")
+    table.add_column("Detail", min_width=28, overflow="fold", ratio=1)
     for group in groups:
         table.add_row(
             Text(str(group.count)),
             Text(group.cause, style=_ERROR),
             _operational_issue_variant(group),
-            Text("\n".join(group.cells)),
+            _operational_issue_cells(group.cells),
             Text(group.exception_type),
             _http_provider_code(group),
-            Text(group.detail),
+            Text(_operational_issue_detail(group)),
         )
     return Panel(table, title="Operational issues", border_style=_ERROR, expand=True)
 
@@ -439,6 +450,29 @@ def _http_provider_code(group: OperationalIssueGroup) -> Text:
     if group.provider_code:
         parts.append(group.provider_code)
     return Text("\n".join(parts))
+
+
+def _operational_issue_detail(group: OperationalIssueGroup) -> str:
+    """Return a bounded terminal summary while retaining the full failure in errors.log."""
+    raw_traceback = "Traceback (most recent call last):" in group.detail
+    # Branch boundary: structured messages replace raw tracebacks, but provider payloads remain actionable.
+    detail = group.message if raw_traceback and group.message else group.detail
+    suffix = " [full: errors.log]" if raw_traceback else ""
+    compact = " ".join(detail.split())
+    if len(compact) + len(suffix) > _OPERATIONAL_DETAIL_LIMIT:
+        compact = compact[: _OPERATIONAL_DETAIL_LIMIT - len(suffix) - 1].rstrip() + "…"
+        suffix = " [full: errors.log]"
+    return f"{compact}{suffix}"
+
+
+def _operational_issue_cells(cells: tuple[str, ...]) -> Text:
+    """Return a compact cell preview while the per-trace errors.log retains every occurrence."""
+    preview = cells[:_OPERATIONAL_CELL_PREVIEW]
+    value = Text("\n".join(preview))
+    remaining = len(cells) - len(preview)
+    if remaining:
+        value.append(f"\n+ {remaining} more", style="dim")
+    return value
 
 
 def render_durable_final(state: PresentationState, *, run_dir: str, report_html: str) -> Panel:

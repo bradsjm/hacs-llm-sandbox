@@ -285,6 +285,11 @@ class PresentationState:
     completed: list[PresentationCell] = field(default_factory=list)
     # Sticky for the run: turns True only once a real thinking phase is seen on an active lane.
     activity_enabled: bool = False
+    # Cached projections of `completed`, recomputed in ingest() on the mutating (main) thread so
+    # the Live auto-refresh thread only reads these frozen tuples instead of iterating the live
+    # `completed` list (or its length) mid-append. `completed` is append-only via ingest().
+    _groups_cache: tuple[OperationalIssueGroup, ...] = ()
+    _aggregates_cache: tuple[PairAggregate, ...] = ()
 
     def ingest(self, event: MatrixProgressEvent, *, timeout: float, max_tool_calls: int) -> None:
         """Apply one lifecycle event without allowing presentation to affect evaluation."""
@@ -303,6 +308,10 @@ class PresentationState:
             # State mutation point: a terminal trace leaves the active set exactly once.
             self.lanes.pop(event.cell, None)
             self.completed.append(_presentation_cell(event.cell, event.trace, {}))
+            # Recompute projections here (main thread) so the Live refresh thread only reads frozen
+            # tuples; this is the sole mutation point for `completed`, so once per cell is sufficient.
+            self._groups_cache = operational_issue_groups(self.completed)
+            self._aggregates_cache = pair_aggregates(self.completed)
 
     def ingest_phase(self, event: LanePhaseEvent) -> bool:
         """Project a phase onto its active lane; return whether visible state actually changed.
@@ -346,13 +355,13 @@ class PresentationState:
 
     @property
     def operational_issue_groups(self) -> tuple[OperationalIssueGroup, ...]:
-        """Return deterministic operational-failure rows for completed cells."""
-        return operational_issue_groups(self.completed)
+        """Return operational-failure rows, recomputed in ingest() on the mutating thread."""
+        return self._groups_cache
 
     @property
     def aggregates(self) -> tuple[PairAggregate, ...]:
-        """Return candidate by variant aggregates for the completed cells."""
-        return pair_aggregates(self.completed)
+        """Return candidate by variant aggregates, recomputed in ingest() on the mutating thread."""
+        return self._aggregates_cache
 
 
 @dataclass(frozen=True, slots=True)
