@@ -33,7 +33,25 @@
           "type": "array",
           "minItems": 0,
           "items": {"$ref": "#/$defs/action"}
+        },
+        "desired_states": {
+          "type": "array",
+          "minItems": 0,
+          "items": {"$ref": "#/$defs/desired_state"}
         }
+      }
+    },
+    "desired_state": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entity_id", "state"],
+      "properties": {
+        "entity_id": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(light|switch)\\..+"
+        },
+        "state": {"type": "string", "enum": ["on", "off"]}
       }
     },
     "action": {

@@ -17,6 +17,7 @@ from llm_sandbox_evals.schema import (
     ActionResult,
     CaseOutcome,
     CaseTrace,
+    EndStateResult,
     EvalDiagnostics,
     ExecutionError,
     RequiredAction,
@@ -34,7 +35,8 @@ def _trace(
     reasoning_effort: str | None = None,
     cap_exhausted: bool = False,
     failure: str | None = None,
-    action_reason: str | None = "ok",
+    score_reason: str | None = "ok",
+    scoring_mode: str | None = "actions",
     provider_error: str | None = None,
     execution_error: ExecutionError | None = None,
 ) -> CaseTrace:
@@ -45,8 +47,12 @@ def _trace(
         model_id=model_id,
         answer=None,
         required_actions=expected,
-        outcome=CaseOutcome(state, action_reason),
-        action_result=ActionResult(state == "correct", action_reason or "ok"),
+        desired_states=(),
+        overlay_state_seeds=(),
+        recorded_invocations=(),
+        end_state_result=EndStateResult("not_authored", False, False),
+        outcome=CaseOutcome(state, scoring_mode, score_reason),
+        action_result=ActionResult(state == "correct", score_reason or "ok"),
         action_ledger=ActionLedger(),
         tool_events=(),
         diagnostics=EvalDiagnostics(cap_exhausted=cap_exhausted, failure=failure, elapsed_seconds=1.0),
@@ -69,23 +75,23 @@ def _cell(
     ("trace_kwargs", "expected"),
     [
         pytest.param(
-            {"state": "incorrect", "cap_exhausted": True, "action_reason": "wrong_target"},
+            {"state": "incorrect", "cap_exhausted": True, "score_reason": "wrong_target"},
             "cap_exhausted",
             id="cap-exhausted",
         ),
         pytest.param(
-            {"state": "incomplete", "action_reason": None, "failure": "timeout"}, "timeout", id="incomplete-timeout"
+            {"state": "incomplete", "score_reason": None, "failure": "timeout"}, "timeout", id="incomplete-timeout"
         ),
         pytest.param(
-            {"state": "incomplete", "action_reason": None, "failure": None}, "unknown", id="incomplete-no-failure"
+            {"state": "incomplete", "score_reason": None, "failure": None}, "unknown", id="incomplete-no-failure"
         ),
-        pytest.param({"state": "incorrect", "action_reason": "wrong_target"}, "wrong_target", id="scored-reason"),
+        pytest.param({"state": "incorrect", "score_reason": "wrong_target"}, "wrong_target", id="scored-reason"),
         pytest.param(
-            {"state": "correct", "action_reason": "equivalent_target_partition"},
+            {"state": "correct", "score_reason": "equivalent_target_partition"},
             "equivalent_target_partition",
             id="equivalent-target-partition",
         ),
-        pytest.param({"state": "correct", "action_reason": "ok"}, "ok", id="correct"),
+        pytest.param({"state": "correct", "score_reason": "ok"}, "ok", id="correct"),
     ],
 )
 def test_effective_cause_resolves_every_branch(trace_kwargs: dict[str, object], expected: str) -> None:
@@ -94,7 +100,7 @@ def test_effective_cause_resolves_every_branch(trace_kwargs: dict[str, object], 
 
 
 def test_result_label_combines_state_and_cause_without_raw_payload() -> None:
-    trace = _trace(state="incomplete", action_reason=None, failure="provider_error")
+    trace = _trace(state="incomplete", score_reason=None, failure="provider_error")
     label = result_label(trace)
 
     assert label == "incomplete·provider_error"
@@ -103,7 +109,7 @@ def test_result_label_combines_state_and_cause_without_raw_payload() -> None:
 
 
 def test_result_label_preserves_equivalent_target_partition_reason() -> None:
-    trace = _trace(state="correct", action_reason="equivalent_target_partition")
+    trace = _trace(state="correct", score_reason="equivalent_target_partition")
 
     assert result_label(trace) == "correct·equivalent_target_partition"
 
@@ -132,7 +138,7 @@ def test_presentation_state_projects_lifecycle_events() -> None:
     state = PresentationState()
     timeout_cell = _cell("timeout-case")
     correct_cell = _cell("correct-case")
-    timeout_trace = _trace(state="incomplete", action_reason=None, failure="timeout")
+    timeout_trace = _trace(state="incomplete", score_reason=None, failure="timeout")
     correct_trace = _trace(state="correct")
 
     state.ingest(MatrixProgressEvent("matrix_started", total=2), timeout=10.0, max_tool_calls=10)
@@ -168,7 +174,9 @@ def test_presentation_state_projects_lifecycle_events() -> None:
 def test_presentation_state_cap_exhausted_does_not_count_as_operational_issue() -> None:
     state = PresentationState()
     cell = _cell("cap-case")
-    trace = _trace(state="incorrect", cap_exhausted=True, action_reason="wrong_target")
+    trace = _trace(
+        state="incorrect", cap_exhausted=True, scoring_mode="cap_exhausted", score_reason="cap_exhausted"
+    )
 
     state.ingest(MatrixProgressEvent("matrix_started", total=1), timeout=10.0, max_tool_calls=10)
     state.ingest(MatrixProgressEvent("cell_started", cell=cell, request="r"), timeout=10.0, max_tool_calls=10)
@@ -349,7 +357,7 @@ def test_operational_issue_groups_preserve_exact_identity_across_runtime_and_rep
                 case_id="legacy",
                 candidate_id="legacy-candidate",
                 model_id="cerebras",
-                action_reason=None,
+                score_reason=None,
                 failure="provider_error",
                 provider_error=legacy_detail,
             ),
@@ -360,7 +368,7 @@ def test_operational_issue_groups_preserve_exact_identity_across_runtime_and_rep
                 state="incomplete",
                 case_id="distinct-payload",
                 model_id="cerebras",
-                action_reason=None,
+                score_reason=None,
                 failure="rate_limit",
                 execution_error=distinct_quota_error,
             ),
@@ -372,7 +380,7 @@ def test_operational_issue_groups_preserve_exact_identity_across_runtime_and_rep
                 case_id="case-a",
                 candidate_id="zeta",
                 model_id="cerebras",
-                action_reason=None,
+                score_reason=None,
                 failure="rate_limit",
                 execution_error=quota_error,
             ),
@@ -385,7 +393,7 @@ def test_operational_issue_groups_preserve_exact_identity_across_runtime_and_rep
                 case_id="timeout",
                 candidate_id="timeout-candidate",
                 model_id="cerebras",
-                action_reason=None,
+                score_reason=None,
                 failure="timeout",
                 execution_error=ExecutionError("TimeoutError", "Timed out after 10 seconds"),
             ),
@@ -397,7 +405,7 @@ def test_operational_issue_groups_preserve_exact_identity_across_runtime_and_rep
                 case_id="variant",
                 model_id="cerebras",
                 reasoning_effort="high",
-                action_reason=None,
+                score_reason=None,
                 failure="rate_limit",
                 execution_error=quota_error,
             ),
@@ -409,13 +417,13 @@ def test_operational_issue_groups_preserve_exact_identity_across_runtime_and_rep
                 case_id="cap-exhausted",
                 model_id="cerebras",
                 cap_exhausted=True,
-                action_reason=None,
+                score_reason=None,
                 failure="cap_exhausted",
             ),
         ),
         (
             _cell("incorrect", model_id="cerebras"),
-            _trace(state="incorrect", case_id="incorrect", model_id="cerebras", action_reason="wrong_target"),
+            _trace(state="incorrect", case_id="incorrect", model_id="cerebras", score_reason="wrong_target"),
         ),
         (
             _cell("distinct-message", "baseline", "cerebras"),
@@ -423,7 +431,7 @@ def test_operational_issue_groups_preserve_exact_identity_across_runtime_and_rep
                 state="incomplete",
                 case_id="distinct-message",
                 model_id="cerebras",
-                action_reason=None,
+                score_reason=None,
                 failure="rate_limit",
                 execution_error=distinct_message_error,
             ),
@@ -434,7 +442,7 @@ def test_operational_issue_groups_preserve_exact_identity_across_runtime_and_rep
                 state="incomplete",
                 case_id="distinct-provider-model",
                 model_id="cerebras",
-                action_reason=None,
+                score_reason=None,
                 failure="rate_limit",
                 execution_error=distinct_provider_model_error,
             ),
@@ -446,7 +454,7 @@ def test_operational_issue_groups_preserve_exact_identity_across_runtime_and_rep
                 case_id="case-z",
                 candidate_id="alpha",
                 model_id="cerebras",
-                action_reason=None,
+                score_reason=None,
                 failure="rate_limit",
                 execution_error=quota_error,
             ),
@@ -599,7 +607,7 @@ def test_operational_issue_groups_include_full_raw_provider_error_identity() -> 
                 state="incomplete",
                 case_id="raw-beta",
                 model_id="cerebras",
-                action_reason=None,
+                score_reason=None,
                 failure="rate_limit",
                 provider_error=raw_beta,
                 execution_error=execution_error,
@@ -611,7 +619,7 @@ def test_operational_issue_groups_include_full_raw_provider_error_identity() -> 
                 state="incomplete",
                 case_id="legacy-alpha",
                 model_id="cerebras",
-                action_reason=None,
+                score_reason=None,
                 failure="provider_error",
                 provider_error=legacy_alpha,
             ),
@@ -623,7 +631,7 @@ def test_operational_issue_groups_include_full_raw_provider_error_identity() -> 
                 case_id="case-a",
                 candidate_id="zeta",
                 model_id="cerebras",
-                action_reason=None,
+                score_reason=None,
                 failure="rate_limit",
                 provider_error=shared_raw,
                 execution_error=execution_error,
@@ -635,7 +643,7 @@ def test_operational_issue_groups_include_full_raw_provider_error_identity() -> 
                 state="incomplete",
                 case_id="fallback",
                 model_id="cerebras",
-                action_reason=None,
+                score_reason=None,
                 failure="rate_limit",
                 execution_error=execution_error,
             ),
@@ -646,7 +654,7 @@ def test_operational_issue_groups_include_full_raw_provider_error_identity() -> 
                 state="incomplete",
                 case_id="legacy-beta",
                 model_id="cerebras",
-                action_reason=None,
+                score_reason=None,
                 failure="provider_error",
                 provider_error=legacy_beta,
             ),
@@ -657,7 +665,7 @@ def test_operational_issue_groups_include_full_raw_provider_error_identity() -> 
                 state="incomplete",
                 case_id="raw-alpha",
                 model_id="cerebras",
-                action_reason=None,
+                score_reason=None,
                 failure="rate_limit",
                 provider_error=raw_alpha,
                 execution_error=execution_error,
@@ -670,7 +678,7 @@ def test_operational_issue_groups_include_full_raw_provider_error_identity() -> 
                 case_id="case-z",
                 candidate_id="alpha",
                 model_id="cerebras",
-                action_reason=None,
+                score_reason=None,
                 failure="rate_limit",
                 provider_error=shared_raw,
                 execution_error=execution_error,
@@ -776,7 +784,7 @@ def test_operational_issue_groups_include_full_raw_provider_error_identity() -> 
 def test_report_presentation_model_shares_semantics_with_runtime_state() -> None:
     timeout_cell = _cell("timeout-case", model_id="luna")
     correct_cell = _cell("correct-case", model_id="luna")
-    timeout_trace = _trace(state="incomplete", action_reason=None, failure="timeout", model_id="luna")
+    timeout_trace = _trace(state="incomplete", score_reason=None, failure="timeout", model_id="luna")
     correct_trace = _trace(state="correct", model_id="luna")
     report = EvaluationReport(
         name="report-projection",
@@ -812,7 +820,11 @@ def test_report_presentation_model_reads_metrics_with_usage_fallback() -> None:
         model_id="stub",
         answer=None,
         required_actions=(RequiredAction("light", "turn_on", ("light.bedroom",)),),
-        outcome=CaseOutcome("correct", "ok"),
+        desired_states=(),
+        overlay_state_seeds=(),
+        recorded_invocations=(),
+        end_state_result=EndStateResult("not_authored", False, False),
+        outcome=CaseOutcome("correct", "actions", "ok"),
         action_result=ActionResult(True, "ok"),
         action_ledger=ActionLedger(),
         tool_events=(),

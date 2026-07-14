@@ -30,6 +30,17 @@ type FailureClassification = Literal[
     "provider_error",
 ]
 
+type ScoringMode = Literal["end_state", "actions", "cap_exhausted"]
+
+type EndStateStatus = Literal["not_authored", "unevaluable", "satisfied", "unsatisfied"]
+
+type ScoreReason = Literal[
+    "end_state_satisfied",
+    "end_state_unsatisfied",
+    ActionOutcomeReason,
+    "cap_exhausted",
+]
+
 
 def variant_label(model_id: str, reasoning_effort: str | None) -> str:
     """Return the display-only identity for one resolved model variant."""
@@ -113,14 +124,54 @@ class ActionComparison:
     matched: bool
 
 
+_SUPPORTED_STATE_DOMAINS = ("light", "switch")
+_SUPPORTED_STATE_VALUES = ("on", "off")
+
+
+@dataclass(frozen=True, slots=True)
+class DesiredState:
+    """One desired post-run entity state used as the primary scoring predicate.
+
+    Restricted to ``light``/``switch`` domains with a binary ``on``/``off``
+    state so the eval-only overlay reducer can deterministically evaluate it
+    without emulating arbitrary Home Assistant service semantics.
+    """
+
+    entity_id: str
+    state: str
+
+    def __post_init__(self) -> None:
+        """Validate the predicate's entity domain and desired state vocabulary."""
+        if not self.entity_id or not isinstance(self.entity_id, str):
+            raise ValueError("desired state entity_id must be a nonempty string")
+        domain = self.entity_id.split(".", 1)[0] if "." in self.entity_id else ""
+        if domain not in _SUPPORTED_STATE_DOMAINS:
+            raise ValueError(
+                f"desired state entity_id must be a {_SUPPORTED_STATE_DOMAINS} entity, got {self.entity_id!r}"
+            )
+        if self.state not in _SUPPORTED_STATE_VALUES:
+            raise ValueError(
+                f"desired state must be one of {_SUPPORTED_STATE_VALUES}, got {self.state!r}"
+            )
+
+
 @dataclass(frozen=True, slots=True)
 class EvalCase:
-    """One action request and its required successful service effects."""
+    """One action request, its required successful service effects, and optional end-state predicates."""
 
     id: str
     home: str
     user_request: str
     required_actions: tuple[RequiredAction, ...]
+    desired_states: tuple[DesiredState, ...] = ()
+
+    def __post_init__(self) -> None:
+        """Reject duplicate desired-state entity IDs so contradictory goals cannot silently pick a score."""
+        seen: set[str] = set()
+        for predicate in self.desired_states:
+            if predicate.entity_id in seen:
+                raise ValueError(f"duplicate desired state entity_id: {predicate.entity_id!r}")
+            seen.add(predicate.entity_id)
 
 
 @dataclass(frozen=True, slots=True)
@@ -155,6 +206,38 @@ class ActionLedger:
 
 
 @dataclass(frozen=True, slots=True)
+class OverlayStateSeed:
+    """Frozen initial state for one predicate-relevant entity.
+
+    Captured from the scoped snapshot so a saved trace can be re-scored
+    without consulting fixture code.
+    """
+
+    entity_id: str
+    domain: str
+    state: str
+
+
+@dataclass(frozen=True, slots=True)
+class EndStateComparison:
+    """Per-predicate observed final state versus the desired state."""
+
+    desired: DesiredState
+    actual_state: str | None
+    matched: bool
+
+
+@dataclass(frozen=True, slots=True)
+class EndStateResult:
+    """End-state assessment: primary score when evaluable, diagnostics otherwise."""
+
+    status: EndStateStatus
+    evaluable: bool
+    passed: bool
+    comparisons: tuple[EndStateComparison, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class ExecutionError:
     """Structured provider or harness failure metadata for one execution attempt."""
 
@@ -185,10 +268,18 @@ class EvalDiagnostics:
 
 @dataclass(frozen=True, slots=True)
 class CaseOutcome:
-    """Binary action quality outcome or an incomplete operational result."""
+    """Binary quality outcome or an incomplete operational result.
+
+    ``scoring_mode`` identifies which assessment determined the verdict:
+    ``end_state`` for evaluable desired-state predicates, ``actions`` for the
+    exact action-ledger fallback, ``cap_exhausted`` for the operational
+    override, or ``None`` for incomplete execution.  ``score_reason`` carries
+    the stable reason for that mode.
+    """
 
     state: Literal["correct", "incorrect", "incomplete"]
-    action_reason: ActionOutcomeReason | None
+    scoring_mode: ScoringMode | None
+    score_reason: ScoreReason | None
     score: float = field(init=False)
 
     def __post_init__(self) -> None:
@@ -198,13 +289,17 @@ class CaseOutcome:
 
 @dataclass(frozen=True, slots=True)
 class CaseTrace:
-    """Self-contained scoring-v7 action eval trace."""
+    """Self-contained scoring-v8 eval trace with end-state and action evidence."""
 
     case_id: str
     candidate_id: str
     model_id: str
     answer: str | None
     required_actions: tuple[RequiredAction, ...]
+    desired_states: tuple[DesiredState, ...]
+    overlay_state_seeds: tuple[OverlayStateSeed, ...]
+    recorded_invocations: tuple[dict[str, object], ...]
+    end_state_result: EndStateResult
     outcome: CaseOutcome
     action_result: ActionResult
     action_ledger: ActionLedger
@@ -212,7 +307,7 @@ class CaseTrace:
     diagnostics: EvalDiagnostics
     reasoning_effort: str | None = None
     temperature: float | None = None
-    scoring_version: Literal[7] = 7
+    scoring_version: Literal[8] = 8
     provider_error: str | None = None
     execution_error: ExecutionError | None = None
     user_request: str = ""

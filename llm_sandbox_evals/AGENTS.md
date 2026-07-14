@@ -1,38 +1,58 @@
-# LLM Sandbox action evals
+# LLM Sandbox evals
 
 ## Scope
 
-`llm_sandbox_evals/` is a development-only action-capability harness. It asks a
+`llm_sandbox_evals/` is a development-only capability harness. It asks a
 real Pydantic AI agent to use the production LLM tools against fresh frozen Home
-Assistant fixtures. It evaluates only successful service invocation effects.
+Assistant fixtures. It scores desired end-state predicates primary, falling
+back to exact action-ledger matching when no predicate is authored or the
+end state is unevaluable.
 
 ## Current contract
 
-- Cases contain only `id`, `home`, `user_request`, and `required_actions`.
-- `required_actions` may be empty. An empty list is correct only when the
-  successful action ledger is also empty.
-- Required actions contain `domain`, `service`, and required nonempty
-  `target_entity_ids`. The current corpus does not author `service_data`.
+- Cases contain `id`, `home`, `user_request`, `required_actions`, and optional
+  `desired_states`.
+- `desired_states` is a list of `{entity_id, state}` predicates restricted to
+  `light`/`switch` entities with `on`/`off` state. Omitting it or providing an
+  empty list selects action fallback. Duplicate predicate entity IDs are
+  rejected at construction.
+- `required_actions` may be empty and is always retained as action diagnostics
+  and fallback. Required actions contain `domain`, `service`, and required
+  nonempty `target_entity_ids`. The current corpus does not author `service_data`.
 - Runtime actions are always enabled without a domain allowlist.
 - Agent output is plain text (`Agent[EvalRuntime, str]`). Prose is display-only
   and is never parsed or scored.
-- Correctness checks exact call matching first. If exact matching leaves exactly
-  one unmatched authored multi-target action, the remaining successful concrete
+- When `desired_states` are authored and evaluable (every predicate entity
+  exists in the scoped snapshot with a binary `on`/`off` state and matching
+  `light`/`switch` domain), end-state scoring is primary: all predicates
+  satisfied → correct, any unsatisfied → incorrect. A satisfied state passes
+  even with zero actions, extra actions, or action-ledger mismatches. An
+  unsatisfied state fails even if the action ledger matches.
+- When `desired_states` are absent or unevaluable, the exact action multiset
+  determines the outcome. Exact call matching is tried first. If exactly one
+  unmatched authored multi-target action remains, the successful concrete
   entity-ID calls may pass as `equivalent_target_partition` only when there are
   at least two calls; every target collection is nonempty and duplicate-free;
   the calls are pairwise disjoint; their exact union equals the authored target
   set; domain and service match; all actual canonical comparable
   `service_data` values are identical; and authored `service_data`, when
   present, matches. Duplicate, missing, extra, wrong-service, and
-  different-data successes fail. Empty `required_actions` still rejects every
-  successful action.
+  different-data successes fail.
+- The overlay reducer applies only direct `light`/`switch` `turn_on`,
+  `turn_off`, and `toggle` transitions from ordered `RecordingInvoker` calls
+  to a copied seed state map. Unsupported services, indirect selectors,
+  attribute effects, and service data leave the overlay unchanged.
 - Raw and rejected records are diagnostics only. Action results preserve
   normalized observed effects, one-to-one dimension comparisons, unexpected
   actions, and stable reason codes without weakening action matching.
+- `CaseOutcome` carries `scoring_mode` (`end_state`, `actions`,
+  `cap_exhausted`, or `None` for incomplete) and `score_reason`
+  (`end_state_satisfied`, `end_state_unsatisfied`, an `ActionOutcomeReason`
+  for fallback, `cap_exhausted`, or `None` for incomplete).
 - Provider HTTP 429 responses and provider bodies containing
   `token_quota_exceeded` classify incomplete execution failures as `rate_limit`.
   Structured execution metadata is additive diagnostic context only.
-- Traces and reports use scoring version 7. Version 6 and older artifacts are
+- Traces and reports use scoring version 8. Version 7 and older artifacts are
   rejected as legacy; there is no compatibility decoder or rescoring path.
 
 Do not add read scoring, evidence normalization, answer schemas, collections,
@@ -40,7 +60,7 @@ aggregates, relations, no-data, recorder-answer scoring, authored service-data
 coverage, policy/rejection scoring, disabled-action behavior, or
 clarification-quality scoring to this baseline. Conditional state/history/logbook
 cases, true no-action cases, and multi-target selector resolution are now part
-of the action corpus.
+of the corpus with end-state predicates.
 
 ## Dataset and stub
 
@@ -94,18 +114,24 @@ checks and uses `home_full` for the corpus and its complete 288-entity fixture.
 - `tools.py` — visibility scoping, non-live `RecordingInvoker`, and compact
   action normalization.
 - `scoring/actions.py` / `scoring/evaluate.py` — successful-ledger construction,
-  exact call matching, and the narrow multi-target partition equivalence.
-- `harness.py` — lifecycle, tool events, action extraction, minimal successful
-  tool diagnostics, and trace assembly.
+  exact call matching, the narrow multi-target partition equivalence, and
+  end-state-primary scoring selection.
+- `scoring/end_state.py` — pure overlay reducer: seeds predicate entities from
+  the scoped snapshot, replays ordered `RecordingInvoker` calls as direct
+  light/switch transitions, and returns a satisfied/unsatisfied/unevaluable
+  assessment.
+- `harness.py` — lifecycle, tool events, action extraction, overlay seed
+  extraction, minimal successful tool diagnostics, and trace assembly.
 - `experiment.py`, `reports.py`, `presentation.py`, `terminal.py`, `html_report.py` — overall model
-  comparison, v7 persistence, immutable and runtime presentation projections, diagnostics, and action-ledger display without
-  category analysis.
+  comparison, v8 persistence, immutable and runtime presentation projections, diagnostics, and end-state
+  plus action-ledger display without category analysis.
 
 ## Eval UX and artifacts
 
 - Keep `model_id` as the provider id. Persist the run-wide resolved reasoning
   and temperature fields and derive display-only variant labels.
-- `action_reason` is scored-action-only. Incomplete operational failures carry
+- `scoring_mode` and `score_reason` identify which assessment determined the
+  verdict. Incomplete operational failures carry `scoring_mode=None` and
   `diagnostics.failure`; presentation must use the shared effective cause.
 - Count `total`, `finished`, and `scored`; quality is correct/scored and
   coverage is scored/total. Do not reintroduce user-facing `completed` counts.
@@ -143,15 +169,17 @@ surface. Their eval-specific scoring and stub routes must not return.
 
 ## Staged future work
 
-Expand only through explicit plans and observable action contracts. The current
-corpus still does not author service data; v7 only compares comparable
-`service_data` to prevent partition equivalence across different action payloads
-or against authored payloads if they are introduced later. Policy/rejection
-behavior, disabled-action behavior, and response/clarification-quality scoring
-remain deferred. Conditional state/history/logbook behavior, true no-action
-outcomes, and multi-target selector resolution are already represented in the
-current corpus. Read-answer scoring requires a separate design rather than
-restoration of v4 models or evidence modules.
+Expand only through explicit plans and observable contracts. The current
+corpus authors `desired_states` for 10 of 14 cases; the remaining 4
+(brightness, color, bare ambiguity, ceiling ambiguity) use action fallback
+because their intent requires unsupported attribute semantics or safe
+abstention. The overlay reducer supports only direct `light`/`switch`
+`turn_on`/`turn_off`/`toggle` state transitions; expanding it to attributes
+or other domains requires a new state-based case and explicit reducer support.
+Policy/rejection behavior, disabled-action behavior, and
+response/clarification-quality scoring remain deferred. Read-answer scoring
+requires a separate design rather than restoration of v4 models or evidence
+modules.
 
 ## Safety and commands
 

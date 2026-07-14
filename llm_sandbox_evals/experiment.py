@@ -86,7 +86,7 @@ class SandboxOutcome(Evaluator[MatrixCellRef, CaseTrace, MatrixCellMeta]):
         """Publish binary quality and provider classification labels."""
         trace = ctx.output
         return {
-            "score": EvaluationReason(value=trace.outcome.score, reason=trace.outcome.action_reason),
+            "score": EvaluationReason(value=trace.outcome.score, reason=trace.outcome.score_reason),
             "outcome": trace.outcome.state,
             "incomplete": trace.outcome.state == "incomplete",
             "failure_classification": trace.diagnostics.failure or "none",

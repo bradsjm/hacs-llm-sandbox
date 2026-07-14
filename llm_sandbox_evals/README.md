@@ -1,16 +1,19 @@
-# LLM Sandbox action evals
+# LLM Sandbox evals
 
 `llm_sandbox_evals` is a development-only harness for one capability: whether
-an Assist model successfully invokes the required Home Assistant service. It
-runs the production tools against a fresh frozen fixture snapshot and records
-validated service effects through the non-live `RecordingInvoker` seam.
+an Assist model reaches the desired Home Assistant end state. It runs the
+production tools against a fresh frozen fixture snapshot, records validated
+service effects through the non-live `RecordingInvoker` seam, and derives a
+post-run overlay from ordered calls to evaluate authored desired-state
+predicates. When no predicate is authored or the end state is unevaluable,
+exact action-ledger matching is used as fallback.
 
 The baseline does not score reads, evidence, recorder output, answer structure,
 blocked actions, policy rejection, service data, clarification quality,
 collections, aggregates, relations, or no-data behavior. Conditional state,
 history, and logbook action selection, including true no-action outcomes, is
-covered by the current corpus. The model returns plain text. That prose is
-retained for display and never parsed or scored.
+covered by the current corpus with end-state predicates. The model returns
+plain text. That prose is retained for display and never parsed or scored.
 
 ## Run
 
@@ -53,7 +56,7 @@ partial-only folders.
 ## Case contract
 
 `data/cases.yaml` uses the Pydantic Evals `name` / `cases[*].inputs` wrapper.
-Each `inputs` object has exactly:
+Each `inputs` object has:
 
 ```yaml
 id: direct_turn_on_utility_room_ceiling
@@ -63,23 +66,32 @@ required_actions:
   - domain: light
     service: turn_on
     target_entity_ids: [light.utility_room_ceiling]
+desired_states:
+  - entity_id: light.utility_room_ceiling
+    state: "on"
 ```
 
-A valid no-action case uses an empty list:
+`desired_states` is optional. Omitting it or providing an empty list selects
+action fallback. Predicates are restricted to `light`/`switch` entities with
+`on`/`off` state. Duplicate predicate entity IDs are rejected.
+
+A valid no-action state case uses an empty required-action list with a
+desired state that is already satisfied:
 
 ```yaml
 id: no_action_light_already_on
 home: home_full
 user_request: Turn on the Living Room ceiling light if it is off.
 required_actions: []
+desired_states:
+  - entity_id: light.living_room_ceiling
+    state: "on"
 ```
 
 `target_entity_ids` is required and nonempty. Runtime actions are always
-enabled without a domain allowlist. `required_actions: []` is valid and means
-that the case is correct only when the model produces zero successful actions.
-Any extra successful action fails, including a different fallback service or a
-duplicate of an otherwise required action. The current corpus does not author
-`service_data`.
+enabled without a domain allowlist. `required_actions: []` is valid and is
+correct when the desired state is satisfied (even with zero actions) or when
+no desired states are authored and the model produces zero successful actions.
 
 ## The `home_full` corpus
 
@@ -107,12 +119,17 @@ The corpus contains 14 cases in this progression:
    from the otherwise ambiguous Living Room lights.
 
 For a multi-target case, one successful call containing all resolved target IDs
-is the exact match. Scoring v7 has one narrow equivalence: when exact matching
-leaves exactly one unmatched authored multi-target action, the remaining
+is the exact match. Scoring v8 has one narrow action equivalence: when exact
+matching leaves exactly one unmatched authored multi-target action, the remaining
 successful concrete entity-ID calls may score as `equivalent_target_partition`
 if they form a complete, disjoint, duplicate-free partition of the authored
 target set across at least two calls with matching domain, service, and
 comparable service data. This is not general action merging.
+
+Ten of the fourteen cases author `desired_states` and use end-state primary
+scoring. The remaining four (brightness, color, bare ambiguity, and ceiling
+ambiguity) use action fallback because their intent requires unsupported
+attribute semantics or safe abstention.
 
 The offline stub is deliberately narrower than the corpus. It exact-matches
 the five direct/brightness/color requests, routes them through
@@ -132,10 +149,26 @@ cases are valid no-action stub smoke cases, while the non-empty discovery,
 condition, and ambiguity-with-logic cases are intentionally not routed by the
 stub. This documents stub coverage only; it does not claim real-model results.
 
-## Scoring v7
+## Scoring v8
 
-Only the successful action ledger is scored. Required and actual effects are
-matched by exact call equality first across:
+End-state predicates are scored primary. When `desired_states` are authored
+and evaluable (every predicate entity exists in the scoped snapshot with a
+binary `on`/`off` state and matching `light`/`switch` domain), the overlay
+reducer applies ordered `RecordingInvoker` calls to a copied seed state map
+and evaluates the final state:
+
+- all predicates satisfied → correct `end_state_satisfied`
+- any predicate unsatisfied → incorrect `end_state_unsatisfied`
+
+A satisfied state passes even with zero actions (e.g. light already on), extra
+actions, or action-ledger mismatches. An unsatisfied state fails even if the
+action ledger matches. The overlay reducer supports only direct `light`/`switch`
+`turn_on`, `turn_off`, and `toggle` transitions; unsupported services, indirect
+selectors, attribute effects, and service data leave the overlay unchanged.
+
+When no `desired_states` are authored or they are unevaluable, the exact
+action multiset is scored as fallback. Required and actual effects are matched
+by exact call equality first across:
 
 - domain;
 - service;
@@ -155,28 +188,23 @@ calls may pass as `equivalent_target_partition` only when all of these are true:
 - authored `service_data`, if present, matches that actual comparable data.
 
 Missing, extra, duplicate, wrong-service, and different-data successful effects
-fail. An empty `required_actions` list therefore passes only with zero
-successful effects and fails on any successful effect, including a different
-fallback service. Raw and rejected action records remain diagnostic and cannot
-satisfy or invalidate an otherwise matched successful ledger. The current corpus
-does not author `service_data`; the comparable-data checks exist to prevent
-partition equivalence across different actual payloads or against authored
-payloads if later cases add them. Structured action comparisons preserve
-unexpected effects and expose stable action reason codes.
-`CaseOutcome.action_reason` is present only for scored correct/incorrect cells.
-Operational provider, timeout, and harness failures remain `incomplete`, have
-`action_reason: null`, and use `diagnostics.failure` as their effective cause.
-Provider HTTP 429 responses and provider bodies containing
-`token_quota_exceeded` classify as `rate_limit`. Structured execution metadata
-is additive diagnostic context; scoring remains v7 and action semantics are
-unchanged. Cap exhaustion is scored incorrect with its real action reason and
-the distinct effective cause `cap_exhausted`.
+fail the action fallback. Raw and rejected action records remain diagnostic and
+cannot satisfy or invalidate an otherwise matched successful ledger. The action
+ledger and comparison are always computed and retained as diagnostics regardless
+of scoring mode.
 
-Reports use scoring version 7. Version 6 and older artifacts are rejected as
-legacy; there is no compatibility decoder or rescoring shim. `model_id` remains
-the provider id, while every trace and descriptor persist the resolved run-wide
-`reasoning_effort` and `temperature`. Presentation derives labels such as
-`luna(high)` or `luna(default)` without changing provider routing.
+`CaseOutcome` carries `scoring_mode` (`end_state`, `actions`, `cap_exhausted`,
+or `None` for incomplete) and `score_reason`. Operational provider, timeout, and
+harness failures remain `incomplete` with `scoring_mode=None` and use
+`diagnostics.failure` as their effective cause. Provider HTTP 429 responses and
+provider bodies containing `token_quota_exceeded` classify as `rate_limit`.
+Cap exhaustion is scored incorrect with `scoring_mode="cap_exhausted"` and the
+distinct effective cause `cap_exhausted`.
+
+Reports use scoring version 8. Version 7 and older artifacts are rejected as
+legacy; there is no compatibility decoder or rescoring shim. `rescore_trace()`
+rebuilds the outcome from persisted `desired_states`, `overlay_state_seeds`,
+`recorded_invocations`, and `action_ledger` without consulting fixture code.
 
 User-facing counts are `total` cells, `finished` terminal cells, and `scored`
 correct plus incorrect cells. `quality_rate = correct / scored`; `coverage_rate
@@ -217,16 +245,18 @@ inspectors show their operational cause rather than an action mismatch.
 ## Architecture
 
 ```text
-14 home_full YAML cases
-        |
+14 home_full YAML cases (10 with desired_states, 4 action-only)
+         |
 fresh scoped HomeSnapshot
-        |
+         |
 Pydantic AI Agent[EvalRuntime, str]
-        |
-production tools -> RecordingInvoker -> action ledger
-        |
-exact-first action comparison + narrow partition equivalence
-        |
+         |
+production tools -> RecordingInvoker -> ordered calls + action ledger
+         |
+overlay reducer (light/switch turn_on/off/toggle) + exact action matching
+         |
+end_state primary / actions fallback + diagnostics
+         |
 correct / incorrect / incomplete + diagnostics
 ```
 
@@ -241,12 +271,16 @@ inventory-scale development checks.
 
 ## Staged expansion
 
-Future capabilities should be introduced one observable action boundary at a
-time with explicit authored contracts. The following remain deferred:
+Future capabilities should be introduced one observable contract at a time.
+The overlay reducer currently supports only direct `light`/`switch`
+`turn_on`/`turn_off`/`toggle` state transitions. Expanding it to attributes
+(brightness, color) or other domains requires a new state-based case and
+explicit reducer support. The following remain deferred:
 
-1. authored service-data coverage in the corpus;
-2. policy/rejection behavior and disabled-action behavior;
-3. response and clarification-quality scoring.
+1. attribute-level end-state predicates (brightness, color);
+2. authored service-data coverage in the corpus;
+3. policy/rejection behavior and disabled-action behavior;
+4. response and clarification-quality scoring.
 
 Conditional state/history/logbook behavior, true no-action outcomes, and
 multi-target selector resolution are already in scope in the `home_full`

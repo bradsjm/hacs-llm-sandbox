@@ -18,7 +18,7 @@ type JsonObject = dict[str, object]
 
 _REPORT_ADAPTER: TypeAdapter[MatrixReport] = TypeAdapter(MatrixReport)
 _PARTIAL_ADAPTER: TypeAdapter[PartialRunArtifact] = TypeAdapter(PartialRunArtifact)
-_SCORING_VERSION = 7
+_SCORING_VERSION = 8
 _CASE_TRACE_FIELDS = frozenset(
     {
         "case_id",
@@ -29,6 +29,10 @@ _CASE_TRACE_FIELDS = frozenset(
         "temperature",
         "answer",
         "required_actions",
+        "desired_states",
+        "overlay_state_seeds",
+        "recorded_invocations",
+        "end_state_result",
         "outcome",
         "action_result",
         "action_ledger",
@@ -64,22 +68,31 @@ def load_report(run_dir: Path) -> MatrixReport:
     if not _contains_current_trace(payload):
         # Deliberately reject before Pydantic validation so legacy artifacts cannot
         # be silently reinterpreted by a future schema-compatible decoder.
-        raise ValueError("legacy scoring artifact; rerun evaluation with scoring v7")
+        raise ValueError("legacy scoring artifact; rerun evaluation with scoring v8")
     return _REPORT_ADAPTER.validate_python(payload)
 
 
 def rescore_trace(trace: CaseTrace) -> CaseOutcome:
-    """Rescore a v7 trace using only its persisted required actions and ledger."""
+    """Rescore a v8 trace from its persisted overlay seeds, invocations, and ledger."""
     if trace.scoring_version != _SCORING_VERSION:
-        raise ValueError("legacy scoring artifact; rerun evaluation with scoring v7")
+        raise ValueError("legacy scoring artifact; rerun evaluation with scoring v8")
     recorded_actions = trace.action_ledger.successful + trace.action_ledger.rejected
     case = EvalCase(
         id=trace.case_id,
         home="stored-trace",
         user_request=trace.user_request,
         required_actions=trace.required_actions,
+        desired_states=trace.desired_states,
     )
-    outcome, _, _ = evaluate_case(case, recorded_actions)
+    outcome, _, _, _ = evaluate_case(
+        case,
+        recorded_actions,
+        overlay_seeds=trace.overlay_state_seeds,
+        invoker_calls=trace.recorded_invocations,
+    )
+    # Branch boundary: cap exhaustion is an operational override that survives rescoring.
+    if trace.diagnostics.cap_exhausted:
+        return CaseOutcome("incorrect", "cap_exhausted", "cap_exhausted")
     return outcome
 
 

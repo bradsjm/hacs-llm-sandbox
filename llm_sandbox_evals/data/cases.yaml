@@ -10,6 +10,9 @@ cases:
         - domain: light
           service: turn_on
           target_entity_ids: [light.utility_room_ceiling]
+      desired_states:
+        - entity_id: light.utility_room_ceiling
+          state: "on"
   - name: direct_turn_off_utility_room_accent
     inputs:
       id: direct_turn_off_utility_room_accent
@@ -19,6 +22,9 @@ cases:
         - domain: light
           service: turn_off
           target_entity_ids: [light.utility_room_accent]
+      desired_states:
+        - entity_id: light.utility_room_accent
+          state: "off"
   - name: direct_toggle_utility_room_outlet
     inputs:
       id: direct_toggle_utility_room_outlet
@@ -28,6 +34,9 @@ cases:
         - domain: switch
           service: toggle
           target_entity_ids: [switch.utility_room_outlet]
+      desired_states:
+        - entity_id: switch.utility_room_outlet
+          state: "on"
   - name: discover_utility_room_lights
     inputs:
       id: discover_utility_room_lights
@@ -37,6 +46,11 @@ cases:
         - domain: light
           service: turn_on
           target_entity_ids: [light.utility_room_accent, light.utility_room_ceiling]
+      desired_states:
+        - entity_id: light.utility_room_accent
+          state: "on"
+        - entity_id: light.utility_room_ceiling
+          state: "on"
   - name: discover_basement_ceiling_lights
     inputs:
       id: discover_basement_ceiling_lights
@@ -58,6 +72,31 @@ cases:
             - light.wine_tasting_room_ceiling
             - light.basement_hallway_ceiling
             - light.server_room_ceiling
+      desired_states:
+        - entity_id: light.utility_room_ceiling
+          state: "on"
+        - entity_id: light.storage_room_ceiling
+          state: "on"
+        - entity_id: light.workshop_ceiling
+          state: "on"
+        - entity_id: light.wine_cellar_ceiling
+          state: "on"
+        - entity_id: light.home_gym_ceiling
+          state: "on"
+        - entity_id: light.media_room_ceiling
+          state: "on"
+        - entity_id: light.laundry_room_ceiling
+          state: "on"
+        - entity_id: light.basement_bathroom_ceiling
+          state: "on"
+        - entity_id: light.playroom_ceiling
+          state: "on"
+        - entity_id: light.wine_tasting_room_ceiling
+          state: "on"
+        - entity_id: light.basement_hallway_ceiling
+          state: "on"
+        - entity_id: light.server_room_ceiling
+          state: "on"
   - name: brightness_utility_room_ceiling
     inputs:
       id: brightness_utility_room_ceiling
@@ -82,6 +121,9 @@ cases:
       home: home_full
       user_request: Turn on the Living Room ceiling light if it is off.
       required_actions: []
+      desired_states:
+        - entity_id: light.living_room_ceiling
+          state: "on"
   - name: condition_turn_off_living_room_ceiling
     inputs:
       id: condition_turn_off_living_room_ceiling
@@ -91,6 +133,9 @@ cases:
         - domain: light
           service: turn_off
           target_entity_ids: [light.living_room_ceiling]
+      desired_states:
+        - entity_id: light.living_room_ceiling
+          state: "off"
   - name: condition_history_change_turn_off
     inputs:
       id: condition_history_change_turn_off
@@ -100,12 +145,18 @@ cases:
         - domain: light
           service: turn_off
           target_entity_ids: [light.living_room_ceiling]
+      desired_states:
+        - entity_id: light.living_room_ceiling
+          state: "off"
   - name: no_action_history_no_recent_change
     inputs:
       id: no_action_history_no_recent_change
       home: home_full
       user_request: If the Hallway outlet changed state in the last hour, toggle it; otherwise do nothing.
       required_actions: []
+      desired_states:
+        - entity_id: switch.hallway_outlet
+          state: "off"
   - name: ambiguous_bare_light
     inputs:
       id: ambiguous_bare_light
@@ -127,3 +178,6 @@ cases:
         - domain: light
           service: turn_off
           target_entity_ids: [light.living_room_accent]
+      desired_states:
+        - entity_id: light.living_room_accent
+          state: "off"

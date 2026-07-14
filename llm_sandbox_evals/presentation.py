@@ -32,7 +32,7 @@ def effective_cause(trace: CaseTrace) -> str:
         return "cap_exhausted"
     if trace.outcome.state == "incomplete":
         return trace.diagnostics.failure or "unknown"
-    return trace.outcome.action_reason or "unknown"
+    return trace.outcome.score_reason or "unknown"
 
 
 def result_label(trace: CaseTrace) -> str:

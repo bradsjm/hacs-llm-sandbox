@@ -20,6 +20,7 @@ from llm_sandbox_evals.schema import (
     CaseOutcome,
     CaseTrace,
     CompletedCellRecord,
+    EndStateResult,
     EvalDiagnostics,
     ExecutionError,
     FailureClassification,
@@ -70,9 +71,19 @@ async def test_v7_report_round_trip_rescores_equivalent_target_partition(tmp_pat
             "service_data": None,
         }
     ]
+    output["desired_states"] = []
+    output["overlay_state_seeds"] = []
+    output["recorded_invocations"] = []
+    output["end_state_result"] = {
+        "status": "not_authored",
+        "evaluable": False,
+        "passed": False,
+        "comparisons": [],
+    }
     output["outcome"] = {
         "state": "correct",
-        "action_reason": "equivalent_target_partition",
+        "scoring_mode": "actions",
+        "score_reason": "equivalent_target_partition",
         "score": 1.0,
     }
     output["action_result"] = {
@@ -86,15 +97,15 @@ async def test_v7_report_round_trip_rescores_equivalent_target_partition(tmp_pat
 
     restored = load_report(run_dir).cases[0].output
 
-    assert rescore_trace(restored) == CaseOutcome("correct", "equivalent_target_partition")
-    assert restored.outcome == CaseOutcome("correct", "equivalent_target_partition")
+    assert rescore_trace(restored) == CaseOutcome("correct", "actions", "equivalent_target_partition")
+    assert restored.outcome == CaseOutcome("correct", "actions", "equivalent_target_partition")
     assert restored.required_actions == (expected_action,)
     assert restored.answer == original_answer
     assert restored.action_ledger == ActionLedger(successful=successful_actions)
     assert restored.action_result.reason == "equivalent_target_partition"
-    assert restored.scoring_version == 7
-    assert payload["scoring_version"] == 7
-    assert output["scoring_version"] == 7
+    assert restored.scoring_version == 8
+    assert payload["scoring_version"] == 8
+    assert output["scoring_version"] == 8
 
 
 async def test_variant_fields_and_descriptor_survive_write_load(tmp_path: Path) -> None:
@@ -274,7 +285,7 @@ async def test_legacy_and_invalid_artifacts_are_strictly_rejected(tmp_path: Path
         payload["scoring_version"] = version
     (run_dir / "report.json").write_text(json.dumps(payload), encoding="utf-8")
 
-    with pytest.raises(ValueError, match=r"^legacy scoring artifact; rerun evaluation with scoring v7$"):
+    with pytest.raises(ValueError, match=r"^legacy scoring artifact; rerun evaluation with scoring v8$"):
         load_report(run_dir)
 
 
@@ -286,7 +297,7 @@ async def test_v6_trace_is_rejected_even_inside_a_v7_envelope(tmp_path: Path) ->
     payload["cases"][0]["output"]["scoring_version"] = 6
     (run_dir / "report.json").write_text(json.dumps(payload), encoding="utf-8")
 
-    with pytest.raises(ValueError, match=r"^legacy scoring artifact; rerun evaluation with scoring v7$"):
+    with pytest.raises(ValueError, match=r"^legacy scoring artifact; rerun evaluation with scoring v8$"):
         load_report(run_dir)
 
 
@@ -391,7 +402,11 @@ def _incomplete_trace(
         model_id=model_id,
         answer=None,
         required_actions=(RequiredAction("light", "turn_on", ("light.utility_room_ceiling",)),),
-        outcome=CaseOutcome("incomplete", None),
+        desired_states=(),
+        overlay_state_seeds=(),
+        recorded_invocations=(),
+        end_state_result=EndStateResult("not_authored", False, False),
+        outcome=CaseOutcome("incomplete", None, None),
         action_result=ActionResult(False, "missing_action"),
         action_ledger=ActionLedger(),
         tool_events=(),
@@ -452,7 +467,11 @@ def _partial_artifact(*, status: Literal["cancelled", "failed"]) -> PartialRunAr
         model_id="stub",
         answer="Done.",
         required_actions=(RequiredAction("light", "turn_on", ("light.bedroom",)),),
-        outcome=CaseOutcome("correct", "ok"),
+        desired_states=(),
+        overlay_state_seeds=(),
+        recorded_invocations=(),
+        end_state_result=EndStateResult("not_authored", False, False),
+        outcome=CaseOutcome("correct", "actions", "ok"),
         action_result=ActionResult(True, "ok"),
         action_ledger=ActionLedger(),
         tool_events=(),

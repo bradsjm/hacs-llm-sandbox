@@ -12,6 +12,7 @@ from llm_sandbox_evals.schema import (
     ActionResult,
     CaseOutcome,
     CaseTrace,
+    EndStateResult,
     EvalDiagnostics,
     RequiredAction,
 )
@@ -23,7 +24,8 @@ def _trace(
     *,
     case_id: str = "action-fail",
     state: str = "incorrect",
-    action_reason: str | None = "wrong_target",
+    score_reason: str | None = "wrong_target",
+    scoring_mode: str | None = "actions",
     failure: str | None = None,
     answer: str | None = None,
     reasoning_effort: str | None = "high",
@@ -37,8 +39,12 @@ def _trace(
         model_id="stub",
         answer=answer,
         required_actions=(RequiredAction("light", "turn_on", ("light.bedroom",)),),
-        outcome=CaseOutcome(state, action_reason),
-        action_result=ActionResult(state == "correct", action_reason or "ok"),
+        desired_states=(),
+        overlay_state_seeds=(),
+        recorded_invocations=(),
+        end_state_result=EndStateResult("not_authored", False, False),
+        outcome=CaseOutcome(state, scoring_mode, score_reason),
+        action_result=ActionResult(state == "correct", score_reason or "ok"),
         action_ledger=action_ledger or ActionLedger(),
         tool_events=(),
         diagnostics=EvalDiagnostics(
@@ -90,16 +96,16 @@ def _report() -> EvaluationReport:
     }
     fail = _trace(
         state="incorrect",
-        action_reason="wrong_target",
+        score_reason="wrong_target",
         answer="Done. </script><script>alert(1)</script>",
         usage={"total_tokens": 42, "cost": 0.001},
         action_ledger=ActionLedger(successful=(wrong_target_action,)),
     )
-    ok = _trace(case_id="action-ok", state="correct", action_reason="ok", answer="Turned on.", usage=None)
+    ok = _trace(case_id="action-ok", state="correct", score_reason="ok", answer="Turned on.", usage=None)
     incomplete = _trace(
         case_id="action-timeout",
         state="incomplete",
-        action_reason=None,
+        score_reason=None,
         failure="timeout",
         tool_calls=0,
         usage=None,
@@ -157,7 +163,7 @@ def test_incomplete_cell_renders_operational_cause_not_action_mismatch() -> None
     incomplete_cell = next(cell for cell in payload["cells"] if cell["state"] == "incomplete")
     # The cause is the operational failure, never a forced action_mismatch.
     assert incomplete_cell["cause"] == "timeout"
-    assert incomplete_cell["action_reason"] is None
+    assert incomplete_cell["score_reason"] is None
     assert incomplete_cell["result"] == "incomplete·timeout"
     # No incomplete cell reads as a scored action reason anywhere in the page.
     assert "incomplete·action_mismatch" not in html_text
@@ -172,7 +178,7 @@ def test_payload_carries_variant_usage_and_raw_action_evidence() -> None:
     # Per-cell metrics and the trace usage fallback both reach the renderer.
     assert fail_cell["metrics"]["tool_calls"] == 1
     assert fail_cell["diagnostics"]["usage"]["total_tokens"] == 42
-    assert fail_cell["action_reason"] == "wrong_target"
+    assert fail_cell["score_reason"] == "wrong_target"
     assert fail_cell["cause"] == "wrong_target"
     assert fail_cell["result"] == "incorrect·wrong_target"
     assert fail_cell["action_ledger"] == {
@@ -334,7 +340,7 @@ def _failing_named_temporary_file(
 
 
 def _write_valid_report(run_dir: Path) -> None:
-    """Persist a valid scoring-v7 report.json that load_report accepts."""
+    """Persist a valid scoring-v8 report.json that load_report accepts."""
     payload = json.loads(_REPORT_ADAPTER.dump_json(_report()))
-    payload["scoring_version"] = 7
+    payload["scoring_version"] = 8
     (run_dir / "report.json").write_text(json.dumps(payload), encoding="utf-8")

@@ -11,6 +11,7 @@ from llm_sandbox_evals.schema import (
     ActionResult,
     CaseOutcome,
     CaseTrace,
+    EndStateResult,
     EvalDiagnostics,
     ExecutionError,
     RequiredAction,
@@ -61,7 +62,8 @@ def _trace(
     case_id: str = "case",
     candidate_id: str = "baseline",
     state: str = "correct",
-    action_reason: str | None = "ok",
+    score_reason: str | None = "ok",
+    scoring_mode: str | None = "actions",
     failure: str | None = None,
     cap_exhausted: bool = False,
     tool_calls: int = 0,
@@ -80,8 +82,12 @@ def _trace(
         reasoning_effort=reasoning_effort,
         answer=answer,
         required_actions=(RequiredAction("light", "turn_on", ("light.bedroom",)),),
-        outcome=CaseOutcome(state, action_reason),
-        action_result=ActionResult(state == "correct", action_reason or "ok"),
+        desired_states=(),
+        overlay_state_seeds=(),
+        recorded_invocations=(),
+        end_state_result=EndStateResult("not_authored", False, False),
+        outcome=CaseOutcome(state, scoring_mode, score_reason),
+        action_result=ActionResult(state == "correct", score_reason or "ok"),
         action_ledger=ActionLedger(),
         tool_events=(
             ToolEvent(
@@ -164,7 +170,7 @@ def test_human_render_has_no_phase_activity_waiting_or_response_row() -> None:
             _cell(),
             _trace(
                 state="incomplete",
-                action_reason=None,
+                score_reason=None,
                 failure="timeout",
                 request="Turn on bedroom light",
                 answer="raw model response text",
@@ -192,7 +198,7 @@ def test_recent_table_has_a_single_result_column_with_state_and_cause() -> None:
     reporter = _reporter(human=True)
     _feed(
         reporter,
-        (_cell(), _trace(state="incomplete", action_reason=None, failure="provider_error", tool_calls=2, elapsed=3.0)),
+        (_cell(), _trace(state="incomplete", score_reason=None, failure="provider_error", tool_calls=2, elapsed=3.0)),
     )
 
     table = reporter._recent_table()
@@ -445,7 +451,7 @@ def test_operational_issues_group_rate_limits_with_full_actionable_detail() -> N
                 case_id="case-z",
                 candidate_id="zeta",
                 state="incomplete",
-                action_reason=None,
+                score_reason=None,
                 failure="rate_limit",
                 model_id="cerebras",
                 request="quota case",
@@ -458,7 +464,7 @@ def test_operational_issues_group_rate_limits_with_full_actionable_detail() -> N
                 case_id="case-a",
                 candidate_id="alpha",
                 state="incomplete",
-                action_reason=None,
+                score_reason=None,
                 failure="rate_limit",
                 model_id="cerebras",
                 request="quota case",
@@ -522,7 +528,7 @@ def test_operational_issues_bound_raw_traceback_detail_at_terminal_width() -> No
             _trace(
                 case_id="timeout-case",
                 state="incomplete",
-                action_reason=None,
+                score_reason=None,
                 failure="timeout",
                 provider_error=traceback_detail,
                 execution_error=ExecutionError(
@@ -579,7 +585,7 @@ def test_operational_issues_preview_cells_when_group_has_many_occurrences() -> N
                 _trace(
                     case_id=f"case-{index}",
                     state="incomplete",
-                    action_reason=None,
+                    score_reason=None,
                     failure="rate_limit",
                     model_id="provider",
                     execution_error=execution_error,
@@ -609,7 +615,7 @@ def test_operational_issues_render_provider_markup_as_literal_text_live_and_dura
             _trace(
                 case_id="literal-markup",
                 state="incomplete",
-                action_reason=None,
+                score_reason=None,
                 failure="rate_limit",
                 model_id="cerebras",
                 request="literal markup",
@@ -728,7 +734,7 @@ def test_machine_events_emit_stable_kv_without_raw_payload() -> None:
     cell = _cell()
     trace = _trace(
         state="incomplete",
-        action_reason=None,
+        score_reason=None,
         failure="rate_limit",
         request="secret request body",
         provider_error="Traceback (most recent call last): raw-traceback-sensitive",
@@ -762,7 +768,7 @@ def test_machine_events_emit_stable_kv_without_raw_payload() -> None:
 
 def test_durable_final_emits_counts_and_artifact_path_once() -> None:
     reporter = _reporter(human=True)
-    _feed(reporter, (_cell(), _trace(state="incorrect", action_reason="wrong_target", tool_calls=2)))
+    _feed(reporter, (_cell(), _trace(state="incorrect", score_reason="wrong_target", tool_calls=2)))
 
     console = Console(width=160, force_terminal=False, record=True)
     console.print(render_durable_final(reporter._state, run_dir="runs/run-1", report_html="runs/run-1/report.html"))

@@ -9,8 +9,10 @@ from llm_sandbox_evals.prompts import baseline_candidate
 from llm_sandbox_evals.schema import (
     ActionComparison,
     ActionResult,
+    DesiredState,
     EvalCase,
     ObservedAction,
+    OverlayStateSeed,
     RequiredAction,
 )
 from llm_sandbox_evals.scoring import evaluate_case
@@ -46,16 +48,26 @@ def _observed(
 
 
 @pytest.mark.parametrize(
-    "case",
+    ("case", "expected_mode", "expected_reason"),
     # The offline stub routes only direct_*/brightness_*/color_* requests. Every
     # other family (no_action_*, ambiguous_*, discover_*, condition_*) is
     # intentionally outside this stub smoke and is exercised by real-model runs;
     # do not broaden this allow-list — non-routed non-empty cases would no-op
     # and score incorrect under the stub.
-    [case for case in CASES if case.id.startswith(("direct_", "brightness_", "color_"))],
-    ids=lambda case: case.id,
+    [
+        pytest.param(
+            case,
+            "end_state" if case.id.startswith("direct_") else "actions",
+            "end_state_satisfied" if case.id.startswith("direct_") else "ok",
+            id=case.id,
+        )
+        for case in CASES
+        if case.id.startswith(("direct_", "brightness_", "color_"))
+    ],
 )
-async def test_each_authored_direct_action_passes(case: EvalCase, tmp_path: Path) -> None:
+async def test_each_authored_direct_action_passes(
+    case: EvalCase, expected_mode: str, expected_reason: str, tmp_path: Path
+) -> None:
     trace = await run_case(
         baseline_candidate(),
         "stub",
@@ -72,7 +84,9 @@ async def test_each_authored_direct_action_passes(case: EvalCase, tmp_path: Path
     )
 
     assert trace.outcome.state == "correct"
-    assert trace.outcome.action_reason == trace.action_result.reason == "ok"
+    assert trace.outcome.scoring_mode == expected_mode
+    assert trace.outcome.score_reason == expected_reason
+    assert trace.action_result.reason == "ok"
     assert trace.answer == "Done."
     assert trace.action_result.passed is True
 
@@ -364,17 +378,19 @@ def test_action_assessment_failure_taxonomy(
     recorded: list[dict[str, object]],
     expected_result: ActionResult,
 ) -> None:
-    outcome, result, _ledger = evaluate_case(case, recorded)
+    outcome, result, _ledger, _end_state = evaluate_case(case, recorded, overlay_seeds=(), invoker_calls=())
 
     assert result == expected_result
-    assert outcome.action_reason == result.reason
+    assert outcome.score_reason == result.reason
     assert outcome.state == ("correct" if result.passed else "incorrect")
 
 
 def test_unset_service_data_is_not_an_implicit_oracle_field() -> None:
-    outcome, result, _ledger = evaluate_case(
+    outcome, result, _ledger, _end_state = evaluate_case(
         _case(_BEDROOM_ON),
         [_action("light", "turn_on", "light.bedroom", {"transition": 1})],
+        overlay_seeds=(),
+        invoker_calls=(),
     )
 
     assert outcome.state == "correct"
@@ -386,7 +402,9 @@ def test_successful_match_remains_correct_when_an_attempt_was_rejected() -> None
     successful = _action("light", "turn_on", "light.bedroom")
     rejected = _action("light", "turn_off", "light.living", status="error")
 
-    outcome, result, ledger = evaluate_case(_case(_BEDROOM_ON), [rejected, successful])
+    outcome, result, ledger, _end_state = evaluate_case(
+        _case(_BEDROOM_ON), [rejected, successful], overlay_seeds=(), invoker_calls=()
+    )
 
     assert outcome.state == "correct"
     assert result.reason == "ok"
@@ -406,7 +424,9 @@ def test_exact_multi_target_action_remains_an_exact_match() -> None:
         )
     ]
 
-    outcome, result, _ledger = evaluate_case(_case(_PARTITION_ON), recorded)
+    outcome, result, _ledger, _end_state = evaluate_case(
+        _case(_PARTITION_ON), recorded, overlay_seeds=(), invoker_calls=()
+    )
 
     assert outcome.state == "correct"
     assert result.passed is True
@@ -444,7 +464,9 @@ def test_exact_multi_target_action_remains_an_exact_match() -> None:
 def test_disjoint_target_partitions_are_equivalent(
     recorded: list[dict[str, object]],
 ) -> None:
-    outcome, result, ledger = evaluate_case(_case(_PARTITION_ON), recorded)
+    outcome, result, ledger, _end_state = evaluate_case(
+        _case(_PARTITION_ON), recorded, overlay_seeds=(), invoker_calls=()
+    )
 
     assert outcome.state == "correct"
     assert result.passed is True
@@ -517,7 +539,9 @@ def test_partition_service_data_uses_canonical_equivalence(
     required: RequiredAction,
     recorded: list[dict[str, object]],
 ) -> None:
-    outcome, result, _ledger = evaluate_case(_case(required), recorded)
+    outcome, result, _ledger, _end_state = evaluate_case(
+        _case(required), recorded, overlay_seeds=(), invoker_calls=()
+    )
 
     assert outcome.state == "correct"
     assert result.passed is True
@@ -630,7 +654,9 @@ def test_invalid_target_partitions_fail(
     required: RequiredAction,
     recorded: list[dict[str, object]],
 ) -> None:
-    outcome, result, _ledger = evaluate_case(_case(required), recorded)
+    outcome, result, _ledger, _end_state = evaluate_case(
+        _case(required), recorded, overlay_seeds=(), invoker_calls=()
+    )
 
     assert outcome.state == "incorrect"
     assert result.passed is False
@@ -650,7 +676,9 @@ def test_exact_match_is_consumed_before_singular_partition_fallback() -> None:
         _action("light", "turn_on", ["light.beta", "light.alpha"]),
     ]
 
-    outcome, result, _ledger = evaluate_case(_case(aggregate, exact), recorded)
+    outcome, result, _ledger, _end_state = evaluate_case(
+        _case(aggregate, exact), recorded, overlay_seeds=(), invoker_calls=()
+    )
 
     assert outcome.state == "correct"
     assert result.passed is True
@@ -664,3 +692,155 @@ def test_exact_match_is_consumed_before_singular_partition_fallback() -> None:
         ),
         _observed("switch", "turn_on", "switch.garage"),
     )
+
+
+# ---------------------------------------------------------------------------
+# End-state primary scoring: state satisfaction overrides action diagnostics
+# ---------------------------------------------------------------------------
+
+
+def _state_case(*desired: DesiredState, actions: tuple[RequiredAction, ...] = ()) -> EvalCase:
+    return EvalCase("state-case", "home_minimal", "Perform actions", actions, desired)
+
+
+def _seed(entity_id: str, state: str) -> OverlayStateSeed:
+    return OverlayStateSeed(entity_id, entity_id.split(".", 1)[0], state)
+
+
+def test_initially_satisfied_with_no_calls_is_end_state_correct() -> None:
+    desired = (DesiredState("light.bedroom", "on"),)
+    seeds = (_seed("light.bedroom", "on"),)
+    outcome, _result, _ledger, end_state = evaluate_case(
+        _state_case(*desired), [], overlay_seeds=seeds, invoker_calls=()
+    )
+    assert outcome.state == "correct"
+    assert outcome.scoring_mode == "end_state"
+    assert outcome.score_reason == "end_state_satisfied"
+    assert end_state.status == "satisfied"
+
+
+def test_satisfied_state_overrides_wrong_action_diagnostics() -> None:
+    # The light is already on; a wrong-target call does not change the overlay.
+    desired = (DesiredState("light.bedroom", "on"),)
+    seeds = (_seed("light.bedroom", "on"),)
+    required = RequiredAction("light", "turn_on", ("light.bedroom",))
+    wrong_call = _action("light", "turn_on", "light.living")
+    outcome, result, _ledger, end_state = evaluate_case(
+        _state_case(*desired, actions=(required,)),
+        [wrong_call],
+        overlay_seeds=seeds,
+        invoker_calls=[wrong_call],
+    )
+    # State is primary: satisfied despite the action ledger showing a wrong-target mismatch.
+    assert outcome.state == "correct"
+    assert outcome.scoring_mode == "end_state"
+    assert outcome.score_reason == "end_state_satisfied"
+    assert end_state.status == "satisfied"
+    # Action diagnostics still report the mismatch.
+    assert result.passed is False
+
+
+def test_satisfied_state_overrides_extra_action() -> None:
+    desired = (DesiredState("light.bedroom", "on"),)
+    seeds = (_seed("light.bedroom", "on"),)
+    extra_call = _action("light", "turn_on", "light.living")
+    outcome, result, _ledger, _end_state = evaluate_case(
+        _state_case(*desired), [extra_call], overlay_seeds=seeds, invoker_calls=[extra_call]
+    )
+    assert outcome.state == "correct"
+    assert outcome.scoring_mode == "end_state"
+    assert outcome.score_reason == "end_state_satisfied"
+    # Action diagnostics show an unexpected action.
+    assert result.passed is False
+
+
+def test_evaluable_unsatisfied_state_is_incorrect_even_if_actions_pass() -> None:
+    # The desired state is off but the call turns the light on.
+    desired = (DesiredState("light.bedroom", "off"),)
+    seeds = (_seed("light.bedroom", "off"),)
+    call = _action("light", "turn_on", "light.bedroom")
+    required = RequiredAction("light", "turn_on", ("light.bedroom",))
+    outcome, result, _ledger, end_state = evaluate_case(
+        _state_case(*desired, actions=(required,)),
+        [call],
+        overlay_seeds=seeds,
+        invoker_calls=[call],
+    )
+    # State is primary: unsatisfied even though the action ledger matches.
+    assert outcome.state == "incorrect"
+    assert outcome.scoring_mode == "end_state"
+    assert outcome.score_reason == "end_state_unsatisfied"
+    assert end_state.status == "unsatisfied"
+    assert result.passed is True
+
+
+def test_no_desired_states_uses_action_fallback() -> None:
+    outcome, result, _ledger, end_state = evaluate_case(
+        _case(_BEDROOM_ON),
+        [_action("light", "turn_on", "light.bedroom")],
+        overlay_seeds=(),
+        invoker_calls=(),
+    )
+    assert outcome.scoring_mode == "actions"
+    assert outcome.score_reason == result.reason == "ok"
+    assert end_state.status == "not_authored"
+
+
+def test_unevaluable_predicate_uses_action_fallback() -> None:
+    desired = (DesiredState("light.missing", "on"),)
+    outcome, result, _ledger, end_state = evaluate_case(
+        _state_case(*desired, actions=(_BEDROOM_ON,)),
+        [_action("light", "turn_on", "light.bedroom")],
+        overlay_seeds=(),
+        invoker_calls=(),
+    )
+    assert outcome.scoring_mode == "actions"
+    assert outcome.score_reason == result.reason == "ok"
+    assert end_state.status == "unevaluable"
+
+
+def test_ordered_toggle_changes_final_state_verdict() -> None:
+    desired = (DesiredState("switch.outlet", "on"),)
+    seeds = (_seed("switch.outlet", "off"),)
+    single_toggle = _action("switch", "toggle", "switch.outlet")
+    double_toggle = [single_toggle, _action("switch", "toggle", "switch.outlet")]
+
+    outcome1, _, _, end1 = evaluate_case(
+        _state_case(*desired), [single_toggle], overlay_seeds=seeds, invoker_calls=[single_toggle]
+    )
+    outcome2, _, _, end2 = evaluate_case(
+        _state_case(*desired), double_toggle, overlay_seeds=seeds, invoker_calls=double_toggle
+    )
+    assert outcome1.state == "correct"
+    assert end1.status == "satisfied"
+    # Two toggles return to off — unsatisfied.
+    assert outcome2.state == "incorrect"
+    assert end2.status == "unsatisfied"
+
+
+@pytest.mark.parametrize(
+    "case_id",
+    ["no_action_light_already_on"],
+)
+async def test_no_action_already_on_passes_state_primary(case_id: str, tmp_path: Path) -> None:
+    """The already-on no-route case passes via end-state with zero tool calls."""
+    case = next(c for c in CASES if c.id == case_id)
+    trace = await run_case(
+        baseline_candidate(),
+        "stub",
+        case,
+        EvalConfig(
+            models=["stub"],
+            candidates=["baseline"],
+            prompt_profile=DEFAULT_PROMPT_PROFILE,
+            cases=None,
+            homes=None,
+            runs_dir=tmp_path,
+        ),
+        profile=resolve_profile(DEFAULT_PROMPT_PROFILE),
+    )
+    assert trace.outcome.state == "correct"
+    assert trace.outcome.scoring_mode == "end_state"
+    assert trace.outcome.score_reason == "end_state_satisfied"
+    assert trace.end_state_result.status == "satisfied"
+    assert trace.recorded_invocations == ()

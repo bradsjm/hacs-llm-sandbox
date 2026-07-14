@@ -18,6 +18,7 @@ from llm_sandbox_evals.schema import (
     ActionResult,
     CaseOutcome,
     CaseTrace,
+    EndStateResult,
     EvalCase,
     EvalDiagnostics,
     PromptCandidate,
@@ -46,7 +47,7 @@ async def test_run_matrix_stub_persists_v7_action_trace_and_variant_identity(tmp
     assert trace.outcome.state == "correct"
     assert trace.outcome.score == 1.0
     assert trace.answer == "Done."
-    assert trace.scoring_version == 7
+    assert trace.scoring_version == 8
     assert trace.reasoning_effort == "low"
     assert _scalar(reloaded.analyses, "Quality rate").value == 1.0
     # The run descriptor rides on native experiment_metadata and survives reload.
@@ -244,7 +245,15 @@ def _trace(cell: MatrixCellRef, state: str) -> CaseTrace:
         model_id=cell.model_id,
         answer="Done.",
         required_actions=expected,
-        outcome=CaseOutcome(state, action_reason if state != "incomplete" else None),
+        desired_states=(),
+        overlay_state_seeds=(),
+        recorded_invocations=(),
+        end_state_result=EndStateResult("not_authored", False, False),
+        outcome=CaseOutcome(
+            state,
+            "actions" if state != "incomplete" else None,
+            action_reason if state != "incomplete" else None,
+        ),
         action_result=ActionResult(state == "correct", action_reason),
         action_ledger=ActionLedger(),
         tool_events=(),

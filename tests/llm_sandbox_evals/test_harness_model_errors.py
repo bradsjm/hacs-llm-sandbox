@@ -163,7 +163,8 @@ async def test_run_case_records_provider_failure_as_incomplete_with_no_action_re
     trace = await run_case(candidate, "bad-model", CASES[0], config, profile=profile)
 
     assert trace.outcome.state == "incomplete"
-    assert trace.outcome.action_reason is None
+    assert trace.outcome.scoring_mode is None
+    assert trace.outcome.score_reason is None
     assert trace.outcome.score == 0.0
     assert trace.provider_error is not None
     assert trace.diagnostics.failure == "provider_error"
@@ -215,7 +216,8 @@ async def test_run_case_uses_nested_quota_code_over_generic_top_level_metadata(
     )
 
     assert trace.outcome.state == "incomplete"
-    assert trace.outcome.action_reason is None
+    assert trace.outcome.scoring_mode is None
+    assert trace.outcome.score_reason is None
     assert trace.diagnostics.failure == "rate_limit"
     assert trace.execution_error is not None
     assert trace.execution_error.exception_type == "ModelHTTPError"
@@ -238,7 +240,8 @@ async def test_run_case_keeps_root_model_protocol_error_ahead_of_wrapped_http_ra
     )
 
     assert trace.outcome.state == "incomplete"
-    assert trace.outcome.action_reason is None
+    assert trace.outcome.scoring_mode is None
+    assert trace.outcome.score_reason is None
     assert trace.diagnostics.failure == "model_protocol_error"
     assert trace.execution_error is not None
     assert trace.execution_error.exception_type == "UnexpectedModelBehavior"
@@ -261,7 +264,8 @@ async def test_run_case_keeps_non_rate_limit_http_error_as_provider_error(
     )
 
     assert trace.outcome.state == "incomplete"
-    assert trace.outcome.action_reason is None
+    assert trace.outcome.scoring_mode is None
+    assert trace.outcome.score_reason is None
     assert trace.diagnostics.failure == "provider_error"
     assert trace.execution_error is not None
     assert trace.execution_error.exception_type == "ModelHTTPError"
@@ -294,11 +298,11 @@ async def test_run_case_keeps_normal_completion_outside_failure_classification(t
 
     assert trace.answer is not None
     assert trace.outcome.state in {"correct", "incorrect"}
-    assert trace.outcome.action_reason is not None
+    assert trace.outcome.score_reason is not None
     assert trace.diagnostics.failure is None
     assert trace.provider_error is None
     assert trace.execution_error is None
-    assert effective_cause(trace) == trace.outcome.action_reason
+    assert effective_cause(trace) == trace.outcome.score_reason
 
 
 async def test_run_case_cap_exhausted_is_scored_with_real_action_reason(monkeypatch: object, tmp_path: Path) -> None:
@@ -324,8 +328,8 @@ async def test_run_case_cap_exhausted_is_scored_with_real_action_reason(monkeypa
     # Cap exhaustion is scored incorrect with the real action reason, not forced to action_mismatch.
     assert trace.answer is None
     assert trace.outcome.state == "incorrect"
-    assert trace.outcome.action_reason is not None
-    assert trace.outcome.action_reason != "action_mismatch"
+    assert trace.outcome.scoring_mode == "cap_exhausted"
+    assert trace.outcome.score_reason == "cap_exhausted"
     assert trace.outcome.score == 0.0
     assert trace.provider_error is None
     assert trace.execution_error is None
@@ -616,7 +620,8 @@ async def _run_case_with_model(
 
 def _assert_cerebras_rate_limit_trace(trace: CaseTrace) -> None:
     assert trace.outcome.state == "incomplete"
-    assert trace.outcome.action_reason is None
+    assert trace.outcome.scoring_mode is None
+    assert trace.outcome.score_reason is None
     assert trace.diagnostics.failure == "rate_limit"
     assert trace.execution_error is not None
     assert trace.execution_error.exception_type == "ModelHTTPError"

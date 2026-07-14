@@ -9,6 +9,7 @@ from time import perf_counter
 import traceback
 
 from custom_components.llm_sandbox.llm_api.prompts import PromptProfile
+from custom_components.llm_sandbox.snapshot.models import HomeSnapshot
 from pydantic_ai import AgentRunResult, AgentRunResultEvent, capture_run_messages
 from pydantic_ai.exceptions import ModelHTTPError, UnexpectedModelBehavior, UsageLimitExceeded
 from pydantic_ai.messages import (
@@ -44,7 +45,7 @@ from llm_sandbox_evals.schema import (
     PromptCandidate,
     ToolEvent,
 )
-from llm_sandbox_evals.scoring import evaluate_case, score_actions
+from llm_sandbox_evals.scoring import assess_end_state, evaluate_case, extract_overlay_seeds, score_actions
 from llm_sandbox_evals.scoring.actions import build_action_ledger
 from llm_sandbox_evals.tools import EVAL_SCOPE, _for_scoring, apply_scope
 
@@ -145,7 +146,14 @@ async def run_case(
         recorded_actions = _recorded_actions_from_tool_events(tool_events, runtime.invoker.calls)
         conversation_id = _conversation_id(messages)
         emit_phase("scoring")
-        outcome, action_result, action_ledger = evaluate_case(case, recorded_actions)
+        overlay_seeds = extract_overlay_seeds(snapshot, case.desired_states)
+        recorded_invocations = tuple(dict(call) for call in runtime.invoker.calls)
+        outcome, action_result, action_ledger, end_state_result = evaluate_case(
+            case,
+            recorded_actions,
+            overlay_seeds=overlay_seeds,
+            invoker_calls=recorded_invocations,
+        )
         return finish_trace(
             CaseTrace(
                 case_id=case.id,
@@ -153,6 +161,10 @@ async def run_case(
                 model_id=model_id,
                 answer=output,
                 required_actions=case.required_actions,
+                desired_states=case.desired_states,
+                overlay_state_seeds=overlay_seeds,
+                recorded_invocations=recorded_invocations,
+                end_state_result=end_state_result,
                 outcome=outcome,
                 action_result=action_result,
                 action_ledger=action_ledger,
@@ -186,6 +198,8 @@ async def run_case(
                 tool_events=tool_events,
                 messages=captured,
                 recorded_actions=_recorded_actions_from_tool_events(tool_events, proposed_actions),
+                snapshot=snapshot,
+                invoker_calls=proposed_actions,
                 conversation_id=_conversation_id(captured),
                 reasoning_effort=config.reasoning_effort,
                 temperature=config.temperature,
@@ -210,6 +224,8 @@ async def run_case(
                 tool_events=tool_events,
                 messages=captured,
                 recorded_actions=_recorded_actions_from_tool_events(tool_events, proposed_actions),
+                snapshot=snapshot,
+                invoker_calls=proposed_actions,
                 conversation_id=_conversation_id(captured),
                 reasoning_effort=config.reasoning_effort,
                 temperature=config.temperature,
@@ -231,6 +247,8 @@ def _failure_trace(
     tool_events: tuple[ToolEvent, ...] = (),
     messages: Sequence[object] = (),
     recorded_actions: tuple[dict[str, object], ...] = (),
+    snapshot: HomeSnapshot | None = None,
+    invoker_calls: Sequence[Mapping[str, object]] = (),
     conversation_id: str | None = None,
     reasoning_effort: str | None = None,
     temperature: float | None = None,
@@ -244,16 +262,26 @@ def _failure_trace(
     action_result = ActionResult(
         False, scored_actions.reason, scored_actions.comparisons, scored_actions.unexpected_actions
     )
+    overlay_seeds = extract_overlay_seeds(snapshot, case.desired_states) if snapshot is not None else ()
+    recorded_invocations = tuple(dict(call) for call in invoker_calls)
+    end_state_result = assess_end_state(case.desired_states, overlay_seeds, recorded_invocations)
     is_cap_exhausted = failure == "cap_exhausted"
+    if is_cap_exhausted:
+        # Branch boundary: cap exhaustion overrides both state and action scoring as an operational scored outcome.
+        outcome = CaseOutcome("incorrect", "cap_exhausted", "cap_exhausted")
+    else:
+        outcome = CaseOutcome("incomplete", None, None)
     return CaseTrace(
         case_id=case.id,
         candidate_id=candidate.id,
         model_id=model_id,
         answer=None,
         required_actions=case.required_actions,
-        outcome=CaseOutcome(
-            "incorrect" if is_cap_exhausted else "incomplete", scored_actions.reason if is_cap_exhausted else None
-        ),
+        desired_states=case.desired_states,
+        overlay_state_seeds=overlay_seeds,
+        recorded_invocations=recorded_invocations,
+        end_state_result=end_state_result,
+        outcome=outcome,
         action_result=action_result,
         action_ledger=action_ledger,
         tool_events=tool_events,
