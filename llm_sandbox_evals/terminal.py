@@ -1,5 +1,6 @@
 """Safe stderr presentation for eval matrix lifecycle events."""
 
+from collections.abc import Callable
 from time import perf_counter
 from typing import Self
 
@@ -14,8 +15,8 @@ from rich.table import Table
 from rich.text import Text
 
 from llm_sandbox_evals.config import EvalConfig
-from llm_sandbox_evals.experiment import LanePhaseEvent, MatrixProgressEvent
-from llm_sandbox_evals.presentation import PresentationState, result_label, variant_label
+from llm_sandbox_evals.experiment import LanePhaseEvent, MatrixCellRef, MatrixProgressEvent
+from llm_sandbox_evals.presentation import OperationalIssueGroup, PresentationState, result_label, variant_label
 
 _ACTIVE = "#38b6ca"
 _SUCCESS = "#55c97c"
@@ -86,6 +87,18 @@ _ACTIVITY_STYLES: dict[str, str] = {
     "scoring": _PERCENT,
     "finished": _SUCCESS,
 }
+
+
+class _DynamicLiveFrame:
+    """Rebuild the Live frame on every Rich refresh so timers keep moving."""
+
+    def __init__(self, render: Callable[[], RenderableType]) -> None:
+        self._render = render
+
+    def __rich_console__(self, _console: Console, _options: ConsoleOptions) -> RenderResult:
+        yield self._render()
+
+
 # Only the authoritative running/processing phases append the safe tool name; preparing_tool_call
 # carries a provider-supplied name and stays a bare label.
 _TOOL_PHASES: frozenset[str] = frozenset({"running_tool", "processing_tool_result"})
@@ -137,6 +150,7 @@ class MatrixTerminalReporter:
         self._console = Console(stderr=True)
         self._state = PresentationState()
         self._live: Live | None = None
+        self._spinners: dict[MatrixCellRef, Spinner] = {}
 
     def __enter__(self) -> Self:
         """Print orientation then start a transient Live frame for interactive runs."""
@@ -147,13 +161,16 @@ class MatrixTerminalReporter:
             # Separate the orientation header from the live frame with one blank line.
             self._console.print()
             self._live = Live(
-                self._render(),
+                self._live_frame(),
                 console=self._console,
-                # Faster refresh keeps the spinner and progress bar visibly animated.
-                refresh_per_second=12,
+                # Faster refresh keeps elapsed timers, the spinner, and the progress bar visibly smooth.
+                refresh_per_second=24,
                 redirect_stdout=False,
                 redirect_stderr=True,
                 transient=True,
+                # Branch boundary: operational provider payloads may exceed the terminal height;
+                # prefer complete human error detail over Rich's default vertical ellipsis.
+                vertical_overflow="visible",
             )
             self._live.start()
         return self
@@ -166,7 +183,7 @@ class MatrixTerminalReporter:
         """Consume a safe lifecycle event and update the mutable runtime projection."""
         self._state.ingest(event, timeout=self._config.model_timeout, max_tool_calls=self._config.max_tool_calls)
         if self._live is not None:
-            self._live.update(self._render(), refresh=True)
+            self._live.update(self._live_frame(), refresh=True)
         elif not self._human:
             self._print_machine_event(event)
 
@@ -176,7 +193,7 @@ class MatrixTerminalReporter:
         # Branch boundary: coalesce repeated stream-delta phases — rebuild the Live frame only when the
         # projected state actually changed, so zero-buffer stream deltas do not backpressure the model.
         if changed and self._live is not None:
-            self._live.update(self._render(), refresh=True)
+            self._live.update(self._live_frame(), refresh=True)
 
     def finish(self, *, run_dir: str, report_html: str) -> None:
         """Print exactly one durable human final after artifacts are complete."""
@@ -234,9 +251,13 @@ class MatrixTerminalReporter:
             Rule("Recent", style=_ACTIVE, characters="─"),
             self._recent_table(),
             Text(),
-            self._issues_panel(),
+            _operational_issues_panel(self._state.operational_issue_groups),
             Text(self._cancel_hint, style="dim"),
         )
+
+    def _live_frame(self) -> _DynamicLiveFrame:
+        """Return a renderable that recomputes time-sensitive values on every Live refresh."""
+        return _DynamicLiveFrame(self._render)
 
     def _status_line(self) -> Text:
         """Return a compact colored counts line above the overall progress bar."""
@@ -297,9 +318,16 @@ class MatrixTerminalReporter:
         for lane in self._state.lanes.values():
             # Branch boundary: before Activity is revealed, preserve the original always-cyan spinner.
             activity_style = _activity_style(lane.phase) if activity else _ACTIVE
+            spinner = self._spinners.get(lane.cell)
+            if spinner is None:
+                spinner = Spinner("dots", style=activity_style)
+                self._spinners[lane.cell] = spinner
+            else:
+                # Preserve the spinner clock while still reflecting phase color changes.
+                spinner.style = activity_style
             row: list[RenderableType] = [
-                # A live Spinner renderable animates every refresh without any simulated phase text.
-                Spinner("dots", style=activity_style),
+                # A persistent Spinner renderable animates every refresh without any simulated phase text.
+                spinner,
                 Text(lane.request),
             ]
             # Branch boundary: Activity text is derived only from stored phase facts, never model content.
@@ -338,12 +366,14 @@ class MatrixTerminalReporter:
         table.add_column("Result", width=26, no_wrap=True, overflow="ellipsis")
         table.add_column("Tools", width=6, justify="right")
         table.add_column("Elapsed", width=8, justify="right")
-        for index, cell in enumerate(reversed(self._state.completed[-_RECENT_RESULTS:]), start=1):
+        recent = self._state.completed[-_RECENT_RESULTS:]
+        first_recent_index = len(self._state.completed) - len(recent) + 1
+        for index, cell in enumerate(recent, start=first_recent_index):
             trace = cell.trace
             glyph, color = _OUTCOME_STYLES[trace.outcome.state]
             table.add_row(
                 Text(glyph, style=color),
-                str(len(self._state.completed) - index + 1),
+                str(index),
                 Text(trace.user_request or cell.case_id),
                 _LeftEllipsisText(cell.variant, style="dim"),
                 # Single Result column, colored by outcome, still reads as state·cause.
@@ -352,14 +382,6 @@ class MatrixTerminalReporter:
                 _duration(trace.diagnostics.elapsed_seconds or 0.0),
             )
         return table
-
-    def _issues_panel(self) -> Panel:
-        """Group actual operational causes without presenting them as scored mismatches."""
-        issues = self._state.operational_issues
-        if not issues:
-            return Panel(Text("None", style="dim"), title="Operational issues", border_style="dim", expand=False)
-        body = Text(", ".join(f"{cause}: {count}" for cause, count in sorted(issues.items())), style=_ERROR)
-        return Panel(body, title="Operational issues", border_style=_ERROR, expand=False)
 
     def _print_machine_event(self, event: MatrixProgressEvent) -> None:
         """Keep redirected stderr lifecycle diagnostics concise and deterministic."""
@@ -372,6 +394,53 @@ class MatrixTerminalReporter:
             )
 
 
+def _operational_issues_panel(groups: tuple[OperationalIssueGroup, ...]) -> Panel:
+    """Render grouped operational failures with durable provider details preserved."""
+    # Branch boundary: an empty run still reserves the full-width issues section for scanability.
+    if not groups:
+        return Panel(Text("None", style="dim"), title="Operational issues", border_style="dim", expand=True)
+
+    table = Table(expand=True, box=box.SIMPLE_HEAD, show_lines=True, header_style=_ACTIVE)
+    table.add_column("#", justify="right", no_wrap=True)
+    table.add_column("Cause", overflow="fold")
+    table.add_column("Variant", overflow="fold")
+    table.add_column("Cells", overflow="fold")
+    table.add_column("Exception", overflow="fold")
+    table.add_column("HTTP / provider code", overflow="fold")
+    table.add_column("Detail", overflow="fold", ratio=3)
+    for group in groups:
+        table.add_row(
+            Text(str(group.count)),
+            Text(group.cause, style=_ERROR),
+            _operational_issue_variant(group),
+            Text("\n".join(group.cells)),
+            Text(group.exception_type),
+            _http_provider_code(group),
+            Text(group.detail),
+        )
+    return Panel(table, title="Operational issues", border_style=_ERROR, expand=True)
+
+
+def _operational_issue_variant(group: OperationalIssueGroup) -> Text:
+    """Return the display variant plus the concrete provider model when supplied."""
+    value = Text(group.variant)
+    # Branch boundary: provider_model is optional structured metadata, so omit the line entirely when absent.
+    if group.provider_model:
+        value.append("\nprovider model: ", style="dim")
+        value.append(group.provider_model, style="dim")
+    return value
+
+
+def _http_provider_code(group: OperationalIssueGroup) -> Text:
+    """Combine available HTTP status and provider code without synthesizing missing values."""
+    parts: list[str] = []
+    if group.status_code is not None:
+        parts.append(str(group.status_code))
+    if group.provider_code:
+        parts.append(group.provider_code)
+    return Text("\n".join(parts))
+
+
 def render_durable_final(state: PresentationState, *, run_dir: str, report_html: str) -> Panel:
     """Return the sole durable interactive final after Live has stopped."""
     counts = state.counts
@@ -381,14 +450,7 @@ def render_durable_final(state: PresentationState, *, run_dir: str, report_html:
     summary.append(f"{counts.correct}/{counts.scored} ({counts.quality_rate:.1%})\n", style=_SUCCESS)
     summary.append("Coverage ", style="bold")
     summary.append(f"{counts.scored}/{counts.total} ({counts.coverage_rate:.1%})\n", style=_ACTIVE)
-    issues = state.operational_issues
-    if issues:
-        # Operational failures are surfaced separately from scored quality.
-        summary.append(
-            "Operational issues: " + ", ".join(f"{key}: {value}" for key, value in sorted(issues.items())) + "\n",
-            style=_ERROR,
-        )
-    table = Table(box=box.SIMPLE_HEAD, expand=False, pad_edge=False, header_style=_ACTIVE)
+    table = Table(box=box.SIMPLE_HEAD, expand=True, pad_edge=False, header_style=_ACTIVE)
     table.add_column("Candidate")
     table.add_column("Variant", overflow="fold")
     table.add_column("Quality", justify="right")
@@ -417,7 +479,11 @@ def render_durable_final(state: PresentationState, *, run_dir: str, report_html:
     summary.append(f"Artifacts: {run_dir}\n", style="dim")
     summary.append(f"report.html: {report_html}", style="dim")
     return Panel(
-        Group(summary, Text(), table), title="Eval complete", border_style=_SUCCESS, box=box.ROUNDED, expand=False
+        Group(summary, Text(), table, Text(), _operational_issues_panel(state.operational_issue_groups)),
+        title="Eval complete",
+        border_style=_SUCCESS,
+        box=box.ROUNDED,
+        expand=True,
     )
 
 

@@ -23,9 +23,15 @@ IDs resolve to the `openai-chat` provider (for example, `gpt-4o-mini` becomes
 `openai-chat:gpt-4o-mini`). `stub` and IDs containing `:` are preserved.
 Optimizer `--target-model` and `--proposer-model` remain DSPy/LiteLLM IDs.
 Every run creates an atomic `manifest.json` before model calls. Completed runs
-contain native `report.json` and `report.html`; cancelled or failed runs contain
-the typed `partial.json` journal instead. A partial journal is explicitly not a
-report, cannot be rendered as HTML, and cannot be resumed.
+contain native `report.json`, `errors.log`, and `report.html`; cancelled or
+failed runs contain the typed `partial.json` journal instead. A partial journal
+is explicitly not a report, cannot be rendered as HTML, and cannot be resumed.
+For completed reports, `errors.log` is UTF-8 NDJSON with one record per
+incomplete execution error in report order, including repeated incidents and
+full error/provider detail. It is zero bytes when no execution errors occur.
+The shared completed-report writer atomically replaces `errors.log` before
+atomically replacing `report.json`, so a newly completed `report.json` has its
+companion log without making the two files a single transaction.
 
 The harness uses scoring v7. It matches successful actions exactly first. If
 exact matching leaves exactly one unmatched authored multi-target action, the
@@ -39,7 +45,9 @@ It preserves provider `model_id` and records the resolved run-wide reasoning
 effort and temperature separately, deriving labels such as `model(high)` for
 presentation. `quality_rate` is correct/scored and `coverage_rate` is
 scored/total; incomplete cells carry an operational cause, not an action
-mismatch.
+mismatch. Provider HTTP 429 responses and provider bodies containing
+`token_quota_exceeded` classify as `rate_limit`; structured execution metadata
+is additive and does not change scoring or action semantics.
 
 TTY runs render one transient Rich view and a durable stderr final with the
 artifact location once. Redirected runs, or `--machine`, emit stable KV on
@@ -49,6 +57,10 @@ non-streaming fallback. Lanes keep their existing five-column layout unless a
 real `thinking` event is observed for an active lane; only then does a sticky,
 structured Activity column appear for the run. Providers without `ThinkingPart`
 keep the five-column layout, without synthesized reasoning or `Waiting`.
+Human live and persistent durable final output render `Operational issues` as a
+full-width actionable table. Exact duplicate issues group for display with
+affected cells, while `errors.log` remains per-trace and machine output remains
+payload-free.
 
 Activity labels are payload-free. Actual runtime `running` and `processing`
 tool phases include the validated tool name; provider/model-supplied

@@ -10,10 +10,16 @@
   corrected native usage metrics.
 - Added atomic run manifests and typed cancellation/failure journals that are
   explicitly not reports, plus pre-flight matrix validation.
+- Added completed-report `errors.log` artifacts with ordered UTF-8 NDJSON
+  execution-error records, zero-byte success logs, and atomic replacement before
+  the companion `report.json` is atomically replaced.
 - Added Auto TTY / `--machine` output behavior, native agent event streaming,
   and an Activity column that appears only after observed thinking, without
   persisting transient phase/activity data; retained the durable terminal final
   and report-model-driven HTML/CSV presentation.
+- Classified provider HTTP 429 and `token_quota_exceeded` failures as
+  `rate_limit`, and rendered grouped actionable `Operational issues` tables
+  without changing v7 scoring or payload-free machine output.
 
 ### Restore safe configuration minima
 

@@ -1,6 +1,7 @@
 import asyncio
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, fields
+import json
 from pathlib import Path
 
 from custom_components.llm_sandbox.const import DEFAULT_PROMPT_PROFILE
@@ -11,13 +12,40 @@ from llm_sandbox_evals.harness import _diagnostics, _partial_usage, _usage, run_
 from llm_sandbox_evals.phases import PhaseObservation
 from llm_sandbox_evals.presentation import effective_cause
 from llm_sandbox_evals.prompts import load_candidates
-from llm_sandbox_evals.schema import ToolEvent
+from llm_sandbox_evals.schema import CaseTrace, ToolEvent
+from pydantic_ai.exceptions import ModelHTTPError, UnexpectedModelBehavior
 from pydantic_ai.messages import ModelMessage, ModelResponse, ToolCallPart
-from pydantic_ai.models.function import AgentInfo, DeltaThinkingPart, DeltaToolCall, DeltaToolCalls, FunctionModel
+from pydantic_ai.models.function import (
+    AgentInfo,
+    DeltaThinkingPart,
+    DeltaToolCall,
+    DeltaToolCalls,
+    FunctionModel,
+)
 from pydantic_ai.usage import RunUsage
 import pytest
 
-from llm_sandbox_evals import agent_runner
+# Keep the boundary explicit because this test package shares the runtime package name.
+# isort: split
+
+
+_CEREBRAS_RATE_LIMIT_BODY = {
+    "message": "Tokens per minute limit exceeded - too many tokens processed.",
+    "type": "too_many_tokens_error",
+    "param": "quota",
+    "code": "token_quota_exceeded",
+}
+
+_NESTED_QUOTA_BODY = {
+    "message": "request rejected",
+    "type": "api_error",
+    "code": "generic_provider_error",
+    "error": {
+        "message": "token throughput exceeded",
+        "type": "api_error",
+        "code": "token_quota_exceeded",
+    },
+}
 
 
 @dataclass
@@ -131,7 +159,7 @@ async def test_run_case_records_provider_failure_as_incomplete_with_no_action_re
     def make_model(_model_id: str) -> FunctionModel:
         return FunctionModel(stream_function=_failing_stream, model_name="bad-model")
 
-    monkeypatch.setattr(agent_runner, "make_model", make_model)  # type: ignore[attr-defined]
+    monkeypatch.setattr("llm_sandbox_evals.agent_runner.make_model", make_model)
     trace = await run_case(candidate, "bad-model", CASES[0], config, profile=profile)
 
     assert trace.outcome.state == "incomplete"
@@ -143,6 +171,113 @@ async def test_run_case_records_provider_failure_as_incomplete_with_no_action_re
     assert effective_cause(trace) == "provider_error"
     assert trace.reasoning_effort == config.reasoning_effort
     assert trace.temperature == config.temperature
+
+
+async def test_run_case_captures_top_level_cerebras_rate_limit_metadata(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    model_name = "cerebras/llama-3.3-70b"
+    trace = await _run_case_with_model(
+        monkeypatch,
+        tmp_path,
+        model_name=model_name,
+        model=FunctionModel(stream_function=_cerebras_rate_limit_stream, model_name=model_name),
+    )
+
+    _assert_cerebras_rate_limit_trace(trace)
+
+
+async def test_run_case_finds_cerebras_rate_limit_through_exception_cause(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    model_name = "cerebras/llama-3.3-70b"
+    trace = await _run_case_with_model(
+        monkeypatch,
+        tmp_path,
+        model_name=model_name,
+        model=FunctionModel(stream_function=_wrapped_cerebras_rate_limit_stream, model_name=model_name),
+    )
+
+    _assert_cerebras_rate_limit_trace(trace)
+    assert trace.provider_error is not None
+    assert "gateway request failed" in trace.provider_error
+
+
+async def test_run_case_uses_nested_quota_code_over_generic_top_level_metadata(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    model_name = "provider/model-v1"
+    trace = await _run_case_with_model(
+        monkeypatch,
+        tmp_path,
+        model_name=model_name,
+        model=FunctionModel(stream_function=_nested_quota_stream, model_name=model_name),
+    )
+
+    assert trace.outcome.state == "incomplete"
+    assert trace.outcome.action_reason is None
+    assert trace.diagnostics.failure == "rate_limit"
+    assert trace.execution_error is not None
+    assert trace.execution_error.exception_type == "ModelHTTPError"
+    assert trace.execution_error.status_code == 400
+    assert trace.execution_error.provider_code == "token_quota_exceeded"
+    assert trace.execution_error.provider_model == model_name
+    assert trace.execution_error.provider_detail is not None
+    assert json.loads(trace.execution_error.provider_detail) == _NESTED_QUOTA_BODY
+
+
+async def test_run_case_keeps_root_model_protocol_error_ahead_of_wrapped_http_rate_limit(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    model_name = "provider/model-v1"
+    trace = await _run_case_with_model(
+        monkeypatch,
+        tmp_path,
+        model_name=model_name,
+        model=FunctionModel(stream_function=_model_protocol_error_stream, model_name=model_name),
+    )
+
+    assert trace.outcome.state == "incomplete"
+    assert trace.outcome.action_reason is None
+    assert trace.diagnostics.failure == "model_protocol_error"
+    assert trace.execution_error is not None
+    assert trace.execution_error.exception_type == "UnexpectedModelBehavior"
+    assert trace.execution_error.status_code is None
+    assert trace.execution_error.provider_code is None
+    assert trace.provider_error is not None
+    assert "ModelHTTPError" in trace.provider_error
+    assert "UnexpectedModelBehavior" in trace.provider_error
+
+
+async def test_run_case_keeps_non_rate_limit_http_error_as_provider_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    model_name = "provider/model-v1"
+    trace = await _run_case_with_model(
+        monkeypatch,
+        tmp_path,
+        model_name=model_name,
+        model=FunctionModel(stream_function=_provider_http_error_stream, model_name=model_name),
+    )
+
+    assert trace.outcome.state == "incomplete"
+    assert trace.outcome.action_reason is None
+    assert trace.diagnostics.failure == "provider_error"
+    assert trace.execution_error is not None
+    assert trace.execution_error.exception_type == "ModelHTTPError"
+    assert trace.execution_error.status_code == 503
+    assert trace.execution_error.provider_code == "upstream_unavailable"
+    assert trace.execution_error.provider_model == "provider/model-v1"
+    assert trace.execution_error.provider_detail is not None
+    assert json.loads(trace.execution_error.provider_detail) == {
+        "error": {
+            "code": "upstream_unavailable",
+            "message": "provider unavailable",
+            "type": "api_error",
+        }
+    }
+    assert trace.provider_error is not None
+    assert "upstream_unavailable" in trace.provider_error
 
 
 async def test_run_case_keeps_normal_completion_outside_failure_classification(tmp_path: Path) -> None:
@@ -162,6 +297,7 @@ async def test_run_case_keeps_normal_completion_outside_failure_classification(t
     assert trace.outcome.action_reason is not None
     assert trace.diagnostics.failure is None
     assert trace.provider_error is None
+    assert trace.execution_error is None
     assert effective_cause(trace) == trace.outcome.action_reason
 
 
@@ -181,7 +317,7 @@ async def test_run_case_cap_exhausted_is_scored_with_real_action_reason(monkeypa
     def make_model(_model_id: str) -> FunctionModel:
         return FunctionModel(stream_function=_looping_stream, model_name="looping-model")
 
-    monkeypatch.setattr(agent_runner, "make_model", make_model)  # type: ignore[attr-defined]
+    monkeypatch.setattr("llm_sandbox_evals.agent_runner.make_model", make_model)
     case = next(case for case in CASES if case.id == "direct_turn_off_utility_room_accent")
     trace = await run_case(candidate, "looping-model", case, config, profile=profile)
 
@@ -192,6 +328,7 @@ async def test_run_case_cap_exhausted_is_scored_with_real_action_reason(monkeypa
     assert trace.outcome.action_reason != "action_mismatch"
     assert trace.outcome.score == 0.0
     assert trace.provider_error is None
+    assert trace.execution_error is None
     assert trace.diagnostics.failure == "cap_exhausted"
     assert trace.diagnostics.cap_exhausted is True
     assert effective_cause(trace) == "cap_exhausted"
@@ -223,7 +360,7 @@ async def test_run_case_failure_trace_retains_partial_model_response_usage(
     def make_model(_model_id: str) -> FunctionModel:
         return FunctionModel(stream_function=_usage_then_fail_stream, model_name="usage-model")
 
-    monkeypatch.setattr(agent_runner, "make_model", make_model)  # type: ignore[attr-defined]
+    monkeypatch.setattr("llm_sandbox_evals.agent_runner.make_model", make_model)
     trace = await run_case(candidate, "usage-model", CASES[0], config, profile=profile)
 
     assert trace.outcome.state == "incomplete"
@@ -248,7 +385,7 @@ async def test_run_case_observes_native_stream_phases_without_leaking_payloads_o
     def make_model(_model_id: str) -> FunctionModel:
         return FunctionModel(stream_function=_thinking_tool_then_response_stream, model_name="native-stream")
 
-    monkeypatch.setattr(agent_runner, "make_model", make_model)
+    monkeypatch.setattr("llm_sandbox_evals.agent_runner.make_model", make_model)
     trace = await run_case(
         candidate,
         "native-stream",
@@ -322,7 +459,7 @@ async def test_run_case_timeout_closes_pending_native_stream(monkeypatch: pytest
     def make_model(_model_id: str) -> FunctionModel:
         return FunctionModel(stream_function=pending_stream, model_name="timeout-model")
 
-    monkeypatch.setattr(agent_runner, "make_model", make_model)
+    monkeypatch.setattr("llm_sandbox_evals.agent_runner.make_model", make_model)
     trace = await run_case(
         candidate,
         "timeout-model",
@@ -341,6 +478,10 @@ async def test_run_case_timeout_closes_pending_native_stream(monkeypatch: pytest
 
     assert trace.outcome.state == "incomplete"
     assert trace.diagnostics.failure == "timeout"
+    assert trace.execution_error is not None
+    assert "after=0.01s" in trace.execution_error.message
+    assert trace.provider_error is not None
+    assert "after=0.01s" in trace.provider_error
     assert stream_started.is_set()
     await asyncio.wait_for(stream_closed.wait(), timeout=0.1)
 
@@ -348,6 +489,46 @@ async def test_run_case_timeout_closes_pending_native_stream(monkeypatch: pytest
 async def _failing_stream(messages: list[ModelMessage], _info: AgentInfo) -> AsyncIterator[str]:
     if messages:
         raise RuntimeError("provider rejected model")
+    yield "unreachable"
+
+
+async def _cerebras_rate_limit_stream(_messages: list[ModelMessage], _info: AgentInfo) -> AsyncIterator[str]:
+    raise ModelHTTPError(429, "cerebras/llama-3.3-70b", _CEREBRAS_RATE_LIMIT_BODY)
+    yield "unreachable"
+
+
+async def _wrapped_cerebras_rate_limit_stream(_messages: list[ModelMessage], _info: AgentInfo) -> AsyncIterator[str]:
+    try:
+        raise ModelHTTPError(429, "cerebras/llama-3.3-70b", _CEREBRAS_RATE_LIMIT_BODY)
+    except ModelHTTPError as err:
+        raise RuntimeError("gateway request failed") from err
+    yield "unreachable"
+
+
+async def _nested_quota_stream(_messages: list[ModelMessage], _info: AgentInfo) -> AsyncIterator[str]:
+    raise ModelHTTPError(400, "provider/model-v1", _NESTED_QUOTA_BODY)
+    yield "unreachable"
+
+
+async def _model_protocol_error_stream(_messages: list[ModelMessage], _info: AgentInfo) -> AsyncIterator[str]:
+    raise UnexpectedModelBehavior("invalid provider response") from ModelHTTPError(
+        429, "provider/model-v1", _CEREBRAS_RATE_LIMIT_BODY
+    )
+    yield "unreachable"
+
+
+async def _provider_http_error_stream(_messages: list[ModelMessage], _info: AgentInfo) -> AsyncIterator[str]:
+    raise ModelHTTPError(
+        503,
+        "provider/model-v1",
+        {
+            "error": {
+                "message": "provider unavailable",
+                "type": "api_error",
+                "code": "upstream_unavailable",
+            }
+        },
+    )
     yield "unreachable"
 
 
@@ -402,3 +583,51 @@ def _execute_home_code_delta(tool_call_id: str, code: str, *, part_index: int = 
 
 def _raise_phase_observer_error(_observation: PhaseObservation) -> None:
     raise RuntimeError("observer unavailable")
+
+
+async def _run_case_with_model(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    *,
+    model_name: str,
+    model: FunctionModel,
+) -> CaseTrace:
+    candidate = load_candidates(["baseline"], DEFAULT_PROMPT_PROFILE)[0]
+
+    def make_model(_model_id: str) -> FunctionModel:
+        return model
+
+    monkeypatch.setattr("llm_sandbox_evals.agent_runner.make_model", make_model)
+    return await run_case(
+        candidate,
+        model_name,
+        CASES[0],
+        EvalConfig(
+            models=[model_name],
+            candidates=[candidate.id],
+            prompt_profile=DEFAULT_PROMPT_PROFILE,
+            cases=None,
+            homes=None,
+            runs_dir=tmp_path,
+        ),
+        profile=resolve_profile(DEFAULT_PROMPT_PROFILE),
+    )
+
+
+def _assert_cerebras_rate_limit_trace(trace: CaseTrace) -> None:
+    assert trace.outcome.state == "incomplete"
+    assert trace.outcome.action_reason is None
+    assert trace.diagnostics.failure == "rate_limit"
+    assert trace.execution_error is not None
+    assert trace.execution_error.exception_type == "ModelHTTPError"
+    assert trace.execution_error.status_code == 429
+    assert trace.execution_error.provider_code == "token_quota_exceeded"
+    assert trace.execution_error.provider_model == "cerebras/llama-3.3-70b"
+    assert trace.execution_error.provider_detail is not None
+    assert json.loads(trace.execution_error.provider_detail) == _CEREBRAS_RATE_LIMIT_BODY
+    assert trace.provider_error is not None
+    assert "Traceback (most recent call last)" in trace.provider_error
+    assert all(
+        key in trace.provider_error and value in trace.provider_error
+        for key, value in _CEREBRAS_RATE_LIMIT_BODY.items()
+    )

@@ -40,6 +40,15 @@ Each run creates `manifest.json` before model calls. Its status moves from
 `running` to `complete`, `cancelled`, or `failed`. Cancellation and operational
 failure also write `partial.json`: a typed journal of terminal cells, **not** a
 native Pydantic Evals report. Partials cannot be rendered as HTML or resumed.
+Completed report folders contain `report.json`, `errors.log`, and `report.html`
+alongside the manifest. `errors.log` is UTF-8 NDJSON with one record per
+incomplete execution error in report order, preserving repeated incidents and
+full error/provider detail; it is zero bytes when no execution errors occurred.
+Completed-report writing atomically replaces `errors.log` before atomically
+replacing `report.json`, so a newly completed `report.json` has its companion
+log without claiming a cross-file transaction. It is written with completed
+reports only, not backfilled for older runs or promised for failed/cancelled
+partial-only folders.
 
 ## Case contract
 
@@ -157,8 +166,11 @@ unexpected effects and expose stable action reason codes.
 `CaseOutcome.action_reason` is present only for scored correct/incorrect cells.
 Operational provider, timeout, and harness failures remain `incomplete`, have
 `action_reason: null`, and use `diagnostics.failure` as their effective cause.
-Cap exhaustion is scored incorrect with its real action reason and the distinct
-effective cause `cap_exhausted`.
+Provider HTTP 429 responses and provider bodies containing
+`token_quota_exceeded` classify as `rate_limit`. Structured execution metadata
+is additive diagnostic context; scoring remains v7 and action semantics are
+unchanged. Cap exhaustion is scored incorrect with its real action reason and
+the distinct effective cause `cap_exhausted`.
 
 Reports use scoring version 7. Version 6 and older artifacts are rejected as
 legacy; there is no compatibility decoder or rescoring shim. `model_id` remains
@@ -191,7 +203,11 @@ or artifacts. Interactive Activity and machine output do not render reasoning
 content, model responses, tool arguments, or tool results. Existing durable
 reports retain their established `CaseTrace` answer and tool-diagnostics
 contract. After the transient Live frame ends, one durable final compares
-candidate × variant quality, coverage, operational issues, and usage.
+candidate × variant quality, coverage, operational issues, and usage. The human
+terminal `Operational issues` section is a full-width actionable table in both
+live and persistent durable final output. Exact duplicate issues group for
+display with affected cells, while `errors.log` remains one record per trace;
+machine output remains payload-free.
 
 `report.html`, CSV export, and `report <run_id> --html` are all rebuilt from an
 immutable saved-report presentation model. The HTML hero shows quality,

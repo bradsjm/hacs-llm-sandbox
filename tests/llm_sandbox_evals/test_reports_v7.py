@@ -5,7 +5,7 @@ from typing import Literal
 
 from custom_components.llm_sandbox.const import DEFAULT_PROMPT_PROFILE
 from llm_sandbox_evals.config import EvalConfig
-from llm_sandbox_evals.experiment import run_matrix
+from llm_sandbox_evals.experiment import MatrixCellRef, run_matrix
 from llm_sandbox_evals.reports import (
     _REPORT_ADAPTER,
     load_partial_artifact,
@@ -21,10 +21,13 @@ from llm_sandbox_evals.schema import (
     CaseTrace,
     CompletedCellRecord,
     EvalDiagnostics,
+    ExecutionError,
+    FailureClassification,
     PartialRunArtifact,
     RequiredAction,
 )
 from pydantic import ValidationError
+from pydantic_evals.reporting import EvaluationReport, ReportCase
 import pytest
 
 from llm_sandbox_evals import reports
@@ -123,6 +126,142 @@ async def test_variant_fields_and_descriptor_survive_write_load(tmp_path: Path) 
     assert cell.temperature == 0.7
 
 
+async def test_execution_error_round_trips_and_defaults_for_older_v7_payload(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    report = await run_matrix(config, run_id="execution-error-round-trip")
+    run_dir = write_report_json(report, config, run_id="execution-error-round-trip-written")
+    report_path = run_dir / "report.json"
+    payload = json.loads(report_path.read_text(encoding="utf-8"))
+    output = payload["cases"][0]["output"]
+    expected = ExecutionError(
+        exception_type="ModelHTTPError",
+        message="provider request failed",
+        status_code=503,
+        provider_code="upstream_unavailable",
+        provider_model="provider/model-v1",
+        provider_detail='{"code":"upstream_unavailable"}',
+    )
+    output["execution_error"] = {
+        "exception_type": expected.exception_type,
+        "message": expected.message,
+        "status_code": expected.status_code,
+        "provider_code": expected.provider_code,
+        "provider_model": expected.provider_model,
+        "provider_detail": expected.provider_detail,
+    }
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    assert load_report(run_dir).cases[0].output.execution_error == expected
+
+    del output["execution_error"]
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    assert load_report(run_dir).cases[0].output.execution_error is None
+
+
+async def test_report_writer_creates_empty_error_log_for_successful_stub_report(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    report = await run_matrix(config, run_id="empty-error-log")
+
+    run_dir = write_report_json(report, config, run_id="empty-error-log-written")
+
+    assert (run_dir / "report.json").is_file()
+    assert (run_dir / "errors.log").read_bytes() == b""
+
+
+def test_report_writer_preserves_each_incomplete_error_as_ordered_ndjson(tmp_path: Path) -> None:
+    provider_detail = json.dumps(
+        {
+            "error": {
+                "code": "token_quota_exceeded",
+                "message": "Daily quota exhausted; retry tomorrow.",
+            }
+        }
+    )
+    full_rate_limit_detail = (
+        "Traceback (most recent call last):\n"
+        "ModelHTTPError: status_code=429 code=token_quota_exceeded\n"
+        f"provider body: {provider_detail}"
+    )
+    repeated_rate_limit = _incomplete_trace(
+        case_id="rate-limit-case",
+        candidate_id="baseline",
+        model_id="openrouter:cerebras/llama-3.3-70b",
+        reasoning_effort="high",
+        temperature=0.4,
+        conversation_id="conversation-rate-limit",
+        user_request="Turn on the Utility Room ceiling light.",
+        classification="rate_limit",
+        provider_error=full_rate_limit_detail,
+        execution_error=ExecutionError(
+            exception_type="ModelHTTPError",
+            message="Provider rate limit exceeded",
+            status_code=429,
+            provider_code="token_quota_exceeded",
+            provider_model="cerebras/llama-3.3-70b",
+            provider_detail=provider_detail,
+        ),
+    )
+    provider_only_detail = "Provider closed the request before structured metadata was captured."
+    provider_only = _incomplete_trace(
+        case_id="provider-only-case",
+        candidate_id="candidate-b",
+        model_id="anthropic:claude-sonnet-4-6",
+        reasoning_effort=None,
+        temperature=None,
+        conversation_id=None,
+        user_request="Toggle the Utility Room outlet.",
+        classification="provider_error",
+        provider_error=provider_only_detail,
+        execution_error=None,
+    )
+    report = _report_with_traces(repeated_rate_limit, repeated_rate_limit, provider_only)
+    config = _config(tmp_path)
+
+    run_dir = write_report_json(report, config, run_id="ordered-errors")
+
+    physical_lines = (run_dir / "errors.log").read_bytes().splitlines()
+    records = [json.loads(line) for line in physical_lines]
+    rate_limit_record = {
+        "classification": "rate_limit",
+        "case_id": "rate-limit-case",
+        "candidate_id": "baseline",
+        "model_id": "openrouter:cerebras/llama-3.3-70b",
+        "variant": "openrouter:cerebras/llama-3.3-70b(high)",
+        "reasoning_effort": "high",
+        "temperature": 0.4,
+        "conversation_id": "conversation-rate-limit",
+        "user_request": "Turn on the Utility Room ceiling light.",
+        "exception_type": "ModelHTTPError",
+        "message": "Provider rate limit exceeded",
+        "status_code": 429,
+        "provider_code": "token_quota_exceeded",
+        "provider_model": "cerebras/llama-3.3-70b",
+        "provider_detail": provider_detail,
+        "detail": full_rate_limit_detail,
+    }
+    provider_only_record = {
+        "classification": "provider_error",
+        "case_id": "provider-only-case",
+        "candidate_id": "candidate-b",
+        "model_id": "anthropic:claude-sonnet-4-6",
+        "variant": "anthropic:claude-sonnet-4-6(default)",
+        "reasoning_effort": None,
+        "temperature": None,
+        "conversation_id": None,
+        "user_request": "Toggle the Utility Room outlet.",
+        "exception_type": None,
+        "message": None,
+        "status_code": None,
+        "provider_code": None,
+        "provider_model": None,
+        "provider_detail": None,
+        "detail": provider_only_detail,
+    }
+    assert records == [rate_limit_record, rate_limit_record, provider_only_record]
+    assert physical_lines[0] == physical_lines[1]
+
+
 @pytest.mark.parametrize("version", [None, 1, 5, 6], ids=["missing", "v1", "v5", "v6"])
 async def test_legacy_and_invalid_artifacts_are_strictly_rejected(tmp_path: Path, version: int | None) -> None:
     config = _config(tmp_path)
@@ -175,13 +314,36 @@ async def test_report_writer_cleans_temporary_file_when_json_serialization_fails
     report = await run_matrix(config, run_id="report-serialization-failure")
     run_id = "report-serialization-failure-written"
     run_dir = tmp_path / run_id
+    run_dir.mkdir()
+    errors_path = run_dir / "errors.log"
+    report_path = run_dir / "report.json"
+    errors_path.write_bytes(b"existing errors\n")
+    report_path.write_bytes(b"existing report\n")
     monkeypatch.setattr(reports.json, "dumps", _raise_serialization_error)
 
     with pytest.raises(TypeError, match="cannot serialize artifact"):
         write_report_json(report, config, run_id=run_id)
 
-    # A failed write exposes neither a target report nor a stranded atomic-write tempfile.
+    # Serialization completes before either independently atomic target can be replaced.
+    assert errors_path.read_bytes() == b"existing errors\n"
+    assert report_path.read_bytes() == b"existing report\n"
+    assert not list(run_dir.glob(".errors.log.*"))
+    assert not list(run_dir.glob(".report.json.*"))
+
+
+async def test_error_log_replace_failure_prevents_report_and_cleans_temporary_file(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    report = await run_matrix(config, run_id="error-log-replace-failure")
+    run_dir = tmp_path / "error-log-replace-failure-written"
+    errors_path = run_dir / "errors.log"
+    errors_path.mkdir(parents=True)
+
+    with pytest.raises(IsADirectoryError):
+        write_report_json(report, config, run_id=run_dir.name)
+
+    assert errors_path.is_dir()
     assert not (run_dir / "report.json").exists()
+    assert not list(run_dir.glob(".errors.log.*"))
     assert not list(run_dir.glob(".report.json.*"))
 
 
@@ -208,6 +370,77 @@ def _config(runs_dir: Path) -> EvalConfig:
         homes=None,
         runs_dir=runs_dir,
     )
+
+
+def _incomplete_trace(
+    *,
+    case_id: str,
+    candidate_id: str,
+    model_id: str,
+    reasoning_effort: str | None,
+    temperature: float | None,
+    conversation_id: str | None,
+    user_request: str,
+    classification: FailureClassification,
+    provider_error: str,
+    execution_error: ExecutionError | None,
+) -> CaseTrace:
+    return CaseTrace(
+        case_id=case_id,
+        candidate_id=candidate_id,
+        model_id=model_id,
+        answer=None,
+        required_actions=(RequiredAction("light", "turn_on", ("light.utility_room_ceiling",)),),
+        outcome=CaseOutcome("incomplete", None),
+        action_result=ActionResult(False, "missing_action"),
+        action_ledger=ActionLedger(),
+        tool_events=(),
+        diagnostics=EvalDiagnostics(failure=classification),
+        reasoning_effort=reasoning_effort,
+        temperature=temperature,
+        provider_error=provider_error,
+        execution_error=execution_error,
+        user_request=user_request,
+        conversation_id=conversation_id,
+    )
+
+
+def _report_with_traces(*traces: CaseTrace) -> reports.MatrixReport:
+    cases = []
+    for trace in traces:
+        cell = MatrixCellRef(
+            trace.case_id,
+            trace.candidate_id,
+            trace.model_id,
+            "home_minimal",
+            trace.reasoning_effort,
+            trace.temperature,
+        )
+        cases.append(
+            ReportCase(
+                name=f"{trace.candidate_id}/{trace.model_id}/{trace.case_id}",
+                inputs=cell,
+                metadata={
+                    "run_id": "ordered-errors",
+                    "case_id": trace.case_id,
+                    "candidate_id": trace.candidate_id,
+                    "model_id": trace.model_id,
+                    "home": cell.home,
+                    "reasoning_effort": trace.reasoning_effort,
+                    "temperature": trace.temperature,
+                },
+                expected_output=None,
+                output=trace,
+                metrics={},
+                attributes={},
+                scores={},
+                labels={},
+                assertions={},
+                task_duration=0.0,
+                total_duration=0.0,
+            )
+        )
+    return EvaluationReport(name="ordered-errors", cases=cases)
 
 
 def _partial_artifact(*, status: Literal["cancelled", "failed"]) -> PartialRunArtifact:

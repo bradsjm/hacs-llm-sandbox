@@ -22,6 +22,14 @@ type ActionOutcomeReason = Literal[
     "action_mismatch",
 ]
 
+type FailureClassification = Literal[
+    "cap_exhausted",
+    "timeout",
+    "model_protocol_error",
+    "rate_limit",
+    "provider_error",
+]
+
 
 def variant_label(model_id: str, reasoning_effort: str | None) -> str:
     """Return the display-only identity for one resolved model variant."""
@@ -147,6 +155,18 @@ class ActionLedger:
 
 
 @dataclass(frozen=True, slots=True)
+class ExecutionError:
+    """Structured provider or harness failure metadata for one execution attempt."""
+
+    exception_type: str
+    message: str
+    status_code: int | None = None
+    provider_code: str | None = None
+    provider_model: str | None = None
+    provider_detail: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class EvalDiagnostics:
     """Operational facts that never change action correctness."""
 
@@ -160,7 +180,7 @@ class EvalDiagnostics:
     elapsed_seconds: float | None = None
     cap_exhausted: bool = False
     usage: dict[str, int | float | bool | None] | None = None
-    failure: str | None = None
+    failure: FailureClassification | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -194,6 +214,7 @@ class CaseTrace:
     temperature: float | None = None
     scoring_version: Literal[7] = 7
     provider_error: str | None = None
+    execution_error: ExecutionError | None = None
     user_request: str = ""
     conversation_id: str | None = None
 

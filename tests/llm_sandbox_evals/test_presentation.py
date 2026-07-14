@@ -4,6 +4,7 @@ from llm_sandbox_evals.experiment import MatrixCellRef, MatrixProgressEvent
 from llm_sandbox_evals.phases import LanePhase
 from llm_sandbox_evals.presentation import (
     LanePhaseEvent,
+    OperationalIssueGroup,
     PresentationState,
     ReportPresentationModel,
     effective_cause,
@@ -17,6 +18,7 @@ from llm_sandbox_evals.schema import (
     CaseOutcome,
     CaseTrace,
     EvalDiagnostics,
+    ExecutionError,
     RequiredAction,
 )
 from pydantic_evals.reporting import EvaluationReport, ReportCase
@@ -33,6 +35,8 @@ def _trace(
     cap_exhausted: bool = False,
     failure: str | None = None,
     action_reason: str | None = "ok",
+    provider_error: str | None = None,
+    execution_error: ExecutionError | None = None,
 ) -> CaseTrace:
     expected = (RequiredAction("light", "turn_on", ("light.bedroom",)),)
     return CaseTrace(
@@ -47,11 +51,18 @@ def _trace(
         tool_events=(),
         diagnostics=EvalDiagnostics(cap_exhausted=cap_exhausted, failure=failure, elapsed_seconds=1.0),
         reasoning_effort=reasoning_effort,
+        provider_error=provider_error,
+        execution_error=execution_error,
     )
 
 
-def _cell(case_id: str, candidate_id: str = "baseline", model_id: str = "stub") -> MatrixCellRef:
-    return MatrixCellRef(case_id, candidate_id, model_id, "home_minimal")
+def _cell(
+    case_id: str,
+    candidate_id: str = "baseline",
+    model_id: str = "stub",
+    reasoning_effort: str | None = None,
+) -> MatrixCellRef:
+    return MatrixCellRef(case_id, candidate_id, model_id, "home_minimal", reasoning_effort)
 
 
 @pytest.mark.parametrize(
@@ -293,6 +304,473 @@ def _report_case(
         task_duration=None,
         total_duration=None,
     )
+
+
+def test_operational_issue_groups_preserve_exact_identity_across_runtime_and_report() -> None:
+    quota_payload = '{"code":"token_quota","resource":"tokens"}'
+    quota_error = ExecutionError(
+        "ModelHTTPError",
+        "Too many requests",
+        status_code=429,
+        provider_code="token_quota",
+        provider_model="cerebras",
+        provider_detail=quota_payload,
+    )
+    distinct_quota_error = ExecutionError(
+        "ModelHTTPError",
+        "Too many requests",
+        status_code=429,
+        provider_code="request_quota",
+        provider_model="cerebras",
+        provider_detail='{"code":"request_quota","resource":"requests"}',
+    )
+    distinct_message_error = ExecutionError(
+        "ModelHTTPError",
+        "Token quota exceeded",
+        status_code=429,
+        provider_code="token_quota",
+        provider_model="cerebras",
+        provider_detail=quota_payload,
+    )
+    distinct_provider_model_error = ExecutionError(
+        "ModelHTTPError",
+        "Too many requests",
+        status_code=429,
+        provider_code="token_quota",
+        provider_model="cerebras-fallback",
+        provider_detail=quota_payload,
+    )
+    legacy_detail = 'legacy response: {"status":429,"code":"token_quota"}'
+    entries = (
+        (
+            _cell("legacy", "legacy-candidate", "cerebras"),
+            _trace(
+                state="incomplete",
+                case_id="legacy",
+                candidate_id="legacy-candidate",
+                model_id="cerebras",
+                action_reason=None,
+                failure="provider_error",
+                provider_error=legacy_detail,
+            ),
+        ),
+        (
+            _cell("distinct-payload", "baseline", "cerebras"),
+            _trace(
+                state="incomplete",
+                case_id="distinct-payload",
+                model_id="cerebras",
+                action_reason=None,
+                failure="rate_limit",
+                execution_error=distinct_quota_error,
+            ),
+        ),
+        (
+            _cell("case-a", "zeta", "cerebras"),
+            _trace(
+                state="incomplete",
+                case_id="case-a",
+                candidate_id="zeta",
+                model_id="cerebras",
+                action_reason=None,
+                failure="rate_limit",
+                execution_error=quota_error,
+            ),
+        ),
+        (_cell("success", model_id="cerebras"), _trace(case_id="success", model_id="cerebras")),
+        (
+            _cell("timeout", "timeout-candidate", "cerebras"),
+            _trace(
+                state="incomplete",
+                case_id="timeout",
+                candidate_id="timeout-candidate",
+                model_id="cerebras",
+                action_reason=None,
+                failure="timeout",
+                execution_error=ExecutionError("TimeoutError", "Timed out after 10 seconds"),
+            ),
+        ),
+        (
+            _cell("variant", "baseline", "cerebras", "high"),
+            _trace(
+                state="incomplete",
+                case_id="variant",
+                model_id="cerebras",
+                reasoning_effort="high",
+                action_reason=None,
+                failure="rate_limit",
+                execution_error=quota_error,
+            ),
+        ),
+        (
+            _cell("cap-exhausted", model_id="cerebras"),
+            _trace(
+                state="incomplete",
+                case_id="cap-exhausted",
+                model_id="cerebras",
+                cap_exhausted=True,
+                action_reason=None,
+                failure="cap_exhausted",
+            ),
+        ),
+        (
+            _cell("incorrect", model_id="cerebras"),
+            _trace(state="incorrect", case_id="incorrect", model_id="cerebras", action_reason="wrong_target"),
+        ),
+        (
+            _cell("distinct-message", "baseline", "cerebras"),
+            _trace(
+                state="incomplete",
+                case_id="distinct-message",
+                model_id="cerebras",
+                action_reason=None,
+                failure="rate_limit",
+                execution_error=distinct_message_error,
+            ),
+        ),
+        (
+            _cell("distinct-provider-model", "baseline", "cerebras"),
+            _trace(
+                state="incomplete",
+                case_id="distinct-provider-model",
+                model_id="cerebras",
+                action_reason=None,
+                failure="rate_limit",
+                execution_error=distinct_provider_model_error,
+            ),
+        ),
+        (
+            _cell("case-z", "alpha", "cerebras"),
+            _trace(
+                state="incomplete",
+                case_id="case-z",
+                candidate_id="alpha",
+                model_id="cerebras",
+                action_reason=None,
+                failure="rate_limit",
+                execution_error=quota_error,
+            ),
+        ),
+    )
+    expected_groups = (
+        OperationalIssueGroup(
+            2,
+            "rate_limit",
+            "cerebras(default)",
+            ("alpha/case-z", "zeta/case-a"),
+            "ModelHTTPError",
+            429,
+            "token_quota",
+            "cerebras",
+            "Too many requests",
+            quota_payload,
+        ),
+        OperationalIssueGroup(
+            1,
+            "provider_error",
+            "cerebras(default)",
+            ("legacy-candidate/legacy",),
+            "unknown",
+            None,
+            None,
+            None,
+            None,
+            legacy_detail,
+        ),
+        OperationalIssueGroup(
+            1,
+            "rate_limit",
+            "cerebras(default)",
+            ("baseline/distinct-payload",),
+            "ModelHTTPError",
+            429,
+            "request_quota",
+            "cerebras",
+            "Too many requests",
+            '{"code":"request_quota","resource":"requests"}',
+        ),
+        OperationalIssueGroup(
+            1,
+            "rate_limit",
+            "cerebras(default)",
+            ("baseline/distinct-message",),
+            "ModelHTTPError",
+            429,
+            "token_quota",
+            "cerebras",
+            "Token quota exceeded",
+            quota_payload,
+        ),
+        OperationalIssueGroup(
+            1,
+            "rate_limit",
+            "cerebras(default)",
+            ("baseline/distinct-provider-model",),
+            "ModelHTTPError",
+            429,
+            "token_quota",
+            "cerebras-fallback",
+            "Too many requests",
+            quota_payload,
+        ),
+        OperationalIssueGroup(
+            1,
+            "rate_limit",
+            "cerebras(high)",
+            ("baseline/variant",),
+            "ModelHTTPError",
+            429,
+            "token_quota",
+            "cerebras",
+            "Too many requests",
+            quota_payload,
+        ),
+        OperationalIssueGroup(
+            1,
+            "timeout",
+            "cerebras(default)",
+            ("timeout-candidate/timeout",),
+            "TimeoutError",
+            None,
+            None,
+            None,
+            "Timed out after 10 seconds",
+            "Timed out after 10 seconds",
+        ),
+    )
+
+    state = PresentationState()
+    state.ingest(MatrixProgressEvent("matrix_started", total=len(entries)), timeout=10.0, max_tool_calls=10)
+    for completion_index, (cell, trace) in enumerate(entries, start=1):
+        state.ingest(
+            MatrixProgressEvent("cell_started", cell=cell, request=cell.case_id), timeout=10.0, max_tool_calls=10
+        )
+        state.ingest(
+            MatrixProgressEvent(
+                "cell_finished",
+                cell=cell,
+                trace=trace,
+                completion_index=completion_index,
+                total=len(entries),
+            ),
+            timeout=10.0,
+            max_tool_calls=10,
+        )
+    report = EvaluationReport(
+        name="operational-issue-groups",
+        cases=[_report_case(trace, cell) for cell, trace in entries],
+    )
+    report_model = ReportPresentationModel.from_report(report)
+
+    assert len(state.operational_issue_groups) == 7
+    assert state.operational_issue_groups == expected_groups
+    assert report_model.operational_issue_groups == state.operational_issue_groups
+    assert dict(state.operational_issues) == {"rate_limit": 6, "provider_error": 1, "timeout": 1}
+    assert report_model.operational_issues == state.operational_issues
+
+
+def test_operational_issue_groups_include_full_raw_provider_error_identity() -> None:
+    structured_detail = "Structured provider detail"
+    execution_error = ExecutionError(
+        "ModelHTTPError",
+        "Too many requests",
+        status_code=429,
+        provider_code="token_quota",
+        provider_model="cerebras",
+        provider_detail=structured_detail,
+    )
+    raw_alpha = (
+        "ProviderRequestError: RAW_WRAPPER_ALPHA\n"
+        "The above exception was the direct cause of the following exception:\n"
+        "RateLimitError: TOKEN_QUOTA_CAUSE"
+    )
+    raw_beta = (
+        "ProviderRequestError: RAW_WRAPPER_BETA\n"
+        "The above exception was the direct cause of the following exception:\n"
+        "RateLimitError: TOKEN_QUOTA_CAUSE"
+    )
+    shared_raw = "ProviderRequestError: SHARED_WRAPPER\nCaused by: SHARED_TOKEN_QUOTA_CAUSE"
+    legacy_alpha = "LegacyProviderError: LEGACY_WRAPPER_ALPHA\nCaused by: LEGACY_CAUSE"
+    legacy_beta = "LegacyProviderError: LEGACY_WRAPPER_BETA\nCaused by: LEGACY_CAUSE"
+    entries = (
+        (
+            _cell("raw-beta", "baseline", "cerebras"),
+            _trace(
+                state="incomplete",
+                case_id="raw-beta",
+                model_id="cerebras",
+                action_reason=None,
+                failure="rate_limit",
+                provider_error=raw_beta,
+                execution_error=execution_error,
+            ),
+        ),
+        (
+            _cell("legacy-alpha", "baseline", "cerebras"),
+            _trace(
+                state="incomplete",
+                case_id="legacy-alpha",
+                model_id="cerebras",
+                action_reason=None,
+                failure="provider_error",
+                provider_error=legacy_alpha,
+            ),
+        ),
+        (
+            _cell("case-a", "zeta", "cerebras"),
+            _trace(
+                state="incomplete",
+                case_id="case-a",
+                candidate_id="zeta",
+                model_id="cerebras",
+                action_reason=None,
+                failure="rate_limit",
+                provider_error=shared_raw,
+                execution_error=execution_error,
+            ),
+        ),
+        (
+            _cell("fallback", "baseline", "cerebras"),
+            _trace(
+                state="incomplete",
+                case_id="fallback",
+                model_id="cerebras",
+                action_reason=None,
+                failure="rate_limit",
+                execution_error=execution_error,
+            ),
+        ),
+        (
+            _cell("legacy-beta", "baseline", "cerebras"),
+            _trace(
+                state="incomplete",
+                case_id="legacy-beta",
+                model_id="cerebras",
+                action_reason=None,
+                failure="provider_error",
+                provider_error=legacy_beta,
+            ),
+        ),
+        (
+            _cell("raw-alpha", "baseline", "cerebras"),
+            _trace(
+                state="incomplete",
+                case_id="raw-alpha",
+                model_id="cerebras",
+                action_reason=None,
+                failure="rate_limit",
+                provider_error=raw_alpha,
+                execution_error=execution_error,
+            ),
+        ),
+        (
+            _cell("case-z", "alpha", "cerebras"),
+            _trace(
+                state="incomplete",
+                case_id="case-z",
+                candidate_id="alpha",
+                model_id="cerebras",
+                action_reason=None,
+                failure="rate_limit",
+                provider_error=shared_raw,
+                execution_error=execution_error,
+            ),
+        ),
+    )
+    expected_groups = (
+        OperationalIssueGroup(
+            count=2,
+            cause="rate_limit",
+            variant="cerebras(default)",
+            cells=("alpha/case-z", "zeta/case-a"),
+            exception_type="ModelHTTPError",
+            status_code=429,
+            provider_code="token_quota",
+            provider_model="cerebras",
+            message="Too many requests",
+            detail=shared_raw,
+        ),
+        OperationalIssueGroup(
+            count=1,
+            cause="provider_error",
+            variant="cerebras(default)",
+            cells=("baseline/legacy-alpha",),
+            exception_type="unknown",
+            status_code=None,
+            provider_code=None,
+            provider_model=None,
+            message=None,
+            detail=legacy_alpha,
+        ),
+        OperationalIssueGroup(
+            count=1,
+            cause="provider_error",
+            variant="cerebras(default)",
+            cells=("baseline/legacy-beta",),
+            exception_type="unknown",
+            status_code=None,
+            provider_code=None,
+            provider_model=None,
+            message=None,
+            detail=legacy_beta,
+        ),
+        OperationalIssueGroup(
+            count=1,
+            cause="rate_limit",
+            variant="cerebras(default)",
+            cells=("baseline/raw-alpha",),
+            exception_type="ModelHTTPError",
+            status_code=429,
+            provider_code="token_quota",
+            provider_model="cerebras",
+            message="Too many requests",
+            detail=raw_alpha,
+        ),
+        OperationalIssueGroup(
+            count=1,
+            cause="rate_limit",
+            variant="cerebras(default)",
+            cells=("baseline/raw-beta",),
+            exception_type="ModelHTTPError",
+            status_code=429,
+            provider_code="token_quota",
+            provider_model="cerebras",
+            message="Too many requests",
+            detail=raw_beta,
+        ),
+        OperationalIssueGroup(
+            count=1,
+            cause="rate_limit",
+            variant="cerebras(default)",
+            cells=("baseline/fallback",),
+            exception_type="ModelHTTPError",
+            status_code=429,
+            provider_code="token_quota",
+            provider_model="cerebras",
+            message="Too many requests",
+            detail=structured_detail,
+        ),
+    )
+
+    state = PresentationState()
+    state.ingest(MatrixProgressEvent("matrix_started", total=len(entries)), timeout=10.0, max_tool_calls=10)
+    for completion_index, (cell, trace) in enumerate(entries, start=1):
+        state.ingest(
+            MatrixProgressEvent("cell_finished", cell=cell, trace=trace, completion_index=completion_index),
+            timeout=10.0,
+            max_tool_calls=10,
+        )
+    report_model = ReportPresentationModel.from_report(
+        EvaluationReport(
+            name="raw-operational-issue-groups",
+            cases=[_report_case(trace, cell) for cell, trace in entries],
+        )
+    )
+
+    assert state.operational_issue_groups == expected_groups
+    assert report_model.operational_issue_groups == expected_groups
+    assert dict(state.operational_issues) == {"rate_limit": 5, "provider_error": 2}
+    assert report_model.operational_issues == state.operational_issues
 
 
 def test_report_presentation_model_shares_semantics_with_runtime_state() -> None:

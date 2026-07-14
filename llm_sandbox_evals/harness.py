@@ -1,14 +1,16 @@
 """Eval task body backed by a real Pydantic AI Agent."""
 
 import asyncio
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
+from dataclasses import dataclass
 import json
 from time import perf_counter
+import traceback
 
 from custom_components.llm_sandbox.llm_api.prompts import PromptProfile
 from pydantic_ai import AgentRunResult, AgentRunResultEvent, capture_run_messages
-from pydantic_ai.exceptions import UnexpectedModelBehavior, UsageLimitExceeded
+from pydantic_ai.exceptions import ModelHTTPError, UnexpectedModelBehavior, UsageLimitExceeded
 from pydantic_ai.messages import (
     FunctionToolCallEvent,
     ModelRequest,
@@ -37,6 +39,8 @@ from llm_sandbox_evals.schema import (
     CaseTrace,
     EvalCase,
     EvalDiagnostics,
+    ExecutionError,
+    FailureClassification,
     PromptCandidate,
     ToolEvent,
 )
@@ -45,6 +49,16 @@ from llm_sandbox_evals.scoring.actions import build_action_ledger
 from llm_sandbox_evals.tools import EVAL_SCOPE, _for_scoring, apply_scope
 
 _TOOL_EXECUTE_HOME_CODE = "execute_home_code"
+_TOKEN_QUOTA_EXCEEDED = "token_quota_exceeded"
+
+
+@dataclass(frozen=True, slots=True)
+class _CapturedFailure:
+    """Normalized diagnostic failure data retained outside action scoring."""
+
+    classification: FailureClassification
+    execution_error: ExecutionError
+    detail: str
 
 
 async def run_case(
@@ -178,56 +192,20 @@ async def run_case(
                 on_scoring=emit_phase,
             )
         )
-    except TimeoutError as err:
-        tool_events = _tool_events(captured)
-        return finish_trace(
-            _failure_trace(
-                candidate,
-                model_id,
-                case,
-                "timeout",
-                _format_exception(err, timeout=config.model_timeout),
-                diagnostic=True,
-                elapsed=perf_counter() - started,
-                tool_events=tool_events,
-                messages=captured,
-                recorded_actions=_recorded_actions_from_tool_events(tool_events, proposed_actions),
-                conversation_id=_conversation_id(captured),
-                reasoning_effort=config.reasoning_effort,
-                temperature=config.temperature,
-                on_scoring=emit_phase,
-            )
-        )
-    except UnexpectedModelBehavior as err:
-        tool_events = _tool_events(captured)
-        return finish_trace(
-            _failure_trace(
-                candidate,
-                model_id,
-                case,
-                "model_protocol_error",
-                _format_exception(err),
-                diagnostic=True,
-                elapsed=perf_counter() - started,
-                tool_events=tool_events,
-                messages=captured,
-                recorded_actions=_recorded_actions_from_tool_events(tool_events, proposed_actions),
-                conversation_id=_conversation_id(captured),
-                reasoning_effort=config.reasoning_effort,
-                temperature=config.temperature,
-                on_scoring=emit_phase,
-            )
-        )
     except Exception as err:  # noqa: BLE001 - provider/harness failures are isolated to the current matrix cell.
+        captured_failure = _capture_failure(
+            err, timeout=config.model_timeout if isinstance(err, TimeoutError) else None
+        )
         tool_events = _tool_events(captured)
         return finish_trace(
             _failure_trace(
                 candidate,
                 model_id,
                 case,
-                "provider_error",
-                _format_exception(err),
+                captured_failure.classification,
+                captured_failure.detail,
                 diagnostic=True,
+                execution_error=captured_failure.execution_error,
                 elapsed=perf_counter() - started,
                 tool_events=tool_events,
                 messages=captured,
@@ -244,10 +222,11 @@ def _failure_trace(
     candidate: PromptCandidate,
     model_id: str,
     case: EvalCase,
-    failure: str,
+    failure: FailureClassification,
     feedback: str,
     *,
     diagnostic: bool,
+    execution_error: ExecutionError | None = None,
     elapsed: float | None = None,
     tool_events: tuple[ToolEvent, ...] = (),
     messages: Sequence[object] = (),
@@ -288,6 +267,7 @@ def _failure_trace(
             cap_exhausted=is_cap_exhausted,
         ),
         provider_error=feedback if diagnostic else None,
+        execution_error=execution_error if diagnostic else None,
         conversation_id=conversation_id,
         user_request=case.user_request,
         reasoning_effort=reasoning_effort,
@@ -311,11 +291,168 @@ def _observe_stream_phase(event: object, emit_phase: PhaseEmitter) -> None:
             emit_phase("responding")
 
 
+def _capture_failure(err: BaseException, *, timeout: float | None = None) -> _CapturedFailure:
+    """Return the typed classification, structured metadata, and raw traceback for one failure."""
+    source: BaseException
+    # Branch boundary: an actual timeout remains a timeout even if Python retained unrelated context.
+    if isinstance(err, TimeoutError):
+        classification: FailureClassification = "timeout"
+        source = err
+    elif isinstance(err, ModelHTTPError):
+        classification = _classify_http_error(err)
+        source = err
+    elif isinstance(err, UnexpectedModelBehavior):
+        classification = "model_protocol_error"
+        source = err
+    else:
+        http_error = _find_model_http_error(err)
+        if http_error is not None:
+            classification = _classify_http_error(http_error)
+            source = http_error
+        elif _contains_exception(err, TimeoutError):
+            classification = "timeout"
+            source = _find_exception(err, TimeoutError) or err
+        elif _contains_exception(err, UnexpectedModelBehavior):
+            classification = "model_protocol_error"
+            source = _find_exception(err, UnexpectedModelBehavior) or err
+        else:
+            classification = "provider_error"
+            source = err
+
+    return _CapturedFailure(
+        classification=classification,
+        execution_error=_execution_error(source, timeout=timeout),
+        detail=_traceback_detail(err, timeout=timeout),
+    )
+
+
+def _classify_http_error(err: ModelHTTPError) -> FailureClassification:
+    """Classify provider HTTP errors from structured status and body fields."""
+    if err.status_code == 429 or _http_body_has_token_quota(err.body):
+        return "rate_limit"
+    return "provider_error"
+
+
+def _execution_error(err: BaseException, *, timeout: float | None = None) -> ExecutionError:
+    """Build JSON-compatible structured error metadata from the selected source exception."""
+    message = _exception_message(err, timeout=timeout)
+    if isinstance(err, ModelHTTPError):
+        code, error_type = _http_error_code_and_type(err.body)
+        return ExecutionError(
+            exception_type=type(err).__name__,
+            message=message,
+            status_code=err.status_code,
+            provider_code=_http_error_provider_code(err.body) or code or error_type,
+            provider_model=err.model_name,
+            provider_detail=_provider_detail(err.body),
+        )
+    return ExecutionError(exception_type=type(err).__name__, message=message)
+
+
+def _http_error_code_and_type(body: object | None) -> tuple[str | None, str | None]:
+    """Return nonempty provider error code/type values from mapping-shaped HTTP bodies."""
+    candidates = _http_error_code_type_candidates(body)
+    return candidates[0] if candidates else (None, None)
+
+
+def _http_error_provider_code(body: object | None) -> str | None:
+    """Return the diagnostic provider code, surfacing quota when it drives classification."""
+    for code, error_type in _http_error_code_type_candidates(body):
+        if code == _TOKEN_QUOTA_EXCEEDED or error_type == _TOKEN_QUOTA_EXCEEDED:
+            return _TOKEN_QUOTA_EXCEEDED
+    code, error_type = _http_error_code_and_type(body)
+    return code or error_type
+
+
+def _http_body_has_token_quota(body: object | None) -> bool:
+    """Return whether any provider code/type slot carries the token quota indicator."""
+    return any(
+        code == _TOKEN_QUOTA_EXCEEDED or error_type == _TOKEN_QUOTA_EXCEEDED
+        for code, error_type in _http_error_code_type_candidates(body)
+    )
+
+
+def _http_error_code_type_candidates(body: object | None) -> tuple[tuple[str | None, str | None], ...]:
+    """Return direct provider code/type first, then nested error code/type."""
+    if not isinstance(body, Mapping):
+        return ()
+
+    candidates: list[tuple[str | None, str | None]] = []
+    direct_code = _nonempty_string(body.get("code"))
+    direct_type = _nonempty_string(body.get("type"))
+    if direct_code is not None or direct_type is not None:
+        candidates.append((direct_code, direct_type))
+
+    raw_error = body.get("error")
+    if isinstance(raw_error, Mapping):
+        nested_code = _nonempty_string(raw_error.get("code"))
+        nested_type = _nonempty_string(raw_error.get("type"))
+        if nested_code is not None or nested_type is not None:
+            candidates.append((nested_code, nested_type))
+    return tuple(candidates)
+
+
+def _nonempty_string(value: object) -> str | None:
+    """Return a provider-supplied string only when it carries a value."""
+    return value if isinstance(value, str) and value else None
+
+
+def _provider_detail(body: object | None) -> str | None:
+    """Preserve provider HTTP bodies in a JSON-compatible diagnostic string."""
+    if body is None:
+        return None
+    if isinstance(body, str):
+        return body
+    try:
+        return json.dumps(body, indent=2, sort_keys=True, default=repr)
+    except TypeError, ValueError:
+        return repr(body)
+
+
+def _traceback_detail(err: BaseException, *, timeout: float | None = None) -> str:
+    """Return a full chained traceback, retaining timeout metadata when present."""
+    detail = "".join(traceback.format_exception(err)).rstrip()
+    if timeout is not None:
+        detail = f"{detail}\nafter={timeout:g}s"
+    return detail
+
+
+def _find_model_http_error(err: BaseException) -> ModelHTTPError | None:
+    """Return the first Pydantic AI HTTP error in the chained exception graph."""
+    return _find_exception(err, ModelHTTPError)
+
+
+def _find_exception[ExceptionT: BaseException](
+    err: BaseException, exception_type: type[ExceptionT]
+) -> ExceptionT | None:
+    """Return the first matching exception while avoiding chained-exception cycles."""
+    for current in _iter_exception_chain(err):
+        if isinstance(current, exception_type):
+            return current
+    return None
+
+
+def _contains_exception(err: BaseException, exception_type: type[BaseException]) -> bool:
+    """Return whether any chained exception has the requested type."""
+    return _find_exception(err, exception_type) is not None
+
+
+def _iter_exception_chain(err: BaseException) -> Sequence[BaseException]:
+    """Return the root/cause/context chain without following cycles indefinitely."""
+    chain: list[BaseException] = []
+    seen: set[int] = set()
+    current: BaseException | None = err
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        chain.append(current)
+        # Branch boundary: explicit causes supersede implicit contexts in Python's displayed chain.
+        current = current.__cause__ or current.__context__
+    return tuple(chain)
+
+
 def _format_exception(err: BaseException, *, timeout: float | None = None) -> str:
     """Format provider, timeout, and limit failures as compact one-line feedback."""
-    message = _exception_message(err)
-    if timeout is not None:
-        message = f"{message} after={timeout:g}s"
+    message = _exception_message(err, timeout=timeout)
     formatted = f"{type(err).__name__}: {message}"
     cause_chain = _format_cause_chain(err)
     if cause_chain:
@@ -337,10 +474,16 @@ def _format_cause_chain(err: BaseException) -> str:
     return " <- ".join(chain)
 
 
-def _exception_message(err: BaseException) -> str:
+def _exception_message(err: BaseException, *, timeout: float | None = None) -> str:
     """Return a non-empty one-line exception message."""
     message = " ".join(str(err).split())
-    return message or "timed out" if isinstance(err, TimeoutError) else message or "no detail"
+    if isinstance(err, TimeoutError):
+        message = message or "timed out"
+    else:
+        message = message or "no detail"
+    if timeout is not None:
+        return f"{message} after={timeout:g}s"
+    return message
 
 
 def _select_cases(case_filters: list[str] | None, home_filters: list[str] | None) -> list[EvalCase]:
@@ -419,7 +562,7 @@ def _diagnostics(
     *,
     elapsed: float | None,
     usage: dict[str, int | float | None] | None,
-    failure: str | None,
+    failure: FailureClassification | None,
     cap_exhausted: bool = False,
 ) -> EvalDiagnostics:
     """Build diagnostics without turning attempts, timing, or usage into score."""

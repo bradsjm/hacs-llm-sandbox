@@ -1,6 +1,7 @@
 from io import StringIO
 from pathlib import Path
 from typing import cast
+import unicodedata
 
 from llm_sandbox_evals.config import EvalConfig
 from llm_sandbox_evals.experiment import LanePhaseEvent, MatrixCellRef, MatrixProgressEvent
@@ -11,13 +12,21 @@ from llm_sandbox_evals.schema import (
     CaseOutcome,
     CaseTrace,
     EvalDiagnostics,
+    ExecutionError,
     RequiredAction,
     ToolEvent,
 )
-from llm_sandbox_evals.terminal import MatrixTerminalReporter, _duration, _left_ellipsis, _token_total
+from llm_sandbox_evals.terminal import (
+    MatrixTerminalReporter,
+    _duration,
+    _left_ellipsis,
+    _token_total,
+    render_durable_final,
+)
 import pytest
 from rich.console import Console
 from rich.live import Live
+from rich.panel import Panel
 from rich.table import Table
 
 
@@ -46,6 +55,8 @@ def _cell(case_id: str = "case", reasoning_effort: str | None = None) -> MatrixC
 
 def _trace(
     *,
+    case_id: str = "case",
+    candidate_id: str = "baseline",
     state: str = "correct",
     action_reason: str | None = "ok",
     failure: str | None = None,
@@ -56,10 +67,12 @@ def _trace(
     answer: str | None = None,
     model_id: str = "stub",
     reasoning_effort: str | None = None,
+    provider_error: str | None = None,
+    execution_error: ExecutionError | None = None,
 ) -> CaseTrace:
     return CaseTrace(
-        case_id="case",
-        candidate_id="baseline",
+        case_id=case_id,
+        candidate_id=candidate_id,
         model_id=model_id,
         reasoning_effort=reasoning_effort,
         answer=answer,
@@ -80,6 +93,8 @@ def _trace(
             failure=failure,
             elapsed_seconds=elapsed,
         ),
+        provider_error=provider_error,
+        execution_error=execution_error,
         user_request=request,
     )
 
@@ -95,6 +110,36 @@ def _feed(reporter: MatrixTerminalReporter, *cells: tuple[MatrixCellRef, CaseTra
 
 def _lane_column_metadata(table: Table) -> list[tuple[str, int | None, int | None]]:
     return [(str(column.header), column.width, column.ratio) for column in table.columns]
+
+
+def _normalized_rich_text(output: str) -> str:
+    without_borders = "".join(
+        " " if unicodedata.name(character, "").startswith("BOX DRAWINGS") else character for character in output
+    )
+    return " ".join(without_borders.split())
+
+
+def _assert_actionable_operational_issue_output(output: str, *, detail_fragments: tuple[str, ...]) -> None:
+    normalized = _normalized_rich_text(output)
+    assert "Operational issues" in normalized
+    assert "#" in normalized
+    assert "Cause" in normalized
+    assert "Variant" in normalized
+    assert "Cells" in normalized
+    assert "Exception" in normalized
+    assert "HTTP / provider code" in normalized
+    assert "Detail" in normalized
+    assert "2" in normalized.split()
+    assert "rate_limit" in normalized
+    assert "cerebras-llama-3.3" in normalized
+    assert "429" in normalized
+    assert "token_quota_exceeded" in normalized
+    assert "alpha/case-a" in normalized
+    assert "zeta/case-z" in normalized
+    for fragment in detail_fragments:
+        assert fragment in normalized
+    assert "…" not in output
+    assert "..." not in output
 
 
 class _LiveRecorder:
@@ -161,6 +206,22 @@ def test_recent_table_has_a_single_result_column_with_state_and_cause() -> None:
     assert "action_mismatch" not in output
 
 
+def test_recent_table_renders_newest_result_at_bottom() -> None:
+    reporter = _reporter(human=True)
+    _feed(
+        reporter,
+        (_cell("case-oldest"), _trace(case_id="case-oldest", request="oldest request")),
+        (_cell("case-middle"), _trace(case_id="case-middle", request="middle request")),
+        (_cell("case-newest"), _trace(case_id="case-newest", request="newest request")),
+    )
+
+    console = Console(width=160, force_terminal=False, record=True)
+    console.print(reporter._recent_table())
+    output = console.export_text()
+
+    assert output.index("oldest request") < output.index("middle request") < output.index("newest request")
+
+
 def test_lanes_show_variant_and_tool_cap_without_phase() -> None:
     reporter = _reporter(human=True)
     reporter._state.total = 1
@@ -177,6 +238,19 @@ def test_lanes_show_variant_and_tool_cap_without_phase() -> None:
     output = console.export_text()
     assert "stub(high)" in output
     assert "0 / 10" in output
+
+
+def test_dynamic_live_frame_preserves_spinner_between_refreshes() -> None:
+    reporter = _reporter(human=True)
+    reporter._state.total = 1
+    reporter.handle(MatrixProgressEvent("cell_started", cell=_cell(), request="Turn on light"))
+
+    reporter._lanes_table()
+    first_spinner = reporter._spinners[_cell()]
+    reporter._lanes_table()
+    second_spinner = reporter._spinners[_cell()]
+
+    assert first_spinner is second_spinner
 
 
 @pytest.mark.parametrize("width", [pytest.param(80, id="narrow"), pytest.param(102, id="wide")])
@@ -339,6 +413,187 @@ def test_narrow_activity_renders_full_safe_tool_labels(phase: LanePhase, expecte
     assert "…" not in output
 
 
+def test_operational_issues_group_rate_limits_with_full_actionable_detail() -> None:
+    detail_start = (
+        "Provider payload: Daily token quota exceeded for the Cerebras deployment. "
+        "The request was rejected before model execution,"
+    )
+    detail_end = (
+        "and the account must wait for the quota window to reset before retrying this evaluation cell. "
+        "No partial response was produced by the provider."
+    )
+    detail = f"{detail_start} {detail_end}"
+    detail_fragments = (
+        "Provider payload: Daily token quota exceeded for the Cerebras deployment.",
+        "The request was rejected before model",
+        "execution,",
+        "the account must wait for the quota window to reset before retrying this evaluation cell.",
+        "response was produced by the provider.",
+    )
+    execution_error = ExecutionError(
+        exception_type="ModelHTTPError",
+        message="Provider rate limit exceeded while starting the model request",
+        status_code=429,
+        provider_code="token_quota_exceeded",
+        provider_model="cerebras-llama-3.3",
+        provider_detail=detail,
+    )
+    reporter = _reporter(human=True)
+    _feed(
+        reporter,
+        (
+            MatrixCellRef("case-z", "zeta", "cerebras", "home_minimal"),
+            _trace(
+                case_id="case-z",
+                candidate_id="zeta",
+                state="incomplete",
+                action_reason=None,
+                failure="rate_limit",
+                model_id="cerebras",
+                request="quota case",
+                execution_error=execution_error,
+            ),
+        ),
+        (
+            MatrixCellRef("case-a", "alpha", "cerebras", "home_minimal"),
+            _trace(
+                case_id="case-a",
+                candidate_id="alpha",
+                state="incomplete",
+                action_reason=None,
+                failure="rate_limit",
+                model_id="cerebras",
+                request="quota case",
+                execution_error=execution_error,
+            ),
+        ),
+    )
+
+    groups = reporter.state.operational_issue_groups
+    assert len(groups) == 1
+    assert groups[0].count == 2
+    assert groups[0].cells == ("alpha/case-a", "zeta/case-z")
+    assert groups[0].detail == detail
+
+    frame = reporter._render()
+    issues_panel = next(renderable for renderable in frame.renderables if isinstance(renderable, Panel))
+    assert issues_panel.expand is True
+    live_console = Console(width=240, force_terminal=False, record=True)
+    live_console.print(issues_panel)
+    _assert_actionable_operational_issue_output(live_console.export_text(), detail_fragments=detail_fragments)
+
+    durable_console = Console(width=240, force_terminal=False, record=True)
+    durable_console.print(
+        render_durable_final(reporter.state, run_dir="runs/run-1", report_html="runs/run-1/report.html")
+    )
+    _assert_actionable_operational_issue_output(durable_console.export_text(), detail_fragments=detail_fragments)
+
+
+def test_operational_issues_empty_state_remains_visible_live_and_durable() -> None:
+    reporter = _reporter(human=True)
+    live_console = Console(width=160, force_terminal=False, record=True)
+    live_console.print(reporter._render())
+    live_output = _normalized_rich_text(live_console.export_text())
+
+    durable_console = Console(width=160, force_terminal=False, record=True)
+    durable_console.print(
+        render_durable_final(reporter.state, run_dir="runs/run-1", report_html="runs/run-1/report.html")
+    )
+    durable_output = _normalized_rich_text(durable_console.export_text())
+
+    assert "Operational issues" in live_output
+    assert "None" in live_output
+    assert "Operational issues" in durable_output
+    assert "None" in durable_output
+
+
+def test_operational_issues_render_provider_markup_as_literal_text_live_and_durable() -> None:
+    detail = "Provider payload [bold]literal-detail[/bold] keeps [unterminated as literal text."
+    provider_code = "[bold]literal-code[/bold]"
+    provider_model = "[/red]"
+    reporter = _reporter(human=True)
+    _feed(
+        reporter,
+        (
+            MatrixCellRef("literal-markup", "baseline", "cerebras", "home_minimal"),
+            _trace(
+                case_id="literal-markup",
+                state="incomplete",
+                action_reason=None,
+                failure="rate_limit",
+                model_id="cerebras",
+                request="literal markup",
+                execution_error=ExecutionError(
+                    exception_type="ModelHTTPError",
+                    message="Provider rejected literal markup payload",
+                    status_code=429,
+                    provider_code=provider_code,
+                    provider_model=provider_model,
+                    provider_detail=detail,
+                ),
+            ),
+        ),
+    )
+
+    live_console = Console(width=320, force_terminal=False, record=True)
+    live_console.print(reporter._render())
+    live_output = _normalized_rich_text(live_console.export_text())
+
+    durable_console = Console(width=320, force_terminal=False, record=True)
+    durable_console.print(
+        render_durable_final(reporter.state, run_dir="runs/run-1", report_html="runs/run-1/report.html")
+    )
+    durable_output = _normalized_rich_text(durable_console.export_text())
+
+    assert detail in live_output
+    assert provider_code in live_output
+    assert provider_model in live_output
+    assert detail in durable_output
+    assert provider_code in durable_output
+    assert provider_model in durable_output
+
+
+def test_reporter_constructs_live_with_visible_vertical_overflow(monkeypatch: pytest.MonkeyPatch) -> None:
+    constructor_kwargs: dict[str, object] = {}
+    lifecycle: list[str] = []
+    live_renderables: list[object] = []
+    current_time = 100.0
+
+    class _FakeLive:
+        def __init__(self, renderable: object, **kwargs: object) -> None:
+            live_renderables.append(renderable)
+            constructor_kwargs.update(kwargs)
+
+        def start(self) -> None:
+            lifecycle.append("start")
+
+        def stop(self) -> None:
+            lifecycle.append("stop")
+
+    monkeypatch.setattr("llm_sandbox_evals.terminal.Live", _FakeLive)
+    monkeypatch.setattr("llm_sandbox_evals.terminal.perf_counter", lambda: current_time)
+    reporter = _reporter(human=True)
+    reporter._state.started_at = 100.0
+    reporter._console = Console(width=160, height=24, force_terminal=False, file=StringIO())
+
+    with reporter:
+        assert constructor_kwargs["vertical_overflow"] == "visible"
+        assert constructor_kwargs["refresh_per_second"] == 24
+        assert lifecycle == ["start"]
+
+    assert lifecycle == ["start", "stop"]
+    assert live_renderables
+
+    first_frame = Console(width=160, force_terminal=False, record=True)
+    first_frame.print(live_renderables[0])
+    current_time = 102.4
+    second_frame = Console(width=160, force_terminal=False, record=True)
+    second_frame.print(live_renderables[0])
+
+    assert "Elapsed 0.0s" in first_frame.export_text()
+    assert "Elapsed 2.4s" in second_frame.export_text()
+
+
 def test_machine_phase_events_produce_no_terminal_output() -> None:
     stream = StringIO()
     reporter = _reporter(human=False)
@@ -381,22 +636,41 @@ def test_machine_events_emit_stable_kv_without_raw_payload() -> None:
     reporter = _reporter(human=False)
     reporter._console = stream
     cell = _cell()
-    trace = _trace(state="incomplete", action_reason=None, failure="timeout", request="secret request body")
+    trace = _trace(
+        state="incomplete",
+        action_reason=None,
+        failure="rate_limit",
+        request="secret request body",
+        provider_error="Traceback (most recent call last): raw-traceback-sensitive",
+        execution_error=ExecutionError(
+            exception_type="ModelHTTPError",
+            message="provider-sensitive-message",
+            status_code=429,
+            provider_code="token_quota_exceeded",
+            provider_model="cerebras-llama-3.3",
+            provider_detail="provider-sensitive-body",
+        ),
+    )
 
     reporter.handle(MatrixProgressEvent("matrix_started", total=1))
     reporter.handle(MatrixProgressEvent("cell_started", cell=cell, request="secret request body"))
     reporter.handle(MatrixProgressEvent("cell_finished", cell=cell, trace=trace, completion_index=1, total=1))
 
     output = output_buffer.getvalue()
-    assert "matrix_started total=1" in output
-    assert "cell_finished index=1 result=incomplete·timeout" in output
-    # Redirected output stays deterministic KV with no raw request text.
+    assert output.splitlines() == [
+        "matrix_started total=1",
+        "cell_finished index=1 result=incomplete·rate_limit",
+    ]
+    # Redirected output stays deterministic KV with no diagnostic or model-facing content.
+    assert "provider-sensitive-body" not in output
+    assert "provider-sensitive-message" not in output
+    assert "raw-traceback-sensitive" not in output
     assert "secret request body" not in output
+    assert "secret-tool-arg" not in output
+    assert "payload" not in output
 
 
 def test_durable_final_emits_counts_and_artifact_path_once() -> None:
-    from llm_sandbox_evals.terminal import render_durable_final
-
     reporter = _reporter(human=True)
     _feed(reporter, (_cell(), _trace(state="incorrect", action_reason="wrong_target", tool_calls=2)))
 

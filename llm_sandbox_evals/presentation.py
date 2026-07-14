@@ -94,6 +94,22 @@ class PresentationCell:
 
 
 @dataclass(frozen=True, slots=True)
+class OperationalIssueGroup:
+    """One deterministic operational-failure row shared by runtime and reports."""
+
+    count: int
+    cause: str
+    variant: str
+    cells: tuple[str, ...]
+    exception_type: str
+    status_code: int | None
+    provider_code: str | None
+    provider_model: str | None
+    message: str | None
+    detail: str
+
+
+@dataclass(frozen=True, slots=True)
 class PairAggregate:
     """Candidate by resolved-variant aggregate for compact comparison views."""
 
@@ -105,6 +121,19 @@ class PairAggregate:
     mean_elapsed: float
     total_tokens: float | None
     total_cost: float | None
+
+
+type _OperationalIssueKey = tuple[
+    str,
+    str,
+    str,
+    int | None,
+    str | None,
+    str | None,
+    str | None,
+    str | None,
+    str | None,
+]
 
 
 def pair_aggregates(cells: Iterable[PresentationCell]) -> tuple[PairAggregate, ...]:
@@ -142,6 +171,84 @@ def pair_aggregates(cells: Iterable[PresentationCell]) -> tuple[PairAggregate, .
             )
         )
     return tuple(aggregates)
+
+
+def operational_issue_groups(cells: Iterable[PresentationCell]) -> tuple[OperationalIssueGroup, ...]:
+    """Group incomplete cells by variant, cause, and structured operational identity."""
+    grouped: dict[_OperationalIssueKey, list[PresentationCell]] = {}
+    for cell in cells:
+        trace = cell.trace
+        # Branch boundary: cap exhaustion is a scored outcome, not an incomplete operational issue.
+        if trace.outcome.state != "incomplete" or trace.diagnostics.cap_exhausted:
+            continue
+        execution_error = trace.execution_error
+        exception_type = execution_error.exception_type if execution_error is not None else "unknown"
+        status_code = execution_error.status_code if execution_error is not None else None
+        provider_code = execution_error.provider_code if execution_error is not None else None
+        provider_model = execution_error.provider_model if execution_error is not None else None
+        message = execution_error.message if execution_error is not None else None
+        provider_detail = execution_error.provider_detail if execution_error is not None else None
+        provider_error = trace.provider_error
+        key = (
+            cell.variant,
+            effective_cause(trace),
+            exception_type,
+            status_code,
+            provider_code,
+            provider_model,
+            message,
+            provider_detail,
+            provider_error,
+        )
+        grouped.setdefault(key, []).append(cell)
+
+    groups: list[OperationalIssueGroup] = []
+    for (
+        variant,
+        cause,
+        exception_type,
+        status_code,
+        provider_code,
+        provider_model,
+        message,
+        provider_detail,
+        provider_error,
+    ), values in grouped.items():
+        ordered_values = tuple(sorted(values, key=lambda cell: (cell.candidate_id, cell.case_id)))
+        identities = tuple(f"{cell.candidate_id}/{cell.case_id}" for cell in ordered_values)
+        detail = provider_error or provider_detail or message or "No error detail"
+        groups.append(
+            OperationalIssueGroup(
+                count=len(values),
+                cause=cause,
+                variant=variant,
+                cells=identities,
+                exception_type=exception_type,
+                status_code=status_code,
+                provider_code=provider_code,
+                provider_model=provider_model,
+                message=message,
+                detail=detail,
+            )
+        )
+    return tuple(
+        sorted(
+            groups,
+            key=lambda group: (
+                -group.count,
+                group.cause,
+                group.variant,
+                group.exception_type,
+                group.status_code is None,
+                group.status_code or 0,
+                group.provider_code or "",
+                group.provider_model or "",
+                group.message or "",
+                group.detail,
+                group.cells,
+            ),
+        )
+    )
 
 
 def _metric_or_usage(cell: PresentationCell, name: str) -> float | None:
@@ -232,9 +339,15 @@ class PresentationState:
     @property
     def operational_issues(self) -> Counter[str]:
         """Group incomplete cells by their true operational cause."""
-        return Counter(
-            effective_cause(cell.trace) for cell in self.completed if cell.trace.outcome.state == "incomplete"
-        )
+        counts: Counter[str] = Counter()
+        for group in self.operational_issue_groups:
+            counts[group.cause] += group.count
+        return counts
+
+    @property
+    def operational_issue_groups(self) -> tuple[OperationalIssueGroup, ...]:
+        """Return deterministic operational-failure rows for completed cells."""
+        return operational_issue_groups(self.completed)
 
     @property
     def aggregates(self) -> tuple[PairAggregate, ...]:
@@ -270,7 +383,15 @@ class ReportPresentationModel:
     @property
     def operational_issues(self) -> Counter[str]:
         """Group incomplete report cells by their effective cause."""
-        return Counter(effective_cause(cell.trace) for cell in self.cells if cell.trace.outcome.state == "incomplete")
+        counts: Counter[str] = Counter()
+        for group in self.operational_issue_groups:
+            counts[group.cause] += group.count
+        return counts
+
+    @property
+    def operational_issue_groups(self) -> tuple[OperationalIssueGroup, ...]:
+        """Return deterministic operational-failure rows for report cells."""
+        return operational_issue_groups(self.cells)
 
     @property
     def aggregates(self) -> tuple[PairAggregate, ...]:

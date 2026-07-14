@@ -29,6 +29,9 @@ Assistant fixtures. It evaluates only successful service invocation effects.
 - Raw and rejected records are diagnostics only. Action results preserve
   normalized observed effects, one-to-one dimension comparisons, unexpected
   actions, and stable reason codes without weakening action matching.
+- Provider HTTP 429 responses and provider bodies containing
+  `token_quota_exceeded` classify incomplete execution failures as `rate_limit`.
+  Structured execution metadata is additive diagnostic context only.
 - Traces and reports use scoring version 7. Version 6 and older artifacts are
   rejected as legacy; there is no compatibility decoder or rescoring path.
 
@@ -109,6 +112,14 @@ checks and uses `home_full` for the corpus and its complete 288-entity fixture.
 - Create an atomic `manifest.json` before model calls. A cancelled or failed run
   writes the typed `partial.json` journal, which is explicitly not a report and
   has no HTML/resume path.
+- Completed report folders contain `report.json`, `errors.log`, and
+  `report.html` alongside the manifest. `errors.log` is UTF-8 NDJSON with one
+  record per incomplete execution error in report order, including repeats and
+  full error/provider detail; it is zero bytes when no execution errors occur
+  and is produced only with completed reports. Completed-report writing
+  atomically replaces `errors.log` before atomically replacing `report.json`, so
+  a newly completed `report.json` has its companion log without a cross-file
+  transaction guarantee.
 - Interactive output is Rich on stderr; redirected or `--machine` output is
   deterministic stdout KV. Non-zero exits have empty stdout. Every agent run
   uses native Pydantic AI `run_stream_events`, with no streaming flag or
@@ -122,7 +133,10 @@ checks and uses `home_full` for the corpus and its complete 288-entity fixture.
   label/tool-name only and is not persisted in reports or artifacts. Interactive
   Activity and machine output do not render reasoning content, model responses,
   tool arguments, or tool results. Existing durable reports retain their
-  established `CaseTrace` answer and tool-diagnostics contract.
+  established `CaseTrace` answer and tool-diagnostics contract. Human live and
+  persistent durable final output render `Operational issues` as a full-width
+  actionable table; exact duplicates group for display with affected cells,
+  while `errors.log` remains per-trace and machine output remains payload-free.
 
 Production read tools may remain registered because they are part of the product
 surface. Their eval-specific scoring and stub routes must not return.
