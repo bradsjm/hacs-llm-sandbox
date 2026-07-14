@@ -1,7 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-uv run --group dev --group evals ruff check llm_sandbox_evals tests/llm_sandbox_evals && \
-uv run --group dev --group evals mypy llm_sandbox_evals && \
-uv run --group dev --group evals pytest tests/llm_sandbox_evals && \
-uv run --group dev --group evals python -m llm_sandbox_evals eval --models stub
+uv run --group dev --group evals ruff check llm_sandbox_evals tests/llm_sandbox_evals
+uv run --group dev --group evals mypy llm_sandbox_evals
+uv run --group dev --group evals pytest tests/llm_sandbox_evals
+
+# Run the offline stub smoke eval in a temporary runs directory so a routine
+# successful check leaves no report artifacts behind. On failure the directory
+# is retained and its path is printed so the report remains available for diagnosis.
+stub_runs_dir=$(mktemp -d)
+if uv run --group dev --group evals python -m llm_sandbox_evals eval --models stub --runs-dir "$stub_runs_dir"; then
+  rm -rf "$stub_runs_dir"
+else
+  status=$?
+  echo "eval stub artifacts retained for diagnosis: $stub_runs_dir" >&2
+  exit "$status"
+fi
