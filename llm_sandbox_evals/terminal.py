@@ -28,11 +28,19 @@ _PERCENT = "#b8a1e8"
 _RECENT_RESULTS = 10
 _OPERATIONAL_DETAIL_LIMIT = 320
 _OPERATIONAL_CELL_PREVIEW = 3
-# Live refresh halves auto-refresh render churn vs 24 fps with no perceptible animation cost:
-# Rich's dots spinner is time-based (advances identically regardless of refresh rate), and 12 fps
-# clears the 0.1s elapsed-timer resolution (10 Hz) with margin while event-driven updates bypass
-# this cadence entirely via Live.update(refresh=True).
-_LIVE_REFRESH_PER_SECOND = 12
+# Live timers display whole seconds, so 4 Hz clears the 1 Hz second-transition resolution with
+# margin. Rich Live (non-screen mode) erases and re-prints the entire frame on every refresh —
+# there is no cell-level diffing — so a lower rate directly reduces full-frame repaint flicker.
+# The dots spinner's speed is scaled to match this rate (see _SPINNER_SPEED) so it advances one
+# frame per refresh instead of jumping. Event-driven updates bypass this cadence via
+# Live.update(refresh=True) but sample the same time-based spinner frame, so they stay smooth.
+_LIVE_REFRESH_PER_SECOND = 4
+# Rich "dots" spinner: 10 frames at 80 ms interval (12.5 fps native). See rich._spinners.SPINNERS.
+_DOTS_INTERVAL_MS = 80
+# Scale the spinner's effective frame rate to the Live refresh rate so each refresh advances
+# exactly one frame. At 4 Hz this yields a smooth 4 fps animation (2.5 s per 10-frame cycle)
+# instead of the jerky ~3-frame jumps that sampling a 12.5 fps animation at 4 Hz would produce.
+_SPINNER_SPEED = _LIVE_REFRESH_PER_SECOND * _DOTS_INTERVAL_MS / 1000
 
 # Fixed lane-table column widths (in cells). Named so the responsive breakpoint is derived from
 # the real budget rather than a magic number.
@@ -285,7 +293,7 @@ class MatrixTerminalReporter:
             f"    Scored {counts.scored}  Quality {counts.quality_rate:.1%}  Coverage {counts.coverage_rate:.1%}",
             style="bold",
         )
-        line.append(f"    Elapsed {_duration(perf_counter() - self._state.started_at)}", style=_WARNING)
+        line.append(f"    Elapsed {_live_duration(perf_counter() - self._state.started_at)}", style=_WARNING)
         return line
 
     def _overall_progress(self) -> Progress:
@@ -331,7 +339,7 @@ class MatrixTerminalReporter:
             activity_style = _activity_style(lane.phase) if activity else _ACTIVE
             spinner = self._spinners.get(lane.cell)
             if spinner is None:
-                spinner = Spinner("dots", style=activity_style)
+                spinner = Spinner("dots", style=activity_style, speed=_SPINNER_SPEED)
                 self._spinners[lane.cell] = spinner
             else:
                 # Preserve the spinner clock while still reflecting phase color changes.
@@ -351,13 +359,15 @@ class MatrixTerminalReporter:
                 )
             row.extend(
                 (
-                    Text(f"{_duration(perf_counter() - lane.started_at)} / {lane.timeout:g}s"),
+                    Text(f"{_live_duration(perf_counter() - lane.started_at)} / {lane.timeout:g}s"),
                     Text(f"{lane.tools_used} / {lane.max_tool_calls}"),
                 )
             )
             table.add_row(*row)
-        if not self._state.lanes:
-            # Idle placeholder keeps the section height stable; its arity matches the active column set.
+        # Reserve the effective matrix concurrency in rows so the Running section does not shrink
+        # as lanes finish. Before matrix_started the total is unknown, so reserve one safe row.
+        capacity = 1 if self._state.total == 0 else min(self._config.concurrency, self._state.total)
+        for _ in range(max(0, capacity - len(self._state.lanes))):
             placeholder: list[RenderableType] = [Text(" "), Text("—", style="dim")]
             if activity:
                 placeholder.append(Text("—", style="dim"))
@@ -539,3 +549,10 @@ def _duration(seconds: float) -> str:
     """Format monotonic durations compactly."""
     minutes, remaining = divmod(max(0, int(seconds)), 60)
     return f"{minutes}:{remaining:02d}" if minutes else f"{seconds:.1f}s"
+
+
+def _live_duration(seconds: float) -> str:
+    """Format live elapsed durations in whole seconds for stable 4 Hz Live refresh."""
+    whole = max(0, int(seconds))
+    minutes, remaining = divmod(whole, 60)
+    return f"{minutes}:{remaining:02d}" if minutes else f"{whole}s"

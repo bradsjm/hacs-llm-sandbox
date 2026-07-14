@@ -19,9 +19,11 @@ from llm_sandbox_evals.schema import (
 )
 from llm_sandbox_evals.terminal import (
     _LIVE_REFRESH_PER_SECOND,
+    _SPINNER_SPEED,
     MatrixTerminalReporter,
     _duration,
     _left_ellipsis,
+    _live_duration,
     _operational_issue_cells,
     _operational_issue_detail,
     _token_total,
@@ -31,10 +33,11 @@ import pytest
 from rich.console import Console
 from rich.live import Live
 from rich.panel import Panel
+from rich.spinner import Spinner
 from rich.table import Table
 
 
-def _config() -> EvalConfig:
+def _config(*, concurrency: int = 5) -> EvalConfig:
     return EvalConfig(
         models=["stub"],
         candidates=["baseline"],
@@ -44,12 +47,17 @@ def _config() -> EvalConfig:
         runs_dir=Path("runs/eval-test"),
         max_tool_calls=10,
         model_timeout=75.0,
+        concurrency=concurrency,
     )
 
 
-def _reporter(*, human: bool = True, escape_available: bool = True) -> MatrixTerminalReporter:
+def _reporter(*, human: bool = True, escape_available: bool = True, concurrency: int = 5) -> MatrixTerminalReporter:
     return MatrixTerminalReporter(
-        _config(), run_id="run-1", run_dir="runs/run-1", human=human, escape_available=escape_available
+        _config(concurrency=concurrency),
+        run_id="run-1",
+        run_dir="runs/run-1",
+        human=human,
+        escape_available=escape_available,
     )
 
 
@@ -263,6 +271,32 @@ def test_dynamic_live_frame_preserves_spinner_between_refreshes() -> None:
     assert first_spinner is second_spinner
 
 
+def test_spinner_advances_one_frame_per_refresh() -> None:
+    """The dots spinner advances exactly one frame per Live refresh for smooth 4 Hz animation."""
+    interval = 1.0 / _LIVE_REFRESH_PER_SECOND
+    spinner = Spinner("dots", speed=_SPINNER_SPEED)
+    # First render sets start_time; the next render one refresh interval later must advance one frame.
+    frame_at_start = spinner.render(0.0).plain
+    frame_at_next_refresh = spinner.render(interval).plain
+    all_frames = Spinner("dots").frames
+    assert all_frames.index(frame_at_start) + 1 == all_frames.index(frame_at_next_refresh)
+
+
+def test_spinner_survives_activity_phase_change_without_reset() -> None:
+    """A thinking phase enables the Activity column but must not reset the lane's spinner instance."""
+    reporter = _reporter(human=True)
+    reporter._state.total = 1
+    cell = _cell()
+    reporter.handle(MatrixProgressEvent("cell_started", cell=cell, request="Turn on light"))
+    reporter._lanes_table()
+    spinner_before_activity = reporter._spinners[cell]
+    # A real thinking phase flips the sticky Activity column on.
+    reporter.handle_phase(LanePhaseEvent(cell=cell, phase="thinking"))
+    reporter._lanes_table()
+    spinner_after_activity = reporter._spinners[cell]
+    assert spinner_before_activity is spinner_after_activity
+
+
 @pytest.mark.parametrize("width", [pytest.param(80, id="narrow"), pytest.param(102, id="wide")])
 def test_lanes_keep_five_columns_without_activity_for_non_thinking_phases(width: int) -> None:
     reporter = _reporter(human=True)
@@ -390,6 +424,50 @@ def test_activity_idle_placeholder_renders_at_narrow_and_wide_widths(
 
     assert _lane_column_metadata(table) == expected_columns
     assert "Activity" in console.export_text()
+
+
+def test_lanes_table_reserves_one_row_before_matrix_started() -> None:
+    """Before matrix_started, reserve one safe row regardless of configured concurrency."""
+    reporter = _reporter(human=True, concurrency=100)
+    reporter._console = Console(width=80, force_terminal=False, file=StringIO())
+
+    table = reporter._lanes_table()
+
+    assert len(table.rows) == 1
+
+
+@pytest.mark.parametrize(
+    ("concurrency", "total", "active", "finished", "expected_rows", "width"),
+    [
+        pytest.param(5, 2, 1, 0, 2, 160, id="total-below-concurrency-one-active"),
+        pytest.param(5, 2, 1, 1, 2, 160, id="total-below-concurrency-all-finished"),
+        pytest.param(2, 5, 1, 0, 2, 160, id="total-above-concurrency-one-active"),
+        pytest.param(2, 5, 2, 0, 2, 160, id="total-above-concurrency-two-active"),
+        pytest.param(2, 5, 2, 2, 2, 80, id="total-above-concurrency-all-finished-narrow"),
+        pytest.param(3, 3, 2, 0, 3, 160, id="total-equals-concurrency-partial-active"),
+    ],
+)
+def test_lanes_table_reserves_capacity_after_matrix_started(
+    concurrency: int, total: int, active: int, finished: int, expected_rows: int, width: int
+) -> None:
+    """Running section always has min(concurrency, total) rows: active lanes plus placeholders."""
+    reporter = _reporter(human=True, concurrency=concurrency)
+    reporter._console = Console(width=width, force_terminal=False, file=StringIO())
+    reporter.handle(MatrixProgressEvent("matrix_started", total=total))
+    cells = [_cell(f"case-{index}") for index in range(active)]
+    for cell in cells:
+        reporter.handle(MatrixProgressEvent("cell_started", cell=cell, request="light", total=total))
+    for index, cell in enumerate(cells[:finished], start=1):
+        reporter.handle(
+            MatrixProgressEvent("cell_finished", cell=cell, trace=_trace(), completion_index=index, total=total)
+        )
+
+    table = reporter._lanes_table()
+    assert len(table.rows) == expected_rows
+
+    # Render to verify the full placeholder count renders without a column-arity error.
+    console = Console(width=width, force_terminal=False, record=True)
+    console.print(table)
 
 
 @pytest.mark.parametrize(
@@ -675,6 +753,7 @@ def test_reporter_constructs_live_with_visible_vertical_overflow(monkeypatch: py
     with reporter:
         assert constructor_kwargs["vertical_overflow"] == "visible"
         assert constructor_kwargs["refresh_per_second"] == _LIVE_REFRESH_PER_SECOND
+        assert constructor_kwargs["refresh_per_second"] == 4
         assert lifecycle == ["start"]
 
     assert lifecycle == ["start", "stop"]
@@ -686,8 +765,13 @@ def test_reporter_constructs_live_with_visible_vertical_overflow(monkeypatch: py
     second_frame = Console(width=160, force_terminal=False, record=True)
     second_frame.print(live_renderables[0])
 
-    assert "Elapsed 0.0s" in first_frame.export_text()
-    assert "Elapsed 2.4s" in second_frame.export_text()
+    first_output = first_frame.export_text()
+    second_output = second_frame.export_text()
+    assert "Elapsed 0s" in first_output
+    assert "Elapsed 2s" in second_output
+    # Live timers floor to whole seconds; the decimal representation must not appear.
+    assert "0.0s" not in first_output
+    assert "2.4s" not in second_output
 
 
 def test_machine_phase_events_produce_no_terminal_output() -> None:
@@ -847,6 +931,40 @@ def test_token_total_uses_rounded_thousands(tokens: float | None, expected: str)
 )
 def test_duration_is_compact(seconds: float, expected: str) -> None:
     assert _duration(seconds) == expected
+
+
+@pytest.mark.parametrize(
+    ("seconds", "expected"),
+    [
+        pytest.param(0.4, "0s", id="subsecond-floors-to-zero"),
+        pytest.param(2.4, "2s", id="subsecond-floors-to-whole"),
+        pytest.param(10.9, "10s", id="floors-not-rounds"),
+        pytest.param(61.0, "1:01", id="minute"),
+    ],
+)
+def test_live_duration_floors_to_whole_seconds(seconds: float, expected: str) -> None:
+    assert _live_duration(seconds) == expected
+
+
+def test_lanes_table_live_elapsed_displays_whole_seconds(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Active-lane elapsed displays whole seconds, not tenths, matching the 4 Hz Live cadence."""
+    current_time = 100.0
+    monkeypatch.setattr("llm_sandbox_evals.terminal.perf_counter", lambda: current_time)
+    monkeypatch.setattr("llm_sandbox_evals.presentation.perf_counter", lambda: current_time)
+    reporter = _reporter(human=True)
+    reporter._console = Console(width=160, force_terminal=False, file=StringIO())
+    reporter.handle(MatrixProgressEvent("matrix_started", total=1))
+    cell = _cell()
+    reporter.handle(MatrixProgressEvent("cell_started", cell=cell, request="light", total=1))
+
+    current_time = 102.4
+    table = reporter._lanes_table()
+    console = Console(width=160, force_terminal=False, record=True)
+    console.print(table)
+    output = console.export_text()
+
+    assert "2s / 75s" in output
+    assert "2.4s" not in output
 
 
 @pytest.mark.parametrize(
