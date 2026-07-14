@@ -11,7 +11,7 @@
   "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/reference/configuration-options.md",
   "tags": [],
   "version": "current",
-  "lastUpdatedAt": null,
+  "lastUpdatedAt": 1783735834000,
   "frontMatter": {
     "title": "Configuration Options",
     "description": "Current options, defaults, and ranges."

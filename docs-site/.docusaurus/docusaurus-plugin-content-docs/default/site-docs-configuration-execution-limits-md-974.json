@@ -11,7 +11,7 @@
   "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/configuration/execution-limits.md",
   "tags": [],
   "version": "current",
-  "lastUpdatedAt": null,
+  "lastUpdatedAt": 1783689467000,
   "frontMatter": {
     "title": "Execution Limits",
     "description": "Runtime limits for code execution and service calls."

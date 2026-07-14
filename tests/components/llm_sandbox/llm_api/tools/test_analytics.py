@@ -29,7 +29,7 @@ def test_run_analytics_groups_buckets_and_counts_non_numeric_skips() -> None:
 
     result = run_analytics(
         rows,
-        analytics_spec_from_data({"aggregate": {"value": ["mean"]}, "group_by": ["floor_id"], "bucket": "1h"}),
+        analytics_spec_from_data({"value_operations": ["mean"], "group_by": ["floor_id"], "bucket": "1h"}),
         (start, datetime(2026, 1, 1, 2, tzinfo=UTC)),
         snapshot,
     )
@@ -90,6 +90,24 @@ def test_malformed_where_missing_field_is_invalid_input() -> None:
     """Malformed where entries fail validation instead of silently matching every row."""
     with pytest.raises(RecoverableToolError) as err:
         analytics_spec_from_data({"where": [{}]})
+
+    assert err.value.key == "invalid_tool_input"
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        pytest.param({"aggregate": {"value": ["mean"]}}, id="aggregate-object"),
+        pytest.param(
+            {"aggregate": "on_duration", "value_operations": ["mean"]},
+            id="aggregate-and-value-operations",
+        ),
+    ],
+)
+def test_aggregate_input_rejects_object_and_combined_numeric_mode(data: dict[str, object]) -> None:
+    """Aggregate modes and numeric value operations are separate input forms."""
+    with pytest.raises(RecoverableToolError) as err:
+        analytics_spec_from_data(data)
 
     assert err.value.key == "invalid_tool_input"
 
@@ -281,7 +299,7 @@ def test_order_by_preserves_numeric_order_before_limit() -> None:
     result = run_analytics(
         rows,
         analytics_spec_from_data(
-            {"aggregate": {"value": ["sum"]}, "group_by": ["entity_id"], "order_by": "-value_sum", "limit": 1}
+            {"value_operations": ["sum"], "group_by": ["entity_id"], "order_by": "-value_sum", "limit": 1}
         ),
         (start, datetime(2026, 1, 1, 1, tzinfo=UTC)),
         snapshot,
@@ -301,9 +319,7 @@ def test_descending_order_by_keeps_missing_values_last() -> None:
 
     result = run_analytics(
         rows,
-        analytics_spec_from_data(
-            {"aggregate": {"value": ["mean"]}, "group_by": ["entity_id"], "order_by": "-value_mean"}
-        ),
+        analytics_spec_from_data({"value_operations": ["mean"], "group_by": ["entity_id"], "order_by": "-value_mean"}),
         (start, datetime(2026, 1, 1, 1, tzinfo=UTC)),
         snapshot,
     )
@@ -345,7 +361,7 @@ def test_bucketed_time_in_state_attributes_seconds_once_per_bucket() -> None:
 
     result = run_analytics(
         rows,
-        analytics_spec_from_data({"aggregate": {"mode": "time_in_state"}, "bucket": "1h"}),
+        analytics_spec_from_data({"aggregate": "time_in_state", "bucket": "1h"}),
         (start, datetime(2026, 1, 1, 2, tzinfo=UTC)),
         snapshot,
     )

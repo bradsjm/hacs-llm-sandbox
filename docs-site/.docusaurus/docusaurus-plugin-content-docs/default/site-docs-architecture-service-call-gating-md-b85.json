@@ -11,7 +11,7 @@
   "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/architecture/service-call-gating.md",
   "tags": [],
   "version": "current",
-  "lastUpdatedAt": null,
+  "lastUpdatedAt": 1783689467000,
   "frontMatter": {
     "title": "Service Call Gating",
     "description": "Policy checks applied before any live service action is dispatched."

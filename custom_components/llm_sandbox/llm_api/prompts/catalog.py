@@ -203,7 +203,10 @@ def _render_readable_catalog() -> str:
             "SafeDateTime subtraction; subtract numeric timestamps for durations.",
             "## State, history, and logbook\n"
             "- Await hass.history(...) for bounded recorder-backed state history and hass.logbook(...) for bounded activity "
-            "entries. hass.states.get('<entity_id>') -> State | None; hass.states.async_all('<domain>') lists visible "
+            "entries. hass.history(...) returns a flat list of {entity_id, when, state, value} rows (or flat analytics "
+            "result dicts); it does not return the standalone get_history envelope, cursor, or window. Raw results above "
+            "1000 rows are capped and reported through the top-level overflow.history field and a note. "
+            "hass.states.get('<entity_id>') -> State | None; hass.states.async_all('<domain>') lists visible "
             "states, optionally by domain; hass.states.is_state('<entity_id>', '<state>') -> bool.\n"
             f"- State fields: {_items(_STATE_FIELDS)}.",
             "## Registries and record fields\n"
@@ -274,7 +277,10 @@ def _render_compact_catalog() -> str:
             f"{_items(_CONFIG_UNITS)}. Context: {_items(_CONTEXT_FIELDS)} via attr/get(). date/datetime: today/fromisoformat/"
             "now/utcnow/timestamp only; no live clock,timedelta,timezone,strftime,strptime,SafeDateTime subtraction; use numeric timestamps.",
             "## State/history/logbook\n"
-            "- await hass.history(...), hass.logbook(...). states.get(id)->State|None; async_all(domain); is_state(id,state). "
+            "- await hass.history(...), hass.logbook(...). hass.history(...) returns a flat list of "
+            "{entity_id,when,state,value} rows or flat analytics result dicts; it has no standalone get_history "
+            "envelope/cursor/window. Raw results above 1000 rows are capped and reported through top-level "
+            "overflow.history plus a note. states.get(id)->State|None; async_all(domain); is_state(id,state). "
             f"State: {_items(_STATE_FIELDS)}.",
             "## Registries/records\n"
             "- Resolve er/dr/ar/fr/lr/cr with async_get(hass); aliases: "

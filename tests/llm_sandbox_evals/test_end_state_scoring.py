@@ -72,9 +72,7 @@ def test_initially_satisfied_with_no_calls_passes() -> None:
         pytest.param("switch", "turn_off", "on", "off", id="switch-turn-off"),
     ],
 )
-def test_direct_transition_satisfies_predicate(
-    domain: str, service: str, initial: str, desired_state: str
-) -> None:
+def test_direct_transition_satisfies_predicate(domain: str, service: str, initial: str, desired_state: str) -> None:
     entity_id = f"{domain}.device"
     desired = (DesiredState(entity_id, desired_state),)
     seeds = (_seed(entity_id, initial),)

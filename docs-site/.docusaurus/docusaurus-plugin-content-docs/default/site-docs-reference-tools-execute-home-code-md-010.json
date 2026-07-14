@@ -11,7 +11,7 @@
   "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/reference/tools/execute-home-code.md",
   "tags": [],
   "version": "current",
-  "lastUpdatedAt": null,
+  "lastUpdatedAt": 1783733116000,
   "frontMatter": {
     "title": "execute_home_code",
     "description": "Reference for bounded Python/Monty execution over Home Assistant snapshot facades."

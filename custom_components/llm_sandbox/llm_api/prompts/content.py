@@ -247,6 +247,8 @@ def build_execute_home_code_description() -> str:
         "The query load can be narrowed with entity_ids or area_id/floor_id/device_id/label_id/domain. "
         "Use await hass.history(...), hass.query(...), or hass.logbook(...) to compose bounded recorder data with "
         "current state, registries, computation, conditional reasoning, or an action in this one call. "
+        "hass.history(...) returns a flat list of rows or analytics result dicts, not the standalone get_history envelope "
+        "or cursor. "
         "Service-call availability follows the API prompt. "
         "Success returns {execution:{status:'ok'}, output:<data>} and may include top-level printed, notes, "
         "actions, resolutions, and overflow; printed appears only when print() emitted lines, actions records service-call "
@@ -278,9 +280,10 @@ def build_get_history_description() -> str:
         "to return {window, mode, summary} with no rows, cursor, or attributes; aggregate windows may be "
         "larger than raw history. count_transitions may include from_state/to_state filters; "
         "first_seen/last_seen may include to_state to find when a specific state first or last appeared. "
-        "For declarative analytics, pass aggregate={field:[ops]}, group_by=[...], bucket='1h', where=[...], "
-        "order_by, or limit to return {window, scope:{entity_ids}, rows} as list[dict] with the resolved visible "
-        "entity IDs (including when rows is empty), with no cursor. "
+        "For numeric analytics over each row's value, pass value_operations=[count|min|max|mean|median|sum|stdev] "
+        "with optional group_by=[...], bucket='1h', where=[...], order_by, or limit to return {window, "
+        "scope:{entity_ids}, rows} as list[dict] with the resolved visible entity IDs (including when rows is empty), "
+        "with no cursor. aggregate and value_operations cannot be combined. "
         "Errors return {status:'error', error:{key, message, guidance?}}."
     )
 

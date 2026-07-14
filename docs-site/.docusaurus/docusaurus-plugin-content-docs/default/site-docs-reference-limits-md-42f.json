@@ -11,7 +11,7 @@
   "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/reference/limits.md",
   "tags": [],
   "version": "current",
-  "lastUpdatedAt": null,
+  "lastUpdatedAt": 1783733116000,
   "frontMatter": {
     "title": "Limits",
     "description": "Runtime, recorder, SQL, service-call, and image limits."

@@ -11,7 +11,7 @@
   "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/operations/choosing-a-model.md",
   "tags": [],
   "version": "current",
-  "lastUpdatedAt": null,
+  "lastUpdatedAt": 1783606317000,
   "frontMatter": {
     "title": "Choosing A Model",
     "description": "Capabilities to look for in a conversation model."

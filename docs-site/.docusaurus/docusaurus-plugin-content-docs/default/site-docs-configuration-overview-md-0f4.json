@@ -11,7 +11,7 @@
   "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/configuration/overview.md",
   "tags": [],
   "version": "current",
-  "lastUpdatedAt": null,
+  "lastUpdatedAt": 1783735834000,
   "frontMatter": {
     "title": "Configuration Overview",
     "description": "The configuration sections exposed by the integration options flow."

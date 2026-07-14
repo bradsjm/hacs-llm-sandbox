@@ -11,7 +11,7 @@
   "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/concepts/assist-tool-calling.md",
   "tags": [],
   "version": "current",
-  "lastUpdatedAt": null,
+  "lastUpdatedAt": 1783733116000,
   "frontMatter": {
     "title": "Assist Tool Calling",
     "description": "How the integration plugs tools into Home Assistant Assist."

@@ -11,7 +11,7 @@
   "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/architecture/llm-api-registration.md",
   "tags": [],
   "version": "current",
-  "lastUpdatedAt": null,
+  "lastUpdatedAt": 1783793346000,
   "frontMatter": {
     "title": "LLM API Registration",
     "description": "How the integration exposes tools to Home Assistant conversation agents."

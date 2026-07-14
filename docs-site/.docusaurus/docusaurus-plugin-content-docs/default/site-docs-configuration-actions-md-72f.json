@@ -11,7 +11,7 @@
   "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/configuration/actions.md",
   "tags": [],
   "version": "current",
-  "lastUpdatedAt": null,
+  "lastUpdatedAt": 1783689467000,
   "frontMatter": {
     "title": "Actions",
     "description": "Configure whether the assistant may call Home Assistant services."

@@ -174,9 +174,7 @@ def test_presentation_state_projects_lifecycle_events() -> None:
 def test_presentation_state_cap_exhausted_does_not_count_as_operational_issue() -> None:
     state = PresentationState()
     cell = _cell("cap-case")
-    trace = _trace(
-        state="incorrect", cap_exhausted=True, scoring_mode="cap_exhausted", score_reason="cap_exhausted"
-    )
+    trace = _trace(state="incorrect", cap_exhausted=True, scoring_mode="cap_exhausted", score_reason="cap_exhausted")
 
     state.ingest(MatrixProgressEvent("matrix_started", total=1), timeout=10.0, max_tool_calls=10)
     state.ingest(MatrixProgressEvent("cell_started", cell=cell, request="r"), timeout=10.0, max_tool_calls=10)

@@ -17,6 +17,8 @@ Runs a short Python/Monty snippet over a fresh, frozen, visibility-filtered Home
 
 Inside code, the model can use Home Assistant-like facades such as `hass.states`, registry helpers, `await hass.history(...)`, `await hass.logbook(...)`, `await hass.query(...)`, and gated `await hass.services.async_call(...)`. State, registry, config, and service-catalog reads are synchronous.
 
+`hass.history(...)` returns a flat list of rows or analytics result dicts, not the standalone `get_history` envelope.
+
 ## Recorder composition
 
 Use one `execute_home_code` call when recorder data must be combined with current state or registries, computed or compared across sources, used for conditional reasoning, or used to decide or perform an action. Use the matching standalone recorder tool for a direct history, statistics, or logbook answer; independent direct reads can run in parallel.

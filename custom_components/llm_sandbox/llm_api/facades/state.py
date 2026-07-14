@@ -238,17 +238,24 @@ class SafeHass:
         self,
         entity_ids: str | list[str] | None = None,
         hours: float | None = None,
-        aggregate: Mapping[str, object] | str | None = None,
+        aggregate: str | None = None,
+        value_operations: str | list[str] | None = None,
         group_by: str | list[str] | None = None,
         bucket: str | None = None,
         limit: int | None = None,
-    ) -> JsonValueType:
+    ) -> list[dict[str, object]]:
         """Return raw or aggregated recorder history for visible snapshot entities."""
 
         async def _call() -> object:
             runtime = require_runtime(None)
             snapshot = require_snapshot()
-            analytics = aggregate is not None or group_by is not None or bucket is not None or limit is not None
+            analytics = (
+                aggregate is not None
+                or value_operations is not None
+                or group_by is not None
+                or bucket is not None
+                or limit is not None
+            )
             start, end = _clamp_window(
                 runtime._utcnow(),
                 None,
@@ -263,23 +270,21 @@ class SafeHass:
                 if len(rows) > MAX_HISTORY_STATES:
                     runtime.state.notes.append(f"history result capped at {MAX_HISTORY_STATES} rows")
                     capped_rows = rows[:MAX_HISTORY_STATES]
-                    return {
-                        "rows": [
-                            {
-                                "entity_id": row["entity_id"],
-                                "when": row["when"],
-                                "state": row["state"],
-                                "value": row["value"],
-                            }
-                            for row in capped_rows
-                        ],
-                        "overflow": overflow_metadata(
-                            truncated=True,
-                            limit=MAX_HISTORY_STATES,
-                            returned=len(capped_rows),
-                            omitted=len(rows) - len(capped_rows),
-                        ),
-                    }
+                    runtime.state.overflow["history"] = overflow_metadata(
+                        truncated=True,
+                        limit=MAX_HISTORY_STATES,
+                        returned=len(capped_rows),
+                        omitted=len(rows) - len(capped_rows),
+                    )
+                    return [
+                        {
+                            "entity_id": row["entity_id"],
+                            "when": row["when"],
+                            "state": row["state"],
+                            "value": row["value"],
+                        }
+                        for row in capped_rows
+                    ]
                 return [
                     {"entity_id": row["entity_id"], "when": row["when"], "state": row["state"], "value": row["value"]}
                     for row in rows
@@ -287,6 +292,7 @@ class SafeHass:
             spec = analytics_spec_from_data(
                 {
                     "aggregate": aggregate,
+                    "value_operations": value_operations,
                     "group_by": group_by,
                     "bucket": bucket,
                     "limit": limit,
@@ -294,7 +300,7 @@ class SafeHass:
             )
             return run_analytics(cast(list[HistoryRow], rows), spec, (start, end), snapshot)
 
-        return await helper_response(require_runtime(None).state, "history", _call)
+        return cast(list[dict[str, object]], await helper_response(require_runtime(None).state, "history", _call))
 
     async def logbook(
         self,

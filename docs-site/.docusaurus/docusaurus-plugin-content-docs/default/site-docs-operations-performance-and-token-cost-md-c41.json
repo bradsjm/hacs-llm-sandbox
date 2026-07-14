@@ -11,7 +11,7 @@
   "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/operations/performance-and-token-cost.md",
   "tags": [],
   "version": "current",
-  "lastUpdatedAt": null,
+  "lastUpdatedAt": 1783735834000,
   "frontMatter": {
     "title": "Performance And Token Cost",
     "description": "Factors that influence latency, model context size, and cost."

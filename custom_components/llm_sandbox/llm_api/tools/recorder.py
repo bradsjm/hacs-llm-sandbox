@@ -32,7 +32,7 @@ from ...const import (
 from ...snapshot import build_recorder_snapshot
 from ...snapshot.models import HomeSnapshot
 from ...types import TranslationPlaceholders
-from ..data.history import AGGREGATORS, AggregateMode, HistoryRow
+from ..data.history import AGGREGATORS, NUMERIC_OPS, AggregateMode, HistoryRow
 from ..data.recorder_scope import (
     ENTITY_NOT_VISIBLE,
     SELECTOR_NO_MATCH,
@@ -269,6 +269,7 @@ _RECORDER_NULL_OMIT: frozenset[str] = frozenset(
         "types",
         "hours",
         "aggregate",
+        "value_operations",
         "limit",
         "period",
     }
@@ -292,7 +293,7 @@ _RECORDER_EMPTY_STRING_OMIT: frozenset[str] = frozenset(
 )
 # Optional list keys whose empty-list value is dropped before validation.
 _RECORDER_EMPTY_LIST_OMIT: frozenset[str] = frozenset(
-    {"entity_ids", "statistic_ids", "attributes", "group_by", "where", "types"}
+    {"entity_ids", "statistic_ids", "attributes", "group_by", "where", "types", "value_operations"}
 )
 # Relative window size in hours, accepted by every recorder tool as an
 # alternative to absolute ISO start/end (the sandbox forbids timedelta math).
@@ -492,7 +493,11 @@ class GetHistoryTool(_RecorderTool):
             vol.Optional(
                 "aggregate",
                 description="Optional server-side summary mode instead of raw rows.",
-            ): vol.Any(vol.In(tuple(AGGREGATORS)), dict),
+            ): vol.In(tuple(AGGREGATORS)),
+            vol.Optional(
+                "value_operations",
+                description="Numeric operations over each history row's numeric value.",
+            ): vol.All(cv.ensure_list, [vol.In(tuple(sorted(NUMERIC_OPS)))], vol.Length(min=1)),
             vol.Optional("group_by", description="Optional analytics group key(s)."): vol.All(
                 cv.ensure_list, [str], vol.Length(min=1, max=4)
             ),
@@ -520,26 +525,6 @@ class GetHistoryTool(_RecorderTool):
         }
     )
 
-    def _normalize_args(self, args: Mapping[str, object]) -> dict[str, object]:
-        """Accept the requested history analytics input-key synonyms."""
-        data = dict(args)
-        if "agg" in data and "aggregate" not in data:
-            data["aggregate"] = data.pop("agg")
-        if "groupby" in data and "group_by" not in data:
-            data["group_by"] = data.pop("groupby")
-        if "resample" in data and "bucket" not in data:
-            data["bucket"] = data.pop("resample")
-        if "interval" in data and "bucket" not in data:
-            data["bucket"] = data.pop("interval")
-        # Aliases are canonicalized first so their empty/null values drop
-        # through the shared omission (e.g. resample:"" -> bucket:"" -> omitted).
-        return _omit_empty_optional_args(
-            data,
-            null_keys=_RECORDER_NULL_OMIT,
-            empty_string_keys=_RECORDER_EMPTY_STRING_OMIT,
-            empty_list_keys=_RECORDER_EMPTY_LIST_OMIT,
-        )
-
     @override
     async def _query(
         self,
@@ -551,10 +536,11 @@ class GetHistoryTool(_RecorderTool):
         requested_attributes = cast(list[str] | None, data.get("attributes"))
         aggregate = cast(AggregateMode | None, data.get("aggregate"))
         analytics_requested = any(
-            key in data for key in ("aggregate", "group_by", "bucket", "where", "order_by", "limit")
+            key in data
+            for key in ("aggregate", "value_operations", "group_by", "bucket", "where", "order_by", "limit")
         )
         if isinstance(aggregate, str) and not any(
-            key in data for key in ("group_by", "bucket", "where", "order_by", "limit")
+            key in data for key in ("value_operations", "group_by", "bucket", "where", "order_by", "limit")
         ):
             return await _aggregate_history(source, entity_ids, data, aggregate)
         if analytics_requested:

@@ -21,7 +21,7 @@ Use history for state changes, time-in-state, transitions, and declarative analy
 How many times did the garage door open in the last 24 hours?
 ```
 
-`get_history` can return raw rows, legacy aggregates, or analytics grouped by fields such as domain, area, device, floor, label, and time bucket.
+`get_history` can return raw rows, state summary modes (aggregate), or numeric analytics (value_operations) grouped by fields such as domain, area, device, floor, label, and time bucket.
 
 ## Long-term statistics
 
@@ -44,6 +44,8 @@ What happened around the time the alarm armed last night?
 `get_logbook` returns bounded activity entries when logbook runtime data is available.
 
 Inside `execute_home_code`, `await hass.logbook(entity_ids=None, hours=None)` supports that composed path. It accepts at most 20 visible entities over a 24-hour maximum and returns at most the newest 200 chronological JSON-safe entries. It has no cursor and requires recorder plus logbook runtime support.
+
+Inside `execute_home_code`, `await hass.history(...)` returns a flat list of `{entity_id, when, state, value}` rows or flat analytics result dicts. It does not return the standalone `get_history` envelope, cursor, or window; raw results above 1000 rows are capped and reported through the top-level `overflow.history` field.
 
 ## Raw-page pagination
 

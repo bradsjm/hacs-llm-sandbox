@@ -271,14 +271,14 @@ async def _stub_stream(messages: list[ModelMessage], info: AgentInfo) -> AsyncIt
     if action is None:
         yield "Unsupported stub request."
         return
-    domain, service, entity_id = action
+    domain, service, entity_id, service_data = action
     # State transition boundary: the first streamed turn requests the same tool call as the prior stub response.
     yield {
         0: DeltaToolCall(
             name=TOOL_EXECUTE_HOME_CODE,
             json_args=ToolCallPart(
                 tool_name=TOOL_EXECUTE_HOME_CODE,
-                args={"code": _service_code(domain, service, entity_id)},
+                args={"code": _service_code(domain, service, entity_id, service_data)},
                 tool_call_id="stub-call-1",
             ).args_as_json_str(),
             tool_call_id="stub-call-1",
@@ -286,21 +286,38 @@ async def _stub_stream(messages: list[ModelMessage], info: AgentInfo) -> AsyncIt
     }
 
 
-def _stub_action(user_request: str) -> tuple[str, str, str] | None:
+def _stub_action(user_request: str) -> tuple[str, str, str, dict[str, object] | None] | None:
     """Map only stub-routable home_full direct, brightness, and color requests."""
-    return {
-        "turn on the utility room ceiling light.": ("light", "turn_on", "light.utility_room_ceiling"),
-        "turn off the utility room accent light.": ("light", "turn_off", "light.utility_room_accent"),
-        "toggle the utility room outlet.": ("switch", "toggle", "switch.utility_room_outlet"),
-        "set the utility room ceiling light to 50% brightness.": ("light", "turn_on", "light.utility_room_ceiling"),
-        "make the utility room accent light warm white.": ("light", "turn_on", "light.utility_room_accent"),
-    }.get(user_request.strip().lower())
+    routes: dict[str, tuple[str, str, str, dict[str, object] | None]] = {
+        "turn on the utility room ceiling light.": ("light", "turn_on", "light.utility_room_ceiling", None),
+        "turn off the utility room accent light.": ("light", "turn_off", "light.utility_room_accent", None),
+        "toggle the utility room outlet.": ("switch", "toggle", "switch.utility_room_outlet", None),
+        "set the utility room ceiling light to 50% brightness.": (
+            "light",
+            "turn_on",
+            "light.utility_room_ceiling",
+            {"brightness_pct": 50},
+        ),
+        "set the utility room accent light to 2700 k warm white.": (
+            "light",
+            "turn_on",
+            "light.utility_room_accent",
+            {"color_temp_kelvin": 2700},
+        ),
+    }
+    return routes.get(user_request.strip().lower())
 
 
-def _service_code(domain: str, service: str, entity_id: str) -> str:
+def _service_code(
+    domain: str,
+    service: str,
+    entity_id: str,
+    service_data: dict[str, object] | None = None,
+) -> str:
     """Return minimal executable code that records a safe service call."""
+    data_arg = repr(service_data) if service_data else "{}"
     return (
-        f'await hass.services.async_call("{domain}", "{service}", target={{"entity_id": "{entity_id}"}})\n'
+        f'await hass.services.async_call("{domain}", "{service}", {data_arg}, target={{"entity_id": "{entity_id}"}})\n'
         'result = "ok"'
     )
 

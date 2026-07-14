@@ -1,7 +1,7 @@
 {
   "id": "configuration/prompt-profiles",
   "title": "Prompt Profiles",
-  "description": "Choose the base prompt profile used by the LLM API.",
+  "description": "Choose the model-guidance strategy used by the LLM API.",
   "source": "@site/docs/configuration/prompt-profiles.md",
   "sourceDirName": "configuration",
   "slug": "/configuration/prompt-profiles",
@@ -11,10 +11,10 @@
   "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/configuration/prompt-profiles.md",
   "tags": [],
   "version": "current",
-  "lastUpdatedAt": null,
+  "lastUpdatedAt": 1783735834000,
   "frontMatter": {
     "title": "Prompt Profiles",
-    "description": "Choose the base prompt profile used by the LLM API."
+    "description": "Choose the model-guidance strategy used by the LLM API."
   },
   "sidebar": "docsSidebar",
   "previous": {

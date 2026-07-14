@@ -11,7 +11,7 @@
   "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/usage/history-statistics-logbook.md",
   "tags": [],
   "version": "current",
-  "lastUpdatedAt": null,
+  "lastUpdatedAt": 1783733116000,
   "frontMatter": {
     "title": "History, Statistics, And Logbook",
     "description": "Ask questions over recorder-backed state history, long-term statistics, and activity timeline entries."

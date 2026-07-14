@@ -11,7 +11,7 @@
   "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/concepts/recorder-and-sql.md",
   "tags": [],
   "version": "current",
-  "lastUpdatedAt": null,
+  "lastUpdatedAt": 1783733116000,
   "frontMatter": {
     "title": "Recorder And SQL",
     "description": "Recorder-backed tools and the read-only in-memory SQL surface."

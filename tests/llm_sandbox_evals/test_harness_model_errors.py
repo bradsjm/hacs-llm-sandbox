@@ -306,7 +306,8 @@ async def test_run_case_keeps_normal_completion_outside_failure_classification(t
 
 
 async def test_run_case_cap_exhausted_is_scored_with_real_action_reason(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     candidate = load_candidates(["baseline"], DEFAULT_PROMPT_PROFILE)[0]
     profile = resolve_profile(DEFAULT_PROMPT_PROFILE)
     config = EvalConfig(

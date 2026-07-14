@@ -14,7 +14,7 @@ Common inputs include:
 - `hours`, or ISO `start` and `end`.
 - Explicit `entity_ids`, capped at 20.
 - Selectors such as `area_id`, `device_id`, `floor_id`, `label_id`, and `domain`.
-- Analytics options such as `aggregate`, `group_by`, `bucket`, `where`, `order_by`, and `limit`.
+- Analytics options such as `aggregate` (state summary modes), `value_operations` (numeric operations), `group_by`, `bucket`, `where`, `order_by`, and `limit`.
 - Pagination cursor for raw rows. A `next_cursor` can only be passed back to `get_history` with the same resolved scope; omit `start`, `end`, and `hours` when using it.
 
 ## Bounds

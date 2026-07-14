@@ -11,7 +11,7 @@
   "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/reference/tools/get-statistics.md",
   "tags": [],
   "version": "current",
-  "lastUpdatedAt": null,
+  "lastUpdatedAt": 1783689467000,
   "frontMatter": {
     "title": "get_statistics",
     "description": "Reference for bounded long-term statistics queries."

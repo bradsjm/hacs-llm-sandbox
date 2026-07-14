@@ -11,7 +11,7 @@
   "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/installation/install-with-hacs.md",
   "tags": [],
   "version": "current",
-  "lastUpdatedAt": null,
+  "lastUpdatedAt": 1783606317000,
   "frontMatter": {
     "title": "Install With HACS",
     "description": "Install Assist Agent Sandbox as a custom HACS integration."

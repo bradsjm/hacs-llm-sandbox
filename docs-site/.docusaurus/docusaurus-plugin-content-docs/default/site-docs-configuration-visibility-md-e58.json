@@ -11,7 +11,7 @@
   "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/configuration/visibility.md",
   "tags": [],
   "version": "current",
-  "lastUpdatedAt": null,
+  "lastUpdatedAt": 1783606317000,
   "frontMatter": {
     "title": "Visibility",
     "description": "How visibility settings shape the snapshot that the model can inspect."

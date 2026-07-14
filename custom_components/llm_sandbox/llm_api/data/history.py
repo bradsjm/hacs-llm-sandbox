@@ -30,8 +30,6 @@ type NumericOp = Literal["count", "min", "max", "mean", "median", "sum", "stdev"
 
 NUMERIC_OPS: frozenset[str] = frozenset({"count", "min", "max", "mean", "median", "sum", "stdev"})
 GROUP_KEYS: frozenset[str] = frozenset({"entity_id", "domain", "area_id", "floor_id", "device_id"})
-# Aggregate-map keys that select mode or filters, never numeric field->op entries.
-_AGGREGATE_RESERVED_KEYS: frozenset[str] = frozenset({"mode", "from_state", "to_state"})
 DEFAULT_ANALYTICS_LIMIT = 500
 _SEQUENCE_DEPENDENT_MODES = frozenset({"count_transitions", "time_in_state", "on_duration"})
 _TIMESTAMP_ORDERED_MODES = frozenset({"first_seen", "last_seen"})
@@ -65,7 +63,7 @@ class AnalyticsSpec:
 
     mode: AggregateMode | None = None
     filters: AggregateFilters = AggregateFilters()
-    numeric: tuple[tuple[str, tuple[NumericOp, ...]], ...] = ()
+    value_operations: tuple[NumericOp, ...] = ()
     group_by: tuple[str, ...] = ()
     bucket: str | None = None
     where: tuple[Condition, ...] = ()
@@ -176,7 +174,7 @@ def analytics_spec_from_data(data: Mapping[str, object]) -> AnalyticsSpec:
     All mode/op/group validation happens here once; ``run_analytics`` and its
     helpers read the typed spec fields directly without re-checking.
     """
-    mode, filters, numeric = _parse_aggregate(data)
+    mode, filters, value_operations = _parse_aggregate(data)
     group_by = tuple(str(item) for item in _ensure_list(data.get("group_by")))
     unknown_groups = sorted(set(group_by) - GROUP_KEYS)
     if unknown_groups:
@@ -189,7 +187,7 @@ def analytics_spec_from_data(data: Mapping[str, object]) -> AnalyticsSpec:
     return AnalyticsSpec(
         mode=mode,
         filters=filters,
-        numeric=numeric,
+        value_operations=value_operations,
         group_by=group_by,
         bucket=cast(str | None, data.get("bucket")),
         where=where,
@@ -200,56 +198,43 @@ def analytics_spec_from_data(data: Mapping[str, object]) -> AnalyticsSpec:
 
 def _parse_aggregate(
     data: Mapping[str, object],
-) -> tuple[AggregateMode | None, AggregateFilters, tuple[tuple[str, tuple[NumericOp, ...]], ...]]:
-    """Parse aggregate shorthand/maps and validate modes and numeric operations."""
+) -> tuple[AggregateMode | None, AggregateFilters, tuple[NumericOp, ...]]:
+    """Parse named aggregate modes and numeric operations."""
     aggregate = data.get("aggregate")
+    if aggregate is not None and not isinstance(aggregate, str):
+        raise RecoverableToolError("invalid_tool_input", {"error": "aggregate must be a string mode"})
+
     data_from_state = cast(str | None, data.get("from_state"))
     data_to_state = cast(str | None, data.get("to_state"))
     mode: AggregateMode | None = None
-    numeric: tuple[tuple[str, tuple[NumericOp, ...]], ...] = ()
     effective_from_state = data_from_state
     effective_to_state = data_to_state
+    operation_names = tuple(str(item) for item in _ensure_list(data.get("value_operations")))
+    unknown = sorted(set(operation_names) - NUMERIC_OPS)
+    if unknown:
+        raise RecoverableToolError("analytics_unknown_op", {"op": unknown[0], "valid": ", ".join(sorted(NUMERIC_OPS))})
+    value_operations = cast(tuple[NumericOp, ...], operation_names)
 
     if aggregate is not None:
-        if isinstance(aggregate, Mapping):
-            aggregate_map = dict(aggregate)
-            # from_state/to_state may live at the data top level or inside the mapping;
-            # the mapping wins, the top-level values fill the gaps.
-            if data_from_state is not None and "from_state" not in aggregate_map:
-                aggregate_map["from_state"] = data_from_state
-            if data_to_state is not None and "to_state" not in aggregate_map:
-                aggregate_map["to_state"] = data_to_state
-        else:
-            # Shorthand: ``aggregate: "count_transitions"`` is sugar for a mode-only map.
-            aggregate_map = {"mode": aggregate, "from_state": data_from_state, "to_state": data_to_state}
-        effective_from_state = cast(str | None, aggregate_map.get("from_state"))
-        effective_to_state = cast(str | None, aggregate_map.get("to_state"))
+        if aggregate not in AGGREGATORS:
+            raise RecoverableToolError(
+                "analytics_unknown_op", {"op": aggregate, "valid": ", ".join(sorted(AGGREGATORS))}
+            )
+        if value_operations:
+            raise RecoverableToolError(
+                "invalid_tool_input", {"error": "aggregate mode and value_operations cannot be combined"}
+            )
+        mode = aggregate
 
-        if (raw_mode := aggregate_map.get("mode")) is not None:
-            if raw_mode not in AGGREGATORS:
-                raise RecoverableToolError(
-                    "analytics_unknown_op", {"op": str(raw_mode), "valid": ", ".join(sorted(AGGREGATORS))}
-                )
-            mode = cast(AggregateMode, raw_mode)
-            # from_state has prior-state semantics only for count_transitions.
-            if effective_from_state is not None and mode != "count_transitions":
-                raise RecoverableToolError(
-                    "invalid_tool_input", {"error": "from_state is only valid with count_transitions"}
-                )
-        else:
-            fields: list[tuple[str, tuple[NumericOp, ...]]] = []
-            for field, ops in aggregate_map.items():
-                if field in _AGGREGATE_RESERVED_KEYS:
-                    continue
-                op_names = tuple(str(item) for item in _ensure_list(ops))
-                unknown = sorted(set(op_names) - NUMERIC_OPS)
-                if unknown:
-                    raise RecoverableToolError(
-                        "analytics_unknown_op", {"op": unknown[0], "valid": ", ".join(sorted(NUMERIC_OPS))}
-                    )
-                fields.append((str(field), cast(tuple[NumericOp, ...], op_names)))
-            numeric = tuple(fields)
-    return mode, AggregateFilters(effective_from_state, effective_to_state), numeric
+    if effective_from_state is not None and mode != "count_transitions":
+        raise RecoverableToolError("invalid_tool_input", {"error": "from_state is only valid with count_transitions"})
+    if effective_to_state is not None and mode not in {"count_transitions", "first_seen", "last_seen"}:
+        raise RecoverableToolError(
+            "invalid_tool_input",
+            {"error": "to_state is only valid with count_transitions, first_seen, or last_seen"},
+        )
+
+    return mode, AggregateFilters(effective_from_state, effective_to_state), value_operations
 
 
 def run_analytics(
@@ -329,8 +314,8 @@ def _flat_history_row(entity_id: str, state: SafeState | None, row: HistoryRow) 
 
 
 def _aggregate_group(rows: list[HistoryRow], spec: AnalyticsSpec, start: datetime, end: datetime) -> dict[str, object]:
-    # No mode and no numeric field-ops: a plain count over the group.
-    if spec.mode is None and not spec.numeric:
+    # No mode and no numeric value operations: a plain count over the group.
+    if spec.mode is None and not spec.value_operations:
         return {"count": len(rows)}
     if spec.mode is not None:
         mode = spec.mode
@@ -341,19 +326,18 @@ def _aggregate_group(rows: list[HistoryRow], spec: AnalyticsSpec, start: datetim
         return AGGREGATORS[mode](rows, start, end, spec.filters)
 
     output: dict[str, object] = {}
-    for field, ops in spec.numeric:
-        values: list[float] = []
-        skipped = 0
-        for row in rows:
-            number = finite_float(_field_value(row, field, None))
-            if number is None:
-                skipped += 1
-                continue
-            values.append(number)
-        for op in ops:
-            output[f"{field}_{op}"] = _numeric_result(values, op)
-        if skipped:
-            output[f"{field}_skipped_non_numeric"] = skipped
+    values: list[float] = []
+    skipped = 0
+    for row in rows:
+        number = finite_float(_field_value(row, "value", None))
+        if number is None:
+            skipped += 1
+            continue
+        values.append(number)
+    for op in spec.value_operations:
+        output[f"value_{op}"] = _numeric_result(values, op)
+    if skipped:
+        output["value_skipped_non_numeric"] = skipped
     return output
 
 

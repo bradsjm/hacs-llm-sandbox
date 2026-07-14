@@ -1,7 +1,7 @@
 from dataclasses import replace
 
 from custom_components.llm_sandbox.const import DEFAULT_PROMPT_PROFILE
-from custom_components.llm_sandbox.llm_api.data.history import AGGREGATORS
+from custom_components.llm_sandbox.llm_api.data.history import AGGREGATORS, NUMERIC_OPS
 from custom_components.llm_sandbox.llm_api.prompts import resolve_profile
 from custom_components.llm_sandbox.llm_api.tools.recorder import GetHistoryTool
 from llm_sandbox_evals.agent_runner import build_agent_tools, render_eval_system_prompt
@@ -96,8 +96,10 @@ def test_get_history_function_schema_exposes_aggregate_filters() -> None:
     parameters = convert(GetHistoryTool("eval").parameters)
 
     properties = parameters["properties"]
-    assert set(AGGREGATORS)
-    assert properties["aggregate"]["type"] == "object"
+    assert properties["aggregate"]["type"] == "string"
+    assert set(properties["aggregate"]["enum"]) == set(AGGREGATORS)
+    assert properties["value_operations"]["type"] == "array"
+    assert set(properties["value_operations"]["items"]["enum"]) == set(NUMERIC_OPS)
     assert properties["from_state"]["type"] == "string"
     assert properties["to_state"]["type"] == "string"
     assert properties["group_by"]["items"] == {"type": "string"}

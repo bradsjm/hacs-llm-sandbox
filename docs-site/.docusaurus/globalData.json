@@ -201,6 +201,11 @@
               "sidebar": "docsSidebar"
             },
             {
+              "id": "reference/tools/get-automation",
+              "path": "/hacs-llm-sandbox/reference/tools/get-automation",
+              "sidebar": "docsSidebar"
+            },
+            {
               "id": "reference/tools/get-camera-image",
               "path": "/hacs-llm-sandbox/reference/tools/get-camera-image",
               "sidebar": "docsSidebar"

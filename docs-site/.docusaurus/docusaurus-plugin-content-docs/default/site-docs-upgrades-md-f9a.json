@@ -11,7 +11,7 @@
   "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/upgrades.md",
   "tags": [],
   "version": "current",
-  "lastUpdatedAt": null,
+  "lastUpdatedAt": 1783606317000,
   "frontMatter": {
     "title": "Upgrades",
     "description": "How to approach updates while the integration is early preview software."

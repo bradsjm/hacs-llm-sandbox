@@ -150,9 +150,7 @@ class DesiredState:
                 f"desired state entity_id must be a {_SUPPORTED_STATE_DOMAINS} entity, got {self.entity_id!r}"
             )
         if self.state not in _SUPPORTED_STATE_VALUES:
-            raise ValueError(
-                f"desired state must be one of {_SUPPORTED_STATE_VALUES}, got {self.state!r}"
-            )
+            raise ValueError(f"desired state must be one of {_SUPPORTED_STATE_VALUES}, got {self.state!r}")
 
 
 @dataclass(frozen=True, slots=True)

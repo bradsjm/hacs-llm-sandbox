@@ -11,7 +11,7 @@
   "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/development/validation.md",
   "tags": [],
   "version": "current",
-  "lastUpdatedAt": null,
+  "lastUpdatedAt": 1783606317000,
   "frontMatter": {
     "title": "Validation",
     "description": "Commands for validating integration code and documentation."

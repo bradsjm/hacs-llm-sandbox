@@ -11,7 +11,7 @@
   "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/installation/prerequisites.md",
   "tags": [],
   "version": "current",
-  "lastUpdatedAt": null,
+  "lastUpdatedAt": 1783793346000,
   "frontMatter": {
     "title": "Prerequisites",
     "description": "Required Home Assistant, HACS, model, recorder, logbook, and camera capabilities."

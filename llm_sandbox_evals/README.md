@@ -9,8 +9,10 @@ predicates. When no predicate is authored or the end state is unevaluable,
 exact action-ledger matching is used as fallback.
 
 The baseline does not score reads, evidence, recorder output, answer structure,
-blocked actions, policy rejection, service data, clarification quality,
-collections, aggregates, relations, or no-data behavior. Conditional state,
+blocked actions, policy rejection, generic service-data coverage, clarification
+quality, collections, aggregates, relations, or no-data behavior. Action
+fallback compares authored canonical service data for brightness and color, but
+service data has no overlay effect. Conditional state,
 history, and logbook action selection, including true no-action outcomes, is
 covered by the current corpus with end-state predicates. The model returns
 plain text. That prose is retained for display and never parsed or scored.
@@ -101,11 +103,15 @@ The corpus contains 14 cases in this progression:
    `direct_turn_off_utility_room_accent`, and
    `direct_toggle_utility_room_outlet` act on Utility Room lights and a switch.
 2. **Discovery (2):** `discover_utility_room_lights` selects the two lights in
-   the Utility Room, and `discover_basement_ceiling_lights` selects the twelve
-   ceiling lights in the Basement. Each is authored as one multi-target action.
+   the Utility Room and uses action fallback (no `desired_states`) because its
+   shared initial state cannot distinguish partial target selection;
+   `discover_basement_ceiling_lights` remains state-primary with all 12 ceiling
+   lights seeded off. Each is authored as one multi-target action.
 3. **Brightness/color service selection (2):**
    `brightness_utility_room_ceiling` and `color_utility_room_accent` both
-   select `light.turn_on`; neither authors service data.
+   select `light.turn_on` and author canonical service data: `brightness_pct: 50`
+   and `color_temp_kelvin: 2700`. The color request text is `Set the Utility Room
+accent light to 2700 K warm white.`
 4. **State/history/logbook conditions (4):**
    `no_action_light_already_on` and `no_action_history_no_recent_change` have
    empty required-action lists; `condition_turn_off_living_room_ceiling` uses
@@ -126,23 +132,28 @@ if they form a complete, disjoint, duplicate-free partition of the authored
 target set across at least two calls with matching domain, service, and
 comparable service data. This is not general action merging.
 
-Ten of the fourteen cases author `desired_states` and use end-state primary
-scoring. The remaining four (brightness, color, bare ambiguity, and ceiling
-ambiguity) use action fallback because their intent requires unsupported
-attribute semantics or safe abstention.
+Nine of the fourteen cases author `desired_states` and use end-state primary
+scoring. The remaining five (`discover_utility_room_lights`, brightness, color,
+bare ambiguity, and ceiling ambiguity) use action fallback because Utility
+discovery needs complete target matching, brightness and color require
+canonical service data, and the ambiguity cases require safe abstention.
+
+The three recorder-evidence entities — Living Room ceiling, Living Room accent,
+and Hallway outlet — have snapshot `last_changed` values matching their
+terminal recorder history/logbook timestamps.
 
 The offline stub is deliberately narrower than the corpus. It exact-matches
 the five direct/brightness/color requests, routes them through
 `execute_home_code`, emits the corresponding service call, and then returns
 `Done.` as plain text:
 
-| Request                                                 | Stub action                                    |
-| ------------------------------------------------------- | ---------------------------------------------- |
-| `Turn on the Utility Room ceiling light.`               | `light.turn_on` → `light.utility_room_ceiling` |
-| `Turn off the Utility Room accent light.`               | `light.turn_off` → `light.utility_room_accent` |
-| `Toggle the Utility Room outlet.`                       | `switch.toggle` → `switch.utility_room_outlet` |
-| `Set the Utility Room ceiling light to 50% brightness.` | `light.turn_on` → `light.utility_room_ceiling` |
-| `Make the Utility Room accent light warm white.`        | `light.turn_on` → `light.utility_room_accent`  |
+| Request                                                   | Stub action                                                                              |
+| --------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `Turn on the Utility Room ceiling light.`                 | `light.turn_on` → `light.utility_room_ceiling`                                           |
+| `Turn off the Utility Room accent light.`                 | `light.turn_off` → `light.utility_room_accent`                                           |
+| `Toggle the Utility Room outlet.`                         | `switch.toggle` → `switch.utility_room_outlet`                                           |
+| `Set the Utility Room ceiling light to 50% brightness.`   | `light.turn_on` → `light.utility_room_ceiling`; `service_data: {brightness_pct: 50}`     |
+| `Set the Utility Room accent light to 2700 K warm white.` | `light.turn_on` → `light.utility_room_accent`; `service_data: {color_temp_kelvin: 2700}` |
 
 Unmatched requests produce no tool call. Consequently, the four empty-required
 cases are valid no-action stub smoke cases, while the non-empty discovery,
@@ -278,7 +289,7 @@ The overlay reducer currently supports only direct `light`/`switch`
 explicit reducer support. The following remain deferred:
 
 1. attribute-level end-state predicates (brightness, color);
-2. authored service-data coverage in the corpus;
+2. generic service-data coverage in the corpus;
 3. policy/rejection behavior and disabled-action behavior;
 4. response and clarification-quality scoring.
 

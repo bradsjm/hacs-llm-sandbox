@@ -55,4 +55,5 @@ export default {
   "ddc3e85a": [() => import(/* webpackChunkName: "ddc3e85a" */ "@site/docs/operations/privacy-and-security.md"), "@site/docs/operations/privacy-and-security.md", require.resolveWeak("@site/docs/operations/privacy-and-security.md")],
   "e58c98b6": [() => import(/* webpackChunkName: "e58c98b6" */ "@site/docs/configuration/visibility.md"), "@site/docs/configuration/visibility.md", require.resolveWeak("@site/docs/configuration/visibility.md")],
   "eeda5ee9": [() => import(/* webpackChunkName: "eeda5ee9" */ "@site/docs/reference/tools/get-logbook.md"), "@site/docs/reference/tools/get-logbook.md", require.resolveWeak("@site/docs/reference/tools/get-logbook.md")],
+  "f7443d47": [() => import(/* webpackChunkName: "f7443d47" */ "@site/docs/reference/tools/get-automation.md"), "@site/docs/reference/tools/get-automation.md", require.resolveWeak("@site/docs/reference/tools/get-automation.md")],
   "f9ac868d": [() => import(/* webpackChunkName: "f9ac868d" */ "@site/docs/upgrades.md"), "@site/docs/upgrades.md", require.resolveWeak("@site/docs/upgrades.md")],};

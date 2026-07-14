@@ -52,6 +52,7 @@ def test_profile_describes_awaitable_facades(profile: PromptProfile) -> None:
     assert "Only hass.services.async_call" not in profile.base_prompt
     assert "only awaitable" not in profile.base_prompt.lower()
     assert "hass.history(...)" in profile.base_prompt
+    assert "flat list" in profile.base_prompt
     assert "hass.query(...)" in profile.base_prompt
     assert "hass.logbook(...)" in profile.base_prompt
     assert "hass.services.async_call" in profile.base_prompt
@@ -223,6 +224,18 @@ def test_execute_home_code_description_includes_success_metadata() -> None:
     assert "actions" in description
     assert "resolutions" in description
     assert "overflow" in description
+
+
+def test_history_descriptions_use_flat_composed_and_explicit_analytics_contracts() -> None:
+    """Prompt descriptions distinguish standalone history from composed analytics."""
+    history_description = build_get_history_description()
+    execute_description = build_execute_home_code_description()
+
+    assert "value_operations" in history_description
+    assert "aggregate={field" not in history_description
+    assert 'aggregate={"' not in history_description
+    assert "flat list" in execute_description
+    assert "standalone get_history envelope" in execute_description
 
 
 @pytest.mark.parametrize(

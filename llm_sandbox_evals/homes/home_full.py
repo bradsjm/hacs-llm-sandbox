@@ -21,6 +21,27 @@ from homeassistant.core import SupportsResponse
 
 NAME: str = "home_full"
 CREATED_AT: str = "2026-06-29T12:00:00+00:00"
+_LAST_CHANGED_OVERRIDES: Mapping[str, str] = {
+    "light.living_room_ceiling": "2026-06-29T11:45:00+00:00",
+    "light.living_room_accent": "2026-06-29T11:50:00+00:00",
+    "switch.hallway_outlet": "2026-06-29T09:00:00+00:00",
+}
+_BASEMENT_CEILING_LIGHTS_OFF: frozenset[str] = frozenset(
+    {
+        "light.utility_room_ceiling",
+        "light.storage_room_ceiling",
+        "light.workshop_ceiling",
+        "light.wine_cellar_ceiling",
+        "light.home_gym_ceiling",
+        "light.media_room_ceiling",
+        "light.laundry_room_ceiling",
+        "light.basement_bathroom_ceiling",
+        "light.playroom_ceiling",
+        "light.wine_tasting_room_ceiling",
+        "light.basement_hallway_ceiling",
+        "light.server_room_ceiling",
+    }
+)
 
 type RecorderData = dict[str, object]
 type StateRecord = tuple[str, str, str, str, dict[str, object]]
@@ -237,19 +258,21 @@ def _state_record(entity: EntityRecord) -> StateRecord:
     entity_id = entity[0]
     domain, object_id = entity_id.split(".", 1)
     name = object_id.replace("_", " ").title()
+    last_changed = _LAST_CHANGED_OVERRIDES.get(entity_id, CREATED_AT)
     match domain:
         case "binary_sensor":
-            return (entity_id, "off", name, CREATED_AT, {"device_class": "motion"})
+            return (entity_id, "off", name, last_changed, {"device_class": "motion"})
         case "climate":
-            return (entity_id, "heat", name, CREATED_AT, {"current_temperature": 21.0, "temperature": 20.0})
+            return (entity_id, "heat", name, last_changed, {"current_temperature": 21.0, "temperature": 20.0})
         case "light":
-            return (entity_id, "on", name, CREATED_AT, {"brightness": 180})
+            state = "off" if entity_id in _BASEMENT_CEILING_LIGHTS_OFF else "on"
+            return (entity_id, state, name, last_changed, {"brightness": 180})
         case "sensor" if object_id.endswith("_temperature"):
             return (
                 entity_id,
                 "21.5",
                 name,
-                CREATED_AT,
+                last_changed,
                 {"device_class": "temperature", "unit_of_measurement": "°C"},
             )
         case "sensor" if object_id.endswith("_humidity"):
@@ -257,15 +280,15 @@ def _state_record(entity: EntityRecord) -> StateRecord:
                 entity_id,
                 "48",
                 name,
-                CREATED_AT,
+                last_changed,
                 {"device_class": "humidity", "unit_of_measurement": "%"},
             )
         case "sensor" if object_id.endswith("_power"):
-            return (entity_id, "42", name, CREATED_AT, {"device_class": "power", "unit_of_measurement": "W"})
+            return (entity_id, "42", name, last_changed, {"device_class": "power", "unit_of_measurement": "W"})
         case "switch":
-            return (entity_id, "off", name, CREATED_AT, {})
+            return (entity_id, "off", name, last_changed, {})
         case _:
-            return (entity_id, "unknown", name, CREATED_AT, {})
+            return (entity_id, "unknown", name, last_changed, {})
 
 
 _STATES: tuple[StateRecord, ...] = tuple(_state_record(entity) for entity in _ENTITIES)

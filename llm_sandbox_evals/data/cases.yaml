@@ -46,11 +46,6 @@ cases:
         - domain: light
           service: turn_on
           target_entity_ids: [light.utility_room_accent, light.utility_room_ceiling]
-      desired_states:
-        - entity_id: light.utility_room_accent
-          state: "on"
-        - entity_id: light.utility_room_ceiling
-          state: "on"
   - name: discover_basement_ceiling_lights
     inputs:
       id: discover_basement_ceiling_lights
@@ -106,15 +101,19 @@ cases:
         - domain: light
           service: turn_on
           target_entity_ids: [light.utility_room_ceiling]
+          service_data:
+            brightness_pct: 50
   - name: color_utility_room_accent
     inputs:
       id: color_utility_room_accent
       home: home_full
-      user_request: Make the Utility Room accent light warm white.
+      user_request: Set the Utility Room accent light to 2700 K warm white.
       required_actions:
         - domain: light
           service: turn_on
           target_entity_ids: [light.utility_room_accent]
+          service_data:
+            color_temp_kelvin: 2700
   - name: no_action_light_already_on
     inputs:
       id: no_action_light_already_on

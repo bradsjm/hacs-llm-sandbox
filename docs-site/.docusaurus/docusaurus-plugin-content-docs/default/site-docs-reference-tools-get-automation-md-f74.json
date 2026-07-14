@@ -1,0 +1,28 @@
+{
+  "id": "reference/tools/get-automation",
+  "title": "get_automation",
+  "description": "Read authorized Home Assistant automations and optional trigger entries.",
+  "source": "@site/docs/reference/tools/get-automation.md",
+  "sourceDirName": "reference/tools",
+  "slug": "/reference/tools/get-automation",
+  "permalink": "/hacs-llm-sandbox/reference/tools/get-automation",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/reference/tools/get-automation.md",
+  "tags": [],
+  "version": "current",
+  "lastUpdatedAt": 1783793346000,
+  "frontMatter": {
+    "title": "get_automation",
+    "description": "Read authorized Home Assistant automations and optional trigger entries."
+  },
+  "sidebar": "docsSidebar",
+  "previous": {
+    "title": "get_logbook",
+    "permalink": "/hacs-llm-sandbox/reference/tools/get-logbook"
+  },
+  "next": {
+    "title": "get_camera_image",
+    "permalink": "/hacs-llm-sandbox/reference/tools/get-camera-image"
+  }
+}

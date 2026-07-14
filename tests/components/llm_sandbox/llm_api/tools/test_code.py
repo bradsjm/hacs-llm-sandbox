@@ -678,15 +678,141 @@ async def test_hass_history_raw_caps_rows_and_adds_note() -> None:
     finally:
         clear_runtime()
 
-    assert isinstance(result, dict)
-    assert len(result["rows"]) == MAX_HISTORY_STATES
-    assert result["overflow"] == {
+    assert isinstance(result, list)
+    assert len(result) == MAX_HISTORY_STATES
+    assert runtime.state.overflow["history"] == {
         "truncated": True,
         "limit": MAX_HISTORY_STATES,
         "returned": MAX_HISTORY_STATES,
         "omitted": 1,
     }
     assert runtime.state.notes == [f"history result capped at {MAX_HISTORY_STATES} rows"]
+
+
+async def test_hass_history_raw_returns_flat_list() -> None:
+    """Uncapped raw hass.history output is a flat list of projected rows."""
+    rows = [
+        {
+            "entity_id": "sensor.temp",
+            "when": "2026-01-01T00:00:00+00:00",
+            "state": "20",
+            "value": 20.0,
+        }
+    ]
+
+    async def _fetch_history(_entity_ids: Sequence[str], _start: datetime, _end: datetime) -> list[dict[str, object]]:
+        return rows
+
+    hass_facade, _runtime = _history_facade(_snapshot(), _fetch_history)
+    try:
+        result = await hass_facade.history(entity_ids="sensor.temp")
+    finally:
+        clear_runtime()
+
+    assert result == rows
+
+
+async def test_hass_history_empty_returns_empty_list() -> None:
+    """An empty raw history result remains an empty list."""
+
+    async def _fetch_history(_entity_ids: Sequence[str], _start: datetime, _end: datetime) -> list[dict[str, object]]:
+        return []
+
+    hass_facade, _runtime = _history_facade(_snapshot(), _fetch_history)
+    try:
+        result = await hass_facade.history(entity_ids="sensor.temp")
+    finally:
+        clear_runtime()
+
+    assert result == []
+
+
+async def test_hass_history_analytics_returns_flat_list() -> None:
+    """Named aggregate history returns flat analytics result dictionaries."""
+    rows: list[dict[str, object]] = [
+        {"entity_id": "sensor.temp", "when": "2026-01-01T00:00:00+00:00", "state": "on", "value": None},
+        {"entity_id": "sensor.temp", "when": "2026-01-01T00:01:00+00:00", "state": "off", "value": None},
+    ]
+
+    async def _fetch_history(_entity_ids: Sequence[str], _start: datetime, _end: datetime) -> list[dict[str, object]]:
+        return rows
+
+    hass_facade, _runtime = _history_facade(_snapshot(), _fetch_history)
+    try:
+        result = await hass_facade.history(entity_ids="sensor.temp", aggregate="state_counts")
+    finally:
+        clear_runtime()
+
+    assert isinstance(result, list)
+    assert result == [{"state_counts": {"on": 1, "off": 1}}]
+
+
+async def test_hass_history_value_operations_returns_flat_list() -> None:
+    """Numeric history operations return flat result dictionaries with value fields."""
+    rows = [
+        {"entity_id": "sensor.temp", "when": "2026-01-01T00:00:00+00:00", "state": "20", "value": 20.0},
+        {"entity_id": "sensor.temp", "when": "2026-01-01T00:01:00+00:00", "state": "22", "value": 22.0},
+    ]
+
+    async def _fetch_history(_entity_ids: Sequence[str], _start: datetime, _end: datetime) -> list[dict[str, object]]:
+        return rows
+
+    hass_facade, _runtime = _history_facade(_snapshot(), _fetch_history)
+    try:
+        result = await hass_facade.history(entity_ids="sensor.temp", value_operations=["mean"])
+    finally:
+        clear_runtime()
+
+    assert isinstance(result, list)
+    assert result == [{"value_mean": 21.0}]
+
+
+async def test_execute_home_code_history_cap_exposes_top_level_overflow() -> None:
+    """ExecuteHomeCodeTool keeps capped history output flat and promotes overflow metadata."""
+    rows = [
+        {
+            "entity_id": "sensor.temp",
+            "when": f"2026-01-01T00:{index % 60:02d}:00+00:00",
+            "state": str(index),
+            "value": float(index),
+        }
+        for index in range(MAX_HISTORY_STATES + 1)
+    ]
+
+    async def _fetch_history(_entity_ids: Sequence[str], _start: datetime, _end: datetime) -> list[dict[str, object]]:
+        return rows
+
+    _hass_facade, runtime = _history_facade(_snapshot(), _fetch_history)
+    tool = ExecuteHomeCodeTool("test-entry")
+    data = cast(
+        dict[str, object],
+        tool.parameters({"code": "result = await hass.history(entity_ids=['sensor.temp'])"}),
+    )
+    llm_context = llm.LLMContext(
+        platform="test",
+        context=Context(),
+        language="en",
+        assistant=None,
+        device_id=None,
+    )
+    try:
+        result = await tool.run_execute(_snapshot(), data, llm_context, runtime)
+    finally:
+        clear_runtime()
+
+    assert result["execution"] == {"status": "ok"}
+    assert isinstance(result["output"], list)
+    notes = result["notes"]
+    assert isinstance(notes, list)
+    assert f"history result capped at {MAX_HISTORY_STATES} rows" in notes
+    assert result["overflow"] == {
+        "history": {
+            "truncated": True,
+            "limit": MAX_HISTORY_STATES,
+            "returned": MAX_HISTORY_STATES,
+            "omitted": 1,
+        }
+    }
 
 
 async def test_hass_history_analytics_error_uses_helper_key() -> None:

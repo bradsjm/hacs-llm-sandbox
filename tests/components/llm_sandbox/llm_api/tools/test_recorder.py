@@ -860,6 +860,35 @@ async def test_history_declarative_limit_above_cap_clamps(
 
 
 @pytest.mark.parametrize(
+    "tool_args",
+    [
+        pytest.param(
+            {"entity_ids": ["light.bedroom"], "aggregate": {"value": ["mean"]}},
+            id="aggregate-object",
+        ),
+        pytest.param(
+            {"entity_ids": ["light.bedroom"], "aggregate": "state_counts", "value_operations": ["mean"]},
+            id="aggregate-and-value-operations",
+        ),
+        pytest.param({"entity_ids": ["light.bedroom"], "agg": "state_counts"}, id="agg-alias"),
+        pytest.param({"entity_ids": ["light.bedroom"], "groupby": ["domain"]}, id="groupby-alias"),
+        pytest.param({"entity_ids": ["light.bedroom"], "resample": "1h"}, id="resample-alias"),
+        pytest.param({"entity_ids": ["light.bedroom"], "interval": "1h"}, id="interval-alias"),
+    ],
+)
+async def test_history_rejects_legacy_aggregate_inputs(
+    hass: HomeAssistant,
+    recorder_entry: MockConfigEntry,
+    tool_args: dict[str, object],
+) -> None:
+    """Aggregate objects, mixed forms, and removed aliases fail schema validation."""
+    result = await _call_history(hass, recorder_entry, tool_args)
+
+    assert result["status"] == "error"
+    assert result["error"]["key"] == "invalid_tool_input"
+
+
+@pytest.mark.parametrize(
     ("tool_cls", "tool_name", "tool_args"),
     [
         pytest.param(
@@ -1128,9 +1157,34 @@ async def test_invalid_input_returns_invalid_tool_input(
                 "where": [],
                 "hours": None,
                 "aggregate": None,
+                "value_operations": None,
                 "limit": None,
             },
-            id="history",
+            id="history-null",
+        ),
+        pytest.param(
+            GetHistoryTool,
+            TOOL_GET_HISTORY,
+            {
+                "entity_ids": ["light.bedroom"],
+                "start": "",
+                "end": "",
+                "area_id": "",
+                "device_id": "",
+                "from_state": "",
+                "to_state": "",
+                "bucket": "",
+                "order_by": "",
+                "cursor": "",
+                "attributes": [],
+                "group_by": [],
+                "where": [],
+                "hours": None,
+                "aggregate": None,
+                "value_operations": [],
+                "limit": None,
+            },
+            id="history-empty-value-operations",
         ),
         pytest.param(
             GetStatisticsTool,

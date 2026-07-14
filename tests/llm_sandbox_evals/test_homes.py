@@ -1,3 +1,5 @@
+from typing import cast
+
 from llm_sandbox_evals.homes import get_home
 import pytest
 
@@ -29,6 +31,66 @@ def test_full_home_preserves_312_entity_inventory() -> None:
 
     assert len(snapshot.states) == 312
     assert len(snapshot.entities) == 312
+
+
+def test_full_home_basement_ceiling_lights_start_off() -> None:
+    snapshot = get_home("home_full").snapshot()
+    basement_ceiling_ids = {
+        "light.utility_room_ceiling",
+        "light.storage_room_ceiling",
+        "light.workshop_ceiling",
+        "light.wine_cellar_ceiling",
+        "light.home_gym_ceiling",
+        "light.media_room_ceiling",
+        "light.laundry_room_ceiling",
+        "light.basement_bathroom_ceiling",
+        "light.playroom_ceiling",
+        "light.wine_tasting_room_ceiling",
+        "light.basement_hallway_ceiling",
+        "light.server_room_ceiling",
+    }
+
+    assert {snapshot.states[entity_id].state for entity_id in basement_ceiling_ids} == {"off"}
+    assert snapshot.states["light.utility_room_accent"].state == "on"
+    assert snapshot.states["switch.utility_room_outlet"].state == "off"
+
+
+@pytest.mark.parametrize(
+    ("entity_id", "expected_last_changed"),
+    [
+        ("light.living_room_ceiling", "2026-06-29T11:45:00+00:00"),
+        ("light.living_room_accent", "2026-06-29T11:50:00+00:00"),
+    ],
+)
+def test_full_home_lights_match_terminal_history(entity_id: str, expected_last_changed: str) -> None:
+    fixture = get_home("home_full")
+    snapshot = fixture.snapshot()
+    history = cast(dict[str, object], fixture.recorder()["history"])
+    rows = cast(list[dict[str, object]], history[entity_id])
+    terminal_row = rows[-1]
+    state = snapshot.states[entity_id]
+
+    assert state.state == "on"
+    assert state.last_changed == expected_last_changed
+    assert state.last_changed == cast(str, terminal_row["last_changed"])
+    assert state.state == cast(str, terminal_row["state"])
+
+
+@pytest.mark.parametrize(
+    ("entity_id", "expected_last_changed"),
+    [("switch.hallway_outlet", "2026-06-29T09:00:00+00:00")],
+)
+def test_full_home_switch_matches_terminal_logbook(entity_id: str, expected_last_changed: str) -> None:
+    fixture = get_home("home_full")
+    snapshot = fixture.snapshot()
+    logbook = cast(dict[str, object], fixture.recorder()["logbook"])
+    events = cast(list[dict[str, object]], logbook[entity_id])
+    terminal_event = events[-1]
+    state = snapshot.states[entity_id]
+
+    assert state.state == "off"
+    assert state.last_changed == expected_last_changed
+    assert state.last_changed == cast(str, terminal_event["when"])
 
 
 @pytest.mark.parametrize("name", ["home_default", "home_large", "home_real"])

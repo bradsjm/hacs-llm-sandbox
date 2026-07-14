@@ -11,7 +11,7 @@
   "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/architecture/overview.md",
   "tags": [],
   "version": "current",
-  "lastUpdatedAt": null,
+  "lastUpdatedAt": 1783793346000,
   "frontMatter": {
     "title": "Architecture Overview",
     "description": "Main runtime components and how a tool call flows through the integration."

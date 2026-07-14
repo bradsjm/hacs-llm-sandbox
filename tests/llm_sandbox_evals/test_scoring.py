@@ -5,6 +5,7 @@ from custom_components.llm_sandbox.llm_api.prompts import resolve_profile
 from llm_sandbox_evals.cases import CASES
 from llm_sandbox_evals.config import EvalConfig
 from llm_sandbox_evals.harness import run_case
+from llm_sandbox_evals.homes import get_home
 from llm_sandbox_evals.prompts import baseline_candidate
 from llm_sandbox_evals.schema import (
     ActionComparison,
@@ -15,7 +16,8 @@ from llm_sandbox_evals.schema import (
     OverlayStateSeed,
     RequiredAction,
 )
-from llm_sandbox_evals.scoring import evaluate_case
+from llm_sandbox_evals.scoring import evaluate_case, extract_overlay_seeds
+from llm_sandbox_evals.tools import EVAL_SCOPE, apply_scope
 import pytest
 
 
@@ -45,6 +47,34 @@ def _observed(
     service_data: dict[str, object] | None = None,
 ) -> ObservedAction:
     return ObservedAction(domain, service, (entity_id,), service_data or {})
+
+
+def _home_full_case(case_id: str) -> EvalCase:
+    """Return one authored home_full case by its stable corpus identifier."""
+    return next(case for case in CASES if case.id == case_id)
+
+
+def _home_full_seeds(case: EvalCase) -> tuple[OverlayStateSeed, ...]:
+    """Extract predicate seeds from the same scoped fixture snapshot used by the harness."""
+    fixture = get_home(case.home)
+    snapshot = apply_scope(fixture.snapshot(), EVAL_SCOPE)
+    return extract_overlay_seeds(snapshot, case.desired_states)
+
+
+_BASEMENT_CEILING_TARGETS = (
+    "light.utility_room_ceiling",
+    "light.storage_room_ceiling",
+    "light.workshop_ceiling",
+    "light.wine_cellar_ceiling",
+    "light.home_gym_ceiling",
+    "light.media_room_ceiling",
+    "light.laundry_room_ceiling",
+    "light.basement_bathroom_ceiling",
+    "light.playroom_ceiling",
+    "light.wine_tasting_room_ceiling",
+    "light.basement_hallway_ceiling",
+    "light.server_room_ceiling",
+)
 
 
 @pytest.mark.parametrize(
@@ -89,6 +119,201 @@ async def test_each_authored_direct_action_passes(
     assert trace.action_result.reason == "ok"
     assert trace.answer == "Done."
     assert trace.action_result.passed is True
+
+
+@pytest.mark.parametrize(
+    ("case_id", "expected_service_data"),
+    [
+        pytest.param("brightness_utility_room_ceiling", {"brightness_pct": 50}, id="brightness"),
+        pytest.param("color_utility_room_accent", {"color_temp_kelvin": 2700}, id="color-temperature"),
+    ],
+)
+async def test_stub_attribute_actions_record_canonical_service_data(
+    case_id: str, expected_service_data: dict[str, object], tmp_path: Path
+) -> None:
+    case = _home_full_case(case_id)
+    trace = await run_case(
+        baseline_candidate(),
+        "stub",
+        case,
+        EvalConfig(
+            models=["stub"],
+            candidates=["baseline"],
+            prompt_profile=DEFAULT_PROMPT_PROFILE,
+            cases=None,
+            homes=None,
+            runs_dir=tmp_path,
+        ),
+        profile=resolve_profile(DEFAULT_PROMPT_PROFILE),
+    )
+
+    assert trace.outcome.state == "correct"
+    assert trace.outcome.scoring_mode == "actions"
+    assert trace.action_result.passed is True
+    assert trace.recorded_invocations[0]["service_data"] == expected_service_data
+
+
+@pytest.mark.parametrize(
+    ("recorded", "expected_satisfied"),
+    [
+        pytest.param([], False, id="no-action"),
+        pytest.param(
+            [_action("light", "turn_on", "light.storage_room_ceiling")],
+            False,
+            id="wrong-target",
+        ),
+        pytest.param(
+            [_action("light", "turn_on", "light.utility_room_ceiling")],
+            True,
+            id="correct-target",
+        ),
+    ],
+)
+def test_direct_turn_on_utility_room_ceiling_requires_a_transition(
+    recorded: list[dict[str, object]], expected_satisfied: bool
+) -> None:
+    case = _home_full_case("direct_turn_on_utility_room_ceiling")
+    outcome, _result, _ledger, end_state = evaluate_case(
+        case,
+        recorded,
+        overlay_seeds=_home_full_seeds(case),
+        invoker_calls=recorded,
+    )
+
+    assert outcome.scoring_mode == "end_state"
+    assert outcome.state == ("correct" if expected_satisfied else "incorrect")
+    assert end_state.status == ("satisfied" if expected_satisfied else "unsatisfied")
+
+
+@pytest.mark.parametrize(
+    ("recorded", "expected_passed"),
+    [
+        pytest.param([], False, id="no-action"),
+        pytest.param(
+            [_action("light", "turn_on", "light.utility_room_ceiling")],
+            False,
+            id="ceiling-only-partial",
+        ),
+        pytest.param(
+            [_action("light", "turn_on", "light.storage_room_ceiling")],
+            False,
+            id="wrong-target",
+        ),
+        pytest.param(
+            [_action("light", "turn_on", ["light.utility_room_accent", "light.utility_room_ceiling"])],
+            True,
+            id="complete-two-target-action",
+        ),
+    ],
+)
+def test_utility_room_discovery_uses_exact_action_fallback(
+    recorded: list[dict[str, object]], expected_passed: bool
+) -> None:
+    case = _home_full_case("discover_utility_room_lights")
+    outcome, result, _ledger, end_state = evaluate_case(
+        case,
+        recorded,
+        overlay_seeds=_home_full_seeds(case),
+        invoker_calls=recorded,
+    )
+
+    assert outcome.scoring_mode == "actions"
+    assert outcome.state == ("correct" if expected_passed else "incorrect")
+    assert result.passed is expected_passed
+    assert end_state.status == "not_authored"
+
+
+@pytest.mark.parametrize(
+    ("recorded", "expected_satisfied"),
+    [
+        pytest.param([], False, id="no-action"),
+        pytest.param(
+            [_action("light", "turn_on", list(_BASEMENT_CEILING_TARGETS[:1]))],
+            False,
+            id="partial-target-set",
+        ),
+        pytest.param(
+            [_action("light", "turn_on", "light.utility_room_accent")],
+            False,
+            id="wrong-target",
+        ),
+        pytest.param(
+            [_action("light", "turn_on", list(_BASEMENT_CEILING_TARGETS))],
+            True,
+            id="complete-twelve-target-set",
+        ),
+    ],
+)
+def test_basement_ceiling_discovery_requires_all_twelve_state_transitions(
+    recorded: list[dict[str, object]], expected_satisfied: bool
+) -> None:
+    case = _home_full_case("discover_basement_ceiling_lights")
+    outcome, _result, _ledger, end_state = evaluate_case(
+        case,
+        recorded,
+        overlay_seeds=_home_full_seeds(case),
+        invoker_calls=recorded,
+    )
+
+    assert outcome.scoring_mode == "end_state"
+    assert outcome.state == ("correct" if expected_satisfied else "incorrect")
+    assert end_state.status == ("satisfied" if expected_satisfied else "unsatisfied")
+
+
+@pytest.mark.parametrize(
+    ("case_id", "service_data", "expected_passed", "expected_reason"),
+    [
+        pytest.param(
+            "brightness_utility_room_ceiling",
+            {"brightness_pct": 50},
+            True,
+            "ok",
+            id="brightness-canonical-data",
+        ),
+        pytest.param(
+            "brightness_utility_room_ceiling",
+            None,
+            False,
+            "wrong_service_data",
+            id="brightness-missing-data",
+        ),
+        pytest.param(
+            "color_utility_room_accent",
+            {"color_temp_kelvin": 2700},
+            True,
+            "ok",
+            id="color-canonical-data",
+        ),
+        pytest.param(
+            "color_utility_room_accent",
+            {"color_temp_kelvin": 3000},
+            False,
+            "wrong_service_data",
+            id="color-wrong-data",
+        ),
+    ],
+)
+def test_attribute_action_scoring_requires_canonical_service_data(
+    case_id: str,
+    service_data: dict[str, object] | None,
+    expected_passed: bool,
+    expected_reason: str,
+) -> None:
+    case = _home_full_case(case_id)
+    required = case.required_actions[0]
+    recorded = [_action(required.domain, required.service, list(required.target_entity_ids), service_data)]
+    outcome, result, _ledger, end_state = evaluate_case(
+        case,
+        recorded,
+        overlay_seeds=_home_full_seeds(case),
+        invoker_calls=recorded,
+    )
+
+    assert outcome.scoring_mode == "actions"
+    assert outcome.state == ("correct" if expected_passed else "incorrect")
+    assert outcome.score_reason == result.reason == expected_reason
+    assert result.passed is expected_passed
+    assert end_state.status == "not_authored"
 
 
 _BEDROOM_ON = RequiredAction("light", "turn_on", ("light.bedroom",))
@@ -539,9 +764,7 @@ def test_partition_service_data_uses_canonical_equivalence(
     required: RequiredAction,
     recorded: list[dict[str, object]],
 ) -> None:
-    outcome, result, _ledger, _end_state = evaluate_case(
-        _case(required), recorded, overlay_seeds=(), invoker_calls=()
-    )
+    outcome, result, _ledger, _end_state = evaluate_case(_case(required), recorded, overlay_seeds=(), invoker_calls=())
 
     assert outcome.state == "correct"
     assert result.passed is True
@@ -654,9 +877,7 @@ def test_invalid_target_partitions_fail(
     required: RequiredAction,
     recorded: list[dict[str, object]],
 ) -> None:
-    outcome, result, _ledger, _end_state = evaluate_case(
-        _case(required), recorded, overlay_seeds=(), invoker_calls=()
-    )
+    outcome, result, _ledger, _end_state = evaluate_case(_case(required), recorded, overlay_seeds=(), invoker_calls=())
 
     assert outcome.state == "incorrect"
     assert result.passed is False
