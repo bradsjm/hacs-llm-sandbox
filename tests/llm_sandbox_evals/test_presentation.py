@@ -1,6 +1,7 @@
-from typing import Literal
+from typing import Literal, cast
 
 from llm_sandbox_evals.experiment import MatrixCellRef, MatrixProgressEvent
+from llm_sandbox_evals.phases import LanePhase
 from llm_sandbox_evals.presentation import (
     LanePhaseEvent,
     PresentationState,
@@ -56,9 +57,17 @@ def _cell(case_id: str, candidate_id: str = "baseline", model_id: str = "stub") 
 @pytest.mark.parametrize(
     ("trace_kwargs", "expected"),
     [
-        pytest.param({"state": "incorrect", "cap_exhausted": True, "action_reason": "wrong_target"}, "cap_exhausted", id="cap-exhausted"),
-        pytest.param({"state": "incomplete", "action_reason": None, "failure": "timeout"}, "timeout", id="incomplete-timeout"),
-        pytest.param({"state": "incomplete", "action_reason": None, "failure": None}, "unknown", id="incomplete-no-failure"),
+        pytest.param(
+            {"state": "incorrect", "cap_exhausted": True, "action_reason": "wrong_target"},
+            "cap_exhausted",
+            id="cap-exhausted",
+        ),
+        pytest.param(
+            {"state": "incomplete", "action_reason": None, "failure": "timeout"}, "timeout", id="incomplete-timeout"
+        ),
+        pytest.param(
+            {"state": "incomplete", "action_reason": None, "failure": None}, "unknown", id="incomplete-no-failure"
+        ),
         pytest.param({"state": "incorrect", "action_reason": "wrong_target"}, "wrong_target", id="scored-reason"),
         pytest.param({"state": "correct", "action_reason": "ok"}, "ok", id="correct"),
     ],
@@ -83,11 +92,13 @@ def test_rate_is_zero_for_empty_denominator() -> None:
 
 
 def test_result_counts_scored_vocabulary_excludes_completed() -> None:
-    counts = result_counts([
-        _trace(state="correct", case_id="a"),
-        _trace(state="incorrect", case_id="b"),
-        _trace(state="incomplete", case_id="c"),
-    ])
+    counts = result_counts(
+        [
+            _trace(state="correct", case_id="a"),
+            _trace(state="incorrect", case_id="b"),
+            _trace(state="incomplete", case_id="c"),
+        ]
+    )
 
     assert (counts.total, counts.correct, counts.incorrect, counts.incomplete) == (3, 1, 1, 1)
     assert counts.scored == 2
@@ -104,7 +115,11 @@ def test_presentation_state_projects_lifecycle_events() -> None:
 
     state.ingest(MatrixProgressEvent("matrix_started", total=2), timeout=10.0, max_tool_calls=10)
     state.ingest(MatrixProgressEvent("cell_started", cell=timeout_cell, request="r1"), timeout=10.0, max_tool_calls=10)
-    state.ingest(MatrixProgressEvent("tool_started", cell=timeout_cell, tool_name="execute_home_code"), timeout=10.0, max_tool_calls=10)
+    state.ingest(
+        MatrixProgressEvent("tool_started", cell=timeout_cell, tool_name="execute_home_code"),
+        timeout=10.0,
+        max_tool_calls=10,
+    )
     state.ingest(
         MatrixProgressEvent("cell_finished", cell=timeout_cell, trace=timeout_trace, completion_index=1, total=2),
         timeout=10.0,
@@ -124,7 +139,7 @@ def test_presentation_state_projects_lifecycle_events() -> None:
     # Operational issues group by the real cause, never action_mismatch.
     assert dict(state.operational_issues) == {"timeout": 1}
     assert not state.lanes
-    # Lane phase events are accepted but render nothing (streaming deferred).
+    # A phase from a completed lane does not activate the live Activity column.
     state.ingest_phase(LanePhaseEvent(correct_cell, "thinking"))
 
 
@@ -145,6 +160,76 @@ def test_presentation_state_cap_exhausted_does_not_count_as_operational_issue() 
     assert state.counts.scored == 1
     assert state.counts.incomplete == 0
     assert dict(state.operational_issues) == {}
+
+
+def test_presentation_state_ignores_thinking_for_unknown_and_finished_lanes() -> None:
+    state = PresentationState()
+    finished_cell = _cell("finished-case")
+
+    state.ingest(MatrixProgressEvent("matrix_started", total=1), timeout=10.0, max_tool_calls=10)
+    assert not state.ingest_phase(LanePhaseEvent(_cell("unknown-case"), "thinking"))
+    state.ingest(MatrixProgressEvent("cell_started", cell=finished_cell, request="r"), timeout=10.0, max_tool_calls=10)
+    state.ingest(
+        MatrixProgressEvent("cell_finished", cell=finished_cell, trace=_trace(), completion_index=1, total=1),
+        timeout=10.0,
+        max_tool_calls=10,
+    )
+    assert not state.ingest_phase(LanePhaseEvent(finished_cell, "thinking"))
+
+    assert not state.activity_enabled
+    assert not state.lanes
+
+
+def test_ingest_phase_reports_only_visible_active_lane_changes() -> None:
+    state = PresentationState()
+    cell = _cell("phase-change-case")
+
+    state.ingest(MatrixProgressEvent("cell_started", cell=cell, request="r"), timeout=10.0, max_tool_calls=10)
+
+    assert state.ingest_phase(LanePhaseEvent(cell, "queued"))
+    assert not state.ingest_phase(LanePhaseEvent(cell, "queued"))
+    assert state.ingest_phase(LanePhaseEvent(cell, "thinking"))
+    assert state.activity_enabled
+    assert not state.ingest_phase(LanePhaseEvent(cell, "thinking"))
+    assert state.ingest_phase(LanePhaseEvent(cell, "running_tool", "execute_home_code"))
+    assert not state.ingest_phase(LanePhaseEvent(cell, "running_tool", "execute_home_code"))
+    assert state.ingest_phase(LanePhaseEvent(cell, "running_tool", "get_history"))
+
+
+def test_ingest_phase_coalesces_provider_tool_names_and_rejects_invalid_phases() -> None:
+    state = PresentationState()
+    cell = _cell("preparing-case")
+
+    state.ingest(MatrixProgressEvent("cell_started", cell=cell, request="r"), timeout=10.0, max_tool_calls=10)
+
+    assert state.ingest_phase(LanePhaseEvent(cell, "preparing_tool_call", "provider-name-one"))
+    assert not state.ingest_phase(LanePhaseEvent(cell, "preparing_tool_call", "provider-name-two"))
+    assert state.lanes[cell].tool_name is None
+    assert not state.ingest_phase(LanePhaseEvent(cell, cast(LanePhase, "invalid_phase")))
+
+
+@pytest.mark.parametrize(
+    "phase",
+    [
+        pytest.param("queued", id="queued"),
+        pytest.param("awaiting_model", id="awaiting-model"),
+        pytest.param("preparing_tool_call", id="preparing-tool-call"),
+        pytest.param("running_tool", id="running-tool"),
+        pytest.param("processing_tool_result", id="processing-tool-result"),
+        pytest.param("responding", id="responding"),
+        pytest.param("scoring", id="scoring"),
+        pytest.param("finished", id="finished"),
+    ],
+)
+def test_pre_reveal_phases_update_active_lane_without_enabling_activity(phase: LanePhase) -> None:
+    state = PresentationState()
+    cell = _cell("phase-case")
+
+    state.ingest(MatrixProgressEvent("cell_started", cell=cell, request="r"), timeout=10.0, max_tool_calls=10)
+    state.ingest_phase(LanePhaseEvent(cell, phase))
+
+    assert state.lanes[cell].phase == phase
+    assert not state.activity_enabled
 
 
 def test_presentation_state_uses_planned_total_for_coverage_while_run_active() -> None:
@@ -171,7 +256,9 @@ def test_presentation_state_uses_planned_total_for_coverage_while_run_active() -
     assert counts.quality_rate == 1.0
 
 
-def _report_case(trace: CaseTrace, cell: MatrixCellRef, *, metrics: dict[str, float | int] | None = None) -> ReportCase:
+def _report_case(
+    trace: CaseTrace, cell: MatrixCellRef, *, metrics: dict[str, float | int] | None = None
+) -> ReportCase:
     return ReportCase(
         name=f"{cell.candidate_id}/{cell.model_id}/{cell.case_id}",
         inputs=cell,

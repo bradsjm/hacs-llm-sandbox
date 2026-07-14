@@ -159,6 +159,10 @@ quality (`correct/scored`), coverage (`scored/total`), and operational causes.
 TTY runs render one human stderr summary; redirected runs or `--machine` emit
 deterministic KV. `python -m llm_sandbox_evals report <run_id> --html`
 regenerates the complete report without model calls.
+Interactive evals consume native Pydantic AI streaming events; their Activity
+column appears only after an observed thinking event; transient phase/activity
+data is not persisted to reports or artifacts and is not rendered in machine
+output.
 
 ## Support
 

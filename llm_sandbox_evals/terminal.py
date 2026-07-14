@@ -4,7 +4,7 @@ from time import perf_counter
 from typing import Self
 
 from rich import box
-from rich.console import Console, ConsoleOptions, Group, RenderResult
+from rich.console import Console, ConsoleOptions, Group, RenderableType, RenderResult
 from rich.live import Live
 from rich.panel import Panel
 from rich.progress import BarColumn, Progress, TaskProgressColumn, TextColumn
@@ -14,7 +14,7 @@ from rich.table import Table
 from rich.text import Text
 
 from llm_sandbox_evals.config import EvalConfig
-from llm_sandbox_evals.experiment import MatrixProgressEvent
+from llm_sandbox_evals.experiment import LanePhaseEvent, MatrixProgressEvent
 from llm_sandbox_evals.presentation import PresentationState, result_label, variant_label
 
 _ACTIVE = "#38b6ca"
@@ -24,7 +24,35 @@ _ERROR = "#f2705f"
 _TRACK = "grey37"
 _PERCENT = "#b8a1e8"
 _RECENT_RESULTS = 10
+
+# Fixed lane-table column widths (in cells). Named so the responsive breakpoint is derived from
+# the real budget rather than a magic number.
+_SPINNER_WIDTH = 2
 _VARIANT_WIDTH = 22
+_ELAPSED_WIDTH = 18
+_TOOLS_WIDTH = 12
+# Smallest width that renders the longest runtime label `result · execute_home_code` (26 cells)
+# without ellipsis, so the executing tool name is always shown in full during running/processing.
+_ACTIVITY_WIDTH = 26
+
+# Rich Table uses default cell padding (0, 1): one space each side, i.e. two cells per column.
+# pad_edge=False suppresses the outermost left and right pad columns, trimming two cells overall.
+_CELL_PADDING = 2
+_EDGE_TRIM = 2
+# Keep Request at least this legible before abandoning the wide six-column layout.
+_MIN_REQUEST_WIDTH = 12
+# Six-column enabled layout budget: every fixed column + Activity + inter-cell padding + a legible
+# Request. Below this the ratio Request cannot absorb the deficit, so Rich contracts the fixed
+# Activity column and ellipsizes the tool name. At/above it the wide layout renders Activity in full.
+_ACTIVITY_WIDE_MIN_COLUMNS = (
+    _SPINNER_WIDTH
+    + _ACTIVITY_WIDTH
+    + _VARIANT_WIDTH
+    + _ELAPSED_WIDTH
+    + _TOOLS_WIDTH
+    + (6 * _CELL_PADDING - _EDGE_TRIM)
+    + _MIN_REQUEST_WIDTH
+)  # = 80 fixed + 10 padding + 12 request = 102
 
 # Outcome state → (glyph, color). Drives every colored result surface consistently.
 _OUTCOME_STYLES: dict[str, tuple[str, str]] = {
@@ -32,6 +60,34 @@ _OUTCOME_STYLES: dict[str, tuple[str, str]] = {
     "incorrect": ("\u2717", _WARNING),
     "incomplete": ("!", _ERROR),
 }
+
+# Phase → concise, content-free activity verb. Truthful labels sourced only from stream facts.
+_ACTIVITY_LABELS: dict[str, str] = {
+    "queued": "queued",
+    "awaiting_model": "awaiting model",
+    "thinking": "thinking",
+    "preparing_tool_call": "preparing",
+    "running_tool": "run",
+    "processing_tool_result": "result",
+    "responding": "responding",
+    "scoring": "scoring",
+    "finished": "finished",
+}
+# Only the authoritative running/processing phases append the safe tool name; preparing_tool_call
+# carries a provider-supplied name and stays a bare label.
+_TOOL_PHASES: frozenset[str] = frozenset({"running_tool", "processing_tool_result"})
+
+
+def _activity_label(phase: str | None, tool_name: str | None) -> str:
+    """Return a concise activity label; em dash for no phase, tool name only for authoritative phases."""
+    # Branch boundary: an unobserved phase renders as an em dash, never as a simulated wait.
+    if phase is None:
+        return "\u2014"
+    base = _ACTIVITY_LABELS.get(phase, phase)
+    # Branch boundary: only running/processing append the executing tool name; preparing never does.
+    if phase in _TOOL_PHASES and tool_name:
+        return f"{base} \u00b7 {tool_name}"
+    return base
 
 
 class _LeftEllipsisText:
@@ -94,6 +150,14 @@ class MatrixTerminalReporter:
             self._live.update(self._render(), refresh=True)
         elif not self._human:
             self._print_machine_event(event)
+
+    def handle_phase(self, event: LanePhaseEvent) -> None:
+        """Project a payload-free phase; refresh Live only on a real change, never emitting machine output."""
+        changed = self._state.ingest_phase(event)
+        # Branch boundary: coalesce repeated stream-delta phases — rebuild the Live frame only when the
+        # projected state actually changed, so zero-buffer stream deltas do not backpressure the model.
+        if changed and self._live is not None:
+            self._live.update(self._render(), refresh=True)
 
     def finish(self, *, run_dir: str, report_html: str) -> None:
         """Print exactly one durable human final after artifacts are complete."""
@@ -193,31 +257,54 @@ class MatrixTerminalReporter:
         return progress
 
     def _lanes_table(self) -> Table:
-        """Render active lanes with an animated spinner, variant tail, budget, and tool cap."""
+        """Render active lanes; reveal a truthful Activity column only once thinking is observed."""
+        activity = self._state.activity_enabled
+        # Branch boundary: only the enabled layout is responsive; when Activity is enabled but the
+        # reporter console is too narrow for the six-column budget, drop the lowest-priority Variant
+        # so spinner + Request + Activity keep their full widths and the tool name never ellipsizes.
+        narrow = activity and self._console.width < _ACTIVITY_WIDE_MIN_COLUMNS
+        show_variant = not narrow
         table = Table(box=None, expand=True, pad_edge=False, header_style=_ACTIVE)
-        table.add_column("", width=2, no_wrap=True)
+        table.add_column("", width=_SPINNER_WIDTH, no_wrap=True)
         table.add_column("Request", ratio=3, overflow="ellipsis", no_wrap=True)
-        table.add_column("Variant", width=_VARIANT_WIDTH, style="dim", no_wrap=True)
-        table.add_column("Elapsed / timeout", width=18, justify="right", no_wrap=True)
-        table.add_column("Tools / cap", width=12, justify="right", no_wrap=True)
+        # Branch boundary: the Activity column is purely additive and appears only after a real thinking phase.
+        if activity:
+            table.add_column("Activity", width=_ACTIVITY_WIDTH, overflow="ellipsis", no_wrap=True)
+        # Branch boundary: Variant is the only column suppressed on the narrow enabled layout.
+        if show_variant:
+            table.add_column("Variant", width=_VARIANT_WIDTH, style="dim", no_wrap=True)
+        table.add_column("Elapsed / timeout", width=_ELAPSED_WIDTH, justify="right", no_wrap=True)
+        table.add_column("Tools / cap", width=_TOOLS_WIDTH, justify="right", no_wrap=True)
         for lane in self._state.lanes.values():
-            table.add_row(
+            row: list[RenderableType] = [
                 # A live Spinner renderable animates every refresh without any simulated phase text.
                 Spinner("dots", style=_ACTIVE),
                 Text(lane.request),
-                _LeftEllipsisText(variant_label(lane.cell.model_id, lane.cell.reasoning_effort), style="dim"),
-                Text(f"{_duration(perf_counter() - lane.started_at)} / {lane.timeout:g}s"),
-                Text(f"{lane.tools_used} / {lane.max_tool_calls}"),
+            ]
+            # Branch boundary: Activity text is derived only from stored phase facts, never model content.
+            if activity:
+                row.append(Text(_activity_label(lane.phase, lane.tool_name)))
+            # Branch boundary: Variant renders only when the wide layout is in effect.
+            if show_variant:
+                row.append(
+                    _LeftEllipsisText(variant_label(lane.cell.model_id, lane.cell.reasoning_effort), style="dim")
+                )
+            row.extend(
+                (
+                    Text(f"{_duration(perf_counter() - lane.started_at)} / {lane.timeout:g}s"),
+                    Text(f"{lane.tools_used} / {lane.max_tool_calls}"),
+                )
             )
+            table.add_row(*row)
         if not self._state.lanes:
-            # Idle placeholder keeps the section height stable between refreshes.
-            table.add_row(
-                Text(" "),
-                Text("—", style="dim"),
-                Text("—", style="dim"),
-                Text("—", style="dim"),
-                Text("—", style="dim"),
-            )
+            # Idle placeholder keeps the section height stable; its arity matches the active column set.
+            placeholder: list[RenderableType] = [Text(" "), Text("—", style="dim")]
+            if activity:
+                placeholder.append(Text("—", style="dim"))
+            if show_variant:
+                placeholder.append(Text("—", style="dim"))
+            placeholder.extend((Text("—", style="dim"), Text("—", style="dim")))
+            table.add_row(*placeholder)
         return table
 
     def _recent_table(self) -> Table:

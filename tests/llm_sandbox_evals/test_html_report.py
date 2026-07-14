@@ -99,7 +99,9 @@ def _report() -> EvaluationReport:
         name="html-report",
         cases=[_case(fail), _case(ok), _case(incomplete)],
         experiment_metadata={
-            "models": [{"model_id": "stub", "reasoning_effort": "high", "temperature": 0.7, "variant_label": "stub(high)"}],
+            "models": [
+                {"model_id": "stub", "reasoning_effort": "high", "temperature": 0.7, "variant_label": "stub(high)"}
+            ],
         },
     )
 

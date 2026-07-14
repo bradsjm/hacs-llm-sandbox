@@ -1,6 +1,6 @@
 """Pydantic AI agent wiring for evals over production tool cores."""
 
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping
 from typing import Literal, Protocol, cast
 
 from custom_components.llm_sandbox.const import (
@@ -34,14 +34,12 @@ from pydantic_ai import Agent, RunContext, Tool
 from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
-    ModelResponse,
-    TextPart,
     ToolCallPart,
     ToolReturnPart,
     UserPromptPart,
 )
 from pydantic_ai.models import Model, infer_model
-from pydantic_ai.models.function import AgentInfo, FunctionModel
+from pydantic_ai.models.function import AgentInfo, DeltaToolCall, DeltaToolCalls, FunctionModel
 from pydantic_ai.settings import ModelSettings
 from voluptuous_openapi import convert
 
@@ -254,10 +252,10 @@ def make_model(model_id: str) -> Model:
 
 def stub_function_model() -> FunctionModel:
     """Return the deterministic keyless FunctionModel used for CI pipeline validation."""
-    return FunctionModel(_stub_respond, model_name="stub")
+    return FunctionModel(stream_function=_stub_stream, model_name="stub")
 
 
-async def _stub_respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+async def _stub_stream(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str | DeltaToolCalls]:
     """Invoke one stub-routable home_full action, then return plain prose."""
     _ = info
     user_request = _first_user_content(messages)
@@ -267,25 +265,25 @@ async def _stub_respond(messages: list[ModelMessage], info: AgentInfo) -> ModelR
         if isinstance(message, ModelRequest)
         for part in message.parts
     ):
-        return ModelResponse(parts=[TextPart(content="Done.")])
+        yield "Done."
+        return
     action = _stub_action(user_request)
     if action is None:
-        return ModelResponse(parts=[TextPart(content="Unsupported stub request.")])
+        yield "Unsupported stub request."
+        return
     domain, service, entity_id = action
-    return ModelResponse(
-        parts=[
-            _tool_call_part(
-                TOOL_EXECUTE_HOME_CODE,
-                {"code": _service_code(domain, service, entity_id)},
-                1,
-            )
-        ]
-    )
-
-
-def _tool_call_part(tool_name: str, tool_args: dict[str, object], index: int) -> ToolCallPart:
-    """Build one deterministic Pydantic AI tool call part."""
-    return ToolCallPart(tool_name=tool_name, args=tool_args, tool_call_id=f"stub-call-{index}")
+    # State transition boundary: the first streamed turn requests the same tool call as the prior stub response.
+    yield {
+        0: DeltaToolCall(
+            name=TOOL_EXECUTE_HOME_CODE,
+            json_args=ToolCallPart(
+                tool_name=TOOL_EXECUTE_HOME_CODE,
+                args={"code": _service_code(domain, service, entity_id)},
+                tool_call_id="stub-call-1",
+            ).args_as_json_str(),
+            tool_call_id="stub-call-1",
+        )
+    }
 
 
 def _stub_action(user_request: str) -> tuple[str, str, str] | None:

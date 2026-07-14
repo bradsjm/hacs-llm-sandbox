@@ -1,8 +1,10 @@
 from io import StringIO
 from pathlib import Path
+from typing import cast
 
 from llm_sandbox_evals.config import EvalConfig
-from llm_sandbox_evals.experiment import MatrixCellRef, MatrixProgressEvent
+from llm_sandbox_evals.experiment import LanePhaseEvent, MatrixCellRef, MatrixProgressEvent
+from llm_sandbox_evals.phases import LanePhase
 from llm_sandbox_evals.schema import (
     ActionLedger,
     ActionResult,
@@ -15,6 +17,8 @@ from llm_sandbox_evals.schema import (
 from llm_sandbox_evals.terminal import MatrixTerminalReporter, _duration, _left_ellipsis, _token_total
 import pytest
 from rich.console import Console
+from rich.live import Live
+from rich.table import Table
 
 
 def _config() -> EvalConfig:
@@ -89,6 +93,20 @@ def _feed(reporter: MatrixTerminalReporter, *cells: tuple[MatrixCellRef, CaseTra
         )
 
 
+def _lane_column_metadata(table: Table) -> list[tuple[str, int | None, int | None]]:
+    return [(str(column.header), column.width, column.ratio) for column in table.columns]
+
+
+class _LiveRecorder:
+    """Capture phase-triggered Live redraws without starting Rich's background loop."""
+
+    def __init__(self) -> None:
+        self.update_count = 0
+
+    def update(self, _renderable: object, *, refresh: bool) -> None:
+        self.update_count += 1
+
+
 def test_human_render_has_no_phase_activity_waiting_or_response_row() -> None:
     reporter = _reporter(human=True)
     _feed(
@@ -159,6 +177,202 @@ def test_lanes_show_variant_and_tool_cap_without_phase() -> None:
     output = console.export_text()
     assert "stub(high)" in output
     assert "0 / 10" in output
+
+
+@pytest.mark.parametrize("width", [pytest.param(80, id="narrow"), pytest.param(102, id="wide")])
+def test_lanes_keep_five_columns_without_activity_for_non_thinking_phases(width: int) -> None:
+    reporter = _reporter(human=True)
+    reporter._console = Console(width=width, force_terminal=False, file=StringIO())
+    cell = _cell()
+    reporter.handle(MatrixProgressEvent("cell_started", cell=cell, request="Turn on light"))
+    for phase in (
+        "awaiting_model",
+        "preparing_tool_call",
+        "running_tool",
+        "processing_tool_result",
+        "responding",
+        "scoring",
+    ):
+        reporter.handle_phase(LanePhaseEvent(cell, phase, "execute_home_code"))
+
+    table = reporter._lanes_table()
+    console = Console(width=width, force_terminal=False, record=True)
+    console.print(table)
+    output = console.export_text()
+
+    assert _lane_column_metadata(table) == [
+        ("", 2, None),
+        ("Request", None, 3),
+        ("Variant", 22, None),
+        ("Elapsed / timeout", 18, None),
+        ("Tools / cap", 12, None),
+    ]
+    assert "Activity" not in output
+    assert "Waiting" not in output
+
+
+@pytest.mark.parametrize(
+    ("phase", "expected_activity"),
+    [
+        pytest.param("running_tool", "run · execute_home_code", id="running-tool"),
+        pytest.param("processing_tool_result", "result · execute_home_code", id="processing-tool-result"),
+    ],
+)
+def test_thinking_enables_safe_tool_activity_without_stream_payloads(phase: LanePhase, expected_activity: str) -> None:
+    reporter = _reporter(human=True)
+    reporter._console = Console(width=102, force_terminal=False, file=StringIO())
+    cell = _cell()
+    reporter.handle(MatrixProgressEvent("cell_started", cell=cell, request="light"))
+    reporter.handle_phase(LanePhaseEvent(cell, "thinking"))
+    reporter.handle_phase(LanePhaseEvent(cell, "preparing_tool_call", "provider-private-tool-name"))
+    preparing_console = Console(width=102, force_terminal=False, record=True)
+    preparing_console.print(reporter._lanes_table())
+    preparing_output = preparing_console.export_text()
+    assert reporter.state.lanes[cell].tool_name is None
+    reporter.handle(
+        MatrixProgressEvent("response_received", cell=cell, response="private reasoning and response text")
+    )
+    reporter.handle_phase(LanePhaseEvent(cell, phase, "execute_home_code"))
+
+    active_console = Console(width=102, force_terminal=False, record=True)
+    active_console.print(reporter._lanes_table())
+    active_output = active_console.export_text()
+    assert reporter.state.lanes[cell].tool_name == "execute_home_code"
+    reporter.handle(
+        MatrixProgressEvent(
+            "cell_finished",
+            cell=cell,
+            trace=_trace(answer="private reasoning and response text"),
+            completion_index=1,
+            total=1,
+        )
+    )
+    finished_console = Console(width=102, force_terminal=False, record=True)
+    finished_console.print(reporter._render())
+    output = active_output + finished_console.export_text()
+
+    assert "Activity" in output
+    assert expected_activity in output
+    assert "…" not in active_output
+    assert "execute_" in output
+    assert "provider-private-tool-name" not in preparing_output
+    assert "provider-private-tool-name" not in output
+    assert "private reasoning and response text" not in output
+    assert "secret-tool-arg" not in output
+    assert "payload" not in output
+
+
+@pytest.mark.parametrize(
+    ("width", "expected_columns"),
+    [
+        pytest.param(
+            80,
+            [
+                ("", 2, None),
+                ("Request", None, 3),
+                ("Activity", 26, None),
+                ("Elapsed / timeout", 18, None),
+                ("Tools / cap", 12, None),
+            ],
+            id="narrow",
+        ),
+        pytest.param(
+            102,
+            [
+                ("", 2, None),
+                ("Request", None, 3),
+                ("Activity", 26, None),
+                ("Variant", 22, None),
+                ("Elapsed / timeout", 18, None),
+                ("Tools / cap", 12, None),
+            ],
+            id="wide",
+        ),
+    ],
+)
+def test_activity_idle_placeholder_renders_at_narrow_and_wide_widths(
+    width: int, expected_columns: list[tuple[str, int | None, int | None]]
+) -> None:
+    reporter = _reporter(human=True)
+    reporter._console = Console(width=width, force_terminal=False, file=StringIO())
+    cell = _cell()
+    reporter.handle(MatrixProgressEvent("cell_started", cell=cell, request="Turn on light"))
+    reporter.handle_phase(LanePhaseEvent(cell, "thinking"))
+    reporter.handle(MatrixProgressEvent("cell_finished", cell=cell, trace=_trace(), completion_index=1, total=1))
+
+    table = reporter._lanes_table()
+    console = Console(width=width, force_terminal=False, record=True)
+    console.print(table)
+
+    assert _lane_column_metadata(table) == expected_columns
+    assert "Activity" in console.export_text()
+
+
+@pytest.mark.parametrize(
+    ("phase", "expected_activity"),
+    [
+        pytest.param("running_tool", "run · execute_home_code", id="running-tool"),
+        pytest.param("processing_tool_result", "result · execute_home_code", id="processing-tool-result"),
+    ],
+)
+def test_narrow_activity_renders_full_safe_tool_labels(phase: LanePhase, expected_activity: str) -> None:
+    reporter = _reporter(human=True)
+    reporter._console = Console(width=80, force_terminal=False, file=StringIO())
+    cell = _cell()
+    reporter.handle(MatrixProgressEvent("cell_started", cell=cell, request="light"))
+    reporter.handle_phase(LanePhaseEvent(cell, "thinking"))
+    reporter.handle_phase(LanePhaseEvent(cell, phase, "execute_home_code"))
+
+    table = reporter._lanes_table()
+    console = Console(width=80, force_terminal=False, record=True)
+    console.print(table)
+    output = console.export_text()
+
+    assert _lane_column_metadata(table) == [
+        ("", 2, None),
+        ("Request", None, 3),
+        ("Activity", 26, None),
+        ("Elapsed / timeout", 18, None),
+        ("Tools / cap", 12, None),
+    ]
+    assert expected_activity in output
+    assert "…" not in output
+
+
+def test_machine_phase_events_produce_no_terminal_output() -> None:
+    stream = StringIO()
+    reporter = _reporter(human=False)
+    reporter._console = Console(width=200, force_terminal=False, file=stream)
+    cell = _cell()
+    reporter.handle(MatrixProgressEvent("cell_started", cell=cell, request="Turn on light"))
+    reporter.handle_phase(LanePhaseEvent(cell, "thinking"))
+
+    assert stream.getvalue() == ""
+
+
+def test_live_coalesces_duplicate_phase_redraws() -> None:
+    reporter = _reporter(human=True)
+    recorder = _LiveRecorder()
+    reporter._live = cast(Live, recorder)
+    cell = _cell()
+    reporter.handle(MatrixProgressEvent("cell_started", cell=cell, request="light"))
+    recorder.update_count = 0
+
+    reporter.handle_phase(LanePhaseEvent(cell, "thinking"))
+    assert recorder.update_count == 1
+    reporter.handle_phase(LanePhaseEvent(cell, "thinking"))
+    assert recorder.update_count == 1
+    reporter.handle_phase(LanePhaseEvent(cell, "responding"))
+    assert recorder.update_count == 2
+    reporter.handle_phase(LanePhaseEvent(cell, "responding"))
+    assert recorder.update_count == 2
+    reporter.handle_phase(LanePhaseEvent(cell, "running_tool", "execute_home_code"))
+    assert recorder.update_count == 3
+    reporter.handle_phase(LanePhaseEvent(cell, "running_tool", "execute_home_code"))
+    assert recorder.update_count == 3
+    reporter.handle_phase(LanePhaseEvent(cell, "running_tool", "get_history"))
+
+    assert recorder.update_count == 4
 
 
 def test_machine_events_emit_stable_kv_without_raw_payload() -> None:

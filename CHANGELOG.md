@@ -9,8 +9,10 @@
   causes, and corrected native usage metrics.
 - Added atomic run manifests and typed cancellation/failure journals that are
   explicitly not reports, plus pre-flight matrix validation.
-- Added Auto TTY / `--machine` output behavior, a durable terminal final with
-  no simulated activity phase, and report-model-driven HTML/CSV presentation.
+- Added Auto TTY / `--machine` output behavior, native agent event streaming,
+  and an Activity column that appears only after observed thinking, without
+  persisting transient phase/activity data; retained the durable terminal final
+  and report-model-driven HTML/CSV presentation.
 
 ### Restore safe configuration minima
 

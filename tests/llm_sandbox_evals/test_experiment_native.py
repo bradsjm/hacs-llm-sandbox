@@ -1,10 +1,11 @@
 from collections.abc import Sequence
-from dataclasses import replace
+from dataclasses import fields, replace
 from pathlib import Path
 
 from custom_components.llm_sandbox.const import DEFAULT_PROMPT_PROFILE
 from llm_sandbox_evals.config import EvalConfig
 from llm_sandbox_evals.experiment import (
+    LanePhaseEvent,
     MatrixCellRef,
     _record_trace_metrics,
     build_dataset,
@@ -71,6 +72,32 @@ async def test_run_matrix_emits_plain_text_lifecycle_response(tmp_path: Path) ->
     ]
     assert events[-2].response == "Done."
     assert events[-1].trace == report.cases[0].output
+
+
+async def test_run_matrix_forwards_payload_free_phases_for_the_active_cell(tmp_path: Path) -> None:
+    phases: list[LanePhaseEvent] = []
+    case_id = "direct_turn_on_utility_room_ceiling"
+    report = await run_matrix(
+        _config(tmp_path, cases=[case_id]),
+        run_id="phase-forwarding-v6",
+        on_phase=phases.append,
+    )
+
+    expected_cell = MatrixCellRef(case_id, "baseline", "stub", "home_full")
+
+    assert report.cases[0].output.outcome.state == "correct"
+    assert [event.cell for event in phases] == [expected_cell] * len(phases)
+    assert [(event.phase, event.tool_name) for event in phases] == [
+        ("queued", None),
+        ("awaiting_model", None),
+        ("running_tool", "execute_home_code"),
+        ("processing_tool_result", "execute_home_code"),
+        ("responding", None),
+        ("responding", None),
+        ("scoring", None),
+        ("finished", None),
+    ]
+    assert tuple(field.name for field in fields(phases[0])) == ("cell", "phase", "tool_name")
 
 
 async def test_report_uses_scored_vocabulary_and_excludes_completed(tmp_path: Path) -> None:

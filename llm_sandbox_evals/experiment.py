@@ -22,6 +22,7 @@ from pydantic_evals.reporting.analyses import ReportAnalysis, ScalarResult, Tabl
 from llm_sandbox_evals import prompts
 from llm_sandbox_evals.config import EvalConfig
 from llm_sandbox_evals.harness import _select_cases, run_case
+from llm_sandbox_evals.phases import LanePhase, PhaseObservation
 from llm_sandbox_evals.schema import (
     CaseTrace,
     EvalCase,
@@ -33,6 +34,7 @@ from llm_sandbox_evals.schema import (
 
 type MatrixCellMeta = dict[str, str | int | float | None]
 type MatrixEventCallback = Callable[[MatrixProgressEvent], None]
+type LanePhaseCallback = Callable[[LanePhaseEvent], None]
 type MatrixProgressState = Literal[
     "matrix_started", "cell_started", "tool_started", "tool_finished", "response_received", "cell_finished"
 ]
@@ -63,6 +65,15 @@ class MatrixProgressEvent:
     elapsed: float | None = None
     completion_index: int | None = None
     total: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class LanePhaseEvent:
+    """Payload-free phase observation associated with one matrix cell."""
+
+    cell: MatrixCellRef
+    phase: LanePhase
+    tool_name: str | None = None
 
 
 @dataclass(slots=True)
@@ -242,6 +253,7 @@ def make_matrix_task(
     *,
     total: int,
     on_event: MatrixEventCallback | None = None,
+    on_phase: LanePhaseCallback | None = None,
 ) -> Callable[[MatrixCellRef], Awaitable[CaseTrace]]:
     """Build the pydantic-evals task that preserves run_case snapshot/tool semantics."""
     completed = 0
@@ -266,6 +278,9 @@ def make_matrix_task(
                 on_event, MatrixProgressEvent("response_received", cell=cell, request=request, response=response)
             )
 
+        def on_phase_observation(observation: PhaseObservation) -> None:
+            _emit_phase_event(on_phase, LanePhaseEvent(cell, observation.phase, observation.tool_name))
+
         trace = await run_case(
             candidate_by_id[cell.candidate_id],
             cell.model_id,
@@ -274,6 +289,7 @@ def make_matrix_task(
             profile=profile,
             on_tool_boundary=on_tool_boundary,
             on_response=on_response,
+            on_phase=on_phase_observation,
         )
         _record_trace_metrics(trace)
         completed += 1
@@ -300,6 +316,7 @@ async def run_matrix(
     run_id: str | None = None,
     descriptor: RunDescriptor | None = None,
     on_event: MatrixEventCallback | None = None,
+    on_phase: LanePhaseCallback | None = None,
 ) -> EvaluationReport[MatrixCellRef, CaseTrace, MatrixCellMeta]:
     """Run the full matrix through one native pydantic-evals experiment."""
     if descriptor is not None:
@@ -326,6 +343,7 @@ async def run_matrix(
             {c.id: c for c in selected_cases},
             total=len(dataset.cases),
             on_event=on_event,
+            on_phase=on_phase,
         ),
         name="matrix",
         max_concurrency=max(1, config.concurrency),
@@ -341,6 +359,16 @@ def _emit_event(callback: MatrixEventCallback | None, event: MatrixProgressEvent
     try:
         callback(event)
     except Exception:  # noqa: BLE001 - presentation observers must not fail evaluation.
+        return
+
+
+def _emit_phase_event(callback: LanePhaseCallback | None, event: LanePhaseEvent) -> None:
+    """Isolate payload-free phase observers from matrix execution."""
+    if callback is None:
+        return
+    try:
+        callback(event)
+    except Exception:  # noqa: BLE001 - phase observers must not fail evaluation.
         return
 
 

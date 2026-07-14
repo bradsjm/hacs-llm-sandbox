@@ -7,15 +7,29 @@ import json
 from time import perf_counter
 
 from custom_components.llm_sandbox.llm_api.prompts import PromptProfile
-from pydantic_ai import capture_run_messages
+from pydantic_ai import AgentRunResult, AgentRunResultEvent, capture_run_messages
 from pydantic_ai.exceptions import UnexpectedModelBehavior, UsageLimitExceeded
-from pydantic_ai.messages import ModelRequest, ModelResponse, ToolCallPart, ToolReturnPart
+from pydantic_ai.messages import (
+    FunctionToolCallEvent,
+    ModelRequest,
+    ModelResponse,
+    PartDeltaEvent,
+    PartEndEvent,
+    PartStartEvent,
+    TextPart,
+    TextPartDelta,
+    ThinkingPart,
+    ThinkingPartDelta,
+    ToolCallPart,
+    ToolReturnPart,
+)
 from pydantic_ai.usage import UsageLimits
 
 from llm_sandbox_evals import cases
 from llm_sandbox_evals.agent_runner import build_agent, build_model_settings
 from llm_sandbox_evals.config import EvalConfig
 from llm_sandbox_evals.homes import get_home
+from llm_sandbox_evals.phases import LanePhase, PhaseEmitter, PhaseObservation, PhaseObserver
 from llm_sandbox_evals.runtime import ToolBoundaryCallback, build_eval_runtime
 from llm_sandbox_evals.schema import (
     ActionResult,
@@ -42,31 +56,71 @@ async def run_case(
     profile: PromptProfile,
     on_tool_boundary: ToolBoundaryCallback | None = None,
     on_response: Callable[[str], None] | None = None,
+    on_phase: PhaseObserver | None = None,
 ) -> CaseTrace:
     """Run one matrix cell through the production-core Pydantic AI agent."""
     started = perf_counter()
     captured: Sequence[object] = ()
     proposed_actions: Sequence[dict[str, object]] = ()
+    current_phase: LanePhase | None = None
+
+    def emit_phase(phase: LanePhase, tool_name: str | None = None) -> None:
+        """Forward one payload-free phase without allowing observers to alter execution."""
+        nonlocal current_phase
+        # State mutation boundary: a delayed model tool-call event must not replace a runtime tool phase.
+        if phase == "preparing_tool_call" and current_phase in {"running_tool", "processing_tool_result"}:
+            return
+        current_phase = phase
+        if on_phase is not None:
+            try:
+                on_phase(PhaseObservation(phase, tool_name))
+            except Exception:  # noqa: BLE001 - phase observers are isolated from execution and scoring.
+                return
+
+    def finish_trace(trace: CaseTrace) -> CaseTrace:
+        """Mark a trace terminal only after its complete result exists."""
+        emit_phase("finished")
+        return trace
+
+    def on_runtime_tool_boundary(tool_name: str, tool_started: bool) -> None:
+        """Observe actual tool runtime boundaries before retaining existing lifecycle callbacks."""
+        emit_phase("running_tool" if tool_started else "processing_tool_result", tool_name)
+        if on_tool_boundary is not None:
+            try:
+                on_tool_boundary(tool_name, tool_started)
+            except Exception:  # noqa: BLE001 - tool observers are isolated from the production tool result.
+                return
+
+    async def consume_stream() -> AgentRunResult[str]:
+        """Consume the complete native event stream and return its terminal result."""
+        emit_phase("awaiting_model")
+        async with agent.run_stream_events(
+            case.user_request,
+            deps=runtime,
+            model_settings=build_model_settings(
+                model_id,
+                temperature=config.temperature,
+                reasoning_effort=config.reasoning_effort,
+            ),
+            usage_limits=UsageLimits(tool_calls_limit=config.max_tool_calls),
+        ) as events:
+            async for event in events:
+                _observe_stream_phase(event, emit_phase)
+                if isinstance(event, AgentRunResultEvent):
+                    return event.result
+        raise UnexpectedModelBehavior("agent event stream ended without a terminal result")
+
     try:
+        emit_phase("queued")
         fixture = get_home(case.home)
         snapshot = apply_scope(fixture.snapshot(), EVAL_SCOPE)
-        runtime = build_eval_runtime(case, candidate, profile, snapshot, fixture, on_tool_boundary=on_tool_boundary)
+        runtime = build_eval_runtime(
+            case, candidate, profile, snapshot, fixture, on_tool_boundary=on_runtime_tool_boundary
+        )
         proposed_actions = runtime.invoker.calls
         agent = build_agent(runtime, model_id)
         with capture_run_messages() as captured:
-            result = await asyncio.wait_for(
-                agent.run(
-                    case.user_request,
-                    deps=runtime,
-                    model_settings=build_model_settings(
-                        model_id,
-                        temperature=config.temperature,
-                        reasoning_effort=config.reasoning_effort,
-                    ),
-                    usage_limits=UsageLimits(tool_calls_limit=config.max_tool_calls),
-                ),
-                timeout=config.model_timeout,
-            )
+            result = await asyncio.wait_for(consume_stream(), timeout=config.model_timeout)
         output = result.output
         if on_response is not None:
             # Safety constraint: an observer cannot alter a completed model result or scoring.
@@ -76,98 +130,113 @@ async def run_case(
         tool_events = _tool_events(messages)
         recorded_actions = _recorded_actions_from_tool_events(tool_events, runtime.invoker.calls)
         conversation_id = _conversation_id(messages)
+        emit_phase("scoring")
         outcome, action_result, action_ledger = evaluate_case(case, recorded_actions)
-        return CaseTrace(
-            case_id=case.id,
-            candidate_id=candidate.id,
-            model_id=model_id,
-            answer=output,
-            required_actions=case.required_actions,
-            outcome=outcome,
-            action_result=action_result,
-            action_ledger=action_ledger,
-            tool_events=tool_events,
-            diagnostics=_diagnostics(
-                tool_events,
-                messages,
-                elapsed=perf_counter() - started,
-                usage=None if model_id == "stub" else _usage(result, messages),
-                failure=None,
+        return finish_trace(
+            CaseTrace(
+                case_id=case.id,
+                candidate_id=candidate.id,
+                model_id=model_id,
+                answer=output,
+                required_actions=case.required_actions,
+                outcome=outcome,
+                action_result=action_result,
+                action_ledger=action_ledger,
+                tool_events=tool_events,
+                diagnostics=_diagnostics(
+                    tool_events,
+                    messages,
+                    elapsed=perf_counter() - started,
+                    usage=None if model_id == "stub" else _usage(result, messages),
+                    failure=None,
+                ),
+                provider_error=None,
+                conversation_id=conversation_id,
+                user_request=case.user_request,
+                reasoning_effort=config.reasoning_effort,
+                temperature=config.temperature,
             ),
-            provider_error=None,
-            conversation_id=conversation_id,
-            user_request=case.user_request,
-            reasoning_effort=config.reasoning_effort,
-            temperature=config.temperature,
         )
     except UsageLimitExceeded as err:
         # Branch boundary: the model exhausted its allowed tool calls, which is scored behavior rather than a harness error.
         tool_events = _tool_events(captured)
-        return _failure_trace(
-            candidate,
-            model_id,
-            case,
-            "cap_exhausted",
-            _format_exception(err),
-            diagnostic=False,
-            elapsed=perf_counter() - started,
-            tool_events=tool_events,
-            messages=captured,
-            recorded_actions=_recorded_actions_from_tool_events(tool_events, proposed_actions),
-            conversation_id=_conversation_id(captured),
-            reasoning_effort=config.reasoning_effort,
-            temperature=config.temperature,
+        return finish_trace(
+            _failure_trace(
+                candidate,
+                model_id,
+                case,
+                "cap_exhausted",
+                _format_exception(err),
+                diagnostic=False,
+                elapsed=perf_counter() - started,
+                tool_events=tool_events,
+                messages=captured,
+                recorded_actions=_recorded_actions_from_tool_events(tool_events, proposed_actions),
+                conversation_id=_conversation_id(captured),
+                reasoning_effort=config.reasoning_effort,
+                temperature=config.temperature,
+                on_scoring=emit_phase,
+            )
         )
     except TimeoutError as err:
         tool_events = _tool_events(captured)
-        return _failure_trace(
-            candidate,
-            model_id,
-            case,
-            "timeout",
-            _format_exception(err, timeout=config.model_timeout),
-            diagnostic=True,
-            elapsed=perf_counter() - started,
-            tool_events=tool_events,
-            messages=captured,
-            recorded_actions=_recorded_actions_from_tool_events(tool_events, proposed_actions),
-            conversation_id=_conversation_id(captured),
-            reasoning_effort=config.reasoning_effort,
-            temperature=config.temperature,
+        return finish_trace(
+            _failure_trace(
+                candidate,
+                model_id,
+                case,
+                "timeout",
+                _format_exception(err, timeout=config.model_timeout),
+                diagnostic=True,
+                elapsed=perf_counter() - started,
+                tool_events=tool_events,
+                messages=captured,
+                recorded_actions=_recorded_actions_from_tool_events(tool_events, proposed_actions),
+                conversation_id=_conversation_id(captured),
+                reasoning_effort=config.reasoning_effort,
+                temperature=config.temperature,
+                on_scoring=emit_phase,
+            )
         )
     except UnexpectedModelBehavior as err:
         tool_events = _tool_events(captured)
-        return _failure_trace(
-            candidate,
-            model_id,
-            case,
-            "model_protocol_error",
-            _format_exception(err),
-            diagnostic=True,
-            elapsed=perf_counter() - started,
-            tool_events=tool_events,
-            messages=captured,
-            recorded_actions=_recorded_actions_from_tool_events(tool_events, proposed_actions),
-            conversation_id=_conversation_id(captured),
-            reasoning_effort=config.reasoning_effort,
-            temperature=config.temperature,
+        return finish_trace(
+            _failure_trace(
+                candidate,
+                model_id,
+                case,
+                "model_protocol_error",
+                _format_exception(err),
+                diagnostic=True,
+                elapsed=perf_counter() - started,
+                tool_events=tool_events,
+                messages=captured,
+                recorded_actions=_recorded_actions_from_tool_events(tool_events, proposed_actions),
+                conversation_id=_conversation_id(captured),
+                reasoning_effort=config.reasoning_effort,
+                temperature=config.temperature,
+                on_scoring=emit_phase,
+            )
         )
     except Exception as err:  # noqa: BLE001 - provider/harness failures are isolated to the current matrix cell.
         tool_events = _tool_events(captured)
-        return _failure_trace(
-            candidate,
-            model_id,
-            case,
-            "provider_error",
-            _format_exception(err),
-            diagnostic=True,
-            elapsed=perf_counter() - started,
-            tool_events=tool_events,
-            messages=captured,
-            recorded_actions=_recorded_actions_from_tool_events(tool_events, proposed_actions),
-            conversation_id=_conversation_id(captured),
-            reasoning_effort=config.reasoning_effort,
-            temperature=config.temperature,
+        return finish_trace(
+            _failure_trace(
+                candidate,
+                model_id,
+                case,
+                "provider_error",
+                _format_exception(err),
+                diagnostic=True,
+                elapsed=perf_counter() - started,
+                tool_events=tool_events,
+                messages=captured,
+                recorded_actions=_recorded_actions_from_tool_events(tool_events, proposed_actions),
+                conversation_id=_conversation_id(captured),
+                reasoning_effort=config.reasoning_effort,
+                temperature=config.temperature,
+                on_scoring=emit_phase,
+            )
         )
 
 
@@ -186,8 +255,11 @@ def _failure_trace(
     conversation_id: str | None = None,
     reasoning_effort: str | None = None,
     temperature: float | None = None,
+    on_scoring: Callable[[LanePhase], None] | None = None,
 ) -> CaseTrace:
     """Return an incomplete or cap-exhausted trace with captured diagnostics."""
+    if on_scoring is not None:
+        on_scoring("scoring")
     action_ledger = build_action_ledger(recorded_actions)
     scored_actions = score_actions(case.required_actions, action_ledger)
     action_result = ActionResult(
@@ -221,6 +293,22 @@ def _failure_trace(
         reasoning_effort=reasoning_effort,
         temperature=temperature,
     )
+
+
+def _observe_stream_phase(event: object, emit_phase: PhaseEmitter) -> None:
+    """Map only safe native stream facts into an execution phase."""
+    if isinstance(event, FunctionToolCallEvent):
+        emit_phase("preparing_tool_call", event.part.tool_name)
+    elif isinstance(event, PartStartEvent | PartEndEvent):
+        if isinstance(event.part, ThinkingPart):
+            emit_phase("thinking")
+        elif isinstance(event.part, TextPart):
+            emit_phase("responding")
+    elif isinstance(event, PartDeltaEvent):
+        if isinstance(event.delta, ThinkingPartDelta):
+            emit_phase("thinking")
+        elif isinstance(event.delta, TextPartDelta):
+            emit_phase("responding")
 
 
 def _format_exception(err: BaseException, *, timeout: float | None = None) -> str:

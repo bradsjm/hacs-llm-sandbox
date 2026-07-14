@@ -104,8 +104,19 @@ checks and uses `home_full` for the corpus and its complete 288-entity fixture.
   writes the typed `partial.json` journal, which is explicitly not a report and
   has no HTML/resume path.
 - Interactive output is Rich on stderr; redirected or `--machine` output is
-  deterministic stdout KV. Non-zero exits have empty stdout. Terminal lanes do
-  not have phase/Activity/Waiting or response rows; streaming is deferred.
+  deterministic stdout KV. Non-zero exits have empty stdout. Every agent run
+  uses native Pydantic AI `run_stream_events`, with no streaming flag or
+  non-streaming fallback. Lanes retain their five-column layout unless a real
+  `thinking` event arrives for an active lane; then a sticky, structured
+  Activity column appears for the run. Providers without `ThinkingPart` retain
+  the five-column layout, with no synthesized reasoning or `Waiting` state.
+  Activity shows only phase labels: actual `running` and `processing` tool
+  phases include the validated tool name, while provider-supplied `preparing`
+  names are never retained or rendered. The transient phase/activity channel is
+  label/tool-name only and is not persisted in reports or artifacts. Interactive
+  Activity and machine output do not render reasoning content, model responses,
+  tool arguments, or tool results. Existing durable reports retain their
+  established `CaseTrace` answer and tool-diagnostics contract.
 
 Production read tools may remain registered because they are part of the product
 surface. Their eval-specific scoring and stub routes must not return.

@@ -30,9 +30,20 @@ not an action mismatch.
 
 TTY runs render one transient Rich view and a durable stderr final with the
 artifact location once. Redirected runs, or `--machine`, emit stable KV on
-stdout; failed and cancelled runs leave stdout empty. Lanes show request,
-variant, elapsed/timeout, and tools/cap only—there is no phase, Activity, or
-`Waiting` column.
+stdout; failed and cancelled runs leave stdout empty. Every agent run consumes
+Pydantic AI's native `run_stream_events`, with no streaming flag or
+non-streaming fallback. Lanes keep their existing five-column layout unless a
+real `thinking` event is observed for an active lane; only then does a sticky,
+structured Activity column appear for the run. Providers without `ThinkingPart`
+keep the five-column layout, without synthesized reasoning or `Waiting`.
+
+Activity labels are payload-free. Actual runtime `running` and `processing`
+tool phases include the validated tool name; provider/model-supplied
+`preparing` names are not retained or rendered. The transient phase/activity
+channel is label/tool-name only and is not persisted in reports or artifacts.
+Interactive Activity and machine output do not render reasoning content, model
+responses, tool arguments, or tool results. Existing durable reports retain
+their established `CaseTrace` answer and tool-diagnostics contract.
 
 ## Purpose
 

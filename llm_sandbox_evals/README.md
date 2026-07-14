@@ -148,11 +148,23 @@ self-contained trace usage fallback.
 
 ## Presentation
 
-Live lanes contain only request, variant, elapsed/timeout, and tools/cap. There
-is no phase or Activity column, no `Waiting` state, and no model response,
-reasoning, tool arguments, or payloads in the terminal. After the transient
-Live frame ends, one durable final compares candidate × variant quality,
-coverage, operational issues, and usage.
+Every agent run consumes Pydantic AI's native `run_stream_events`; there is no
+streaming option or non-streaming fallback. Live lanes retain their five-column
+layout (request, variant, elapsed/timeout, and tools/cap) unless a real
+`thinking` event is observed for an active lane. That event makes a structured,
+payload-free Activity column sticky for the run. Providers that do not emit
+`ThinkingPart` therefore keep the five-column layout: the harness never
+synthesizes reasoning or a `Waiting` state.
+
+Activity uses only structured phase labels. Actual `running` and `processing`
+tool phases include the validated tool name; provider/model-supplied
+`preparing` names are neither retained nor rendered. The transient
+phase/activity channel is label/tool-name only and is not persisted in reports
+or artifacts. Interactive Activity and machine output do not render reasoning
+content, model responses, tool arguments, or tool results. Existing durable
+reports retain their established `CaseTrace` answer and tool-diagnostics
+contract. After the transient Live frame ends, one durable final compares
+candidate × variant quality, coverage, operational issues, and usage.
 
 `report.html`, CSV export, and `report <run_id> --html` are all rebuilt from an
 immutable saved-report presentation model. The HTML hero shows quality,

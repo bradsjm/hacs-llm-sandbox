@@ -12,13 +12,23 @@ import sys
 import termios
 import time
 from types import SimpleNamespace
-from typing import Never
+from typing import Never, cast
 import warnings
 
 from llm_sandbox_evals.cli import main
+from llm_sandbox_evals.config import EvalConfig
+from llm_sandbox_evals.experiment import (
+    LanePhaseCallback,
+    LanePhaseEvent,
+    MatrixCellMeta,
+    MatrixCellRef,
+    MatrixEventCallback,
+)
+from llm_sandbox_evals.schema import CaseTrace, RunDescriptor
 from pydantic_ai.messages import ModelMessage, ModelResponse
 from pydantic_ai.models import Model
 from pydantic_ai.models.function import AgentInfo, FunctionModel
+from pydantic_evals.reporting import EvaluationReport
 import pytest
 
 from llm_sandbox_evals import agent_runner, cli, logfire_config, reports
@@ -441,6 +451,46 @@ async def test_external_cancellation_stops_inner_interactive_matrix(
         await asyncio.wait_for(outer, timeout=1)
 
     assert cancelled.is_set()
+
+
+@pytest.mark.parametrize("interactive", [pytest.param(False, id="redirected"), pytest.param(True, id="interactive")])
+async def test_run_eval_matrix_delivers_phase_callbacks_in_every_terminal_mode(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, interactive: bool
+) -> None:
+    config = EvalConfig(
+        models=["stub"],
+        candidates=["baseline"],
+        prompt_profile="balanced",
+        cases=None,
+        homes=None,
+        runs_dir=tmp_path,
+    )
+    phase = LanePhaseEvent(MatrixCellRef("phase-case", "baseline", "stub", "home_minimal"), "thinking")
+    delivered: list[LanePhaseEvent] = []
+
+    async def emit_phase(
+        _config: EvalConfig,
+        *,
+        descriptor: RunDescriptor | None = None,
+        on_event: MatrixEventCallback | None = None,
+        on_phase: LanePhaseCallback | None = None,
+    ) -> EvaluationReport[MatrixCellRef, CaseTrace, MatrixCellMeta]:
+        assert on_phase is not None
+        on_phase(phase)
+        return cast(EvaluationReport[MatrixCellRef, CaseTrace, MatrixCellMeta], None)
+
+    monkeypatch.setattr(cli.experiment, "run_matrix", emit_phase)
+    monkeypatch.setattr(cli, "_is_interactive_eval", lambda: interactive)
+    monkeypatch.setattr(cli, "_EscapeWatcher", lambda _cancel: nullcontext(SimpleNamespace(cancelled=False)))
+
+    await cli._run_eval_matrix(
+        config,
+        cli.experiment.build_run_descriptor(config, "phase-delivery", []),
+        lambda _event: None,
+        delivered.append,
+    )
+
+    assert delivered == [phase]
 
 
 @pytest.mark.parametrize(

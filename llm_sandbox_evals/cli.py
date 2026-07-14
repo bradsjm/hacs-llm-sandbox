@@ -471,7 +471,8 @@ def _run_eval(args: argparse.Namespace) -> int:
             escape_available=escape_available,
         )
         with reporter:
-            report = asyncio.run(_run_eval_matrix(config, descriptor, on_event))
+            # Streaming is universal: forward phase observations to the reporter in every mode.
+            report = asyncio.run(_run_eval_matrix(config, descriptor, on_event, reporter.handle_phase))
     except _EvalCancelled, asyncio.CancelledError, KeyboardInterrupt:
         for diagnostic in _persist_terminal_artifacts(
             run_dir, manifest_path, descriptor, "cancelled", records, _matrix_total(config, selected_cases)
@@ -525,12 +526,15 @@ def _run_eval(args: argparse.Namespace) -> int:
 
 
 async def _run_eval_matrix(
-    config: EvalConfig, descriptor: RunDescriptor, on_event: experiment.MatrixEventCallback
+    config: EvalConfig,
+    descriptor: RunDescriptor,
+    on_event: experiment.MatrixEventCallback,
+    on_phase: experiment.LanePhaseCallback | None = None,
 ) -> EvaluationReport[MatrixCellRef, CaseTrace, MatrixCellMeta]:
     """Run one matrix, allowing Escape to cancel only interactive terminal sessions."""
-    # Branch boundary: redirected streams retain their existing non-interactive behavior.
+    # Branch boundary: redirected streams retain their existing non-interactive behavior but still stream phases.
     if not _is_interactive_eval():
-        return await experiment.run_matrix(config, descriptor=descriptor, on_event=on_event)
+        return await experiment.run_matrix(config, descriptor=descriptor, on_event=on_event, on_phase=on_phase)
     current_task = asyncio.current_task()
     assert current_task is not None
     loop = asyncio.get_running_loop()
@@ -538,7 +542,7 @@ async def _run_eval_matrix(
     try:
         with _EscapeWatcher(current_task.cancel) as watcher:
             try:
-                return await experiment.run_matrix(config, descriptor=descriptor, on_event=on_event)
+                return await experiment.run_matrix(config, descriptor=descriptor, on_event=on_event, on_phase=on_phase)
             except asyncio.CancelledError:
                 if watcher.cancelled:
                     raise _EvalCancelled from None

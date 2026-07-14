@@ -1,4 +1,6 @@
-from dataclasses import dataclass
+import asyncio
+from collections.abc import AsyncIterator
+from dataclasses import dataclass, fields
 from pathlib import Path
 
 from custom_components.llm_sandbox.const import DEFAULT_PROMPT_PROFILE
@@ -6,11 +8,12 @@ from custom_components.llm_sandbox.llm_api.prompts import resolve_profile
 from llm_sandbox_evals.cases import CASES
 from llm_sandbox_evals.config import EvalConfig
 from llm_sandbox_evals.harness import _diagnostics, _partial_usage, _usage, run_case
+from llm_sandbox_evals.phases import PhaseObservation
 from llm_sandbox_evals.presentation import effective_cause
 from llm_sandbox_evals.prompts import load_candidates
 from llm_sandbox_evals.schema import ToolEvent
 from pydantic_ai.messages import ModelMessage, ModelResponse, ToolCallPart
-from pydantic_ai.models.function import AgentInfo, FunctionModel
+from pydantic_ai.models.function import AgentInfo, DeltaThinkingPart, DeltaToolCall, DeltaToolCalls, FunctionModel
 from pydantic_ai.usage import RunUsage
 import pytest
 
@@ -38,18 +41,26 @@ class _ResultDouble:
 @pytest.mark.parametrize(
     ("usage_data", "expected"),
     [
-        pytest.param(_UsageDouble(1, 10, 5, {}), {
-            "requests": 1,
-            "request_tokens": 10,
-            "response_tokens": 5,
-            "total_tokens": 15,
-        }, id="full-usage"),
-        pytest.param(_UsageDouble(1, 10, None, {}), {
-            "requests": 1,
-            "request_tokens": 10,
-            "response_tokens": None,
-            "total_tokens": None,
-        }, id="partial-token-components"),
+        pytest.param(
+            _UsageDouble(1, 10, 5, {}),
+            {
+                "requests": 1,
+                "request_tokens": 10,
+                "response_tokens": 5,
+                "total_tokens": 15,
+            },
+            id="full-usage",
+        ),
+        pytest.param(
+            _UsageDouble(1, 10, None, {}),
+            {
+                "requests": 1,
+                "request_tokens": 10,
+                "response_tokens": None,
+                "total_tokens": None,
+            },
+            id="partial-token-components",
+        ),
         pytest.param(None, None, id="missing-usage-property"),
     ],
 )
@@ -118,7 +129,7 @@ async def test_run_case_records_provider_failure_as_incomplete_with_no_action_re
     )
 
     def make_model(_model_id: str) -> FunctionModel:
-        return FunctionModel(_failing_model, model_name="bad-model")
+        return FunctionModel(stream_function=_failing_stream, model_name="bad-model")
 
     monkeypatch.setattr(agent_runner, "make_model", make_model)  # type: ignore[attr-defined]
     trace = await run_case(candidate, "bad-model", CASES[0], config, profile=profile)
@@ -168,7 +179,7 @@ async def test_run_case_cap_exhausted_is_scored_with_real_action_reason(monkeypa
     )
 
     def make_model(_model_id: str) -> FunctionModel:
-        return FunctionModel(_looping_model, model_name="looping-model")
+        return FunctionModel(stream_function=_looping_stream, model_name="looping-model")
 
     monkeypatch.setattr(agent_runner, "make_model", make_model)  # type: ignore[attr-defined]
     case = next(case for case in CASES if case.id == "direct_turn_off_utility_room_accent")
@@ -210,52 +221,184 @@ async def test_run_case_failure_trace_retains_partial_model_response_usage(
     )
 
     def make_model(_model_id: str) -> FunctionModel:
-        return FunctionModel(_usage_then_fail_model, model_name="usage-model")
+        return FunctionModel(stream_function=_usage_then_fail_stream, model_name="usage-model")
 
     monkeypatch.setattr(agent_runner, "make_model", make_model)  # type: ignore[attr-defined]
     trace = await run_case(candidate, "usage-model", CASES[0], config, profile=profile)
 
     assert trace.outcome.state == "incomplete"
     assert trace.diagnostics.failure == "provider_error"
-    # The partial usage from the captured ModelResponse is retained on the failure trace.
+    # The partial usage from the captured streamed ModelResponse is retained on the failure trace.
     assert trace.diagnostics.usage is not None
-    assert trace.diagnostics.usage["request_tokens"] == 10
-    assert trace.diagnostics.usage["response_tokens"] == 5
-    assert trace.diagnostics.usage["total_tokens"] == 15
+    assert trace.diagnostics.usage["request_tokens"] is not None
+    assert trace.diagnostics.usage["response_tokens"] is not None
+    assert trace.diagnostics.usage["total_tokens"] == (
+        trace.diagnostics.usage["request_tokens"] + trace.diagnostics.usage["response_tokens"]
+    )
     assert trace.diagnostics.usage["partial"] is True
 
 
-async def _failing_model(_messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
-    raise RuntimeError("provider rejected model")
+async def test_run_case_observes_native_stream_phases_without_leaking_payloads_or_regressing_tool_state(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    candidate = load_candidates(["baseline"], DEFAULT_PROMPT_PROFILE)[0]
+    case = next(case for case in CASES if case.id == "direct_turn_on_utility_room_ceiling")
+    observations: list[PhaseObservation] = []
+
+    def make_model(_model_id: str) -> FunctionModel:
+        return FunctionModel(stream_function=_thinking_tool_then_response_stream, model_name="native-stream")
+
+    monkeypatch.setattr(agent_runner, "make_model", make_model)
+    trace = await run_case(
+        candidate,
+        "native-stream",
+        case,
+        EvalConfig(
+            models=["native-stream"],
+            candidates=[candidate.id],
+            prompt_profile=DEFAULT_PROMPT_PROFILE,
+            cases=None,
+            homes=None,
+            runs_dir=tmp_path,
+        ),
+        profile=resolve_profile(DEFAULT_PROMPT_PROFILE),
+        on_phase=observations.append,
+    )
+
+    assert trace.provider_error is None
+    assert trace.outcome.state == "correct"
+    assert [(observation.phase, observation.tool_name) for observation in observations] == [
+        ("queued", None),
+        ("awaiting_model", None),
+        ("thinking", None),
+        ("thinking", None),
+        ("running_tool", "execute_home_code"),
+        ("processing_tool_result", "execute_home_code"),
+        ("responding", None),
+        ("responding", None),
+        ("scoring", None),
+        ("finished", None),
+    ]
+    assert tuple(field.name for field in fields(observations[0])) == ("phase", "tool_name")
 
 
-async def _usage_then_fail_model(messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+async def test_run_case_isolates_phase_observer_exceptions(tmp_path: Path) -> None:
+    candidate = load_candidates(["baseline"], DEFAULT_PROMPT_PROFILE)[0]
+    case = next(case for case in CASES if case.id == "direct_turn_on_utility_room_ceiling")
+
+    trace = await run_case(
+        candidate,
+        "stub",
+        case,
+        EvalConfig(
+            models=["stub"],
+            candidates=[candidate.id],
+            prompt_profile=DEFAULT_PROMPT_PROFILE,
+            cases=None,
+            homes=None,
+            runs_dir=tmp_path,
+        ),
+        profile=resolve_profile(DEFAULT_PROMPT_PROFILE),
+        on_phase=_raise_phase_observer_error,
+    )
+
+    assert trace.outcome.state == "correct"
+    assert trace.answer == "Done."
+
+
+async def test_run_case_timeout_closes_pending_native_stream(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    candidate = load_candidates(["baseline"], DEFAULT_PROMPT_PROFILE)[0]
+    stream_started = asyncio.Event()
+    stream_closed = asyncio.Event()
+
+    async def pending_stream(_messages: list[ModelMessage], _info: AgentInfo) -> AsyncIterator[str]:
+        stream_started.set()
+        try:
+            await asyncio.Event().wait()
+            yield "unreachable"
+        finally:
+            stream_closed.set()
+
+    def make_model(_model_id: str) -> FunctionModel:
+        return FunctionModel(stream_function=pending_stream, model_name="timeout-model")
+
+    monkeypatch.setattr(agent_runner, "make_model", make_model)
+    trace = await run_case(
+        candidate,
+        "timeout-model",
+        CASES[0],
+        EvalConfig(
+            models=["timeout-model"],
+            candidates=[candidate.id],
+            prompt_profile=DEFAULT_PROMPT_PROFILE,
+            cases=None,
+            homes=None,
+            runs_dir=tmp_path,
+            model_timeout=0.01,
+        ),
+        profile=resolve_profile(DEFAULT_PROMPT_PROFILE),
+    )
+
+    assert trace.outcome.state == "incomplete"
+    assert trace.diagnostics.failure == "timeout"
+    assert stream_started.is_set()
+    await asyncio.wait_for(stream_closed.wait(), timeout=0.1)
+
+
+async def _failing_stream(messages: list[ModelMessage], _info: AgentInfo) -> AsyncIterator[str]:
+    if messages:
+        raise RuntimeError("provider rejected model")
+    yield "unreachable"
+
+
+async def _usage_then_fail_stream(messages: list[ModelMessage], _info: AgentInfo) -> AsyncIterator[DeltaToolCalls]:
     # First turn: emit a tool call carrying response-level usage. Second turn: fail.
     if len(messages) <= 1:
-        return ModelResponse(
-            parts=[
-                ToolCallPart(
-                    tool_name="execute_home_code",
-                    args={
-                        "code": 'await hass.services.async_call("light", "turn_on", target={"entity_id": "light.utility_room_ceiling"})\nresult = "done"'
-                    },
-                    tool_call_id="usage-1",
-                )
-            ],
-            usage=RunUsage(input_tokens=10, output_tokens=5),
+        yield _execute_home_code_delta(
+            "usage-1",
+            'await hass.services.async_call("light", "turn_on", target={"entity_id": "light.utility_room_ceiling"})\nresult = "done"',
         )
+        return
     raise RuntimeError("provider failed mid-run")
 
 
-async def _looping_model(_messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
-    return ModelResponse(
-        parts=[
-            ToolCallPart(
-                tool_name="execute_home_code",
-                args={
-                    "code": 'await hass.services.async_call("light", "turn_off", target={"entity_id": "light.utility_room_accent"})\nresult = "done"'
-                },
-                tool_call_id=f"loop-{len(_messages)}",
-            )
-        ]
+async def _looping_stream(messages: list[ModelMessage], _info: AgentInfo) -> AsyncIterator[DeltaToolCalls]:
+    yield _execute_home_code_delta(
+        f"loop-{len(messages)}",
+        'await hass.services.async_call("light", "turn_off", target={"entity_id": "light.utility_room_accent"})\nresult = "done"',
     )
+
+
+async def _thinking_tool_then_response_stream(
+    messages: list[ModelMessage], _info: AgentInfo
+) -> AsyncIterator[str | DeltaToolCalls | dict[int, DeltaThinkingPart]]:
+    if any(
+        isinstance(part, ToolCallPart)
+        for message in messages
+        if isinstance(message, ModelResponse)
+        for part in message.parts
+    ):
+        yield "Done."
+        return
+    yield {0: DeltaThinkingPart(content="private analysis")}
+    yield _execute_home_code_delta(
+        "native-stream-1",
+        'await hass.services.async_call("light", "turn_on", target={"entity_id": "light.utility_room_ceiling"})\nresult = "done"',
+        part_index=1,
+    )
+
+
+def _execute_home_code_delta(tool_call_id: str, code: str, *, part_index: int = 0) -> DeltaToolCalls:
+    return {
+        part_index: DeltaToolCall(
+            name="execute_home_code",
+            json_args=ToolCallPart(
+                tool_name="execute_home_code", args={"code": code}, tool_call_id=tool_call_id
+            ).args_as_json_str(),
+            tool_call_id=tool_call_id,
+        )
+    }
+
+
+def _raise_phase_observer_error(_observation: PhaseObservation) -> None:
+    raise RuntimeError("observer unavailable")

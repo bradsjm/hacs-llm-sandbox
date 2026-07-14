@@ -3,15 +3,27 @@
 from collections import Counter
 from dataclasses import dataclass, field
 from time import perf_counter
-from typing import TYPE_CHECKING, Self
+from typing import TYPE_CHECKING, Self, get_args
 
 from pydantic_evals.reporting import EvaluationReport
 
-from llm_sandbox_evals.experiment import MatrixCellMeta, MatrixCellRef, MatrixProgressEvent
+from llm_sandbox_evals.experiment import (
+    LanePhaseEvent,
+    MatrixCellMeta,
+    MatrixCellRef,
+    MatrixProgressEvent,
+)
+from llm_sandbox_evals.phases import LanePhase
 from llm_sandbox_evals.schema import CaseTrace, variant_label
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
+
+# Valid phase vocabulary derived from the backend LanePhase alias, never hand-maintained.
+_VALID_PHASES: frozenset[str] = frozenset(get_args(LanePhase.__value__))
+# Only these phases carry an authoritative tool name resolved after wrapper selection; the
+# provider-driven preparing_tool_call name is model-supplied arbitrary text and is never retained.
+_TOOL_NAME_PHASES: frozenset[str] = frozenset({"running_tool", "processing_tool_result"})
 
 
 def effective_cause(trace: CaseTrace) -> str:
@@ -143,7 +155,7 @@ def _metric_or_usage(cell: PresentationCell, name: str) -> float | None:
 
 @dataclass(slots=True)
 class RuntimeLane:
-    """Safe active-lane metadata; no response or tool payload is retained."""
+    """Safe active-lane metadata; only a phase label and optional tool name are retained."""
 
     cell: MatrixCellRef
     request: str
@@ -151,14 +163,9 @@ class RuntimeLane:
     timeout: float
     max_tool_calls: int
     tools_used: int = 0
-
-
-@dataclass(frozen=True, slots=True)
-class LanePhaseEvent:
-    """Reserved stream-event shape; the non-streaming renderer intentionally ignores it."""
-
-    cell: MatrixCellRef
-    phase: str
+    # Latest observed execution phase and its safe tool name; never any model content.
+    phase: str | None = None
+    tool_name: str | None = None
 
 
 @dataclass(slots=True)
@@ -169,6 +176,8 @@ class PresentationState:
     started_at: float = field(default_factory=perf_counter)
     lanes: dict[MatrixCellRef, RuntimeLane] = field(default_factory=dict)
     completed: list[PresentationCell] = field(default_factory=list)
+    # Sticky for the run: turns True only once a real thinking phase is seen on an active lane.
+    activity_enabled: bool = False
 
     def ingest(self, event: MatrixProgressEvent, *, timeout: float, max_tool_calls: int) -> None:
         """Apply one lifecycle event without allowing presentation to affect evaluation."""
@@ -188,8 +197,31 @@ class PresentationState:
             self.lanes.pop(event.cell, None)
             self.completed.append(_presentation_cell(event.cell, event.trace, {}))
 
-    def ingest_phase(self, _event: LanePhaseEvent) -> None:
-        """Accept the deferred streaming extension point without rendering an activity phase."""
+    def ingest_phase(self, event: LanePhaseEvent) -> bool:
+        """Project a phase onto its active lane; return whether visible state actually changed.
+
+        Coalesces the harness's repeated identical stream-delta phases (e.g. thinking/responding)
+        so the terminal only rebuilds the Live frame on a real transition, never per delta.
+        """
+        lane = self.lanes.get(event.cell)
+        # Branch boundary: phases for drained or unknown cells never mutate state or activate.
+        if lane is None or event.phase not in _VALID_PHASES:
+            return False
+        # Trusted tool name: retained only from authoritative running/processing phases; every other
+        # phase (including provider-supplied preparing_tool_call) resolves to None and is never stored.
+        trusted_tool_name = event.tool_name if event.phase in _TOOL_NAME_PHASES else None
+        # Branch boundary: a real thinking phase is the only trigger for the sticky Activity column.
+        activates = event.phase == "thinking" and not self.activity_enabled
+        # Change detection over exactly the projected fields: lane phase, trusted tool name, or the
+        # False->True sticky flip. A duplicate phase/name after activation reports no change.
+        changed = lane.phase != event.phase or lane.tool_name != trusted_tool_name or activates
+        # State mutation point: store the latest projected phase and trusted tool name for the lane.
+        lane.phase = event.phase
+        lane.tool_name = trusted_tool_name
+        # State mutation point: flip the sticky column reveal exactly once, on first thinking.
+        if activates:
+            self.activity_enabled = True
+        return changed
 
     @property
     def counts(self) -> ResultCounts:
