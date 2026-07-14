@@ -143,7 +143,7 @@ def test_diagnostics_reject_unfinished_empty_return_but_accept_valid_empty_recor
 
 
 async def test_run_case_records_provider_failure_as_incomplete_with_no_action_reason(
-    monkeypatch: object, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     candidate = load_candidates(["baseline"], DEFAULT_PROMPT_PROFILE)[0]
     profile = resolve_profile(DEFAULT_PROMPT_PROFILE)
@@ -305,7 +305,8 @@ async def test_run_case_keeps_normal_completion_outside_failure_classification(t
     assert effective_cause(trace) == trace.outcome.score_reason
 
 
-async def test_run_case_cap_exhausted_is_scored_with_real_action_reason(monkeypatch: object, tmp_path: Path) -> None:
+async def test_run_case_cap_exhausted_is_scored_with_real_action_reason(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     candidate = load_candidates(["baseline"], DEFAULT_PROMPT_PROFILE)[0]
     profile = resolve_profile(DEFAULT_PROMPT_PROFILE)
     config = EvalConfig(
@@ -347,7 +348,7 @@ async def test_run_case_cap_exhausted_is_scored_with_real_action_reason(monkeypa
 
 
 async def test_run_case_failure_trace_retains_partial_model_response_usage(
-    monkeypatch: object, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     # Fix #3: a non-stub failure trace retains response-level usage captured before the failure.
     candidate = load_candidates(["baseline"], DEFAULT_PROMPT_PROFILE)[0]
