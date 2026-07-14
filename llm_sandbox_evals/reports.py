@@ -16,7 +16,7 @@ type MatrixReport = EvaluationReport[MatrixCellRef, CaseTrace, MatrixCellMeta]
 
 _REPORT_ADAPTER: TypeAdapter[MatrixReport] = TypeAdapter(MatrixReport)
 _PARTIAL_ADAPTER: TypeAdapter[PartialRunArtifact] = TypeAdapter(PartialRunArtifact)
-_SCORING_VERSION = 6
+_SCORING_VERSION = 7
 _CASE_TRACE_FIELDS = frozenset(
     {
         "case_id",
@@ -57,17 +57,17 @@ def write_report_json(
 def load_report(run_dir: Path) -> MatrixReport:
     """Load a saved native pydantic-evals report artifact."""
     payload = json.loads((run_dir / "report.json").read_bytes())
-    if not _contains_v6_trace(payload):
+    if not _contains_current_trace(payload):
         # Deliberately reject before Pydantic validation so legacy artifacts cannot
         # be silently reinterpreted by a future schema-compatible decoder.
-        raise ValueError("legacy scoring-v6 artifact; rerun evaluation")
+        raise ValueError("legacy scoring artifact; rerun evaluation with scoring v7")
     return _REPORT_ADAPTER.validate_python(payload)
 
 
 def rescore_trace(trace: CaseTrace) -> CaseOutcome:
-    """Rescore a v6 trace using only its persisted required actions and ledger."""
+    """Rescore a v7 trace using only its persisted required actions and ledger."""
     if trace.scoring_version != _SCORING_VERSION:
-        raise ValueError("legacy scoring-v6 artifact; rerun evaluation")
+        raise ValueError("legacy scoring artifact; rerun evaluation with scoring v7")
     recorded_actions = trace.action_ledger.successful + trace.action_ledger.rejected
     case = EvalCase(
         id=trace.case_id,
@@ -114,8 +114,8 @@ def _atomic_json_write(path: Path, payload: object) -> None:
             temporary.unlink()
 
 
-def _contains_v6_trace(payload: object) -> bool:
-    """Check the serialized report envelope for the self-contained v6 trace shape."""
+def _contains_current_trace(payload: object) -> bool:
+    """Check the serialized report envelope for the current self-contained trace shape."""
     if (
         not isinstance(payload, dict)
         or payload.get("scoring_version") != _SCORING_VERSION

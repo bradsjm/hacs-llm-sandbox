@@ -29,7 +29,7 @@ import pytest
 from llm_sandbox_evals import reports
 
 
-async def test_run_matrix_stub_persists_v6_action_trace_and_variant_identity(tmp_path: Path) -> None:
+async def test_run_matrix_stub_persists_v7_action_trace_and_variant_identity(tmp_path: Path) -> None:
     config = EvalConfig(
         models=["stub"],
         candidates=["baseline"],
@@ -39,14 +39,14 @@ async def test_run_matrix_stub_persists_v6_action_trace_and_variant_identity(tmp
         runs_dir=tmp_path,
         reasoning_effort="low",
     )
-    report = await run_matrix(config, run_id="stub-v6")
-    reloaded = reports.load_report(reports.write_report_json(report, config, run_id="stub-v6-written"))
+    report = await run_matrix(config, run_id="stub-v7")
+    reloaded = reports.load_report(reports.write_report_json(report, config, run_id="stub-v7-written"))
     trace = reloaded.cases[0].output
 
     assert trace.outcome.state == "correct"
     assert trace.outcome.score == 1.0
     assert trace.answer == "Done."
-    assert trace.scoring_version == 6
+    assert trace.scoring_version == 7
     assert trace.reasoning_effort == "low"
     assert _scalar(reloaded.analyses, "Quality rate").value == 1.0
     # The run descriptor rides on native experiment_metadata and survives reload.
@@ -58,7 +58,7 @@ async def test_run_matrix_emits_plain_text_lifecycle_response(tmp_path: Path) ->
     events = []
     report = await run_matrix(
         _config(tmp_path, cases=["direct_turn_on_utility_room_ceiling"]),
-        run_id="lifecycle-v6",
+        run_id="lifecycle-v7",
         on_event=events.append,
     )
 
@@ -79,7 +79,7 @@ async def test_run_matrix_forwards_payload_free_phases_for_the_active_cell(tmp_p
     case_id = "direct_turn_on_utility_room_ceiling"
     report = await run_matrix(
         _config(tmp_path, cases=[case_id]),
-        run_id="phase-forwarding-v6",
+        run_id="phase-forwarding-v7",
         on_phase=phases.append,
     )
 
@@ -104,7 +104,7 @@ async def test_report_uses_scored_vocabulary_and_excludes_completed(tmp_path: Pa
     config = _config(tmp_path, models=["model-a", "model-b"])
     candidates = [_candidate("baseline", api_prompt="long authored prompt"), _candidate("compact", api_prompt="short")]
     selected_cases = [_case("case-a"), _case("case-b")]
-    dataset = build_dataset(config, candidates, selected_cases, "aggregation-v6")
+    dataset = build_dataset(config, candidates, selected_cases, "aggregation-v7")
     states = {
         ("baseline", "model-a", "case-a"): "correct",
         ("baseline", "model-a", "case-b"): "incorrect",
@@ -119,7 +119,7 @@ async def test_report_uses_scored_vocabulary_and_excludes_completed(tmp_path: Pa
     async def task(cell: MatrixCellRef) -> CaseTrace:
         return _trace(cell, states[(cell.candidate_id, cell.model_id, cell.case_id)])
 
-    report = await dataset.evaluate(task, name="aggregation-v6", progress=False, retry_task=None)
+    report = await dataset.evaluate(task, name="aggregation-v7", progress=False, retry_task=None)
     ranking = _table(report.analyses, "Candidate ranking")
     pairs = _table(report.analyses, "Candidate x model outcomes")
 
@@ -146,12 +146,12 @@ async def test_matrix_summary_lines_emit_scored_vocabulary(tmp_path: Path) -> No
     config = _config(tmp_path, models=["model-a"])
     candidates = [_candidate("baseline")]
     selected_cases = [_case("case-a"), _case("case-b")]
-    dataset = build_dataset(config, candidates, selected_cases, "summary-v6")
+    dataset = build_dataset(config, candidates, selected_cases, "summary-v7")
 
     async def task(cell: MatrixCellRef) -> CaseTrace:
         return _trace(cell, "correct")
 
-    report = await dataset.evaluate(task, name="summary-v6", progress=False, retry_task=None)
+    report = await dataset.evaluate(task, name="summary-v7", progress=False, retry_task=None)
     lines = matrix_summary_lines(report)
 
     assert lines[0].startswith("quality_rate: ")
@@ -167,7 +167,7 @@ async def test_matrix_summary_lines_emit_scored_vocabulary(tmp_path: Path) -> No
 
 async def test_report_case_metrics_carry_tool_calls_for_stub_and_no_tokens(tmp_path: Path) -> None:
     config = _config(tmp_path, cases=["direct_turn_on_utility_room_ceiling"])
-    report = await run_matrix(config, run_id="metrics-v6")
+    report = await run_matrix(config, run_id="metrics-v7")
 
     metrics = report.cases[0].metrics
     # The stub emits tool activity but no provider usage, so tokens stay unavailable.

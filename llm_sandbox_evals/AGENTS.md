@@ -12,28 +12,32 @@ Assistant fixtures. It evaluates only successful service invocation effects.
 - `required_actions` may be empty. An empty list is correct only when the
   successful action ledger is also empty.
 - Required actions contain `domain`, `service`, and required nonempty
-  `target_entity_ids`. The current corpus does not author `service_data`;
-  service-data matching remains deferred.
+  `target_entity_ids`. The current corpus does not author `service_data`.
 - Runtime actions are always enabled without a domain allowlist.
 - Agent output is plain text (`Agent[EvalRuntime, str]`). Prose is display-only
   and is never parsed or scored.
-- Correctness is exact multiset equality between required actions and successful
-  ledger effects. Missing, wrong, extra, and duplicate successes fail; any extra
-  successful action fails even when it is a different fallback service. Thus an
-  empty `required_actions` list rejects every successful action.
-- Rejected records are diagnostics only. Action results preserve normalized
-  observed effects, one-to-one dimension comparisons, unexpected actions, and
-  stable reason codes without weakening exact matching.
-- Traces and reports use scoring version 6. Version 5 and older artifacts,
-  including prior v5 artifacts with the former trace contract, are rejected as legacy
-  because the trace field changed; there is no compatibility path.
+- Correctness checks exact call matching first. If exact matching leaves exactly
+  one unmatched authored multi-target action, the remaining successful concrete
+  entity-ID calls may pass as `equivalent_target_partition` only when there are
+  at least two calls; every target collection is nonempty and duplicate-free;
+  the calls are pairwise disjoint; their exact union equals the authored target
+  set; domain and service match; all actual canonical comparable
+  `service_data` values are identical; and authored `service_data`, when
+  present, matches. Duplicate, missing, extra, wrong-service, and
+  different-data successes fail. Empty `required_actions` still rejects every
+  successful action.
+- Raw and rejected records are diagnostics only. Action results preserve
+  normalized observed effects, one-to-one dimension comparisons, unexpected
+  actions, and stable reason codes without weakening action matching.
+- Traces and reports use scoring version 7. Version 6 and older artifacts are
+  rejected as legacy; there is no compatibility decoder or rescoring path.
 
 Do not add read scoring, evidence normalization, answer schemas, collections,
-aggregates, relations, no-data, recorder-answer scoring, service-data matching,
-policy/rejection scoring, disabled-action behavior, or clarification-quality
-scoring to this baseline. Conditional state/history/logbook cases, true
-no-action cases, and multi-target selector resolution are now part of the
-action corpus.
+aggregates, relations, no-data, recorder-answer scoring, authored service-data
+coverage, policy/rejection scoring, disabled-action behavior, or
+clarification-quality scoring to this baseline. Conditional state/history/logbook
+cases, true no-action cases, and multi-target selector resolution are now part
+of the action corpus.
 
 ## Dataset and stub
 
@@ -50,8 +54,10 @@ true no-action, and ambiguity plus ambiguity-with-logic:
 | Ambiguity (3) | `ambiguous_bare_light`, `ambiguous_ceiling_no_area`, `ambiguous_logic_living_room_recent` | No-op ambiguity and Living Room recorder-based disambiguation |
 
 Each multi-target discovery case has one required action whose target list
-contains every resolved entity. Separate successful calls for those entities do
-not equal that single action and therefore score incorrectly.
+contains every resolved entity. Scoring still tries exact call matching first;
+only one unmatched authored multi-target action can accept a complete,
+disjoint, duplicate-free partition across two or more successful concrete
+entity-ID calls with the same domain, service, and comparable service data.
 
 The offline stub is intentionally limited to the five exact, normalized
 `home_full` phrases below. It calls `execute_home_code` and then emits plain
@@ -84,12 +90,12 @@ checks and uses `home_full` for the corpus and its complete 288-entity fixture.
 - `runtime.py` — fresh fixture runtime with actions enabled.
 - `tools.py` — visibility scoping, non-live `RecordingInvoker`, and compact
   action normalization.
-- `scoring/actions.py` / `scoring/evaluate.py` — successful-ledger construction
-  and exact effect matching.
+- `scoring/actions.py` / `scoring/evaluate.py` — successful-ledger construction,
+  exact call matching, and the narrow multi-target partition equivalence.
 - `harness.py` — lifecycle, tool events, action extraction, minimal successful
   tool diagnostics, and trace assembly.
 - `experiment.py`, `reports.py`, `presentation.py`, `terminal.py`, `html_report.py` — overall model
-  comparison, v6 persistence, immutable and runtime presentation projections, diagnostics, and action-ledger display without
+  comparison, v7 persistence, immutable and runtime presentation projections, diagnostics, and action-ledger display without
   category analysis.
 
 ## Eval UX and artifacts
@@ -123,13 +129,15 @@ surface. Their eval-specific scoring and stub routes must not return.
 
 ## Staged future work
 
-Expand only through explicit plans and observable action contracts. Service-data
-matching, policy/rejection behavior, disabled-action behavior, and
-response/clarification-quality scoring remain deferred. Conditional
-state/history/logbook behavior, true no-action outcomes, and multi-target
-selector resolution are already represented in the current corpus. Read-answer
-scoring requires a separate design rather than restoration of v4 models or
-evidence modules.
+Expand only through explicit plans and observable action contracts. The current
+corpus still does not author service data; v7 only compares comparable
+`service_data` to prevent partition equivalence across different action payloads
+or against authored payloads if they are introduced later. Policy/rejection
+behavior, disabled-action behavior, and response/clarification-quality scoring
+remain deferred. Conditional state/history/logbook behavior, true no-action
+outcomes, and multi-target selector resolution are already represented in the
+current corpus. Read-answer scoring requires a separate design rather than
+restoration of v4 models or evidence modules.
 
 ## Safety and commands
 

@@ -1,6 +1,7 @@
 from datetime import UTC, datetime
 import json
 from pathlib import Path
+from typing import Literal
 
 from custom_components.llm_sandbox.const import DEFAULT_PROMPT_PROFILE
 from llm_sandbox_evals.config import EvalConfig
@@ -29,28 +30,68 @@ import pytest
 from llm_sandbox_evals import reports
 
 
-async def test_v6_report_round_trip_rescores_from_stored_ledger(tmp_path: Path) -> None:
+async def test_v7_report_round_trip_rescores_equivalent_target_partition(tmp_path: Path) -> None:
     config = _config(tmp_path)
-    report = await run_matrix(config, run_id="v6-round-trip")
-    original = report.cases[0].output
-    run_dir = write_report_json(report, config, run_id="v6-round-trip-written")
+    report = await run_matrix(config, run_id="v7-round-trip")
+    original_answer = report.cases[0].output.answer
+    run_dir = write_report_json(report, config, run_id="v7-round-trip-written")
+    report_path = run_dir / "report.json"
+    payload = json.loads(report_path.read_text(encoding="utf-8"))
+    output = payload["cases"][0]["output"]
+    expected_action = RequiredAction(
+        "light",
+        "turn_on",
+        ("light.utility_room_ceiling", "light.utility_room_accent"),
+    )
+    successful_actions = (
+        {
+            "domain": "light",
+            "service": "turn_on",
+            "target": {"entity_id": ["light.utility_room_ceiling"]},
+            "service_data": {},
+            "status": "success",
+        },
+        {
+            "domain": "light",
+            "service": "turn_on",
+            "target": {"entity_id": ["light.utility_room_accent"]},
+            "service_data": {},
+            "status": "success",
+        },
+    )
+    output["required_actions"] = [
+        {
+            "domain": expected_action.domain,
+            "service": expected_action.service,
+            "target_entity_ids": list(expected_action.target_entity_ids),
+            "service_data": None,
+        }
+    ]
+    output["outcome"] = {
+        "state": "correct",
+        "action_reason": "equivalent_target_partition",
+        "score": 1.0,
+    }
+    output["action_result"] = {
+        "passed": True,
+        "reason": "equivalent_target_partition",
+        "comparisons": [],
+        "unexpected_actions": [],
+    }
+    output["action_ledger"] = {"successful": list(successful_actions), "rejected": []}
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
 
     restored = load_report(run_dir).cases[0].output
 
-    assert rescore_trace(restored) == restored.outcome
-    assert restored.required_actions == original.required_actions
-    assert restored.answer == original.answer
-    assert restored.action_ledger == original.action_ledger
-    assert restored.action_result == original.action_result
-    assert restored.action_result.reason == "ok"
-    assert restored.action_result.comparisons[0].matched is True
-    assert restored.action_result.comparisons[0].actual is not None
-    assert restored.action_result.comparisons[0].actual.service == "turn_on"
-    assert restored.scoring_version == 6
-    payload = json.loads((run_dir / "report.json").read_text(encoding="utf-8"))
-    assert payload["scoring_version"] == 6
-    assert payload["cases"][0]["output"]["scoring_version"] == 6
-    assert payload["cases"][0]["output"]["action_result"]["comparisons"][0]["service_matches"] is True
+    assert rescore_trace(restored) == CaseOutcome("correct", "equivalent_target_partition")
+    assert restored.outcome == CaseOutcome("correct", "equivalent_target_partition")
+    assert restored.required_actions == (expected_action,)
+    assert restored.answer == original_answer
+    assert restored.action_ledger == ActionLedger(successful=successful_actions)
+    assert restored.action_result.reason == "equivalent_target_partition"
+    assert restored.scoring_version == 7
+    assert payload["scoring_version"] == 7
+    assert output["scoring_version"] == 7
 
 
 async def test_variant_fields_and_descriptor_survive_write_load(tmp_path: Path) -> None:
@@ -82,7 +123,7 @@ async def test_variant_fields_and_descriptor_survive_write_load(tmp_path: Path) 
     assert cell.temperature == 0.7
 
 
-@pytest.mark.parametrize("version", [None, 1, 4, 5], ids=["missing", "invalid", "v4", "v5"])
+@pytest.mark.parametrize("version", [None, 1, 5, 6], ids=["missing", "v1", "v5", "v6"])
 async def test_legacy_and_invalid_artifacts_are_strictly_rejected(tmp_path: Path, version: int | None) -> None:
     config = _config(tmp_path)
     report = await run_matrix(config, run_id="artifact-version")
@@ -94,19 +135,19 @@ async def test_legacy_and_invalid_artifacts_are_strictly_rejected(tmp_path: Path
         payload["scoring_version"] = version
     (run_dir / "report.json").write_text(json.dumps(payload), encoding="utf-8")
 
-    with pytest.raises(ValueError, match=r"^legacy scoring-v6 artifact; rerun evaluation$"):
+    with pytest.raises(ValueError, match=r"^legacy scoring artifact; rerun evaluation with scoring v7$"):
         load_report(run_dir)
 
 
-async def test_v5_trace_is_rejected_even_inside_a_v6_envelope(tmp_path: Path) -> None:
+async def test_v6_trace_is_rejected_even_inside_a_v7_envelope(tmp_path: Path) -> None:
     config = _config(tmp_path)
     report = await run_matrix(config, run_id="legacy-trace")
     run_dir = write_report_json(report, config, run_id="legacy-trace-written")
     payload = json.loads((run_dir / "report.json").read_text(encoding="utf-8"))
-    payload["cases"][0]["output"]["scoring_version"] = 5
+    payload["cases"][0]["output"]["scoring_version"] = 6
     (run_dir / "report.json").write_text(json.dumps(payload), encoding="utf-8")
 
-    with pytest.raises(ValueError, match=r"^legacy scoring-v6 artifact; rerun evaluation$"):
+    with pytest.raises(ValueError, match=r"^legacy scoring artifact; rerun evaluation with scoring v7$"):
         load_report(run_dir)
 
 
@@ -169,7 +210,7 @@ def _config(runs_dir: Path) -> EvalConfig:
     )
 
 
-def _partial_artifact(*, status: str) -> PartialRunArtifact:
+def _partial_artifact(*, status: Literal["cancelled", "failed"]) -> PartialRunArtifact:
     from llm_sandbox_evals.schema import ModelDescriptor, RunDescriptor
 
     trace = CaseTrace(
@@ -211,7 +252,7 @@ def _partial_artifact(*, status: str) -> PartialRunArtifact:
             75.0,
             10,
         ),
-        status,  # type: ignore[arg-type]
+        status,
         1,
         2,
         (record,),

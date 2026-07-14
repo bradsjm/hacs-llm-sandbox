@@ -70,7 +70,7 @@ enabled without a domain allowlist. `required_actions: []` is valid and means
 that the case is correct only when the model produces zero successful actions.
 Any extra successful action fails, including a different fallback service or a
 duplicate of an otherwise required action. The current corpus does not author
-`service_data`; service-data matching remains deferred.
+`service_data`.
 
 ## The `home_full` corpus
 
@@ -98,8 +98,12 @@ The corpus contains 14 cases in this progression:
    from the otherwise ambiguous Living Room lights.
 
 For a multi-target case, one successful call containing all resolved target IDs
-is required. Multiple successful single-target calls are a different action
-multiset and score incorrectly.
+is the exact match. Scoring v7 has one narrow equivalence: when exact matching
+leaves exactly one unmatched authored multi-target action, the remaining
+successful concrete entity-ID calls may score as `equivalent_target_partition`
+if they form a complete, disjoint, duplicate-free partition of the authored
+target set across at least two calls with matching domain, service, and
+comparable service data. This is not general action merging.
 
 The offline stub is deliberately narrower than the corpus. It exact-matches
 the five direct/brightness/color requests, routes them through
@@ -119,33 +123,48 @@ cases are valid no-action stub smoke cases, while the non-empty discovery,
 condition, and ambiguity-with-logic cases are intentionally not routed by the
 stub. This documents stub coverage only; it does not claim real-model results.
 
-## Scoring v6
+## Scoring v7
 
 Only the successful action ledger is scored. Required and actual effects are
-compared as exact multisets of:
+matched by exact call equality first across:
 
 - domain;
 - service;
 - target entity IDs;
+- canonical comparable service data, when present.
 
-Missing, wrong, extra, and duplicate successful effects fail. An empty
-`required_actions` list therefore passes only with zero successful effects and
-fails on any successful effect, including a different fallback service. Rejected
-action records remain diagnostic and cannot satisfy or invalidate an otherwise
-exact successful ledger. Service-data matching is deferred; the current
-brightness/color cases assert service and target only. Structured action
-comparisons preserve unexpected effects and expose stable action reason codes.
+If exact matching leaves exactly one unmatched authored action, and that action
+has multiple target entity IDs, the remaining successful concrete entity-ID
+calls may pass as `equivalent_target_partition` only when all of these are true:
+
+- at least two successful calls remain;
+- every remaining call target collection is nonempty and duplicate-free;
+- the remaining call target collections are pairwise disjoint;
+- the exact union of remaining targets equals the authored target set;
+- every remaining call has the authored domain and service;
+- all actual canonical comparable `service_data` values are identical;
+- authored `service_data`, if present, matches that actual comparable data.
+
+Missing, extra, duplicate, wrong-service, and different-data successful effects
+fail. An empty `required_actions` list therefore passes only with zero
+successful effects and fails on any successful effect, including a different
+fallback service. Raw and rejected action records remain diagnostic and cannot
+satisfy or invalidate an otherwise matched successful ledger. The current corpus
+does not author `service_data`; the comparable-data checks exist to prevent
+partition equivalence across different actual payloads or against authored
+payloads if later cases add them. Structured action comparisons preserve
+unexpected effects and expose stable action reason codes.
 `CaseOutcome.action_reason` is present only for scored correct/incorrect cells.
 Operational provider, timeout, and harness failures remain `incomplete`, have
 `action_reason: null`, and use `diagnostics.failure` as their effective cause.
 Cap exhaustion is scored incorrect with its real action reason and the distinct
 effective cause `cap_exhausted`.
 
-Reports use scoring version 6. All prior artifacts, including v5, are rejected
-as legacy; there is no compatibility decoder or rescoring shim. `model_id`
-remains the provider id, while every trace and descriptor persist the resolved
-run-wide `reasoning_effort` and `temperature`. Presentation derives labels such
-as `luna(high)` or `luna(default)` without changing provider routing.
+Reports use scoring version 7. Version 6 and older artifacts are rejected as
+legacy; there is no compatibility decoder or rescoring shim. `model_id` remains
+the provider id, while every trace and descriptor persist the resolved run-wide
+`reasoning_effort` and `temperature`. Presentation derives labels such as
+`luna(high)` or `luna(default)` without changing provider routing.
 
 User-facing counts are `total` cells, `finished` terminal cells, and `scored`
 correct plus incorrect cells. `quality_rate = correct / scored`; `coverage_rate
@@ -190,7 +209,7 @@ Pydantic AI Agent[EvalRuntime, str]
         |
 production tools -> RecordingInvoker -> action ledger
         |
-exact successful-effect comparison
+exact-first action comparison + narrow partition equivalence
         |
 correct / incorrect / incomplete + diagnostics
 ```
@@ -209,7 +228,7 @@ inventory-scale development checks.
 Future capabilities should be introduced one observable action boundary at a
 time with explicit authored contracts. The following remain deferred:
 
-1. service-data matching;
+1. authored service-data coverage in the corpus;
 2. policy/rejection behavior and disabled-action behavior;
 3. response and clarification-quality scoring.
 

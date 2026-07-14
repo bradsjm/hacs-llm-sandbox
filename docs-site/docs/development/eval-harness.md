@@ -27,11 +27,19 @@ contain native `report.json` and `report.html`; cancelled or failed runs contain
 the typed `partial.json` journal instead. A partial journal is explicitly not a
 report, cannot be rendered as HTML, and cannot be resumed.
 
-The harness uses scoring v6. It preserves provider `model_id` and records the
-resolved run-wide reasoning effort and temperature separately, deriving labels
-such as `model(high)` for presentation. `quality_rate` is correct/scored and
-`coverage_rate` is scored/total; incomplete cells carry an operational cause,
-not an action mismatch.
+The harness uses scoring v7. It matches successful actions exactly first. If
+exact matching leaves exactly one unmatched authored multi-target action, the
+remaining successful concrete entity-ID calls may score as
+`equivalent_target_partition` only when at least two calls form a complete,
+disjoint, duplicate-free partition of the authored target set with matching
+domain, service, and comparable service data. Missing, extra, duplicate,
+wrong-service, and different-data calls remain failures; raw calls remain
+diagnostics. Version 6 and older artifacts are rejected without compatibility.
+It preserves provider `model_id` and records the resolved run-wide reasoning
+effort and temperature separately, deriving labels such as `model(high)` for
+presentation. `quality_rate` is correct/scored and `coverage_rate` is
+scored/total; incomplete cells carry an operational cause, not an action
+mismatch.
 
 TTY runs render one transient Rich view and a durable stderr final with the
 artifact location once. Redirected runs, or `--machine`, emit stable KV on

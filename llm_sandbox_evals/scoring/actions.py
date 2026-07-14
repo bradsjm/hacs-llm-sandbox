@@ -42,6 +42,14 @@ def score_actions(expected: tuple[RequiredAction, ...], ledger: ActionLedger) ->
             unmatched_expected.remove(expected_index)
             unmatched_actual.remove(match)
 
+    partition_match = _equivalent_target_partition(expected, actual, unmatched_expected, unmatched_actual)
+    if partition_match is not None:
+        # Branch boundary: only the still-unmatched ledger tail is consumed as one diagnostic aggregate.
+        expected_index, comparison = partition_match
+        comparisons[expected_index] = comparison
+        complete_comparisons = tuple(comparison for comparison in comparisons if comparison is not None)
+        return ActionResult(True, "equivalent_target_partition", complete_comparisons, ())
+
     # Pair each remaining expectation with the still-available effect sharing the
     # most dimensions. Authored order and ledger order resolve equal-distance ties.
     for expected_index in sorted(unmatched_expected):
@@ -96,6 +104,62 @@ def _comparison(expected: RequiredAction, actual: ObservedAction) -> ActionCompa
 
 def _match_count(comparison: ActionComparison) -> int:
     return sum((comparison.service_matches, comparison.target_matches, comparison.service_data_matches))
+
+
+def _equivalent_target_partition(
+    expected: tuple[RequiredAction, ...],
+    actual: tuple[ObservedAction, ...],
+    unmatched_expected: set[int],
+    unmatched_actual: set[int],
+) -> tuple[int, ActionComparison] | None:
+    """Aggregate split successful calls only when they exactly partition one authored target set."""
+    if len(unmatched_expected) != 1 or len(unmatched_actual) < 2:
+        return None
+
+    expected_index = next(iter(unmatched_expected))
+    wanted = expected[expected_index]
+    if len(wanted.target_entity_ids) < 2:
+        return None
+
+    remaining = tuple(actual[index] for index in sorted(unmatched_actual))
+    aggregate = _partition_aggregate(wanted, remaining)
+    if aggregate is None:
+        return None
+    return expected_index, _comparison(wanted, aggregate)
+
+
+def _partition_aggregate(wanted: RequiredAction, actual: tuple[ObservedAction, ...]) -> ObservedAction | None:
+    """Return one diagnostic action when every remaining effect is a target partition segment."""
+    expected_targets = set(wanted.target_entity_ids)
+    if len(expected_targets) != len(wanted.target_entity_ids):
+        return None
+
+    data_key = _data_key(actual[0].service_data)
+    if wanted.service_data is not None and _data_key(wanted.service_data) != data_key:
+        return None
+
+    observed_targets: set[str] = set()
+    for action in actual:
+        if (action.domain, action.service) != (wanted.domain, wanted.service):
+            return None
+        if _data_key(action.service_data) != data_key:
+            return None
+
+        targets = action.target_entity_ids
+        if not targets or any(not target for target in targets):
+            return None
+        unique_targets = set(targets)
+        if len(unique_targets) != len(targets):
+            return None
+        if observed_targets & unique_targets:
+            return None
+
+        # State mutation point: successful per-call validation contributes this call's whole target set.
+        observed_targets.update(unique_targets)
+
+    if observed_targets != expected_targets:
+        return None
+    return ObservedAction(wanted.domain, wanted.service, tuple(sorted(observed_targets)), dict(actual[0].service_data))
 
 
 def _reason(

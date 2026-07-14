@@ -20,7 +20,7 @@ import pytest
 def _action(
     domain: str,
     service: str,
-    entity_id: str,
+    entity_id: str | list[str],
     service_data: dict[str, object] | None = None,
     *,
     status: str | None = None,
@@ -391,3 +391,276 @@ def test_successful_match_remains_correct_when_an_attempt_was_rejected() -> None
     assert outcome.state == "correct"
     assert result.reason == "ok"
     assert ledger.rejected == (rejected,)
+
+
+_PARTITION_TARGETS = ("light.gamma", "light.alpha", "light.delta", "light.beta")
+_PARTITION_ON = RequiredAction("light", "turn_on", _PARTITION_TARGETS)
+
+
+def test_exact_multi_target_action_remains_an_exact_match() -> None:
+    recorded = [
+        _action(
+            "light",
+            "turn_on",
+            ["light.delta", "light.beta", "light.alpha", "light.gamma"],
+        )
+    ]
+
+    outcome, result, _ledger = evaluate_case(_case(_PARTITION_ON), recorded)
+
+    assert outcome.state == "correct"
+    assert result.passed is True
+    assert result.reason == "ok"
+    assert result.comparisons[0].actual == ObservedAction(
+        "light",
+        "turn_on",
+        tuple(sorted(_PARTITION_TARGETS)),
+        {},
+    )
+
+
+@pytest.mark.parametrize(
+    "recorded",
+    [
+        pytest.param(
+            [
+                _action("light", "turn_on", "light.beta"),
+                _action("light", "turn_on", "light.gamma"),
+                _action("light", "turn_on", "light.delta"),
+                _action("light", "turn_on", "light.alpha"),
+            ],
+            id="all-single-calls-in-varied-order",
+        ),
+        pytest.param(
+            [
+                _action("light", "turn_on", ["light.beta", "light.delta"]),
+                _action("light", "turn_on", "light.gamma"),
+                _action("light", "turn_on", "light.alpha"),
+            ],
+            id="mixed-size-calls-in-varied-order",
+        ),
+    ],
+)
+def test_disjoint_target_partitions_are_equivalent(
+    recorded: list[dict[str, object]],
+) -> None:
+    outcome, result, ledger = evaluate_case(_case(_PARTITION_ON), recorded)
+
+    assert outcome.state == "correct"
+    assert result.passed is True
+    assert result.reason == "equivalent_target_partition"
+    assert result.comparisons == (
+        ActionComparison(
+            _PARTITION_ON,
+            ObservedAction(
+                "light",
+                "turn_on",
+                tuple(sorted(_PARTITION_TARGETS)),
+                {},
+            ),
+            True,
+            True,
+            True,
+            True,
+        ),
+    )
+    assert ledger.successful == tuple(recorded)
+
+
+@pytest.mark.parametrize(
+    ("required", "recorded"),
+    [
+        pytest.param(
+            RequiredAction("light", "turn_on", ("light.alpha", "light.beta")),
+            [
+                _action(
+                    "light",
+                    "turn_on",
+                    "light.beta",
+                    {"transition": 1.0, "options": {"levels": [1.0, 2]}},
+                ),
+                _action(
+                    "light",
+                    "turn_on",
+                    "light.alpha",
+                    {"options": {"levels": [1, 2.0]}, "transition": 1},
+                ),
+            ],
+            id="unspecified-authored-data-still-requires-identical-canonical-call-data",
+        ),
+        pytest.param(
+            RequiredAction(
+                "light",
+                "turn_on",
+                ("light.alpha", "light.beta"),
+                {"transition": 1, "options": {"levels": [1, 2]}},
+            ),
+            [
+                _action(
+                    "light",
+                    "turn_on",
+                    "light.beta",
+                    {"options": {"levels": [1.0, 2]}, "transition": 1.0},
+                ),
+                _action(
+                    "light",
+                    "turn_on",
+                    "light.alpha",
+                    {"transition": 1, "options": {"levels": [1, 2.0]}},
+                ),
+            ],
+            id="authored-data-matches-canonical-call-data",
+        ),
+    ],
+)
+def test_partition_service_data_uses_canonical_equivalence(
+    required: RequiredAction,
+    recorded: list[dict[str, object]],
+) -> None:
+    outcome, result, _ledger = evaluate_case(_case(required), recorded)
+
+    assert outcome.state == "correct"
+    assert result.passed is True
+    assert result.reason == "equivalent_target_partition"
+    assert result.comparisons[0].service_data_matches is True
+    assert result.comparisons[0].actual == ObservedAction(
+        "light",
+        "turn_on",
+        ("light.alpha", "light.beta"),
+        {"options": {"levels": [1, 2]}, "transition": 1},
+    )
+
+
+@pytest.mark.parametrize(
+    ("required", "recorded"),
+    [
+        pytest.param(
+            RequiredAction("light", "turn_on", ("light.alpha", "light.beta", "light.gamma")),
+            [
+                _action("light", "turn_on", ["light.alpha", "light.alpha"]),
+                _action("light", "turn_on", ["light.beta", "light.gamma"]),
+            ],
+            id="duplicate-target-within-one-call",
+        ),
+        pytest.param(
+            RequiredAction("light", "turn_on", ("light.alpha", "light.beta", "light.gamma")),
+            [
+                _action("light", "turn_on", ["light.alpha", "light.beta"]),
+                _action("light", "turn_on", ["light.beta", "light.gamma"]),
+            ],
+            id="overlapping-targets-across-calls",
+        ),
+        pytest.param(
+            RequiredAction("light", "turn_on", ("light.alpha", "light.beta", "light.gamma")),
+            [
+                _action("light", "turn_on", "light.alpha"),
+                _action("light", "turn_on", "light.beta"),
+            ],
+            id="missing-target",
+        ),
+        pytest.param(
+            RequiredAction("light", "turn_on", ("light.alpha", "light.beta", "light.gamma")),
+            [
+                _action("light", "turn_on", ["light.alpha", "light.beta"]),
+                _action("light", "turn_on", ["light.gamma", "light.delta"]),
+            ],
+            id="extra-target",
+        ),
+        pytest.param(
+            RequiredAction("light", "turn_on", ("light.alpha", "light.beta", "light.gamma")),
+            [
+                _action("light", "turn_on", "light.alpha"),
+                _action("switch", "turn_on", "light.beta"),
+                _action("light", "turn_on", "light.gamma"),
+            ],
+            id="wrong-domain-member",
+        ),
+        pytest.param(
+            RequiredAction("light", "turn_on", ("light.alpha", "light.beta", "light.gamma")),
+            [
+                _action("light", "turn_on", "light.alpha"),
+                _action("light", "turn_off", "light.beta"),
+                _action("light", "turn_on", "light.gamma"),
+            ],
+            id="wrong-service-member",
+        ),
+        pytest.param(
+            RequiredAction("light", "turn_on", ("light.alpha", "light.beta", "light.gamma")),
+            [
+                _action("light", "turn_on", "light.alpha", {"transition": 1}),
+                _action(
+                    "light",
+                    "turn_on",
+                    ["light.beta", "light.gamma"],
+                    {"transition": 2},
+                ),
+            ],
+            id="differing-call-data-with-unspecified-authored-data",
+        ),
+        pytest.param(
+            RequiredAction(
+                "light",
+                "turn_on",
+                ("light.alpha", "light.beta", "light.gamma"),
+                {"transition": 1},
+            ),
+            [
+                _action("light", "turn_on", "light.alpha", {"transition": 2}),
+                _action(
+                    "light",
+                    "turn_on",
+                    ["light.beta", "light.gamma"],
+                    {"transition": 2.0},
+                ),
+            ],
+            id="authored-data-mismatch",
+        ),
+        pytest.param(
+            RequiredAction("light", "turn_on", ("light.alpha", "light.beta", "light.gamma")),
+            [
+                _action("light", "turn_on", "light.alpha"),
+                _action("light", "turn_on", ["light.beta", "light.gamma"]),
+                _action("switch", "turn_on", "switch.unrelated"),
+            ],
+            id="unrelated-extra-call",
+        ),
+    ],
+)
+def test_invalid_target_partitions_fail(
+    required: RequiredAction,
+    recorded: list[dict[str, object]],
+) -> None:
+    outcome, result, _ledger = evaluate_case(_case(required), recorded)
+
+    assert outcome.state == "incorrect"
+    assert result.passed is False
+    assert result.reason == "multiple_action_mismatches"
+
+
+def test_exact_match_is_consumed_before_singular_partition_fallback() -> None:
+    aggregate = RequiredAction(
+        "light",
+        "turn_on",
+        ("light.alpha", "light.beta", "light.gamma"),
+    )
+    exact = RequiredAction("switch", "turn_on", ("switch.garage",))
+    recorded = [
+        _action("light", "turn_on", "light.gamma"),
+        _action("switch", "turn_on", "switch.garage"),
+        _action("light", "turn_on", ["light.beta", "light.alpha"]),
+    ]
+
+    outcome, result, _ledger = evaluate_case(_case(aggregate, exact), recorded)
+
+    assert outcome.state == "correct"
+    assert result.passed is True
+    assert result.reason == "equivalent_target_partition"
+    assert tuple(comparison.actual for comparison in result.comparisons) == (
+        ObservedAction(
+            "light",
+            "turn_on",
+            ("light.alpha", "light.beta", "light.gamma"),
+            {},
+        ),
+        _observed("switch", "turn_on", "switch.garage"),
+    )

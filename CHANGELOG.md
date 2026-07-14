@@ -4,9 +4,10 @@
 
 ### Improve eval harness lifecycle and presentation
 
-- Bumped `llm_sandbox_evals` artifacts to scoring v6 with persisted model
-  variants, strict legacy rejection, separate action reasons and operational
-  causes, and corrected native usage metrics.
+- Bumped `llm_sandbox_evals` artifacts to scoring v7 with exact-first action
+  matching, narrow multi-target partition equivalence, persisted model variants,
+  strict legacy rejection, separate action reasons and operational causes, and
+  corrected native usage metrics.
 - Added atomic run manifests and typed cancellation/failure journals that are
   explicitly not reports, plus pre-flight matrix validation.
 - Added Auto TTY / `--machine` output behavior, native agent event streaming,

@@ -69,11 +69,16 @@ def _cell(case_id: str, candidate_id: str = "baseline", model_id: str = "stub") 
             {"state": "incomplete", "action_reason": None, "failure": None}, "unknown", id="incomplete-no-failure"
         ),
         pytest.param({"state": "incorrect", "action_reason": "wrong_target"}, "wrong_target", id="scored-reason"),
+        pytest.param(
+            {"state": "correct", "action_reason": "equivalent_target_partition"},
+            "equivalent_target_partition",
+            id="equivalent-target-partition",
+        ),
         pytest.param({"state": "correct", "action_reason": "ok"}, "ok", id="correct"),
     ],
 )
 def test_effective_cause_resolves_every_branch(trace_kwargs: dict[str, object], expected: str) -> None:
-    trace = _trace(**trace_kwargs)  # type: ignore[arg-type]
+    trace = _trace(**trace_kwargs)
     assert effective_cause(trace) == expected
 
 
@@ -84,6 +89,12 @@ def test_result_label_combines_state_and_cause_without_raw_payload() -> None:
     assert label == "incomplete·provider_error"
     assert effective_cause(trace) in label
     assert trace.outcome.state in label
+
+
+def test_result_label_preserves_equivalent_target_partition_reason() -> None:
+    trace = _trace(state="correct", action_reason="equivalent_target_partition")
+
+    assert result_label(trace) == "correct·equivalent_target_partition"
 
 
 def test_rate_is_zero_for_empty_denominator() -> None:

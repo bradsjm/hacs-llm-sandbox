@@ -5,6 +5,7 @@ from typing import Literal
 
 type ActionOutcomeReason = Literal[
     "ok",
+    "equivalent_target_partition",
     "no_action",
     "action_rejected",
     "wrong_service",
@@ -177,7 +178,7 @@ class CaseOutcome:
 
 @dataclass(frozen=True, slots=True)
 class CaseTrace:
-    """Self-contained scoring-v6 action eval trace."""
+    """Self-contained scoring-v7 action eval trace."""
 
     case_id: str
     candidate_id: str
@@ -191,7 +192,7 @@ class CaseTrace:
     diagnostics: EvalDiagnostics
     reasoning_effort: str | None = None
     temperature: float | None = None
-    scoring_version: Literal[6] = 6
+    scoring_version: Literal[7] = 7
     provider_error: str | None = None
     user_request: str = ""
     conversation_id: str | None = None

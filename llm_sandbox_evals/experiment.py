@@ -78,7 +78,7 @@ class LanePhaseEvent:
 
 @dataclass(slots=True)
 class SandboxOutcome(Evaluator[MatrixCellRef, CaseTrace, MatrixCellMeta]):
-    """Expose scoring-v6 quality and operational labels as native eval results."""
+    """Expose scoring-v7 quality and operational labels as native eval results."""
 
     def evaluate(
         self, ctx: EvaluatorContext[MatrixCellRef, CaseTrace, MatrixCellMeta]

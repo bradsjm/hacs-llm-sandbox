@@ -2,7 +2,7 @@ import json
 from os import close
 from pathlib import Path
 from tempfile import mkstemp
-from typing import Self
+from typing import Self, TypedDict, cast
 
 from llm_sandbox_evals.experiment import MatrixCellRef
 from llm_sandbox_evals.html_report import render_html, write_html
@@ -29,6 +29,7 @@ def _trace(
     reasoning_effort: str | None = "high",
     usage: dict[str, object] | None = None,
     tool_calls: int = 1,
+    action_ledger: ActionLedger | None = None,
 ) -> CaseTrace:
     return CaseTrace(
         case_id=case_id,
@@ -38,7 +39,7 @@ def _trace(
         required_actions=(RequiredAction("light", "turn_on", ("light.bedroom",)),),
         outcome=CaseOutcome(state, action_reason),
         action_result=ActionResult(state == "correct", action_reason or "ok"),
-        action_ledger=ActionLedger(),
+        action_ledger=action_ledger or ActionLedger(),
         tool_events=(),
         diagnostics=EvalDiagnostics(
             tool_calls=tool_calls,
@@ -80,11 +81,19 @@ def _case(trace: CaseTrace) -> ReportCase:
 
 
 def _report() -> EvaluationReport:
+    wrong_target_action = {
+        "domain": "light",
+        "service": "turn_on",
+        "target": {"entity_id": ["light.kitchen"]},
+        "service_data": {},
+        "status": "success",
+    }
     fail = _trace(
         state="incorrect",
         action_reason="wrong_target",
         answer="Done. </script><script>alert(1)</script>",
         usage={"total_tokens": 42, "cost": 0.001},
+        action_ledger=ActionLedger(successful=(wrong_target_action,)),
     )
     ok = _trace(case_id="action-ok", state="correct", action_reason="ok", answer="Turned on.", usage=None)
     incomplete = _trace(
@@ -106,12 +115,17 @@ def _report() -> EvaluationReport:
     )
 
 
-def _embedded_report(html_text: str) -> dict[str, object]:
+class _EmbeddedReport(TypedDict):
+    cells: list[dict[str, object]]
+    aggregates: list[dict[str, object]]
+
+
+def _embedded_report(html_text: str) -> _EmbeddedReport:
     marker = '<script type="application/json" id="report-data">'
     start = html_text.index(marker) + len(marker)
     end = html_text.index("</script>", start)
     # render_html neutralizes "</" as "<\/" so the payload never closes its host script early.
-    return json.loads(html_text[start:end].replace("<\\/", "</"))
+    return cast(_EmbeddedReport, json.loads(html_text[start:end].replace("<\\/", "</")))
 
 
 def test_hero_exposes_quality_coverage_variant_config() -> None:
@@ -149,7 +163,7 @@ def test_incomplete_cell_renders_operational_cause_not_action_mismatch() -> None
     assert "incomplete·action_mismatch" not in html_text
 
 
-def test_payload_carries_variant_and_usage_metrics() -> None:
+def test_payload_carries_variant_usage_and_raw_action_evidence() -> None:
     html_text = render_html(_report(), run_id="20260713-100000-000000")
     payload = _embedded_report(html_text)
 
@@ -158,6 +172,21 @@ def test_payload_carries_variant_and_usage_metrics() -> None:
     # Per-cell metrics and the trace usage fallback both reach the renderer.
     assert fail_cell["metrics"]["tool_calls"] == 1
     assert fail_cell["diagnostics"]["usage"]["total_tokens"] == 42
+    assert fail_cell["action_reason"] == "wrong_target"
+    assert fail_cell["cause"] == "wrong_target"
+    assert fail_cell["result"] == "incorrect·wrong_target"
+    assert fail_cell["action_ledger"] == {
+        "successful": [
+            {
+                "domain": "light",
+                "service": "turn_on",
+                "target": {"entity_id": ["light.kitchen"]},
+                "service_data": {},
+                "status": "success",
+            }
+        ],
+        "rejected": [],
+    }
     # Aggregates carry candidate and variant identity.
     assert payload["aggregates"][0]["candidate"] == "baseline"
     assert payload["aggregates"][0]["variant"] == "stub(high)"
@@ -168,7 +197,7 @@ def test_payload_carries_all_eval_diagnostics_fields() -> None:
     payload = _embedded_report(html_text)
 
     fail_cell = next(cell for cell in payload["cells"] if cell["case_id"] == "action-fail")
-    diagnostics = fail_cell["diagnostics"]
+    diagnostics = cast(dict[str, object], fail_cell["diagnostics"])
     # The raw payload is projected from the slots dataclass via asdict, retaining every field.
     expected_fields = {
         "tool_calls",
@@ -305,7 +334,7 @@ def _failing_named_temporary_file(
 
 
 def _write_valid_report(run_dir: Path) -> None:
-    """Persist a valid scoring-v6 report.json that load_report accepts."""
+    """Persist a valid scoring-v7 report.json that load_report accepts."""
     payload = json.loads(_REPORT_ADAPTER.dump_json(_report()))
-    payload["scoring_version"] = 6
+    payload["scoring_version"] = 7
     (run_dir / "report.json").write_text(json.dumps(payload), encoding="utf-8")

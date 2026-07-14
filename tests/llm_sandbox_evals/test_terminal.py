@@ -376,7 +376,8 @@ def test_live_coalesces_duplicate_phase_redraws() -> None:
 
 
 def test_machine_events_emit_stable_kv_without_raw_payload() -> None:
-    stream = Console(width=200, force_terminal=False, file=__import__("io").StringIO())
+    output_buffer = StringIO()
+    stream = Console(width=200, force_terminal=False, file=output_buffer)
     reporter = _reporter(human=False)
     reporter._console = stream
     cell = _cell()
@@ -386,7 +387,7 @@ def test_machine_events_emit_stable_kv_without_raw_payload() -> None:
     reporter.handle(MatrixProgressEvent("cell_started", cell=cell, request="secret request body"))
     reporter.handle(MatrixProgressEvent("cell_finished", cell=cell, trace=trace, completion_index=1, total=1))
 
-    output = stream.file.getvalue()
+    output = output_buffer.getvalue()
     assert "matrix_started total=1" in output
     assert "cell_finished index=1 result=incomplete·timeout" in output
     # Redirected output stays deterministic KV with no raw request text.
