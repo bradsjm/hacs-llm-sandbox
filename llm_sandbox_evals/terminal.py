@@ -17,9 +17,13 @@ from rich.text import Text
 from llm_sandbox_evals.config import EvalConfig
 from llm_sandbox_evals.experiment import LanePhaseEvent, MatrixCellRef, MatrixProgressEvent
 from llm_sandbox_evals.presentation import (
+    JudgeAggregate,
+    JudgeAttention,
+    JudgeSummary,
     OperationalIssueGroup,
     PresentationCell,
     PresentationState,
+    ReportPresentationModel,
     result_label,
     variant_label,
 )
@@ -43,6 +47,9 @@ _PERCENT = "#b8a1e8"
 _RECENT_RESULTS = 10
 _OPERATIONAL_DETAIL_LIMIT = 320
 _OPERATIONAL_CELL_PREVIEW = 3
+# Bounded advisory-judge preview: at most five needs-attention rows so the durable final stays
+# scannable and never grows with the judged-cell count.
+_JUDGE_ATTENTION_LIMIT = 5
 # Live timers display whole seconds, so 4 Hz clears the 1 Hz second-transition resolution with
 # margin. Rich Live (non-screen mode) erases and re-prints the entire frame on every refresh —
 # there is no cell-level diffing — so a lower rate directly reduces full-frame repaint flicker.
@@ -73,9 +80,8 @@ _CELL_PADDING = 2
 _EDGE_TRIM = 2
 # Keep Request at least this legible before abandoning the wide six-column layout.
 _MIN_REQUEST_WIDTH = 12
-# Six-column enabled layout budget: every fixed column + Activity + inter-cell padding + a legible
-# Request. Below this the ratio Request cannot absorb the deficit, so Rich contracts the fixed
-# Activity column and ellipsizes the tool name. At/above it the wide layout renders Activity in full.
+# Six-column layout budget: every fixed column + Activity + inter-cell padding + a legible Request.
+# Below this the ratio Request cannot absorb the deficit, so the lower-priority Variant is omitted.
 _ACTIVITY_WIDE_MIN_COLUMNS = (
     _SPINNER_WIDTH
     + _ACTIVITY_WIDTH
@@ -103,6 +109,7 @@ _ACTIVITY_LABELS: dict[str, str] = {
     "processing_tool_result": "result",
     "responding": "responding",
     "scoring": "scoring",
+    "judging": "judging",
     "finished": "finished",
 }
 # Phase → semantic terminal style. Unknown/missing phases fall back to the neutral track color.
@@ -115,6 +122,7 @@ _ACTIVITY_STYLES: dict[str, str] = {
     "processing_tool_result": _TOOL,
     "responding": _SUCCESS,
     "scoring": _PERCENT,
+    "judging": _PERCENT,
     "finished": _SUCCESS,
 }
 
@@ -224,12 +232,16 @@ class MatrixTerminalReporter:
         if changed and self._live is not None:
             self._live.update(self._live_frame(), refresh=True)
 
-    def finish(self, *, run_dir: str, report_html: str) -> None:
+    def finish(self, *, run_dir: str, report_html: str, report_model: ReportPresentationModel) -> None:
         """Print exactly one durable human final after artifacts are complete."""
         if not self._human:
             return
         self._stop_live()
-        self._console.print(render_durable_final(self._state, run_dir=run_dir, report_html=report_html))
+        # The immutable report model is the sole source for the advisory judge section; the runtime
+        # PresentationState still drives every deterministic, live, and operational surface.
+        self._console.print(
+            render_durable_final(self._state, run_dir=run_dir, report_html=report_html, report_model=report_model)
+        )
 
     @property
     def state(self) -> PresentationState:
@@ -327,20 +339,17 @@ class MatrixTerminalReporter:
         return progress
 
     def _lanes_table(self) -> Table:
-        """Render active lanes; reveal a truthful Activity column only once thinking is observed."""
-        activity = self._state.activity_enabled
-        # Branch boundary: only the enabled layout is responsive; when Activity is enabled but the
-        # reporter console is too narrow for the six-column budget, drop the lowest-priority Variant
-        # so spinner + Request + Activity keep their full widths and the tool name never ellipsizes.
-        narrow = activity and self._console.width < _ACTIVITY_WIDE_MIN_COLUMNS
+        """Render active lanes with baseline Activity and width-responsive Variant visibility."""
+        # Branch boundary: below the six-column budget, drop only Variant so spinner + Request +
+        # Activity keep their full widths and the tool name never ellipsizes.
+        narrow = self._console.width < _ACTIVITY_WIDE_MIN_COLUMNS
         show_variant = not narrow
         table = Table(box=None, expand=True, pad_edge=False, header_style=_ACTIVE)
         table.add_column("", width=_SPINNER_WIDTH, no_wrap=True)
         table.add_column("Request", ratio=3, overflow="ellipsis", no_wrap=True)
-        # Branch boundary: the Activity column is purely additive and appears only after a real thinking phase.
-        if activity:
-            table.add_column("Activity", width=_ACTIVITY_WIDTH, overflow="ellipsis", no_wrap=True)
-        # Branch boundary: Variant is the only column suppressed on the narrow enabled layout.
+        # Activity is a baseline lane fact and remains visible before any phase transition.
+        table.add_column("Activity", width=_ACTIVITY_WIDTH, overflow="ellipsis", no_wrap=True)
+        # Branch boundary: Variant is the only column suppressed on the narrow layout.
         if show_variant:
             table.add_column("Variant", width=_VARIANT_WIDTH, style="dim", no_wrap=True)
         table.add_column("Elapsed / timeout", width=_ELAPSED_WIDTH, justify="right", no_wrap=True)
@@ -351,8 +360,8 @@ class MatrixTerminalReporter:
         for stale in [cell for cell in self._spinners if cell not in self._state.lanes]:
             del self._spinners[stale]
         for lane in self._state.lanes.values():
-            # Branch boundary: before Activity is revealed, preserve the original always-cyan spinner.
-            activity_style = _activity_style(lane.phase) if activity else _ACTIVE
+            # Phase color is shared by the persistent spinner and the payload-free Activity label.
+            activity_style = _activity_style(lane.phase)
             spinner = self._spinners.get(lane.cell)
             if spinner is None:
                 spinner = Spinner("dots", style=activity_style, speed=_SPINNER_SPEED)
@@ -365,9 +374,8 @@ class MatrixTerminalReporter:
                 spinner,
                 Text(lane.request),
             ]
-            # Branch boundary: Activity text is derived only from stored phase facts, never model content.
-            if activity:
-                row.append(Text(_activity_label(lane.phase, lane.tool_name), style=activity_style))
+            # Activity text is derived only from stored phase facts, never model content.
+            row.append(Text(_activity_label(lane.phase, lane.tool_name), style=activity_style))
             # Branch boundary: Variant renders only when the wide layout is in effect.
             if show_variant:
                 row.append(
@@ -385,8 +393,7 @@ class MatrixTerminalReporter:
         capacity = 1 if self._state.total == 0 else min(self._config.concurrency, self._state.total)
         for _ in range(max(0, capacity - len(self._state.lanes))):
             placeholder: list[RenderableType] = [Text(" "), Text("—", style="dim")]
-            if activity:
-                placeholder.append(Text("—", style="dim"))
+            placeholder.append(Text("—", style="dim"))
             if show_variant:
                 placeholder.append(Text("—", style="dim"))
             placeholder.extend((Text("—", style="dim"), Text("—", style="dim")))
@@ -501,8 +508,18 @@ def _operational_issue_cells(cells: tuple[str, ...]) -> Text:
     return value
 
 
-def render_durable_final(state: PresentationState, *, run_dir: str, report_html: str) -> Panel:
-    """Return the sole durable interactive final after Live has stopped."""
+def render_durable_final(
+    state: PresentationState,
+    *,
+    run_dir: str,
+    report_html: str,
+    report_model: ReportPresentationModel | None = None,
+) -> Panel:
+    """Return the sole durable interactive final after Live has stopped.
+
+    ``report_model`` supplies the advisory code-judge section only; ``None`` (and any run whose
+    cells never requested judging) leaves the deterministic final structurally unchanged.
+    """
     canonical = canonical_cells(state.completed)
     counts = result_counts(cell.trace for cell in canonical)
     paraphrases = result_counts(cell.trace for cell in paraphrase_cells(state.completed))
@@ -564,6 +581,12 @@ def render_durable_final(state: PresentationState, *, run_dir: str, report_html:
     notable_table = _notable_table(state.completed)
     # Branch boundary: fully correct runs do not reserve an empty notable-cells section.
     notable_section: tuple[RenderableType, ...] = (Text(), notable_table) if notable_table is not None else ()
+    # Branch boundary: the advisory judge section is appended last, after every deterministic and
+    # operational section, and only when some report cell requested judging — otherwise the final is
+    # byte-for-byte the pre-judge layout.
+    judge_section: tuple[RenderableType, ...] = (
+        (Text(), _judge_section(report_model)) if report_model is not None and report_model.judge_requested else ()
+    )
     return Panel(
         Group(
             summary,
@@ -574,6 +597,7 @@ def render_durable_final(state: PresentationState, *, run_dir: str, report_html:
             category_table,
             Text(),
             _operational_issues_panel(state.operational_issue_groups),
+            *judge_section,
         ),
         title="Eval complete",
         border_style=_SUCCESS,
@@ -639,6 +663,138 @@ def _notable_table(cells: Sequence[PresentationCell], *, limit: int = 8) -> Tabl
     if remaining > 0:
         table.add_row(Text(f"+ {remaining} more", style="dim"))
     return table
+
+
+def _judge_section(report_model: ReportPresentationModel) -> Panel:
+    """Return the advisory code-judge panel, visually distinct from deterministic quality/ranking."""
+    summary = report_model.judge_summary
+    attention_table = _judge_attention_table(report_model.judge_needs_attention)
+    # Branch boundary: omit the needs-attention block entirely when no result requires review.
+    attention_section: tuple[RenderableType, ...] = (Text(), attention_table) if attention_table is not None else ()
+    return Panel(
+        Group(
+            # An explicit advisory disclaimer keeps this section from reading as deterministic scoring.
+            Text("Advisory only — does not affect quality, ranking, coverage, or the verdict.", style="dim"),
+            _judge_identity_text(report_model.descriptor),
+            _judge_summary_text(summary),
+            Text(),
+            _judge_aggregates_table(report_model.judge_aggregates),
+            *attention_section,
+        ),
+        title="Code judge · advisory",
+        border_style=_PERCENT,
+        box=box.ROUNDED,
+        expand=True,
+    )
+
+
+def _judge_identity_text(descriptor: dict[str, object]) -> Text:
+    """Return the judge model plus rubric identity, using the em dash for absent descriptor facts."""
+    model = descriptor.get("judge_model")
+    rubric_id = descriptor.get("judge_rubric_id")
+    version = descriptor.get("judge_rubric_version")
+    text = Text()
+    text.append("Judge model ", style="bold")
+    text.append("\u2014" if model is None else str(model), style=_PERCENT)
+    # Branch boundary: the rubric identity is shown only when the descriptor actually carries it.
+    if rubric_id is not None:
+        rubric = str(rubric_id) if version is None else f"{rubric_id} v{version}"
+        text.append("   Rubric ", style="bold")
+        text.append(rubric, style="dim")
+    return text
+
+
+def _judge_summary_text(summary: JudgeSummary) -> Text:
+    """Return the compact overall judge facts, with an em dash for absent denominators and means."""
+    # Branch boundary: with nothing judged, the pass denominator is unavailable rather than zero.
+    passed_denominator = str(summary.available) if summary.available else "\u2014"
+    text = Text()
+    text.append("Judged ", style="bold")
+    text.append(f"{summary.available}/{summary.requested}", style=_PERCENT)
+    text.append("   Passed ", style="bold")
+    text.append(f"{summary.passed}/{passed_denominator} ({_percentage(summary.pass_rate)})", style=_PERCENT)
+    text.append("   Mean score ", style="bold")
+    text.append(_percentage(summary.mean_score), style=_PERCENT)
+    text.append("   Evaluator failures ", style="bold")
+    text.append(str(summary.evaluator_failed), style=_ERROR if summary.evaluator_failed else "dim")
+    text.append("   Unavailable ", style="bold")
+    text.append(str(summary.unavailable), style=_WARNING if summary.unavailable else "dim")
+    return text
+
+
+def _judge_aggregates_table(aggregates: Sequence[JudgeAggregate]) -> Table:
+    """Render the per-candidate/variant advisory aggregates with readable, ANSI-free widths."""
+    table = Table(box=box.SIMPLE_HEAD, expand=True, pad_edge=False, header_style=_PERCENT)
+    table.add_column("Candidate")
+    table.add_column("Variant", overflow="fold")
+    table.add_column("Judged", justify="right")
+    table.add_column("Passed", justify="right")
+    table.add_column("Mean score", justify="right")
+    table.add_column("Evaluator failures", justify="right")
+    table.add_column("Unavailable", justify="right")
+    for aggregate in aggregates:
+        # Branch boundary: an aggregate with nothing judged shows an em-dash pass denominator, not zero.
+        passed_denominator = str(aggregate.available) if aggregate.available else "\u2014"
+        table.add_row(
+            aggregate.candidate_id,
+            _LeftEllipsisText(aggregate.variant, style="dim"),
+            f"{aggregate.available}/{aggregate.requested}",
+            f"{aggregate.passed}/{passed_denominator}",
+            Text(_percentage(aggregate.mean_score), style=_PERCENT),
+            str(aggregate.evaluator_failed),
+            str(aggregate.unavailable),
+        )
+    return table
+
+
+# Advisory needs-attention status → semantic style. Evaluator gaps read as errors; unavailable and
+# explicit non-passing scores read as warnings, never as deterministic-quality success colors.
+_JUDGE_ATTENTION_STYLES: dict[str, str] = {
+    "failed": _ERROR,
+    "unavailable": _WARNING,
+    "available": _WARNING,
+}
+
+
+def _judge_attention_table(attention: Sequence[JudgeAttention]) -> Table | None:
+    """Render a bounded advisory preview of judged results needing review, or None when empty."""
+    # Branch boundary: a clean advisory pass reserves no empty needs-attention table.
+    if not attention:
+        return None
+    # One stacked cell per item in a single fold column keeps every field legible at Console width 80,
+    # where a six-column layout would collapse the wrapped Detail to one character per line.
+    table = Table(title="Needs attention", box=None, expand=True, pad_edge=False, header_style=_PERCENT)
+    table.add_column("Case / candidate variant / judge", overflow="fold")
+    for item in attention[:_JUDGE_ATTENTION_LIMIT]:
+        style = _JUDGE_ATTENTION_STYLES.get(item.status, _WARNING)
+        # Branch boundary: only an available result carries a real score; gaps show the em dash.
+        score = _percentage(item.score) if item.status == "available" else "\u2014"
+        # Line 1: case + request variant; line 2: candidate + display variant; line 3: judge verdict.
+        row = Text(f"{item.case_id}/{item.request_variant_id}")
+        row.append(f"\n  {item.candidate_id} · ", style="dim")
+        row.append(item.variant, style="dim")
+        row.append("\n  ")
+        row.append(f"{item.status} · {score} · ", style=style)
+        row.append(_judge_attention_detail(item), style=style)
+        table.add_row(row)
+    remaining = len(attention) - _JUDGE_ATTENTION_LIMIT
+    # Branch boundary: bounded output still reports every omitted advisory result numerically.
+    if remaining > 0:
+        table.add_row(Text(f"+ {remaining} more", style="dim"))
+    return table
+
+
+def _judge_attention_detail(item: JudgeAttention) -> str:
+    """Return one safe fixed advisory detail; never the judge reason or any provider-produced text."""
+    # Branch boundary: an evaluator failure exposes only its safe classification, never native text.
+    if item.status == "failed":
+        return item.failure_error_type or "unknown"
+    # Branch boundary: an unavailable judge has no score or reason, only its status meaning.
+    if item.status == "unavailable":
+        return "judge output unavailable"
+    # A non-passing available result renders a fixed classification; the full judge reason stays in
+    # the HTML, Markdown, and report.json surfaces and is never shown in the terminal.
+    return "code quality did not pass"
 
 
 def _left_ellipsis(value: str, width: int) -> str:

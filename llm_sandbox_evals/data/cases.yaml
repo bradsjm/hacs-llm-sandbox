@@ -61,6 +61,7 @@ cases:
       category: discovery
       tags: []
       oracle: effect
+      judge_code: true
       requests:
         - id: canonical
           text: Turn on all the lights in the Utility Room.
@@ -75,6 +76,7 @@ cases:
       category: discovery
       tags: []
       oracle: effect
+      judge_code: true
       requests:
         - id: canonical
           text: Turn on every ceiling light in the Basement.
@@ -199,6 +201,7 @@ cases:
       category: conditional
       tags: []
       oracle: effect
+      judge_code: true
       requests:
         - id: canonical
           text: If the Living Room ceiling light changed state in the last two hours, turn it off.
@@ -216,6 +219,7 @@ cases:
       category: conditional
       tags: []
       oracle: effect
+      judge_code: true
       requests:
         - id: canonical
           text: If the Hallway outlet changed state in the last hour, toggle it; otherwise do nothing.
@@ -254,6 +258,7 @@ cases:
       category: ambiguity
       tags: []
       oracle: effect
+      judge_code: true
       requests:
         - id: canonical
           text: Turn off the Living Room light that was switched on most recently.

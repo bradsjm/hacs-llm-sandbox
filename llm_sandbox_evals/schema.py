@@ -90,6 +90,9 @@ class RunDescriptor:
     concurrency: int
     model_timeout: float
     max_tool_calls: int
+    judge_model: str | None = None
+    judge_rubric_id: str = "llm_sandbox_code_quality"
+    judge_rubric_version: int = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -201,6 +204,7 @@ class EvalCase:
     oracle: Literal["effect", "tool_calls", "answer"] = "effect"
     expected_tool_calls: tuple[ExpectedToolCall, ...] = ()
     expected_answer: AnswerPredicate | None = None
+    judge_code: bool = False
 
     def __post_init__(self) -> None:
         """Validate task identity, request variants, tags, and desired-entity uniqueness."""

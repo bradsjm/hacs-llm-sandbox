@@ -3,6 +3,7 @@
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import partial
 import os
 from time import perf_counter
 from typing import Literal
@@ -20,6 +21,7 @@ from pydantic_evals.reporting import EvaluationReport
 from pydantic_evals.reporting.analyses import ReportAnalysis, ScalarResult, TableResult
 
 from llm_sandbox_evals import prompts
+from llm_sandbox_evals.code_judge import CodeQualityJudge
 from llm_sandbox_evals.config import EvalConfig
 from llm_sandbox_evals.harness import _select_cases, run_case
 from llm_sandbox_evals.phases import LanePhase, PhaseObservation
@@ -33,12 +35,15 @@ from llm_sandbox_evals.schema import (
 )
 from llm_sandbox_evals.statistics import nullable_rate
 
-type MatrixCellMeta = dict[str, str | int | float | None]
+type MatrixCellMeta = dict[str, str | int | float | bool | None]
 type MatrixEventCallback = Callable[[MatrixProgressEvent], None]
 type LanePhaseCallback = Callable[[LanePhaseEvent], None]
 type MatrixProgressState = Literal[
     "matrix_started", "cell_started", "tool_started", "tool_finished", "response_received", "cell_finished"
 ]
+
+JUDGE_RUBRIC_ID = "llm_sandbox_code_quality"
+JUDGE_RUBRIC_VERSION = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,6 +81,122 @@ class LanePhaseEvent:
     cell: MatrixCellRef
     phase: LanePhase
     tool_name: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _StartedCell:
+    """Run-scoped lifecycle data retained until one cell becomes terminal."""
+
+    request: str
+    started_at: float
+
+
+@dataclass(slots=True)
+class _PendingJudgment:
+    """Completed task output waiting for its advisory judge to terminate."""
+
+    trace: CaseTrace
+    judging: bool = False
+
+
+class _MatrixCompletionCoordinator:
+    """Synchronously coordinate task and judge completion on the event-loop thread."""
+
+    def __init__(
+        self,
+        *,
+        total: int,
+        on_event: MatrixEventCallback | None,
+        on_phase: LanePhaseCallback | None,
+    ) -> None:
+        self._total = total
+        self._on_event = on_event
+        self._on_phase = on_phase
+        self._judged_cells: set[MatrixCellRef] = set()
+        self._started: dict[MatrixCellRef, _StartedCell] = {}
+        self._pending: dict[MatrixCellRef, _PendingJudgment] = {}
+        self._metrics_recorded: set[MatrixCellRef] = set()
+        self._terminal: set[MatrixCellRef] = set()
+        self._completion_count = 0
+
+    def register_judged(self, cell: MatrixCellRef) -> None:
+        """Mark a cell as judge-gated before dataset execution begins."""
+        # State mutation point: evaluator construction establishes the run's fixed judged-cell set.
+        self._judged_cells.add(cell)
+
+    def is_judged(self, cell: MatrixCellRef) -> bool:
+        """Return whether matrix completion must wait for this cell's judge."""
+        return cell in self._judged_cells
+
+    def start(self, cell: MatrixCellRef, request: str) -> None:
+        """Retain timing state and announce one newly active cell."""
+        # Branch boundary: duplicate or late starts cannot replace timing or reopen a terminal cell.
+        if cell in self._started or cell in self._terminal:
+            return
+        # State mutation point: start timing is owned by the coordinator until terminal emission.
+        self._started[cell] = _StartedCell(request, perf_counter())
+        _emit_event(
+            self._on_event,
+            MatrixProgressEvent("cell_started", cell=cell, request=request, total=self._total),
+        )
+
+    def task_returned(self, cell: MatrixCellRef, trace: CaseTrace) -> None:
+        """Record task metrics once, completing now or waiting for an enabled judge."""
+        # Branch boundary: unknown, duplicate, or already-terminal task callbacks are harmless no-ops.
+        if cell not in self._started or cell in self._metrics_recorded or cell in self._terminal:
+            return
+        # State mutation point: native task metrics are recorded exactly once while its eval context is active.
+        self._metrics_recorded.add(cell)
+        _record_trace_metrics(trace)
+        if cell in self._judged_cells:
+            # State mutation point: retain the deterministic trace until the judge reaches an ordinary terminal state.
+            self._pending[cell] = _PendingJudgment(trace)
+            return
+        self._finish(cell, trace)
+
+    def judging(self, cell: MatrixCellRef) -> None:
+        """Move one pending judged cell into its visible advisory phase."""
+        pending = self._pending.get(cell)
+        # Branch boundary: unknown, duplicate, cancelled, or terminal callbacks cannot mutate lifecycle state.
+        if pending is None or pending.judging or cell in self._terminal:
+            return
+        # State mutation point: mark before observer delivery so reentrant duplicate callbacks are ignored.
+        pending.judging = True
+        _emit_phase_event(self._on_phase, LanePhaseEvent(cell, "judging"))
+
+    def judge_terminal(self, cell: MatrixCellRef) -> None:
+        """Release a judged cell after success or an ordinary evaluator failure."""
+        pending = self._pending.pop(cell, None)
+        # Branch boundary: cancellation omits this callback; unknown and duplicate callbacks remain incomplete.
+        if pending is None or cell in self._terminal:
+            return
+        self._finish(cell, pending.trace)
+
+    def _finish(self, cell: MatrixCellRef, trace: CaseTrace) -> None:
+        """Emit the exactly-once terminal phase and indexed completion event."""
+        started = self._started.pop(cell, None)
+        # Branch boundary: a missing start or duplicate terminal callback cannot synthesize completion.
+        if started is None or cell in self._terminal:
+            return
+        # State mutation point: claim terminal state and index before any fallible observer runs.
+        self._terminal.add(cell)
+        self._completion_count += 1
+        completion_index = self._completion_count
+        # Branch boundary: unjudged cells retain the harness's existing final phase; judged cells replace it here.
+        if cell in self._judged_cells:
+            _emit_phase_event(self._on_phase, LanePhaseEvent(cell, "finished"))
+        _emit_event(
+            self._on_event,
+            MatrixProgressEvent(
+                "cell_finished",
+                cell=cell,
+                request=started.request,
+                trace=trace,
+                elapsed=perf_counter() - started.started_at,
+                completion_index=completion_index,
+                total=self._total,
+            ),
+        )
 
 
 @dataclass(slots=True)
@@ -219,7 +340,12 @@ class CandidateMatrixReport(ReportEvaluator[MatrixCellRef, CaseTrace, MatrixCell
 
 
 def build_dataset(
-    config: EvalConfig, candidates: Sequence[PromptCandidate], selected_cases: Sequence[EvalCase], run_id: str
+    config: EvalConfig,
+    candidates: Sequence[PromptCandidate],
+    selected_cases: Sequence[EvalCase],
+    run_id: str,
+    *,
+    completion: _MatrixCompletionCoordinator | None = None,
 ) -> Dataset[MatrixCellRef, CaseTrace, MatrixCellMeta]:
     """Build one native dataset containing every candidate/model/task/request-variant cell."""
     cases: list[Case[MatrixCellRef, CaseTrace, MatrixCellMeta]] = []
@@ -246,13 +372,29 @@ def build_dataset(
                         "reasoning_effort": ref.reasoning_effort,
                         "temperature": ref.temperature,
                         "variant_label": variant_label(ref.model_id, ref.reasoning_effort),
+                        "judge_code": case.judge_code,
+                        "judge_enabled": case.judge_code and config.judge_model is not None,
                     }
+                    evaluators: list[Evaluator[MatrixCellRef, CaseTrace, MatrixCellMeta]] = [SandboxOutcome()]
+                    if case.judge_code and config.judge_model is not None:
+                        if completion is not None:
+                            completion.register_judged(ref)
+                        evaluators.append(
+                            CodeQualityJudge(
+                                model=config.judge_model,
+                                model_timeout=config.model_timeout,
+                                on_judging=partial(completion.judging, ref) if completion is not None else None,
+                                on_terminal=(
+                                    partial(completion.judge_terminal, ref) if completion is not None else None
+                                ),
+                            )
+                        )
                     cases.append(
                         Case(
                             name=f"{candidate.id}/{model_id}/{case.id}/{request_variant.id}",
                             inputs=ref,
                             metadata=metadata,
-                            evaluators=(SandboxOutcome(),),
+                            evaluators=tuple(evaluators),
                         )
                     )
     return Dataset(
@@ -276,19 +418,19 @@ def make_matrix_task(
     case_by_id: dict[str, EvalCase],
     *,
     total: int,
+    completion: _MatrixCompletionCoordinator | None = None,
     on_event: MatrixEventCallback | None = None,
     on_phase: LanePhaseCallback | None = None,
 ) -> Callable[[MatrixCellRef], Awaitable[CaseTrace]]:
     """Build the pydantic-evals task that preserves run_case snapshot/tool semantics."""
-    completed = 0
+    if completion is None:
+        completion = _MatrixCompletionCoordinator(total=total, on_event=on_event, on_phase=on_phase)
 
     async def task(cell: MatrixCellRef) -> CaseTrace:
-        nonlocal completed
         case = case_by_id[cell.case_id]
         request_variant = next(variant for variant in case.requests if variant.id == cell.request_variant_id)
         request = _presentation_request(request_variant.text)
-        start = perf_counter()
-        _emit_event(on_event, MatrixProgressEvent("cell_started", cell=cell, request=request, total=total))
+        completion.start(cell, request)
 
         def on_tool_boundary(tool_name: str, started: bool) -> None:
             _emit_event(
@@ -304,6 +446,9 @@ def make_matrix_task(
             )
 
         def on_phase_observation(observation: PhaseObservation) -> None:
+            # Branch boundary: judged matrix cells stay active until their evaluator callback owns the final phase.
+            if observation.phase == "finished" and completion.is_judged(cell):
+                return
             _emit_phase_event(on_phase, LanePhaseEvent(cell, observation.phase, observation.tool_name))
 
         trace = await run_case(
@@ -317,20 +462,7 @@ def make_matrix_task(
             on_response=on_response,
             on_phase=on_phase_observation,
         )
-        _record_trace_metrics(trace)
-        completed += 1
-        _emit_event(
-            on_event,
-            MatrixProgressEvent(
-                "cell_finished",
-                cell=cell,
-                request=request,
-                trace=trace,
-                elapsed=perf_counter() - start,
-                completion_index=completed,
-                total=total,
-            ),
-        )
+        completion.task_returned(cell, trace)
         return trace
 
     return task
@@ -357,7 +489,9 @@ async def run_matrix(
     profile = resolve_profile(config.prompt_profile)
     candidates = prompts.load_candidates(config.candidates, config.prompt_profile)
     selected_cases = _select_cases(config.cases, config.homes)
-    dataset = build_dataset(config, candidates, selected_cases, run_id)
+    total = sum(len(case.requests) for case in selected_cases) * len(candidates) * len(config.models)
+    completion = _MatrixCompletionCoordinator(total=total, on_event=on_event, on_phase=on_phase)
+    dataset = build_dataset(config, candidates, selected_cases, run_id, completion=completion)
     _emit_event(on_event, MatrixProgressEvent("matrix_started", total=len(dataset.cases)))
     if descriptor is None:
         descriptor = build_run_descriptor(config, run_id, selected_cases)
@@ -368,6 +502,7 @@ async def run_matrix(
             {c.id: c for c in candidates},
             {c.id: c for c in selected_cases},
             total=len(dataset.cases),
+            completion=completion,
             on_event=on_event,
             on_phase=on_phase,
         ),
@@ -477,6 +612,9 @@ def build_run_descriptor(config: EvalConfig, run_id: str, selected_cases: Sequen
         config.concurrency,
         config.model_timeout,
         config.max_tool_calls,
+        config.judge_model,
+        JUDGE_RUBRIC_ID,
+        JUDGE_RUBRIC_VERSION,
     )
 
 
@@ -500,6 +638,9 @@ def _descriptor_metadata(descriptor: RunDescriptor) -> dict[str, object]:
         "concurrency": descriptor.concurrency,
         "model_timeout": descriptor.model_timeout,
         "max_tool_calls": descriptor.max_tool_calls,
+        "judge_model": descriptor.judge_model,
+        "judge_rubric_id": descriptor.judge_rubric_id,
+        "judge_rubric_version": descriptor.judge_rubric_version,
     }
 
 

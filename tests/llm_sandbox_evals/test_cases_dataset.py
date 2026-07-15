@@ -1,3 +1,4 @@
+from collections.abc import Callable
 import json
 from pathlib import Path
 
@@ -16,6 +17,7 @@ def test_authoring_schema_contains_the_closed_case_contract() -> None:
         "home",
         "category",
         "tags",
+        "judge_code",
         "oracle",
         "requests",
         "required_actions",
@@ -24,6 +26,8 @@ def test_authoring_schema_contains_the_closed_case_contract() -> None:
         "expected_answer",
     }
     assert case["required"] == ["id", "home", "category", "requests", "required_actions"]
+    assert case["additionalProperties"] is False
+    assert case["properties"]["judge_code"] == {"type": "boolean", "default": False}
     assert set(schema["$defs"]["action"]["properties"]) == {
         "domain",
         "service",
@@ -56,6 +60,14 @@ _ACTION_ONLY_CASE_IDS = {
     "ambiguous_ceiling_no_area",
 }
 
+_JUDGE_CODE_CASE_IDS = {
+    "discover_utility_room_lights",
+    "discover_basement_ceiling_lights",
+    "condition_history_change_turn_off",
+    "no_action_history_no_recent_change",
+    "ambiguous_logic_living_room_recent",
+}
+
 
 def test_effect_corpus_desired_entity_and_action_only_split_is_exact() -> None:
     case_ids = {case.id for case in CASES}
@@ -82,6 +94,62 @@ def test_dedicated_oracle_cases_author_narrow_contracts() -> None:
     )
     assert count_case.expected_answer == AnswerPredicate("count", count=1)
     assert state_case.expected_answer == AnswerPredicate("state", entity_id="light.utility_room_accent", state="on")
+
+
+def test_authored_code_judge_selection_is_exact() -> None:
+    assert {case.id for case in CASES if case.judge_code} == _JUDGE_CODE_CASE_IDS
+    assert all(case.judge_code is False for case in CASES if case.id not in _JUDGE_CODE_CASE_IDS)
+
+
+def _judge_effect_case() -> EvalCase:
+    return EvalCase(
+        "judge-effect",
+        "home_minimal",
+        "test",
+        (RequestVariant("canonical", "Turn on the bedroom light."),),
+        (),
+        judge_code=True,
+    )
+
+
+def _judge_tool_calls_case() -> EvalCase:
+    return EvalCase(
+        "judge-tool-calls",
+        "home_minimal",
+        "test",
+        (RequestVariant("canonical", "Check the bedroom light history."),),
+        (),
+        oracle="tool_calls",
+        expected_tool_calls=(ExpectedToolCall("get_history"),),
+        judge_code=True,
+    )
+
+
+def _judge_answer_case() -> EvalCase:
+    return EvalCase(
+        "judge-answer",
+        "home_minimal",
+        "test",
+        (RequestVariant("canonical", "Is the bedroom light on?"),),
+        (),
+        oracle="answer",
+        expected_answer=AnswerPredicate("boolean", value=True),
+        judge_code=True,
+    )
+
+
+@pytest.mark.parametrize(
+    "case_factory",
+    [
+        pytest.param(_judge_effect_case, id="effect"),
+        pytest.param(_judge_tool_calls_case, id="tool-calls"),
+        pytest.param(_judge_answer_case, id="answer"),
+    ],
+)
+def test_any_oracle_type_can_explicitly_opt_into_code_judging(case_factory: Callable[[], EvalCase]) -> None:
+    case = case_factory()
+
+    assert case.judge_code is True
 
 
 def test_utility_discovery_uses_exact_action_fallback() -> None:

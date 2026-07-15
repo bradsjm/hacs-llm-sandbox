@@ -39,6 +39,10 @@
           "enum": ["effect", "tool_calls", "answer"],
           "default": "effect"
         },
+        "judge_code": {
+          "type": "boolean",
+          "default": false
+        },
         "requests": {
           "type": "array",
           "minItems": 1,

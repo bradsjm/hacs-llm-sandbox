@@ -20,14 +20,18 @@ scripts/check-evals
 scripts/format-evals
 uv run --group dev --group evals python -m llm_sandbox_evals eval --models stub
 uv run --group dev --group evals python -m llm_sandbox_evals eval --models gpt-4o-mini,stub
+# With --judge-model, judging is limited to the five opted-in complex-code cases.
+uv run --group dev --group evals python -m llm_sandbox_evals eval --models gpt-4o-mini --judge-model gpt-5.4
 uv run --group dev --group evals python -m llm_sandbox_evals report <run_id> --html
 uv run --group dev --group evals python -m llm_sandbox_evals report <run_id> --markdown
 ```
 
-Real Pydantic AI model IDs may replace `stub`; bare IDs such as `gpt-4o-mini`
-are resolved to `openai-chat:gpt-4o-mini`, while `stub` and explicit
-provider-prefixed IDs containing `:` are preserved. Provider credentials come
-from the environment. Artifacts are written below `eval_data/runs/<run_id>/`.
+Real Pydantic AI model IDs may replace `stub`; bare candidate or judge IDs such
+as `gpt-4o-mini` are resolved to `openai-chat:gpt-4o-mini`, while explicit
+provider-prefixed IDs containing `:` are preserved. The singular
+`--judge-model MODEL` is optional; its normalized `stub` value is rejected.
+Provider credentials come from the environment. Artifacts are written below
+`eval_data/runs/<run_id>/`.
 Interactive terminals receive one Rich summary on stderr and the artifact
 location once. Redirected output, or `--machine`, emits deterministic KV on
 stdout. Non-zero exits leave stdout empty.
@@ -36,6 +40,48 @@ stdout. Non-zero exits leave stdout empty.
 its baseline-vs-optimized leaderboard. `optimize --target-model` and
 `--proposer-model` remain DSPy/LiteLLM IDs, for example
 `openrouter/openai/gpt-4o-mini`.
+
+### Optional code-quality judge
+
+The code judge has two independent gates: the case author must set
+`judge_code: true`, and the run must supply `--judge-model MODEL`. The default
+is false. Five current complex-code cases are opted in:
+`discover_utility_room_lights` (area discovery and coordinated multi-target
+action), `discover_basement_ceiling_lights` (large inventory area/name
+filtering and twelve targets), `condition_history_change_turn_off` (history
+processing and conditional action), `no_action_history_no_recent_change`
+(history processing and conditional no-op), and
+`ambiguous_logic_living_room_recent` (comparing recent histories across
+candidates). All other current cases omit `judge_code` and remain false. When
+`--judge-model MODEL` is supplied, it invokes the judge only for cells from
+those five selected cases; without the model, no cells are judged. A separately
+authored case can opt in without changing its oracle; the judge is advisory and
+oracle-agnostic.
+
+It assesses the complete `execute_home_code` trajectory as ephemeral
+request-scoped glue code, prioritizing effective task contribution, minimal
+model/tool round trips, scoped reads, in-sandbox computation, and compact useful
+output. Ruff, formatting, comments, abstractions, typing, tests, and
+maintainability are not part of this advisory rubric. The bounded context
+contains the request, trusted deterministic outcome, every ordered code call
+with execution status and bounded output/action/resolution/note evidence, and
+compact summaries of relevant interleaved non-code tools. It excludes the
+answer, expected evidence, and live objects. If complete code source or action
+evidence cannot fit, no provider call is made and the result is unavailable
+rather than partially judged. Zero-submission cells still receive one judge
+call. The existing model timeout applies; there are no judge retries or
+fallbacks. Provider, validation, and timeout failures are native
+`EvaluatorFailure` records and do not change the deterministic outcome.
+
+Native results remain `code_quality_score` and `code_quality_pass`, from the
+stable evaluator `code_quality_judge` using rubric `llm_sandbox_code_quality`
+version `2`. The resolved model and rubric identity are persisted in the run
+descriptor/metadata. `CaseTrace` remains unchanged and scoring stays v9: judge
+results do not affect correctness, quality, coverage, Wilson intervals,
+ranking, rescoring, `partial.json`, `errors.log`, machine phase lines, or the
+deterministic CSV score. A cancellation during judging emits no false
+`cell_finished` or partial record; an ordinary judge failure releases and
+completes the lane while persisting the native evaluator failure.
 
 Each run creates `manifest.json` before model calls. Its status moves from
 `running` to `complete`, `cancelled`, or `failed`. Cancellation and operational
@@ -244,12 +290,11 @@ for a task passed.
 ## Presentation
 
 Every agent run consumes Pydantic AI's native `run_stream_events`; there is no
-streaming option or non-streaming fallback. Live lanes retain their five-column
-layout (request, variant, elapsed/timeout, and tools/cap) unless a real
-`thinking` event is observed for an active lane. That event makes a structured,
-payload-free Activity column sticky for the run. Providers that do not emit
-`ThinkingPart` therefore keep the five-column layout: the harness never
-synthesizes reasoning or a `Waiting` state.
+streaming option or non-streaming fallback. Rich Activity is always visible
+from lane creation as `queued`, is phase-colored, and remains payload-free.
+Judged lanes show transient `judging` and remain active until judge termination.
+Narrow layouts drop only `Variant`; Activity remains visible. There is no
+synthesized `Waiting` state.
 
 Activity uses only structured phase labels. Actual `running` and `processing`
 tool phases include the validated tool name; provider/model-supplied
@@ -269,8 +314,19 @@ machine output remains payload-free.
 flags are all rebuilt from an
 immutable saved-report presentation model. The HTML hero shows quality,
 Wilson 95% confidence interval, coverage, incomplete cells, category slices,
-and resolved variant configuration; incomplete
-inspectors show their operational cause rather than an action mismatch.
+and resolved variant configuration; incomplete inspectors show their
+operational cause rather than an action mismatch. Completed HTML and Markdown
+reports and `report.json` retain full judge reasons when judging was requested.
+After a completed interactive judged run, the durable Rich final conditionally
+appends a separate `Code judge · advisory` panel sourced from the completed
+native report. It
+shows judge model/rubric identity, overall requested/available counts, pass
+rate, mean score, evaluator-failure and unavailable counts, per-candidate/model-
+variant aggregates, and a bounded five-item needs-attention preview with
+overflow. The preview uses fixed classifications and only the safe evaluator
+error type; it never renders judge reasons, provider messages, stacktraces, or
+request/code/tool payloads. The panel does not affect deterministic quality,
+ranking, coverage, or verdict; machine KV remains judge-free.
 
 ## Architecture
 
@@ -313,7 +369,7 @@ case and explicit reducer support. The following remain deferred:
 Conditional state/history/logbook behavior, true no-action outcomes, and
 multi-target selector resolution are already in scope in the `home_full`
 corpus. Read-answer scoring remains limited to authored deterministic predicate
-types; it is not permissive prose matching or an LLM judge.
+types; the optional code judge does not score those answers.
 
 ## Safety
 

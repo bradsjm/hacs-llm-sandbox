@@ -60,9 +60,41 @@ end state is unevaluable.
 
 Tool-contract scoring compares persisted normalized successful production-tool
 events. Read-answer scoring uses only the authored deterministic predicate
-types; do not add an LLM judge or permissive substring scoring. Generic
-service-data coverage, policy/rejection scoring, disabled-action behavior, and
-clarification-quality scoring remain out of scope.
+types; it must not use an LLM judge or permissive substring scoring. An
+optional code-quality judge is a separate, advisory assessment of
+`execute_home_code` submissions and is oracle-agnostic; it never replaces
+deterministic read-answer or effect scoring. Generic service-data coverage,
+policy/rejection scoring, disabled-action behavior, and clarification-quality
+scoring remain out of scope.
+
+- `judge_code` defaults to false. A cell is judged only when its case sets
+  `judge_code: true` and the run supplies the singular `--judge-model MODEL`.
+  Five current complex-code cases opt in: `discover_utility_room_lights`
+  (area discovery and coordinated multi-target action),
+  `discover_basement_ceiling_lights` (large inventory area/name filtering and
+  twelve targets), `condition_history_change_turn_off` (history processing and
+  conditional action), `no_action_history_no_recent_change` (history
+  processing and conditional no-op), and `ambiguous_logic_living_room_recent`
+  (comparing recent histories across candidates). All other current cases omit
+  the field and remain false, so `--judge-model` invokes the judge only for
+  cells from those five selected cases.
+- The judge receives the request, trusted deterministic outcome, every ordered
+  `execute_home_code` call with source, execution status, bounded
+  output/action/resolution/note evidence, and compact summaries of relevant
+  interleaved non-code tools. If complete source or action evidence cannot fit,
+  no provider call is made and the advisory result is unavailable rather than
+  partial. It does not receive the answer, expected evidence, or live objects.
+  Zero-submission opted-in cells still receive one judge call.
+- The rubric treats Monty as ephemeral request-scoped glue and scores effective
+  task contribution, interaction economy, scoped in-sandbox work, and compact
+  useful output. It does not score Ruff, formatting, comments, abstractions,
+  typing, tests, or maintainability.
+- The native outputs remain `code_quality_score` and `code_quality_pass`, from
+  evaluator `code_quality_judge`, rubric `llm_sandbox_code_quality`, version
+  `2`. The resolved judge model and rubric identity are persisted in the run
+  descriptor/metadata. The existing model timeout applies; there are no judge
+  retries or fallbacks. Provider, validation, and timeout failures are native
+  `EvaluatorFailure` records and never alter the deterministic outcome.
 
 ## Dataset and stub
 
@@ -70,7 +102,9 @@ The corpus is 17 canonical-only `home_full` cases in the `direct`, `discovery`,
 `service_data`, `conditional`, `ambiguity`, `tool_contract`, and `read_answer`
 categories. The first 14 cover effects from direct actions through discovery,
 service data, conditions, and ambiguity; one tool-contract case and two
-read-answer cases exercise the richer primary oracles.
+read-answer cases exercise the richer primary oracles. The five complex-code
+cases listed above set `judge_code: true`; all other cases omit it and use the
+false default.
 
 | Stage | Cases | Coverage |
 | --- | --- | --- |
@@ -168,20 +202,33 @@ checks and uses `home_full` for the corpus and its complete 288-entity fixture.
 - Interactive output is Rich on stderr; redirected or `--machine` output is
   deterministic stdout KV. Non-zero exits have empty stdout. Every agent run
   uses native Pydantic AI `run_stream_events`, with no streaming flag or
-  non-streaming fallback. Lanes retain their five-column layout unless a real
-  `thinking` event arrives for an active lane; then a sticky, structured
-  Activity column appears for the run. Providers without `ThinkingPart` retain
-  the five-column layout, with no synthesized reasoning or `Waiting` state.
-  Activity shows only phase labels: actual `running` and `processing` tool
-  phases include the validated tool name, while provider-supplied `preparing`
-  names are never retained or rendered. The transient phase/activity channel is
-  label/tool-name only and is not persisted in reports or artifacts. Interactive
-  Activity and machine output do not render reasoning content, model responses,
-  tool arguments, or tool results. Existing durable reports retain their
-  established `CaseTrace` answer and tool-diagnostics contract. Human live and
-  persistent durable final output render `Operational issues` as a full-width
-  actionable table; exact duplicates group for display with affected cells,
-  while `errors.log` remains per-trace and machine output remains payload-free.
+  non-streaming fallback. Rich Activity is always visible from lane creation
+  as `queued`, is phase-colored, and remains payload-free. Judged lanes show
+  transient `judging` and remain active until judge termination. Narrow layouts
+  drop only `Variant`; Activity remains visible. Activity shows only phase
+  labels: actual `running` and `processing` tool phases include the validated
+  tool name, while provider-supplied `preparing` names are never retained or
+  rendered. The transient phase/activity channel is not persisted in reports or
+  artifacts. Interactive Activity and machine output do not render reasoning
+  content, model responses, tool arguments, or tool results.
+- A cancellation during judging emits no false `cell_finished` event or
+  `partial.json` record for that cell. An ordinary judge failure releases and
+  completes the lane, persists the native evaluator failure, and leaves the
+  deterministic result intact. After a completed interactive judged run, the
+  durable Rich final conditionally appends a separate `Code judge · advisory`
+  panel sourced from the completed native report. It shows judge model/rubric
+  identity, overall requested/available counts, pass rate, mean score,
+  evaluator-failure and unavailable counts, per-candidate/model-variant
+  aggregates, and a bounded five-item needs-attention preview with overflow.
+  The preview uses fixed classifications and only the safe evaluator error
+  type; it never renders judge reasons, provider messages, stacktraces, or
+  request/code/tool payloads. Full judge reasons remain in HTML/Markdown/
+  `report.json`. The panel does not affect deterministic quality, ranking,
+  coverage, or verdict; machine KV remains judge-free.
+  CSV, deterministic score, quality, coverage, Wilson intervals, ranking,
+  rescoring, `partial.json`, `errors.log`, and machine phase lines are not
+  changed by judge results. `CaseTrace` has no judge field and remains scoring
+  version 9.
 
 Production read tools remain registered because they are part of the product
 surface. Focused tool-contract and read-answer cases score their persisted

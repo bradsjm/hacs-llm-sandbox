@@ -111,6 +111,36 @@ def render_markdown(model: ReportPresentationModel) -> str:
             "",
         )
     )
+
+    # Branch boundary: advisory judge output is absent unless the presentation model records a request.
+    if model.judge_requested:
+        lines.extend(
+            (
+                "",
+                "## Code Judge",
+                "",
+                "| Case | Request variant | Category | Candidate | Variant | Status | Score | Pass | Reason | Failure |",
+                "| --- | --- | --- | --- | --- | --- | ---: | --- | --- | --- |",
+            )
+        )
+        lines.extend(
+            _row(
+                (
+                    _escape(cell.case_id),
+                    _escape(cell.request_variant_id),
+                    _escape(cell.category),
+                    _escape(cell.candidate_id),
+                    _escape(cell.variant),
+                    _escape(cell.judge.status),
+                    _number(cell.judge.score),
+                    "—" if cell.judge.passed is None else str(cell.judge.passed).lower(),
+                    _escape(cell.judge.reason or "—"),
+                    _escape((cell.judge.failure.error_type or "—") if cell.judge.failure is not None else "—"),
+                )
+            )
+            for cell in ordered_cells
+        )
+
     return "\n".join(lines)
 
 
@@ -161,4 +191,4 @@ def _text(value: object) -> str:
 
 def _escape(value: str) -> str:
     """Escape Markdown table delimiters and line breaks in persisted text."""
-    return value.replace("|", "\\|").replace("\n", " ")
+    return value.replace("|", "\\|").replace("\r\n", " ").replace("\r", " ").replace("\n", " ")

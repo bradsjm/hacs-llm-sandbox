@@ -23,6 +23,7 @@ class EvalConfig:
     temperature: float | None = None
     target_model: str | None = None
     proposer_model: str | None = None
+    judge_model: str | None = None
     target_reasoning_effort: str | None = None
     proposer_reasoning_effort: str | None = None
     breadth: int = 5

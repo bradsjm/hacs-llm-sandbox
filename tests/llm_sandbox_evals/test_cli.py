@@ -25,7 +25,14 @@ from llm_sandbox_evals.experiment import (
     MatrixCellRef,
     MatrixEventCallback,
 )
-from llm_sandbox_evals.schema import CaseTrace, RunDescriptor
+from llm_sandbox_evals.schema import (
+    CaseTrace,
+    EvalCase,
+    PromptCandidate,
+    RequestVariant,
+    RequiredAction,
+    RunDescriptor,
+)
 from pydantic_ai.messages import ModelMessage, ModelResponse
 from pydantic_ai.models import Model
 from pydantic_ai.models.function import AgentInfo, FunctionModel
@@ -746,6 +753,45 @@ async def _raise_provider_error(_messages: list[ModelMessage], _info: AgentInfo)
     raise RuntimeError("provider rejected model")
 
 
+def _synthetic_case(
+    case_id: str,
+    request: str = "Turn off the Utility Room accent light.",
+    *,
+    judge_code: bool,
+) -> EvalCase:
+    action = (
+        RequiredAction("light", "turn_on", ("light.utility_room_ceiling",))
+        if request == "Turn on the Utility Room ceiling light."
+        else RequiredAction("light", "turn_off", ("light.utility_room_accent",))
+    )
+    return EvalCase(
+        case_id,
+        "home_full",
+        "test",
+        (RequestVariant("canonical", request),),
+        (action,),
+        judge_code=judge_code,
+    )
+
+
+def _install_synthetic_cases(monkeypatch: pytest.MonkeyPatch, cases: list[EvalCase]) -> None:
+    def validate(_config: EvalConfig) -> tuple[list[EvalCase], list[PromptCandidate]]:
+        return cases, []
+
+    def select(_case_ids: list[str] | None, _homes: list[str] | None) -> list[EvalCase]:
+        return cases
+
+    monkeypatch.setattr(cli, "_validate_run_config", validate)
+    monkeypatch.setattr(cli.experiment, "_select_cases", select)
+
+
+class _JudgeResult:
+    def __init__(self) -> None:
+        self.reason = "clear"
+        self.pass_ = True
+        self.score = 1.0
+
+
 class _ImmediateEscapeWatcher:
     """Test seam that requests cancellation before the matrix task can run."""
 
@@ -773,6 +819,7 @@ class _ImmediateEscapeWatcher:
         pytest.param(["--model-timeout", "0"], "model_timeout_invalid", id="bad-timeout"),
         pytest.param(["--reasoning", "bogus"], "reasoning_invalid", id="bad-reasoning"),
         pytest.param(["--candidates", "no-such-candidate"], "candidates_unresolvable", id="bad-candidate"),
+        pytest.param(["--judge-model", "stub"], "judge_model_invalid", id="stub-judge"),
     ],
 )
 def test_eval_preflight_rejects_invalid_config_before_model_calls(
@@ -800,6 +847,237 @@ def test_eval_preflight_rejects_invalid_config_before_model_calls(
     assert captured.out == ""
     assert not list(tmp_path.iterdir())
     assert model_calls == []
+
+
+@pytest.mark.parametrize(
+    ("judge_args", "expected_judge_model"),
+    [
+        pytest.param([], None, id="absent"),
+        pytest.param(["--judge-model", "gpt-5.4"], "openai-chat:gpt-5.4", id="bare"),
+        pytest.param(
+            ["--judge-model", "anthropic:claude-sonnet-4-6"],
+            "anthropic:claude-sonnet-4-6",
+            id="provider-prefixed",
+        ),
+    ],
+)
+def test_eval_persists_optional_normalized_judge_model(
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+    judge_args: list[str],
+    expected_judge_model: str | None,
+) -> None:
+    exit_code = main(
+        [
+            "eval",
+            "--models",
+            "stub",
+            "--cases",
+            "direct_turn_off_utility_room_accent",
+            "--runs-dir",
+            str(tmp_path),
+            *judge_args,
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    run_dir = Path(captured.out.splitlines()[0].removeprefix("run_dir: "))
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["descriptor"]["judge_model"] == expected_judge_model
+
+
+def test_configured_judge_without_opted_in_cases_makes_no_provider_model_call(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    provider_models: list[str] = []
+
+    def record_provider_model(model_id: str) -> Model:
+        provider_models.append(model_id)
+        return FunctionModel(_raise_provider_error, model_name=model_id)
+
+    monkeypatch.setattr(agent_runner, "infer_model", record_provider_model)
+
+    exit_code = main(
+        [
+            "eval",
+            "--models",
+            "stub",
+            "--judge-model",
+            "openai-chat:gpt-5.4",
+            "--cases",
+            "direct_turn_off_utility_room_accent",
+            "--runs-dir",
+            str(tmp_path),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert provider_models == []
+    assert (Path(captured.out.splitlines()[0].removeprefix("run_dir: ")) / "report.json").is_file()
+
+
+def test_machine_judged_run_emits_no_phase_line_and_one_delayed_completion(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _install_synthetic_cases(monkeypatch, [_synthetic_case("machine-judged", judge_code=True)])
+    judge_calls: list[dict[str, object]] = []
+
+    async def judge(request: dict[str, object], *_args: object, **_kwargs: object) -> _JudgeResult:
+        judge_calls.append(request)
+        return _JudgeResult()
+
+    monkeypatch.setattr("llm_sandbox_evals.code_judge.judge_input_output", judge)
+    exit_code = main(
+        [
+            "eval",
+            "--models",
+            "stub",
+            "--judge-model",
+            "openai-chat:gpt-5.4",
+            "--runs-dir",
+            str(tmp_path),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert judge_calls == [
+        {
+            "request_text": "Turn off the Utility Room accent light.",
+            "deterministic_outcome": {
+                "state": "correct",
+                "scoring_mode": "actions",
+                "score_reason": "ok",
+            },
+        }
+    ]
+    assert "judging" not in captured.err
+    assert "Code judge" not in captured.err
+    assert "Code judge" not in captured.out
+    assert "clear" not in captured.err
+    assert "clear" not in captured.out
+    assert captured.err.splitlines()[0] == "matrix_started total=1"
+    assert captured.err.splitlines()[1].startswith("cell_finished index=1 result=correct·")
+    assert len(captured.err.splitlines()) == 2
+
+
+def test_interactive_judged_run_renders_advisory_final_from_the_saved_report_model(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _install_synthetic_cases(monkeypatch, [_synthetic_case("interactive-judged", judge_code=True)])
+    monkeypatch.setattr(sys.stderr, "isatty", lambda: True)
+
+    async def judge(*_args: object, **_kwargs: object) -> _JudgeResult:
+        return _JudgeResult()
+
+    monkeypatch.setattr("llm_sandbox_evals.code_judge.judge_input_output", judge)
+    exit_code = main(
+        [
+            "eval",
+            "--models",
+            "stub",
+            "--judge-model",
+            "openai-chat:gpt-5.4",
+            "--runs-dir",
+            str(tmp_path),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert captured.out == ""
+    assert "Code judge" in captured.err
+    assert "advisory" in captured.err
+    assert "openai-chat:gpt-5.4" in captured.err
+    assert "llm_sandbox_code_quality" in captured.err
+
+
+def test_mixed_judged_and_unjudged_cells_are_journaled_once_after_matrix_completion(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    judged = _synthetic_case("journal-judged", judge_code=True)
+    unjudged = _synthetic_case("journal-unjudged", "Turn on the Utility Room ceiling light.", judge_code=False)
+    _install_synthetic_cases(monkeypatch, [judged, unjudged])
+
+    async def judge(*_args: object, **_kwargs: object) -> _JudgeResult:
+        return _JudgeResult()
+
+    monkeypatch.setattr("llm_sandbox_evals.code_judge.judge_input_output", judge)
+    monkeypatch.setattr(reports, "write_report_json", _raise_artifact_error)
+    exit_code = main(
+        [
+            "eval",
+            "--models",
+            "stub",
+            "--judge-model",
+            "openai-chat:gpt-5.4",
+            "--runs-dir",
+            str(tmp_path),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert captured.out == ""
+    [run_dir] = list(tmp_path.iterdir())
+    partial = reports.load_partial_artifact(run_dir / "partial.json")
+    assert partial.finished == 2
+    assert sorted(record.trace.case_id for record in partial.records) == [judged.id, unjudged.id]
+    assert sorted(record.completion_index for record in partial.records) == [1, 2]
+
+
+def test_cancellation_during_judging_writes_no_completed_record_or_report(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    case = _synthetic_case("cancelled-while-judging", judge_code=True)
+    _install_synthetic_cases(monkeypatch, [case])
+    judge_started = asyncio.Event()
+
+    async def pending_judge(*_args: object, **_kwargs: object) -> _JudgeResult:
+        judge_started.set()
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+    async def cancel_matrix(
+        config: EvalConfig,
+        descriptor: RunDescriptor,
+        on_event: MatrixEventCallback,
+        on_phase: LanePhaseCallback | None = None,
+    ) -> Never:
+        matrix = asyncio.create_task(
+            cli.experiment.run_matrix(config, descriptor=descriptor, on_event=on_event, on_phase=on_phase)
+        )
+        await judge_started.wait()
+        matrix.cancel()
+        await matrix
+        raise AssertionError("unreachable")
+
+    monkeypatch.setattr("llm_sandbox_evals.code_judge.judge_input_output", pending_judge)
+    monkeypatch.setattr(cli, "_run_eval_matrix", cancel_matrix)
+    exit_code = main(
+        [
+            "eval",
+            "--models",
+            "stub",
+            "--judge-model",
+            "openai-chat:gpt-5.4",
+            "--runs-dir",
+            str(tmp_path),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 130
+    assert judge_started.is_set()
+    assert captured.out == ""
+    [run_dir] = list(tmp_path.iterdir())
+    partial = reports.load_partial_artifact(run_dir / "partial.json")
+    assert partial.status == "cancelled"
+    assert partial.records == ()
+    assert partial.finished == 0
+    assert not (run_dir / "report.json").exists()
 
 
 def test_eval_interactive_mode_emits_human_summary_on_stderr_and_keeps_stdout_clean(

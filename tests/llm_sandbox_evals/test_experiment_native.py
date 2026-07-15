@@ -1,4 +1,5 @@
-from collections.abc import Sequence
+import asyncio
+from collections.abc import Callable, Sequence
 from dataclasses import fields, replace
 from pathlib import Path
 
@@ -7,20 +8,24 @@ from llm_sandbox_evals.config import EvalConfig
 from llm_sandbox_evals.experiment import (
     LanePhaseEvent,
     MatrixCellRef,
+    MatrixProgressEvent,
     _record_trace_metrics,
     build_dataset,
+    build_run_descriptor,
     matrix_summary_lines,
     run_matrix,
 )
-from llm_sandbox_evals.presentation import ReportPresentationModel
+from llm_sandbox_evals.presentation import PresentationState, ReportPresentationModel
 from llm_sandbox_evals.schema import (
     ActionLedger,
     ActionResult,
+    AnswerPredicate,
     CaseOutcome,
     CaseTrace,
     EndStateResult,
     EvalCase,
     EvalDiagnostics,
+    ExpectedToolCall,
     PromptCandidate,
     RequestVariant,
     RequiredAction,
@@ -28,7 +33,7 @@ from llm_sandbox_evals.schema import (
 from pydantic_evals.reporting.analyses import ScalarResult, TableResult
 import pytest
 
-from llm_sandbox_evals import reports
+from llm_sandbox_evals import experiment, reports
 
 
 async def test_run_matrix_stub_persists_v7_action_trace_and_variant_identity(tmp_path: Path) -> None:
@@ -56,6 +61,147 @@ async def test_run_matrix_stub_persists_v7_action_trace_and_variant_identity(tmp
     assert models[0]["variant_label"] == "stub(low)"
 
 
+def test_case_trace_contract_remains_scoring_v9_without_judge_fields() -> None:
+    assert {field.name for field in fields(CaseTrace)} == {
+        "case_id",
+        "candidate_id",
+        "model_id",
+        "request_variant_id",
+        "request_text",
+        "answer",
+        "required_actions",
+        "desired_entities",
+        "overlay_state_seeds",
+        "recorded_invocations",
+        "end_state_result",
+        "outcome",
+        "action_result",
+        "action_ledger",
+        "tool_events",
+        "diagnostics",
+        "oracle",
+        "expected_tool_calls",
+        "expected_answer",
+        "tool_call_result",
+        "answer_result",
+        "reasoning_effort",
+        "temperature",
+        "scoring_version",
+        "provider_error",
+        "execution_error",
+        "category",
+        "tags",
+        "conversation_id",
+    }
+    assert (
+        _trace(MatrixCellRef("case", "canonical", "baseline", "stub", "home_minimal"), "correct").scoring_version == 9
+    )
+
+
+async def test_run_descriptor_and_experiment_metadata_include_judge_configuration(tmp_path: Path) -> None:
+    config = _config(
+        tmp_path,
+        cases=["direct_turn_off_utility_room_accent"],
+        judge_model="openai-chat:gpt-5.4",
+    )
+    selected_case = _case("direct_turn_off_utility_room_accent")
+    descriptor = build_run_descriptor(config, "judge-descriptor", [selected_case])
+    report = await run_matrix(config, descriptor=descriptor)
+
+    assert descriptor.judge_model == "openai-chat:gpt-5.4"
+    assert descriptor.judge_rubric_id
+    assert descriptor.judge_rubric_version == 2
+    assert report.experiment_metadata["judge_model"] == descriptor.judge_model
+    assert report.experiment_metadata["judge_rubric_id"] == descriptor.judge_rubric_id
+    assert report.experiment_metadata["judge_rubric_version"] == descriptor.judge_rubric_version
+
+
+def _judge_effect_case() -> EvalCase:
+    return EvalCase(
+        "judge-effect",
+        "home_minimal",
+        "test",
+        (RequestVariant("canonical", "Turn on the bedroom light."),),
+        (),
+        judge_code=True,
+    )
+
+
+def _judge_tool_calls_case() -> EvalCase:
+    return EvalCase(
+        "judge-tool-calls",
+        "home_minimal",
+        "test",
+        (RequestVariant("canonical", "Check the bedroom light history."),),
+        (),
+        oracle="tool_calls",
+        expected_tool_calls=(ExpectedToolCall("get_history"),),
+        judge_code=True,
+    )
+
+
+def _judge_answer_case() -> EvalCase:
+    return EvalCase(
+        "judge-answer",
+        "home_minimal",
+        "test",
+        (RequestVariant("canonical", "Is the bedroom light on?"),),
+        (),
+        oracle="answer",
+        expected_answer=AnswerPredicate("boolean", value=True),
+        judge_code=True,
+    )
+
+
+@pytest.mark.parametrize(
+    "case_factory",
+    [
+        pytest.param(_judge_effect_case, id="effect"),
+        pytest.param(_judge_tool_calls_case, id="tool-calls"),
+        pytest.param(_judge_answer_case, id="answer"),
+    ],
+)
+def test_dataset_marks_judge_opt_in_per_cell_for_every_oracle_type(
+    case_factory: Callable[[], EvalCase], tmp_path: Path
+) -> None:
+    case = case_factory()
+    config = _config(tmp_path, judge_model="openai-chat:gpt-5.4")
+    [dataset_case] = build_dataset(config, [_candidate("baseline")], [case], "judge-cell").cases
+
+    assert dataset_case.metadata["judge_code"] is True
+    assert dataset_case.metadata["judge_enabled"] is True
+    assert [type(evaluator).__name__ for evaluator in dataset_case.evaluators] == [
+        "SandboxOutcome",
+        "CodeQualityJudge",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("judge_model", "judge_code"),
+    [
+        pytest.param(None, False, id="no-model"),
+        pytest.param("openai-chat:gpt-5.4", False, id="not-opted-in"),
+    ],
+)
+def test_dataset_disables_judging_without_both_opt_in_conditions(
+    judge_model: str | None, judge_code: bool, tmp_path: Path
+) -> None:
+    case = EvalCase(
+        "judge-disabled",
+        "home_minimal",
+        "test",
+        (RequestVariant("canonical", "Turn on the bedroom light."),),
+        (),
+        judge_code=judge_code,
+    )
+    config = _config(tmp_path, judge_model=judge_model)
+    [dataset_case] = build_dataset(config, [_candidate("baseline")], [case], "judge-disabled").cases
+
+    assert dataset_case.metadata["judge_code"] is judge_code
+    assert dataset_case.metadata["judge_enabled"] is False
+    assert [type(evaluator).__name__ for evaluator in dataset_case.evaluators] == ["SandboxOutcome"]
+
+
 async def test_run_matrix_emits_plain_text_lifecycle_response(tmp_path: Path) -> None:
     events = []
     report = await run_matrix(
@@ -76,7 +222,7 @@ async def test_run_matrix_emits_plain_text_lifecycle_response(tmp_path: Path) ->
     assert events[-1].trace == report.cases[0].output
 
 
-async def test_run_matrix_forwards_payload_free_phases_for_the_active_cell(tmp_path: Path) -> None:
+async def test_unjudged_run_keeps_the_existing_phase_order_and_timing(tmp_path: Path) -> None:
     phases: list[LanePhaseEvent] = []
     case_id = "direct_turn_off_utility_room_accent"
     report = await run_matrix(
@@ -99,7 +245,120 @@ async def test_run_matrix_forwards_payload_free_phases_for_the_active_cell(tmp_p
         ("scoring", None),
         ("finished", None),
     ]
+    assert all(event.phase != "judging" for event in phases)
     assert tuple(field.name for field in fields(phases[0])) == ("cell", "phase", "tool_name")
+
+
+async def test_judged_cell_stays_active_until_the_judge_finishes_then_emits_one_completion(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    case = _synthetic_case("judged-cell")
+    _select_synthetic_cases(monkeypatch, [case])
+    events = []
+    phases: list[LanePhaseEvent] = []
+    state = PresentationState()
+    lane_states_during_judging: list[bool] = []
+
+    async def judge(*_args: object, **_kwargs: object) -> _JudgeResult:
+        return _JudgeResult()
+
+    def on_event(event: MatrixProgressEvent) -> None:
+        events.append(event)
+        state.ingest(event, timeout=75.0, max_tool_calls=10)
+
+    def on_phase(event: LanePhaseEvent) -> None:
+        phases.append(event)
+        state.ingest_phase(event)
+        if event.phase == "judging":
+            lane_states_during_judging.append(event.cell in state.lanes)
+
+    monkeypatch.setattr("llm_sandbox_evals.code_judge.judge_input_output", judge)
+    report = await run_matrix(
+        _config(tmp_path, judge_model="openai-chat:gpt-5.4"),
+        run_id="judged-lifecycle",
+        on_event=on_event,
+        on_phase=on_phase,
+    )
+
+    terminal_phases = [event.phase for event in phases if event.phase in {"scoring", "judging", "finished"}]
+    completed = [event for event in events if event.state == "cell_finished"]
+
+    assert [event.phase for event in phases].index("scoring") < [event.phase for event in phases].index("judging")
+    assert terminal_phases == ["scoring", "judging", "finished"]
+    assert lane_states_during_judging == [True]
+    assert len(completed) == 1
+    assert completed[0].trace == report.cases[0].output
+    assert not state.lanes
+
+
+async def test_judge_provider_failure_is_a_native_evaluator_failure_after_the_trace_completes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    case = _synthetic_case("judge-provider-failure")
+    _select_synthetic_cases(monkeypatch, [case])
+    events = []
+    state = PresentationState()
+
+    async def judge(*_args: object, **_kwargs: object) -> _JudgeResult:
+        raise RuntimeError("judge provider unavailable")
+
+    def on_event(event: MatrixProgressEvent) -> None:
+        events.append(event)
+        state.ingest(event, timeout=75.0, max_tool_calls=10)
+
+    monkeypatch.setattr("llm_sandbox_evals.code_judge.judge_input_output", judge)
+    report = await run_matrix(
+        _config(tmp_path, judge_model="openai-chat:gpt-5.4"),
+        run_id="judge-provider-failure",
+        on_event=on_event,
+    )
+
+    completed = [event for event in events if event.state == "cell_finished"]
+
+    assert len(report.cases) == 1
+    assert report.cases[0].output.case_id == case.id
+    assert report.cases[0].output.outcome.state == "correct"
+    assert [(failure.name, failure.error_type) for failure in report.cases[0].evaluator_failures] == [
+        ("code_quality_judge", "RuntimeError")
+    ]
+    assert len(completed) == 1
+    assert completed[0].trace == report.cases[0].output
+    assert not state.lanes
+
+
+async def test_concurrent_judged_cells_complete_in_judge_return_order_with_unique_indices(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    first = _synthetic_case("first-judged", "Turn off the Utility Room accent light.")
+    second = _synthetic_case("second-judged", "Turn on the Utility Room ceiling light.")
+    _select_synthetic_cases(monkeypatch, [first, second])
+    first_judge_started = asyncio.Event()
+    release_first_judge = asyncio.Event()
+
+    async def judge(request: dict[str, object], *_args: object, **_kwargs: object) -> _JudgeResult:
+        if request["request_text"] == first.requests[0].text:
+            first_judge_started.set()
+            await release_first_judge.wait()
+        else:
+            await first_judge_started.wait()
+            release_first_judge.set()
+        return _JudgeResult()
+
+    events = []
+    monkeypatch.setattr("llm_sandbox_evals.code_judge.judge_input_output", judge)
+    await run_matrix(
+        _config(tmp_path, concurrency=2, judge_model="openai-chat:gpt-5.4"),
+        run_id="reverse-judge-completion",
+        on_event=events.append,
+    )
+
+    completed = [event for event in events if event.state == "cell_finished"]
+
+    assert [(event.cell.case_id, event.completion_index) for event in completed if event.cell is not None] == [
+        (second.id, 1),
+        (first.id, 2),
+    ]
+    assert len({event.cell for event in completed}) == 2
 
 
 async def test_report_uses_scored_vocabulary_and_excludes_completed(tmp_path: Path) -> None:
@@ -212,7 +471,14 @@ async def test_native_metrics_omit_cost_and_presentation_uses_trace_cost_fallbac
     assert ReportPresentationModel.from_report(report).aggregates[0].total_cost == 0.03
 
 
-def _config(runs_dir: Path, *, models: list[str] | None = None, cases: list[str] | None = None) -> EvalConfig:
+def _config(
+    runs_dir: Path,
+    *,
+    models: list[str] | None = None,
+    cases: list[str] | None = None,
+    judge_model: str | None = None,
+    concurrency: int = 1,
+) -> EvalConfig:
     return EvalConfig(
         models=models or ["stub"],
         candidates=["baseline"],
@@ -220,7 +486,8 @@ def _config(runs_dir: Path, *, models: list[str] | None = None, cases: list[str]
         cases=cases,
         homes=None,
         runs_dir=runs_dir,
-        concurrency=1,
+        concurrency=concurrency,
+        judge_model=judge_model,
     )
 
 
@@ -236,6 +503,36 @@ def _case(case_id: str) -> EvalCase:
         (RequestVariant("canonical", "Turn on bedroom light"),),
         (RequiredAction("light", "turn_on", ("light.bedroom",)),),
     )
+
+
+def _synthetic_case(case_id: str, request: str = "Turn off the Utility Room accent light.") -> EvalCase:
+    action = (
+        RequiredAction("light", "turn_on", ("light.utility_room_ceiling",))
+        if request == "Turn on the Utility Room ceiling light."
+        else RequiredAction("light", "turn_off", ("light.utility_room_accent",))
+    )
+    return EvalCase(
+        case_id,
+        "home_full",
+        "test",
+        (RequestVariant("canonical", request),),
+        (action,),
+        judge_code=True,
+    )
+
+
+def _select_synthetic_cases(monkeypatch: pytest.MonkeyPatch, cases: list[EvalCase]) -> None:
+    def select_cases(_case_ids: list[str] | None, _homes: list[str] | None) -> list[EvalCase]:
+        return cases
+
+    monkeypatch.setattr(experiment, "_select_cases", select_cases)
+
+
+class _JudgeResult:
+    def __init__(self) -> None:
+        self.reason = "clear"
+        self.pass_ = True
+        self.score = 1.0
 
 
 def _trace(cell: MatrixCellRef, state: str) -> CaseTrace:

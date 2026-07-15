@@ -225,6 +225,14 @@ def _add_eval_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPar
         ),
     )
     eval_parser.add_argument(
+        "--judge-model",
+        metavar="ID",
+        help=(
+            "optional model id for later judge evaluation; bare ids resolve to openai-chat, "
+            "provider-prefixed ids are preserved, and 'stub' is invalid."
+        ),
+    )
+    eval_parser.add_argument(
         "--candidates",
         metavar="ID,ID,...",
         help="comma-separated prompt candidate ids (default: baseline). Use optimized:<path> "
@@ -428,6 +436,12 @@ def _run_eval(args: argparse.Namespace) -> int:
     except ValueError as err:
         sys.stderr.write(f"error: {err}\n")
         return 2
+    judge_model = base_config.judge_model
+    if args.judge_model is not None:
+        # Branch boundary: the singular CLI model follows the same provider-id normalization as the model matrix.
+        normalized_judge_models = _resolve_pydantic_eval_model_ids([args.judge_model])
+        assert normalized_judge_models is not None
+        judge_model = normalized_judge_models[0]
     config = EvalConfig(
         models=_resolve_pydantic_eval_model_ids(_csv_arg(args.models)) or base_config.models,
         candidates=_csv_arg(args.candidates) or base_config.candidates,
@@ -440,6 +454,7 @@ def _run_eval(args: argparse.Namespace) -> int:
         model_timeout=args.model_timeout if args.model_timeout is not None else base_config.model_timeout,
         reasoning_effort=args.reasoning,
         temperature=args.temperature,
+        judge_model=judge_model,
     )
     try:
         selected_cases, _selected_candidates = _validate_run_config(config)
@@ -526,9 +541,12 @@ def _run_eval(args: argparse.Namespace) -> int:
                 _say(diagnostic)
             _say(_format_unexpected_error(err))
             return 1
+        # Build the immutable presentation model from the in-memory report — never reload from disk —
+        # so the human final can render the advisory judge section alongside runtime deterministic state.
         reporter.finish(
             run_dir=str(run_dir),
             report_html=str(report_html),
+            report_model=ReportPresentationModel.from_report(report),
         )
 
         # Branch boundary: interactive runs have one human final on stderr; all other success paths emit KV only.
@@ -582,6 +600,8 @@ def _validate_run_config(config: EvalConfig) -> tuple[list[EvalCase], list[Promp
     """Validate all static matrix inputs before creating artifacts or model tasks."""
     if not config.models:
         raise ValueError("models_empty")
+    if config.judge_model == "stub":
+        raise ValueError("judge_model_invalid")
     if config.concurrency < 1:
         raise ValueError("concurrency_invalid")
     if config.model_timeout <= 0:

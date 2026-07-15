@@ -13,6 +13,7 @@ type LanePhase = Literal[
     "processing_tool_result",
     "responding",
     "scoring",
+    "judging",
     "finished",
 ]
 

@@ -8,7 +8,12 @@ from pathlib import Path
 import shlex
 from tempfile import NamedTemporaryFile
 
-from llm_sandbox_evals.presentation import ReportPresentationModel, effective_cause, result_label
+from llm_sandbox_evals.presentation import (
+    JudgePresentation,
+    ReportPresentationModel,
+    effective_cause,
+    result_label,
+)
 from llm_sandbox_evals.reports import MatrixReport, load_report
 from llm_sandbox_evals.statistics import canonical_cells, pair_aggregates, wilson_interval
 
@@ -61,6 +66,8 @@ def render_html(report: MatrixReport, *, run_id: str | None = None) -> str:
             "action_ledger": cell.trace.action_ledger,
             "tool_events": cell.trace.tool_events,
             "answer": cell.trace.answer,
+            # Advisory code-judge projection kept separate from the deterministic result/cause above.
+            "judge": _judge_payload(cell.judge),
         }
         for cell in model.cells
     ]
@@ -68,6 +75,8 @@ def render_html(report: MatrixReport, *, run_id: str | None = None) -> str:
         {
             "run_id": run_id,
             "created_at": created_at,
+            # Top-level gate: the advisory judge section renders only when some cell requested judging.
+            "judge_requested": model.judge_requested,
             "descriptor": descriptor,
             "counts": {
                 "total": counts.total,
@@ -130,7 +139,10 @@ def render_html(report: MatrixReport, *, run_id: str | None = None) -> str:
         default=_json_default,
         ensure_ascii=False,
     ).replace("</", "<\\/")
-    return _PAGE.replace("__REPORT_DATA__", payload)
+    # Branch boundary: emit the advisory section markup server-side only when judging was requested,
+    # so a report with no requested judging omits the section from the generated document entirely.
+    code_judge_section = _CODE_JUDGE_SECTION if model.judge_requested else ""
+    return _PAGE.replace("__CODE_JUDGE_SECTION__", code_judge_section).replace("__REPORT_DATA__", payload)
 
 
 def _created_at(run_id: str | None) -> str:
@@ -141,6 +153,28 @@ def _created_at(run_id: str | None) -> str:
         return datetime.strptime(run_id, "%Y%m%d-%H%M%S-%f").replace(tzinfo=UTC).isoformat()
     except ValueError:
         return "—"
+
+
+def _judge_payload(judge: JudgePresentation) -> dict[str, object]:
+    """Project the signed-off advisory judge state into a bounded JSON-safe cell object.
+
+    The four mutually exclusive statuses stay explicit so the page never infers advisory
+    judgement from the deterministic result: `available` carries score/pass/reason, `failed`
+    carries a bounded failure type (message may be None), and `unavailable`/`not_requested`
+    carry no scores. Judge reason and failure type flow through the same script-breakout
+    neutralization applied to the whole payload in `render_html`.
+    """
+    failure = judge.failure
+    # Branch boundary: only a failed judge carries a bounded failure classification; every other
+    # status leaves it None so the page cannot conflate a missing judge with a judged failure.
+    failure_payload = None if failure is None else {"error_type": failure.error_type, "message": failure.message}
+    return {
+        "status": judge.status,
+        "score": judge.score,
+        "passed": judge.passed,
+        "reason": judge.reason,
+        "failure": failure_payload,
+    }
 
 
 def _json_default(value: object) -> object:
@@ -188,16 +222,28 @@ def _invalid_report_html(run_dir: Path, error: Exception) -> str:
 <p>Inspect <code>{html.escape(str(run_dir / "report.json"))}</code> or rerun the evaluation.</p></main>"""
 
 
+# Advisory Code judge section markup, injected into the page only when some cell requested judging;
+# extracting it keeps the section out of the generated document on the no-judging path.
+_CODE_JUDGE_SECTION = (
+    '<section id="code-judge" class="advisory"><h2>Code judge<small>advisory</small></h2>'
+    '<p class="muted">Model-scored code quality, advisory only and shown separately from the '
+    "deterministic Result. Excluded from quality, coverage, and every deterministic aggregate.</p>"
+    '<table id="judge-table"><thead><tr><th>Case</th><th>Request variant</th><th>Candidate</th>'
+    "<th>Model variant</th><th>Judge status</th><th>Score</th><th>Pass</th><th>Detail</th></tr>"
+    '</thead><tbody id="judge-body"></tbody></table></section>'
+)
+
+
 _PAGE = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>LLM Sandbox Eval Report</title><style>
-body{font:15px system-ui,sans-serif;margin:0;background:#f4f7fb;color:#142334}main{max-width:1400px;margin:auto;padding:1rem}section,article{background:white;border:1px solid #d4dfeb;border-radius:8px;padding:1rem;margin:1rem 0}.hero{background:#075985;color:#fff}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:.75rem}.card{background:#fff2;border:1px solid #fff5;padding:.7rem;border-radius:6px}.card strong{display:block;font-size:1.45rem}table{width:100%;border-collapse:collapse}th,td{padding:.45rem;border-bottom:1px solid #d4dfeb;text-align:left;vertical-align:top}button{cursor:pointer}pre{white-space:pre-wrap;overflow:auto}.incomplete{color:#8a6100}.incorrect{color:#b42318}.correct{color:#17803a}.detail{display:none}.detail:target{display:block}.muted{color:#526779}</style></head>
+body{font:15px system-ui,sans-serif;margin:0;background:#f4f7fb;color:#142334}main{max-width:1400px;margin:auto;padding:1rem}section,article{background:white;border:1px solid #d4dfeb;border-radius:8px;padding:1rem;margin:1rem 0}.hero{background:#075985;color:#fff}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:.75rem}.card{background:#fff2;border:1px solid #fff5;padding:.7rem;border-radius:6px}.card strong{display:block;font-size:1.45rem}table{width:100%;border-collapse:collapse}th,td{padding:.45rem;border-bottom:1px solid #d4dfeb;text-align:left;vertical-align:top}button{cursor:pointer}pre{white-space:pre-wrap;overflow:auto}.incomplete{color:#8a6100}.incorrect{color:#b42318}.correct{color:#17803a}.detail{display:none}.detail:target{display:block}.muted{color:#526779}.advisory{border-left:4px solid #7c3aed}.advisory h2 small{font-weight:normal;color:#7c3aed;font-size:.8rem;margin-left:.5rem}.judge-failed td{color:#b42318}.judge-unavailable td,.judge-not_requested td{color:#526779}</style></head>
 <body><main><header class="hero"><p>LLM Sandbox eval matrix</p><h1 id="run-title">Eval report</h1><p id="variant-config"></p><div class="grid"><div class="card"><strong id="quality">—</strong>Canonical quality · <span id="quality-ci">—</span> Wilson 95% CI</div><div class="card"><strong id="paraphrase-quality">—</strong>Paraphrase quality · <span id="paraphrase-quality-ci">—</span> utterance-level Wilson 95% CI</div><div class="card"><strong id="coverage">—</strong>Canonical coverage</div><div class="card"><strong id="incomplete">—</strong>Incomplete</div><div class="card"><strong id="total">—</strong>Total cells</div><div class="card"><strong id="candidate-variants">—</strong>Candidate x variants</div></div></header>
 <section><h2>Canonical candidate comparison</h2><table id="comparison"><thead><tr><th>Candidate</th><th>Variant</th><th>Quality</th><th>Wilson 95% CI</th><th>Coverage</th><th>Calls/failures</th><th>Avg elapsed</th><th>Tokens/cost</th></tr></thead><tbody></tbody></table></section>
 <section><h2>Task robustness</h2><table id="task-robustness"><thead><tr><th>Candidate</th><th>Case</th><th>Model variant</th><th>Correct variants</th><th>Total variants</th><th>All passed</th></tr></thead><tbody></tbody></table></section>
 <section><h2>By category (all request variants)</h2><table id="categories"><thead><tr><th>Candidate</th><th>Variant</th><th>Category</th><th>Quality</th><th>Coverage</th><th>Scored</th></tr></thead><tbody></tbody></table></section>
 <section><h2>Charts</h2><article><h3>Candidate x variant correct-rate heatmap</h3><table id="heatmap"></table></article><div class="grid"><article><h3>Quality (scored cells)</h3><table id="quality-chart"></table></article><article><h3>Operational failures</h3><table id="failure-chart"></table></article></div></section>
-<section><h2>Cells</h2><button id="export-csv" type="button">Export CSV</button><table id="cells"><thead><tr><th>Case</th><th>Request variant</th><th>Category</th><th>Candidate</th><th>Model variant</th><th>Result</th><th>Tools</th><th>Elapsed</th></tr></thead><tbody></tbody></table></section><section id="inspector"><h2>Inspector</h2><p class="muted">Choose a cell to inspect verdict, operational context, end-state evidence, action evidence, tool evidence, answer, and raw details.</p></section></main>
+<section><h2>Cells</h2><button id="export-csv" type="button">Export CSV</button><table id="cells"><thead><tr><th>Case</th><th>Request variant</th><th>Category</th><th>Candidate</th><th>Model variant</th><th>Result</th><th>Tools</th><th>Elapsed</th></tr></thead><tbody></tbody></table></section>__CODE_JUDGE_SECTION__<section id="inspector"><h2>Inspector</h2><p class="muted">Choose a cell to inspect verdict, operational context, end-state evidence, action evidence, tool evidence, answer, and raw details.</p></section></main>
 <script type="application/json" id="report-data">__REPORT_DATA__</script><script>
 const d=JSON.parse(document.getElementById('report-data').textContent), $=id=>document.getElementById(id), esc=v=>String(v??'—').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const percent=v=>v==null?'—':`${(v*100).toFixed(1)}%`, interval=v=>!v||v[0]==null||v[1]==null?'—':`[${percent(v[0])}, ${percent(v[1])}]`, metric=(c,n)=>c.metrics?.[n]??c.diagnostics?.usage?.[n]??null;
@@ -212,5 +258,8 @@ $('quality-chart').innerHTML=d.aggregates.map(a=>`<tr><th>${esc(a.candidate)} / 
 $('failure-chart').innerHTML=Object.entries(d.issues).map(([cause,count])=>`<tr><th>${esc(cause)}</th><td>${count}</td></tr>`).join('')||'<tr><td>No operational failures</td></tr>';
 const show=c=>{const id='detail';let x=$(id);if(!x){x=document.createElement('article');x.id=id;$('inspector').append(x)}const usage={...c.diagnostics.usage,...c.metrics};x.innerHTML=`<h3>${esc(c.case_id)} / ${esc(c.request_variant_id)} <span class="${esc(c.state)}">${esc(c.result)}</span></h3><h4>Operational context</h4><pre>${esc(JSON.stringify({cause:c.cause,scoring_mode:c.scoring_mode,score_reason:c.score_reason,cap_exhausted:c.diagnostics.cap_exhausted,elapsed_seconds:c.diagnostics.elapsed_seconds,usage},null,2))}</pre><h4>End-state evidence</h4><pre>${esc(JSON.stringify({desired_entities:c.desired_entities,end_state_result:c.end_state_result},null,2))}</pre><h4>Action evidence</h4><pre>${esc(JSON.stringify({assessment:c.action_result,ledger:c.action_ledger},null,2))}</pre><h4>Tool evidence</h4><pre>${esc(JSON.stringify(c.tool_events,null,2))}</pre><h4>Answer</h4><pre>${esc(c.answer)}</pre><details><summary>Raw details</summary><pre>${esc(JSON.stringify(c,null,2))}</pre></details>`;x.scrollIntoView({block:'nearest'})};
 $('cells').querySelector('tbody').innerHTML=d.cells.map((c,i)=>`<tr><td><button data-cell="${i}">${esc(c.case_id)}</button></td><td>${esc(c.request_variant_id)}</td><td>${esc(c.category)}</td><td>${esc(c.candidate_id)}</td><td>${esc(c.variant)}</td><td class="${esc(c.state)}">${esc(c.result)}</td><td>${c.diagnostics.tool_calls}</td><td>${c.diagnostics.elapsed_seconds??'—'}</td></tr>`).join('');document.addEventListener('click',e=>{const i=e.target.dataset.cell;if(i!==undefined)show(d.cells[Number(i)])});
+// Advisory Code judge: populate the server-injected table only when some cell requested judging;
+// on the false path the section markup is absent, so no lookup of missing nodes occurs.
+if(d.judge_requested){const judgeDetail=j=>{if(j.status==='available')return esc(j.reason);if(j.status==='failed')return `${esc(j.failure?.error_type??'unknown')}${j.failure?.message==null?'':`: ${esc(j.failure.message)}`}`;if(j.status==='unavailable')return 'judge output unavailable';return 'not requested';};$('judge-body').innerHTML=d.cells.map(c=>{const j=c.judge||{status:'not_requested'};const avail=j.status==='available';return `<tr class="judge-${esc(j.status)}"><td>${esc(c.case_id)}</td><td>${esc(c.request_variant_id)}</td><td>${esc(c.candidate_id)}</td><td>${esc(c.variant)}</td><td>${esc(j.status)}</td><td>${avail?percent(j.score):'—'}</td><td>${avail?(j.passed?'yes':'no'):'—'}</td><td>${judgeDetail(j)}</td></tr>`;}).join('');}
 $('export-csv').addEventListener('click',()=>{const rows=[['case_id','request_variant_id','category','candidate_id','model_id','variant','outcome','cause','score','tool_calls','elapsed_seconds','total_tokens','cost'],...d.cells.map(c=>[c.case_id,c.request_variant_id,c.category,c.candidate_id,c.model_id,c.variant,c.state,c.cause,c.state==='correct'?1:0,c.diagnostics.tool_calls,c.diagnostics.elapsed_seconds??'',metric(c,'total_tokens')??'',metric(c,'cost')??''])];const csv=rows.map(r=>r.map(v=>`"${String(v).replaceAll('"','""')}"`).join(',')).join('\\n');const link=document.createElement('a');link.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));link.download=`eval-${d.run_id??'report'}-cells.csv`;link.click();URL.revokeObjectURL(link.href)});
 </script></body></html>"""

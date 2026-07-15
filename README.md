@@ -166,10 +166,48 @@ regenerates the complete report without model calls.
 `python -m llm_sandbox_evals report <run_id> --markdown` similarly writes a
 deterministic Markdown report. Canonical requests define the primary
 leaderboard; paraphrase cells and task robustness remain distinct views.
-Interactive evals consume native Pydantic AI streaming events; their Activity
-column appears only after an observed thinking event; transient phase/activity
-data is not persisted to reports or artifacts and is not rendered in machine
-output.
+The optional singular `eval --judge-model MODEL` uses the same model-ID
+normalization as `--models` (bare IDs become `openai-chat:...`; provider-
+prefixed IDs are preserved; normalized `stub` is rejected). The judge has two
+gates: a separately authored case must set `judge_code: true`, and the run
+must provide the judge model. Five current complex-code cases are opted in:
+`discover_utility_room_lights` (area discovery and coordinated multi-target
+action), `discover_basement_ceiling_lights` (large inventory area/name
+filtering and twelve targets), `condition_history_change_turn_off` (history
+processing and conditional action), `no_action_history_no_recent_change`
+(history processing and conditional no-op), and
+`ambiguous_logic_living_room_recent` (comparing recent histories across
+candidates). All other current cases omit `judge_code` and remain false. With
+`--judge-model`, the judge is invoked only for cells from those five selected
+cases; without the model, no cells are judged:
+
+```bash
+uv run --group dev --group evals python -m llm_sandbox_evals eval \
+  --models gpt-4o-mini --judge-model gpt-5.4
+```
+
+The advisory judge assesses complete `execute_home_code` trajectories as
+ephemeral request-scoped glue code, prioritizing effective task contribution,
+few model/tool round trips, scoped reads, in-sandbox work, and compact useful
+output rather than production-code style. Its bounded context includes every
+code call, runtime output/action/resolution evidence, relevant interleaved
+non-code tool calls, and the trusted deterministic outcome. If complete source
+or action evidence cannot fit, judging is unavailable rather than partial.
+Judge results and native failures do not change deterministic scoring. Rich Activity is
+visible from lane creation as phase-colored `queued`; judged lanes remain
+active through transient `judging`, and narrow layouts retain Activity while
+dropping Variant. After a completed interactive judged run, the durable Rich
+final conditionally appends a separate `Code judge · advisory` panel sourced
+from the completed native report. It shows judge model/rubric identity, overall
+requested/available counts, pass rate, mean score, evaluator-failure and
+unavailable counts, per-candidate/model-variant aggregates, and a bounded
+five-item needs-attention preview with overflow. The preview uses fixed
+classifications and only the safe evaluator error type; it never renders judge
+reasons, provider messages, stacktraces, or request/code/tool payloads. Full
+judge reasons remain in HTML/Markdown/report.json. The panel does not affect
+deterministic quality, ranking, coverage, or verdict; machine KV remains
+judge-free. Transient phase/activity data is not persisted to reports or
+artifacts and is not rendered in machine output.
 
 ## Support
 

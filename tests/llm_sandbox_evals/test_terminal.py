@@ -1,11 +1,17 @@
 from io import StringIO
 from pathlib import Path
-from typing import cast
 import unicodedata
 
 from llm_sandbox_evals.config import EvalConfig
 from llm_sandbox_evals.experiment import LanePhaseEvent, MatrixCellRef, MatrixProgressEvent
 from llm_sandbox_evals.phases import LanePhase
+from llm_sandbox_evals.presentation import (
+    JudgeFailure,
+    JudgePresentation,
+    PresentationCell,
+    PresentationState,
+    ReportPresentationModel,
+)
 from llm_sandbox_evals.schema import (
     ActionLedger,
     ActionResult,
@@ -19,7 +25,6 @@ from llm_sandbox_evals.schema import (
 )
 from llm_sandbox_evals.terminal import (
     _LIVE_REFRESH_PER_SECOND,
-    _SPINNER_SPEED,
     MatrixTerminalReporter,
     _duration,
     _left_ellipsis,
@@ -31,10 +36,7 @@ from llm_sandbox_evals.terminal import (
 )
 import pytest
 from rich.console import Console
-from rich.live import Live
 from rich.panel import Panel
-from rich.spinner import Spinner
-from rich.table import Table
 
 
 def _config(*, concurrency: int = 5) -> EvalConfig:
@@ -135,8 +137,52 @@ def _feed(reporter: MatrixTerminalReporter, *cells: tuple[MatrixCellRef, CaseTra
         )
 
 
-def _lane_column_metadata(table: Table) -> list[tuple[str, int | None, int | None]]:
-    return [(str(column.header), column.width, column.ratio) for column in table.columns]
+def _report_cell(
+    case_id: str,
+    *,
+    candidate_id: str = "baseline",
+    model_id: str = "stub",
+    request_variant_id: str = "canonical",
+    reasoning_effort: str | None = None,
+    request: str = "Turn on bedroom light",
+    provider_error: str | None = None,
+    judge: JudgePresentation,
+) -> PresentationCell:
+    trace = _trace(
+        case_id=case_id,
+        candidate_id=candidate_id,
+        model_id=model_id,
+        request_variant_id=request_variant_id,
+        reasoning_effort=reasoning_effort,
+        request=request,
+        provider_error=provider_error,
+    )
+    return PresentationCell(
+        case_id,
+        request_variant_id,
+        trace.category,
+        candidate_id,
+        model_id,
+        f"{model_id}({reasoning_effort or 'default'})",
+        trace,
+        {},
+        judge,
+    )
+
+
+def _report_model(*cells: PresentationCell) -> ReportPresentationModel:
+    return ReportPresentationModel(
+        cells,
+        {
+            "judge_model": "openai-chat:judge-1",
+            "judge_rubric_id": "llm_sandbox_code_quality",
+            "judge_rubric_version": 7,
+        },
+    )
+
+
+def _report_state(report_model: ReportPresentationModel) -> PresentationState:
+    return PresentationState(total=len(report_model.cells), completed=list(report_model.cells))
 
 
 def _normalized_rich_text(output: str) -> str:
@@ -170,46 +216,19 @@ def _assert_actionable_operational_issue_output(output: str, *, detail_fragments
     assert "..." not in output
 
 
-class _LiveRecorder:
-    """Capture phase-triggered Live redraws without starting Rich's background loop."""
-
-    def __init__(self) -> None:
-        self.update_count = 0
-
-    def update(self, _renderable: object, *, refresh: bool) -> None:
-        self.update_count += 1
-
-
-def test_human_render_has_no_phase_activity_waiting_or_response_row() -> None:
+def test_human_render_shows_initial_queued_activity_without_waiting_or_response_row() -> None:
     reporter = _reporter(human=True)
-    _feed(
-        reporter,
-        (
-            _cell(),
-            _trace(
-                state="incomplete",
-                score_reason=None,
-                failure="timeout",
-                request="Turn on bedroom light",
-                answer="raw model response text",
-            ),
-        ),
-    )
+    reporter.handle(MatrixProgressEvent("cell_started", cell=_cell(), request="Turn on bedroom light"))
 
     console = Console(width=160, force_terminal=False, record=True)
     console.print(reporter._render())
     output = console.export_text()
 
-    # No phase or Activity column exists in the initial terminal (streaming deferred).
-    assert "Activity" not in output
-    assert "Phase" not in output
+    assert "Activity" in output
+    assert "queued" in output
     # The misleading Waiting label and the ephemeral response row are removed.
     assert "Waiting" not in output
     assert "Response" not in output
-    # Raw model response, tool args, and payloads never reach Live (the request is shown, the answer is not).
-    assert "raw model response text" not in output
-    assert "secret-tool-arg" not in output
-    assert "payload" not in output
 
 
 def test_recent_table_has_a_single_result_column_with_state_and_cause() -> None:
@@ -250,8 +269,9 @@ def test_recent_table_renders_newest_result_at_bottom() -> None:
     assert output.index("oldest request") < output.index("middle request") < output.index("newest request")
 
 
-def test_lanes_show_variant_and_tool_cap_without_phase() -> None:
+def test_lanes_start_queued_with_activity_variant_and_tool_cap() -> None:
     reporter = _reporter(human=True)
+    reporter._console = Console(width=160, force_terminal=False, file=StringIO())
     reporter._state.total = 1
     reporter.handle(MatrixProgressEvent("cell_started", cell=_cell(reasoning_effort="high"), request="Turn on light"))
 
@@ -259,84 +279,55 @@ def test_lanes_show_variant_and_tool_cap_without_phase() -> None:
     column_headers = [column.header for column in table.columns]
     assert "Variant" in column_headers
     assert "Tools / cap" in column_headers
-    assert "Activity" not in column_headers
+    assert "Activity" in column_headers
 
     console = Console(width=160, force_terminal=False, record=True)
     console.print(table)
     output = console.export_text()
     assert "stub(high)" in output
+    assert "queued" in output
     assert "0 / 10" in output
 
 
-def test_dynamic_live_frame_preserves_spinner_between_refreshes() -> None:
+def test_spinner_persists_and_follows_phase_style() -> None:
     reporter = _reporter(human=True)
     reporter._state.total = 1
     reporter.handle(MatrixProgressEvent("cell_started", cell=_cell(), request="Turn on light"))
 
     reporter._lanes_table()
-    first_spinner = reporter._spinners[_cell()]
+    spinner_before_phase = reporter._spinners[_cell()]
+    queued_style = spinner_before_phase.style
+    reporter.handle_phase(LanePhaseEvent(_cell(), "running_tool", "execute_home_code"))
     reporter._lanes_table()
-    second_spinner = reporter._spinners[_cell()]
+    spinner_while_running_tool = reporter._spinners[_cell()]
+    running_tool_style = spinner_while_running_tool.style
+    reporter.handle_phase(LanePhaseEvent(_cell(), "responding"))
+    reporter._lanes_table()
+    spinner_while_responding = reporter._spinners[_cell()]
 
-    assert first_spinner is second_spinner
-
-
-def test_spinner_advances_one_frame_per_refresh() -> None:
-    """The dots spinner advances exactly one frame per Live refresh for smooth 4 Hz animation."""
-    interval = 1.0 / _LIVE_REFRESH_PER_SECOND
-    spinner = Spinner("dots", speed=_SPINNER_SPEED)
-    # First render sets start_time; the next render one refresh interval later must advance one frame.
-    frame_at_start = spinner.render(0.0).plain
-    frame_at_next_refresh = spinner.render(interval).plain
-    all_frames = Spinner("dots").frames
-    assert all_frames.index(frame_at_start) + 1 == all_frames.index(frame_at_next_refresh)
+    assert spinner_before_phase is spinner_while_running_tool is spinner_while_responding
+    assert running_tool_style != queued_style
+    assert spinner_while_responding.style not in {queued_style, running_tool_style}
 
 
-def test_spinner_survives_activity_phase_change_without_reset() -> None:
-    """A thinking phase enables the Activity column but must not reset the lane's spinner instance."""
+def test_judging_phase_renders_with_the_scoring_style_without_replacing_its_spinner() -> None:
     reporter = _reporter(human=True)
     reporter._state.total = 1
     cell = _cell()
     reporter.handle(MatrixProgressEvent("cell_started", cell=cell, request="Turn on light"))
+    reporter.handle_phase(LanePhaseEvent(cell, "scoring"))
     reporter._lanes_table()
-    spinner_before_activity = reporter._spinners[cell]
-    # A real thinking phase flips the sticky Activity column on.
-    reporter.handle_phase(LanePhaseEvent(cell=cell, phase="thinking"))
-    reporter._lanes_table()
-    spinner_after_activity = reporter._spinners[cell]
-    assert spinner_before_activity is spinner_after_activity
+    spinner_before_judging = reporter._spinners[cell]
+    scoring_style = spinner_before_judging.style
 
-
-@pytest.mark.parametrize("width", [pytest.param(80, id="narrow"), pytest.param(102, id="wide")])
-def test_lanes_keep_five_columns_without_activity_for_non_thinking_phases(width: int) -> None:
-    reporter = _reporter(human=True)
-    reporter._console = Console(width=width, force_terminal=False, file=StringIO())
-    cell = _cell()
-    reporter.handle(MatrixProgressEvent("cell_started", cell=cell, request="Turn on light"))
-    for phase in (
-        "awaiting_model",
-        "preparing_tool_call",
-        "running_tool",
-        "processing_tool_result",
-        "responding",
-        "scoring",
-    ):
-        reporter.handle_phase(LanePhaseEvent(cell, phase, "execute_home_code"))
-
+    reporter.handle_phase(LanePhaseEvent(cell, "judging"))
     table = reporter._lanes_table()
-    console = Console(width=width, force_terminal=False, record=True)
+    console = Console(width=160, force_terminal=False, record=True)
     console.print(table)
-    output = console.export_text()
 
-    assert _lane_column_metadata(table) == [
-        ("", 2, None),
-        ("Request", None, 3),
-        ("Variant", 22, None),
-        ("Elapsed / timeout", 18, None),
-        ("Tools / cap", 12, None),
-    ]
-    assert "Activity" not in output
-    assert "Waiting" not in output
+    assert reporter._spinners[cell] is spinner_before_judging
+    assert reporter._spinners[cell].style == scoring_style
+    assert "judging" in console.export_text()
 
 
 @pytest.mark.parametrize(
@@ -346,12 +337,13 @@ def test_lanes_keep_five_columns_without_activity_for_non_thinking_phases(width:
         pytest.param("processing_tool_result", "result · execute_home_code", id="processing-tool-result"),
     ],
 )
-def test_thinking_enables_safe_tool_activity_without_stream_payloads(phase: LanePhase, expected_activity: str) -> None:
+def test_real_phase_renders_safe_tool_activity_without_stream_payloads(
+    phase: LanePhase, expected_activity: str
+) -> None:
     reporter = _reporter(human=True)
     reporter._console = Console(width=102, force_terminal=False, file=StringIO())
     cell = _cell()
     reporter.handle(MatrixProgressEvent("cell_started", cell=cell, request="light"))
-    reporter.handle_phase(LanePhaseEvent(cell, "thinking"))
     reporter.handle_phase(LanePhaseEvent(cell, "preparing_tool_call", "provider-private-tool-name"))
     preparing_console = Console(width=102, force_terminal=False, record=True)
     preparing_console.print(reporter._lanes_table())
@@ -391,48 +383,32 @@ def test_thinking_enables_safe_tool_activity_without_stream_payloads(phase: Lane
 
 
 @pytest.mark.parametrize(
-    ("width", "expected_columns"),
+    ("width", "expected_headers"),
     [
         pytest.param(
             80,
-            [
-                ("", 2, None),
-                ("Request", None, 3),
-                ("Activity", 26, None),
-                ("Elapsed / timeout", 18, None),
-                ("Tools / cap", 12, None),
-            ],
+            ["", "Request", "Activity", "Elapsed / timeout", "Tools / cap"],
             id="narrow",
         ),
         pytest.param(
             102,
-            [
-                ("", 2, None),
-                ("Request", None, 3),
-                ("Activity", 26, None),
-                ("Variant", 22, None),
-                ("Elapsed / timeout", 18, None),
-                ("Tools / cap", 12, None),
-            ],
+            ["", "Request", "Activity", "Variant", "Elapsed / timeout", "Tools / cap"],
             id="wide",
         ),
     ],
 )
-def test_activity_idle_placeholder_renders_at_narrow_and_wide_widths(
-    width: int, expected_columns: list[tuple[str, int | None, int | None]]
-) -> None:
+def test_activity_idle_placeholder_renders_at_narrow_and_wide_widths(width: int, expected_headers: list[str]) -> None:
     reporter = _reporter(human=True)
     reporter._console = Console(width=width, force_terminal=False, file=StringIO())
     cell = _cell()
     reporter.handle(MatrixProgressEvent("cell_started", cell=cell, request="Turn on light"))
-    reporter.handle_phase(LanePhaseEvent(cell, "thinking"))
     reporter.handle(MatrixProgressEvent("cell_finished", cell=cell, trace=_trace(), completion_index=1, total=1))
 
     table = reporter._lanes_table()
     console = Console(width=width, force_terminal=False, record=True)
     console.print(table)
 
-    assert _lane_column_metadata(table) == expected_columns
+    assert [str(column.header) for column in table.columns] == expected_headers
     assert "Activity" in console.export_text()
 
 
@@ -492,7 +468,6 @@ def test_narrow_activity_renders_full_safe_tool_labels(phase: LanePhase, expecte
     reporter._console = Console(width=80, force_terminal=False, file=StringIO())
     cell = _cell()
     reporter.handle(MatrixProgressEvent("cell_started", cell=cell, request="light"))
-    reporter.handle_phase(LanePhaseEvent(cell, "thinking"))
     reporter.handle_phase(LanePhaseEvent(cell, phase, "execute_home_code"))
 
     table = reporter._lanes_table()
@@ -500,13 +475,9 @@ def test_narrow_activity_renders_full_safe_tool_labels(phase: LanePhase, expecte
     console.print(table)
     output = console.export_text()
 
-    assert _lane_column_metadata(table) == [
-        ("", 2, None),
-        ("Request", None, 3),
-        ("Activity", 26, None),
-        ("Elapsed / timeout", 18, None),
-        ("Tools / cap", 12, None),
-    ]
+    column_headers = [str(column.header) for column in table.columns]
+    assert "Activity" in column_headers
+    assert "Variant" not in column_headers
     assert expected_activity in output
     assert "…" not in output
 
@@ -790,34 +761,9 @@ def test_machine_phase_events_produce_no_terminal_output() -> None:
     reporter._console = Console(width=200, force_terminal=False, file=stream)
     cell = _cell()
     reporter.handle(MatrixProgressEvent("cell_started", cell=cell, request="Turn on light"))
-    reporter.handle_phase(LanePhaseEvent(cell, "thinking"))
+    reporter.handle_phase(LanePhaseEvent(cell, "running_tool", "execute_home_code"))
 
     assert stream.getvalue() == ""
-
-
-def test_live_coalesces_duplicate_phase_redraws() -> None:
-    reporter = _reporter(human=True)
-    recorder = _LiveRecorder()
-    reporter._live = cast(Live, recorder)
-    cell = _cell()
-    reporter.handle(MatrixProgressEvent("cell_started", cell=cell, request="light"))
-    recorder.update_count = 0
-
-    reporter.handle_phase(LanePhaseEvent(cell, "thinking"))
-    assert recorder.update_count == 1
-    reporter.handle_phase(LanePhaseEvent(cell, "thinking"))
-    assert recorder.update_count == 1
-    reporter.handle_phase(LanePhaseEvent(cell, "responding"))
-    assert recorder.update_count == 2
-    reporter.handle_phase(LanePhaseEvent(cell, "responding"))
-    assert recorder.update_count == 2
-    reporter.handle_phase(LanePhaseEvent(cell, "running_tool", "execute_home_code"))
-    assert recorder.update_count == 3
-    reporter.handle_phase(LanePhaseEvent(cell, "running_tool", "execute_home_code"))
-    assert recorder.update_count == 3
-    reporter.handle_phase(LanePhaseEvent(cell, "running_tool", "get_history"))
-
-    assert recorder.update_count == 4
 
 
 def test_machine_events_emit_stable_kv_without_raw_payload() -> None:
@@ -844,6 +790,7 @@ def test_machine_events_emit_stable_kv_without_raw_payload() -> None:
 
     reporter.handle(MatrixProgressEvent("matrix_started", total=1))
     reporter.handle(MatrixProgressEvent("cell_started", cell=cell, request="secret request body"))
+    reporter.handle_phase(LanePhaseEvent(cell, "running_tool", "execute_home_code"))
     reporter.handle(MatrixProgressEvent("cell_finished", cell=cell, trace=trace, completion_index=1, total=1))
 
     output = output_buffer.getvalue()
@@ -874,6 +821,136 @@ def test_durable_final_emits_counts_and_artifact_path_once() -> None:
     # The artifact directory and report.html each appear on one dedicated line in the durable final.
     assert "Artifacts: runs/run-1" in output
     assert "report.html: runs/run-1/report.html" in output
+
+
+def test_durable_final_renders_bounded_safe_advisory_code_judge_details() -> None:
+    raw_judge_reason = (
+        "RAW_JUDGE_REASON request=RAW_JUDGE_REQUEST_PAYLOAD code=RAW_JUDGE_CODE_PAYLOAD tool=RAW_JUDGE_TOOL_PAYLOAD"
+    )
+    report_model = _report_model(
+        _report_cell(
+            "alpha-passed",
+            candidate_id="alpha",
+            model_id="alpha-model",
+            judge=JudgePresentation("available", score=0.9, passed=True, reason="clear"),
+        ),
+        _report_cell(
+            "alpha-failed-score",
+            candidate_id="alpha",
+            model_id="alpha-model",
+            judge=JudgePresentation("available", score=0.5, passed=False, reason=raw_judge_reason),
+        ),
+        _report_cell(
+            "judge-failure",
+            candidate_id="alpha",
+            model_id="alpha-model",
+            request="RAW_REQUEST_PAYLOAD",
+            provider_error="RAW_NATIVE_PROVIDER_TRACE",
+            judge=JudgePresentation(
+                "failed",
+                failure=JudgeFailure("JudgeProviderTimeout", "RAW_PROVIDER_FAILURE_REQUEST_PAYLOAD"),
+            ),
+        ),
+        _report_cell(
+            "judge-unavailable",
+            candidate_id="alpha",
+            model_id="alpha-model",
+            judge=JudgePresentation("unavailable"),
+        ),
+        _report_cell(
+            "beta-low-score",
+            candidate_id="beta",
+            model_id="beta-model",
+            reasoning_effort="high",
+            judge=JudgePresentation("available", score=0.1, passed=False, reason=raw_judge_reason),
+        ),
+        _report_cell(
+            "beta-mid-score",
+            candidate_id="beta",
+            model_id="beta-model",
+            reasoning_effort="high",
+            judge=JudgePresentation("available", score=0.2, passed=False, reason=raw_judge_reason),
+        ),
+        _report_cell(
+            "gamma-low-score",
+            candidate_id="gamma",
+            model_id="gamma-model",
+            request_variant_id="paraphrase",
+            judge=JudgePresentation("available", score=0.3, passed=False, reason=raw_judge_reason),
+        ),
+        _report_cell(
+            "gamma-mid-score",
+            candidate_id="gamma",
+            model_id="gamma-model",
+            request_variant_id="paraphrase",
+            judge=JudgePresentation("available", score=0.4, passed=False, reason=raw_judge_reason),
+        ),
+    )
+
+    console = Console(width=80, force_terminal=False, record=True)
+    console.print(
+        render_durable_final(
+            _report_state(report_model),
+            run_dir="runs/run-1",
+            report_html="runs/run-1/report.html",
+            report_model=report_model,
+        )
+    )
+    output = console.export_text()
+    normalized = _normalized_rich_text(output)
+
+    assert "Code judge" in normalized
+    assert "advisory" in normalized
+    assert "openai-chat:judge-1" in normalized
+    assert "llm_sandbox_code_quality" in normalized
+    assert "v7" in normalized
+    for fact in ("Judged 6/8", "Passed 1/6 (16.7%)", "Mean score 40.0%", "Evaluator failures 1", "Unavailable 1"):
+        assert fact in normalized
+    # Candidate/model groups remain separate, including the non-default reasoning variant.
+    for value in ("alpha", "alpha-model(default)", "beta", "beta-model(high)", "gamma", "gamma-model(default)"):
+        assert value in normalized
+    assert "Needs attention" in normalized
+    for case_id in ("judge-failure", "judge-unavailable", "beta-low-score", "beta-mid-score", "gamma-low-score"):
+        assert case_id in output
+    assert "+ 2 more" in normalized
+    # Available non-passes use a fixed safe detail; evaluator failures reveal only their classification.
+    assert "code quality did not pass" in normalized
+    assert "JudgeProviderTimeout" in normalized
+    assert raw_judge_reason not in output
+    for sentinel in (
+        "RAW_JUDGE_REASON",
+        "RAW_JUDGE_REQUEST_PAYLOAD",
+        "RAW_JUDGE_CODE_PAYLOAD",
+        "RAW_JUDGE_TOOL_PAYLOAD",
+    ):
+        assert sentinel not in output
+    assert "RAW_PROVIDER_FAILURE_REQUEST_PAYLOAD" not in output
+    assert "RAW_NATIVE_PROVIDER_TRACE" not in output
+    assert "RAW_REQUEST_PAYLOAD" not in output
+    assert "secret-tool-arg" not in output
+    assert "payload" not in output
+
+
+def test_durable_final_without_requested_judges_preserves_the_existing_summary() -> None:
+    report_model = _report_model(
+        _report_cell("not-judged", judge=JudgePresentation("not_requested")),
+    )
+
+    console = Console(width=80, force_terminal=False, record=True)
+    console.print(
+        render_durable_final(
+            _report_state(report_model),
+            run_dir="runs/run-1",
+            report_html="runs/run-1/report.html",
+            report_model=report_model,
+        )
+    )
+    output = _normalized_rich_text(console.export_text())
+
+    assert "Code judge" not in output
+    assert "Canonical quality" in output
+    assert "By category (all request variants)" in output
+    assert "Artifacts: runs/run-1" in output
 
 
 def test_durable_final_surfaces_paraphrase_quality_and_task_robustness() -> None:

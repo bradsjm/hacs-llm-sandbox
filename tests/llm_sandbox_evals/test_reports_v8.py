@@ -28,6 +28,8 @@ from llm_sandbox_evals.schema import (
     RequiredAction,
 )
 from pydantic import ValidationError
+from pydantic_evals.evaluators import EvaluationResult, EvaluatorFailure
+from pydantic_evals.evaluators.spec import EvaluatorSpec
 from pydantic_evals.reporting import EvaluationReport, ReportCase
 import pytest
 
@@ -192,6 +194,95 @@ async def test_execution_error_round_trips_and_defaults_for_older_v7_payload(tmp
     report_path.write_text(json.dumps(payload), encoding="utf-8")
 
     assert load_report(run_dir).cases[0].output.execution_error is None
+
+
+def test_native_code_judge_results_and_failure_survive_report_round_trip(tmp_path: Path) -> None:
+    source = EvaluatorSpec(name="code_quality_judge", arguments={"model": "judge", "model_timeout": 30.0})
+    score = EvaluationResult(
+        name="code_quality_score",
+        value=0.8,
+        reason="concise discovery",
+        source=source,
+        evaluator_version="1",
+    )
+    assertion = EvaluationResult(
+        name="code_quality_pass",
+        value=True,
+        reason="concise discovery",
+        source=source,
+        evaluator_version="1",
+    )
+    failure = EvaluatorFailure(
+        name="code_quality_judge",
+        error_message="RuntimeError: judge unavailable",
+        error_stacktrace="Traceback: judge unavailable",
+        source=source,
+        evaluator_version="1",
+        error_type="RuntimeError",
+    )
+    report = _report_with_traces(
+        _incomplete_trace(
+            case_id="judged-success",
+            candidate_id="baseline",
+            model_id="stub",
+            reasoning_effort=None,
+            temperature=None,
+            conversation_id=None,
+            request_text="request",
+            classification="provider_error",
+            provider_error="provider failed",
+            execution_error=None,
+        ),
+        _incomplete_trace(
+            case_id="judged-failure",
+            candidate_id="baseline",
+            model_id="stub",
+            reasoning_effort=None,
+            temperature=None,
+            conversation_id=None,
+            request_text="request",
+            classification="provider_error",
+            provider_error="provider failed",
+            execution_error=None,
+        ),
+    )
+    report.cases[0].scores[score.name] = score
+    report.cases[0].assertions[assertion.name] = assertion
+    report.cases[1].evaluator_failures.append(failure)
+
+    run_dir = write_report_json(report, _config(tmp_path), run_id="native-judge-round-trip")
+    restored = load_report(run_dir)
+    restored_score = restored.cases[0].scores[score.name]
+    restored_assertion = restored.cases[0].assertions[assertion.name]
+    restored_failure = restored.cases[1].evaluator_failures[0]
+
+    assert (
+        restored_score.value,
+        restored_score.reason,
+        restored_score.source.name,
+        restored_score.evaluator_version,
+    ) == (score.value, score.reason, "code_quality_judge", "1")
+    assert (
+        restored_assertion.value,
+        restored_assertion.reason,
+        restored_assertion.source.name,
+        restored_assertion.evaluator_version,
+    ) == (assertion.value, assertion.reason, "code_quality_judge", "1")
+    assert (
+        restored_failure.name,
+        restored_failure.error_message,
+        restored_failure.error_stacktrace,
+        restored_failure.source.name,
+        restored_failure.evaluator_version,
+        restored_failure.error_type,
+    ) == (
+        "code_quality_judge",
+        failure.error_message,
+        failure.error_stacktrace,
+        "code_quality_judge",
+        "1",
+        "RuntimeError",
+    )
 
 
 async def test_report_writer_creates_empty_error_log_for_successful_stub_report(tmp_path: Path) -> None:
@@ -359,6 +450,16 @@ def test_partial_journal_round_trips_and_is_not_report_shaped(tmp_path: Path) ->
     payload = json.loads(path.read_text(encoding="utf-8"))
     with pytest.raises(ValidationError):
         _REPORT_ADAPTER.validate_python(payload)
+
+
+def test_partial_journal_retains_only_the_scoring_v9_case_trace_shape(tmp_path: Path) -> None:
+    path = write_partial_artifact(tmp_path / "partial.json", _partial_artifact(status="failed"))
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    trace = payload["records"][0]["trace"]
+
+    assert trace["scoring_version"] == 9
+    assert trace["case_id"] == "case-a"
+    assert {"scores", "assertions", "evaluator_failures", "code_quality_score", "code_quality_pass"}.isdisjoint(trace)
 
 
 async def test_report_writer_cleans_temporary_file_when_json_serialization_fails(

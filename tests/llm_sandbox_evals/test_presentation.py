@@ -22,6 +22,8 @@ from llm_sandbox_evals.schema import (
     ExecutionError,
     RequiredAction,
 )
+from pydantic_evals.evaluators import EvaluationResult, EvaluatorFailure
+from pydantic_evals.evaluators.spec import EvaluatorSpec
 from pydantic_evals.reporting import EvaluationReport, ReportCase
 import pytest
 
@@ -170,8 +172,8 @@ def test_presentation_state_projects_lifecycle_events() -> None:
     # Operational issues group by the real cause, never action_mismatch.
     assert dict(state.operational_issues) == {"timeout": 1}
     assert not state.lanes
-    # A phase from a completed lane does not activate the live Activity column.
-    state.ingest_phase(LanePhaseEvent(correct_cell, "thinking"))
+    # A phase from a completed lane leaves the completed projection unchanged.
+    state.ingest_phase(LanePhaseEvent(correct_cell, "responding"))
 
 
 def test_presentation_state_cap_exhausted_does_not_count_as_operational_issue() -> None:
@@ -193,22 +195,23 @@ def test_presentation_state_cap_exhausted_does_not_count_as_operational_issue() 
     assert dict(state.operational_issues) == {}
 
 
-def test_presentation_state_ignores_thinking_for_unknown_and_finished_lanes() -> None:
+def test_presentation_state_ignores_phases_for_unknown_and_finished_lanes() -> None:
     state = PresentationState()
     finished_cell = _cell("finished-case")
 
     state.ingest(MatrixProgressEvent("matrix_started", total=1), timeout=10.0, max_tool_calls=10)
-    assert not state.ingest_phase(LanePhaseEvent(_cell("unknown-case"), "thinking"))
+    assert not state.ingest_phase(LanePhaseEvent(_cell("unknown-case"), "running_tool", "execute_home_code"))
+    assert not state.lanes
     state.ingest(MatrixProgressEvent("cell_started", cell=finished_cell, request="r"), timeout=10.0, max_tool_calls=10)
     state.ingest(
         MatrixProgressEvent("cell_finished", cell=finished_cell, trace=_trace(), completion_index=1, total=1),
         timeout=10.0,
         max_tool_calls=10,
     )
-    assert not state.ingest_phase(LanePhaseEvent(finished_cell, "thinking"))
+    assert not state.ingest_phase(LanePhaseEvent(finished_cell, "running_tool", "execute_home_code"))
 
-    assert not state.activity_enabled
     assert not state.lanes
+    assert len(state.completed) == 1
 
 
 def test_ingest_phase_reports_only_visible_active_lane_changes() -> None:
@@ -217,11 +220,10 @@ def test_ingest_phase_reports_only_visible_active_lane_changes() -> None:
 
     state.ingest(MatrixProgressEvent("cell_started", cell=cell, request="r"), timeout=10.0, max_tool_calls=10)
 
-    assert state.ingest_phase(LanePhaseEvent(cell, "queued"))
+    assert state.lanes[cell].phase == "queued"
     assert not state.ingest_phase(LanePhaseEvent(cell, "queued"))
-    assert state.ingest_phase(LanePhaseEvent(cell, "thinking"))
-    assert state.activity_enabled
-    assert not state.ingest_phase(LanePhaseEvent(cell, "thinking"))
+    assert state.ingest_phase(LanePhaseEvent(cell, "awaiting_model"))
+    assert not state.ingest_phase(LanePhaseEvent(cell, "awaiting_model"))
     assert state.ingest_phase(LanePhaseEvent(cell, "running_tool", "execute_home_code"))
     assert not state.ingest_phase(LanePhaseEvent(cell, "running_tool", "execute_home_code"))
     assert state.ingest_phase(LanePhaseEvent(cell, "running_tool", "get_history"))
@@ -240,27 +242,22 @@ def test_ingest_phase_coalesces_provider_tool_names_and_rejects_invalid_phases()
 
 
 @pytest.mark.parametrize(
-    "phase",
+    ("phase", "tool_name"),
     [
-        pytest.param("queued", id="queued"),
-        pytest.param("awaiting_model", id="awaiting-model"),
-        pytest.param("preparing_tool_call", id="preparing-tool-call"),
-        pytest.param("running_tool", id="running-tool"),
-        pytest.param("processing_tool_result", id="processing-tool-result"),
-        pytest.param("responding", id="responding"),
-        pytest.param("scoring", id="scoring"),
-        pytest.param("finished", id="finished"),
+        pytest.param("awaiting_model", None, id="awaiting-model"),
+        pytest.param("running_tool", "execute_home_code", id="running-tool"),
+        pytest.param("responding", None, id="responding"),
     ],
 )
-def test_pre_reveal_phases_update_active_lane_without_enabling_activity(phase: LanePhase) -> None:
+def test_presentation_state_projects_real_phases_without_thinking(phase: LanePhase, tool_name: str | None) -> None:
     state = PresentationState()
     cell = _cell("phase-case")
 
     state.ingest(MatrixProgressEvent("cell_started", cell=cell, request="r"), timeout=10.0, max_tool_calls=10)
-    state.ingest_phase(LanePhaseEvent(cell, phase))
+    assert state.ingest_phase(LanePhaseEvent(cell, phase, tool_name))
 
     assert state.lanes[cell].phase == phase
-    assert not state.activity_enabled
+    assert state.lanes[cell].tool_name == tool_name
 
 
 def test_presentation_state_uses_planned_total_for_coverage_while_run_active() -> None:
@@ -851,3 +848,315 @@ def test_report_presentation_model_reads_metrics_with_usage_fallback() -> None:
     # total_tokens: first cell has none in metrics and no trace usage; second cell falls back to trace usage (42).
     assert aggregate.total_tokens == 72.0
     assert aggregate.total_cost == 0.01
+
+
+def test_report_presentation_model_projects_all_code_judge_states_from_native_records() -> None:
+    source = EvaluatorSpec(name="code_quality_judge", arguments={"model": "judge"})
+    available = _report_case(_trace(case_id="available"), _cell("available"))
+    available.metadata["judge_enabled"] = True
+    available.scores["code_quality_score"] = EvaluationResult(
+        name="code_quality_score",
+        value=0.9,
+        reason="efficient discovery",
+        source=source,
+        evaluator_version="1",
+    )
+    available.assertions["code_quality_pass"] = EvaluationResult(
+        name="code_quality_pass",
+        value=True,
+        reason="efficient discovery",
+        source=source,
+        evaluator_version="1",
+    )
+    # An evaluator with a different identity cannot make the code judge fail.
+    available.evaluator_failures.append(
+        EvaluatorFailure(
+            name="unrelated_evaluator",
+            error_message="RuntimeError: unrelated",
+            error_stacktrace="raw unrelated stacktrace",
+            source=source,
+            error_type="RuntimeError",
+        )
+    )
+    failed = _report_case(_trace(case_id="failed", provider_error="RAW_TRACE_PROVIDER_PAYLOAD"), _cell("failed"))
+    failed.metadata["judge_enabled"] = True
+    failed.scores["code_quality_score"] = EvaluationResult(
+        name="code_quality_score",
+        value=0.9,
+        reason="efficient discovery",
+        source=source,
+        evaluator_version="1",
+    )
+    failed.assertions["code_quality_pass"] = EvaluationResult(
+        name="code_quality_pass",
+        value=True,
+        reason="efficient discovery",
+        source=source,
+        evaluator_version="1",
+    )
+    failed.evaluator_failures.append(
+        EvaluatorFailure(
+            name="code_quality_judge",
+            error_message="RuntimeError: RAW_EVALUATOR_PROVIDER_PAYLOAD",
+            error_stacktrace="Traceback: RAW_EVALUATOR_STACKTRACE",
+            source=source,
+            evaluator_version="1",
+            error_type="RuntimeError",
+        )
+    )
+    not_requested = _report_case(_trace(case_id="not-requested"), _cell("not-requested"))
+    missing = _report_case(_trace(case_id="missing"), _cell("missing"))
+    missing.metadata["judge_enabled"] = True
+
+    model = ReportPresentationModel.from_report(
+        EvaluationReport(name="code-judge-presentation", cases=[not_requested, available, failed, missing])
+    )
+    not_requested_result, available_result, failed_result, missing_result = (cell.judge for cell in model.cells)
+
+    assert model.judge_requested is True
+    assert not_requested_result.status == "not_requested"
+    assert (available_result.status, available_result.score, available_result.passed, available_result.reason) == (
+        "available",
+        0.9,
+        True,
+        "efficient discovery",
+    )
+    assert failed_result.status == "failed"
+    assert failed_result.failure is not None
+    assert failed_result.failure.error_type == "RuntimeError"
+    assert failed_result.failure.message is None
+    assert not hasattr(failed_result.failure, "error_stacktrace")
+    assert "RAW_TRACE_PROVIDER_PAYLOAD" not in repr(failed_result)
+    assert "RAW_EVALUATOR_PROVIDER_PAYLOAD" not in repr(failed_result)
+    assert "RAW_EVALUATOR_STACKTRACE" not in repr(failed_result)
+    assert missing_result.status == "unavailable"
+
+
+def test_report_presentation_model_requires_a_score_and_assertion_for_code_judge_availability() -> None:
+    source = EvaluatorSpec(name="code_quality_judge", arguments={"model": "judge"})
+    score_only = _report_case(_trace(case_id="score-only"), _cell("score-only"))
+    score_only.metadata["judge_enabled"] = True
+    score_only.scores["code_quality_score"] = EvaluationResult(
+        name="code_quality_score", value=0.7, reason="partial", source=source
+    )
+    assertion_only = _report_case(_trace(case_id="assertion-only"), _cell("assertion-only"))
+    assertion_only.metadata["judge_enabled"] = True
+    assertion_only.assertions["code_quality_pass"] = EvaluationResult(
+        name="code_quality_pass", value=True, reason="partial", source=source
+    )
+
+    model = ReportPresentationModel.from_report(
+        EvaluationReport(name="partial-judge", cases=[score_only, assertion_only])
+    )
+
+    assert tuple(cell.judge.status for cell in model.cells) == ("unavailable", "unavailable")
+
+
+@pytest.mark.parametrize(
+    ("score", "passed"),
+    [
+        pytest.param(True, True, id="boolean-score"),
+        pytest.param(float("nan"), True, id="nan-score"),
+        pytest.param(float("inf"), True, id="infinite-score"),
+        pytest.param(-0.1, True, id="below-range-score"),
+        pytest.param(1.1, True, id="above-range-score"),
+        pytest.param(0.5, 1, id="integer-pass"),
+        pytest.param(0.5, "true", id="string-pass"),
+    ],
+)
+def test_report_presentation_model_treats_malformed_native_judge_results_as_unavailable(
+    score: bool | float, passed: bool | int | str
+) -> None:
+    source = EvaluatorSpec(name="code_quality_judge", arguments={"model": "judge"})
+    report_case = _report_case(_trace(), _cell("malformed"))
+    report_case.metadata["judge_enabled"] = True
+    report_case.scores["code_quality_score"] = EvaluationResult(
+        name="code_quality_score", value=score, reason="malformed", source=source
+    )
+    report_case.assertions["code_quality_pass"] = EvaluationResult(
+        name="code_quality_pass", value=passed, reason="malformed", source=source
+    )
+
+    model = ReportPresentationModel.from_report(EvaluationReport(name="malformed-judge", cases=[report_case]))
+
+    assert model.cells[0].judge.status == "unavailable"
+
+
+def test_report_presentation_model_judge_requested_is_false_without_enabled_metadata() -> None:
+    report_case = _report_case(_trace(), _cell("not-requested"))
+
+    model = ReportPresentationModel.from_report(EvaluationReport(name="judge-not-requested", cases=[report_case]))
+
+    assert model.judge_requested is False
+    assert model.cells[0].judge.status == "not_requested"
+
+
+def test_code_judge_records_do_not_change_deterministic_report_projections() -> None:
+    source = EvaluatorSpec(name="code_quality_judge", arguments={"model": "judge"})
+    clean = _report_case(_trace(case_id="correct"), _cell("correct"))
+    clean.metadata["judge_enabled"] = True
+    judged = _report_case(_trace(case_id="correct"), _cell("correct"))
+    judged.metadata["judge_enabled"] = True
+    judged.scores["code_quality_score"] = EvaluationResult(
+        name="code_quality_score", value=0.1, reason="advisory", source=source
+    )
+    judged.assertions["code_quality_pass"] = EvaluationResult(
+        name="code_quality_pass", value=False, reason="advisory", source=source
+    )
+    judged.evaluator_failures.append(
+        EvaluatorFailure(
+            name="code_quality_judge",
+            error_message="RuntimeError: judge unavailable",
+            error_stacktrace="Traceback: raw provider response",
+            source=source,
+            error_type="RuntimeError",
+        )
+    )
+    baseline = ReportPresentationModel.from_report(EvaluationReport(name="baseline", cases=[clean]))
+    advisory = ReportPresentationModel.from_report(EvaluationReport(name="advisory", cases=[judged]))
+
+    assert baseline.counts == advisory.counts
+    assert baseline.aggregates == advisory.aggregates
+    assert baseline.category_aggregates == advisory.category_aggregates
+    assert baseline.canonical_quality_interval == advisory.canonical_quality_interval
+    assert baseline.task_robustness == advisory.task_robustness
+
+
+def test_report_presentation_model_summarizes_available_judge_results_by_candidate_variant() -> None:
+    source = EvaluatorSpec(name="code_quality_judge", arguments={"model": "judge"})
+    passed = _report_case(
+        _trace(case_id="passed", candidate_id="beta", model_id="luna", reasoning_effort="high"),
+        _cell("passed", "beta", "luna", "high"),
+    )
+    passed.metadata["judge_enabled"] = True
+    passed.scores["code_quality_score"] = EvaluationResult(
+        name="code_quality_score", value=0.9, reason="clear", source=source
+    )
+    passed.assertions["code_quality_pass"] = EvaluationResult(
+        name="code_quality_pass", value=True, reason="clear", source=source
+    )
+    quality_failure = _report_case(_trace(case_id="quality-failure"), _cell("quality-failure"))
+    quality_failure.metadata["judge_enabled"] = True
+    quality_failure.scores["code_quality_score"] = EvaluationResult(
+        name="code_quality_score", value=0.2, reason="incomplete", source=source
+    )
+    quality_failure.assertions["code_quality_pass"] = EvaluationResult(
+        name="code_quality_pass", value=False, reason="incomplete", source=source
+    )
+    evaluator_failed = _report_case(_trace(case_id="evaluator-failed"), _cell("evaluator-failed"))
+    evaluator_failed.metadata["judge_enabled"] = True
+    evaluator_failed.evaluator_failures.append(
+        EvaluatorFailure(
+            name="code_quality_judge",
+            error_message="RuntimeError: provider unavailable",
+            error_stacktrace="Traceback: provider unavailable",
+            source=source,
+            error_type="RuntimeError",
+        )
+    )
+    unavailable = _report_case(_trace(case_id="unavailable"), _cell("unavailable"))
+    unavailable.metadata["judge_enabled"] = True
+    not_requested = _report_case(_trace(case_id="not-requested"), _cell("not-requested"))
+
+    model = ReportPresentationModel.from_report(
+        EvaluationReport(
+            name="judge-summary",
+            cases=[not_requested, passed, unavailable, evaluator_failed, quality_failure],
+        )
+    )
+
+    summary = model.judge_summary
+    assert (
+        summary.requested,
+        summary.available,
+        summary.passed,
+        summary.evaluator_failed,
+        summary.unavailable,
+        summary.pass_rate,
+    ) == (4, 2, 1, 1, 1, 0.5)
+    assert summary.mean_score == pytest.approx(0.55)
+    assert [
+        (
+            aggregate.candidate_id,
+            aggregate.variant,
+            aggregate.requested,
+            aggregate.available,
+            aggregate.passed,
+            aggregate.evaluator_failed,
+            aggregate.unavailable,
+            aggregate.pass_rate,
+            aggregate.mean_score,
+        )
+        for aggregate in model.judge_aggregates
+    ] == [
+        ("baseline", "stub(default)", 3, 1, 0, 1, 1, 0.0, 0.2),
+        ("beta", "luna(high)", 1, 1, 1, 0, 0, 1.0, 0.9),
+    ]
+
+
+def test_report_presentation_model_projects_ordered_safe_judge_attention() -> None:
+    source = EvaluatorSpec(name="code_quality_judge", arguments={"model": "judge"})
+    passed = _report_case(_trace(case_id="passed"), _cell("passed"))
+    passed.metadata["judge_enabled"] = True
+    passed.scores["code_quality_score"] = EvaluationResult(
+        name="code_quality_score", value=0.9, reason="clear", source=source
+    )
+    passed.assertions["code_quality_pass"] = EvaluationResult(
+        name="code_quality_pass", value=True, reason="clear", source=source
+    )
+    not_requested = _report_case(_trace(case_id="not-requested"), _cell("not-requested"))
+    low_score = _report_case(_trace(case_id="low-score"), _cell("low-score"))
+    low_score.metadata["judge_enabled"] = True
+    low_score.scores["code_quality_score"] = EvaluationResult(
+        name="code_quality_score", value=0.2, reason="needs more validation", source=source
+    )
+    low_score.assertions["code_quality_pass"] = EvaluationResult(
+        name="code_quality_pass", value=False, reason="needs more validation", source=source
+    )
+    unavailable = _report_case(_trace(case_id="unavailable"), _cell("unavailable"))
+    unavailable.metadata["judge_enabled"] = True
+    failed = _report_case(_trace(case_id="failed", provider_error="RAW_TRACE_PROVIDER_PAYLOAD"), _cell("failed"))
+    failed.metadata["judge_enabled"] = True
+    failed.evaluator_failures.append(
+        EvaluatorFailure(
+            name="code_quality_judge",
+            error_message="RuntimeError: RAW_EVALUATOR_PROVIDER_PAYLOAD",
+            error_stacktrace="Traceback: RAW_EVALUATOR_STACKTRACE",
+            source=source,
+            error_type="RuntimeError",
+        )
+    )
+
+    model = ReportPresentationModel.from_report(
+        EvaluationReport(name="judge-attention", cases=[passed, low_score, not_requested, unavailable, failed])
+    )
+
+    attention = model.judge_needs_attention
+    assert [(item.case_id, item.status, item.score, item.passed) for item in attention] == [
+        ("failed", "failed", None, None),
+        ("unavailable", "unavailable", None, None),
+        ("low-score", "available", 0.2, False),
+    ]
+    assert all(item.candidate_id == "baseline" and item.variant == "stub(default)" for item in attention)
+    assert "RAW_TRACE_PROVIDER_PAYLOAD" not in repr(attention)
+    assert "RAW_EVALUATOR_PROVIDER_PAYLOAD" not in repr(attention)
+    assert "RAW_EVALUATOR_STACKTRACE" not in repr(attention)
+
+
+def test_report_presentation_model_keeps_advisory_summary_empty_without_requested_judges() -> None:
+    model = ReportPresentationModel.from_report(
+        EvaluationReport(name="no-judges", cases=[_report_case(_trace(case_id="one"), _cell("one"))])
+    )
+
+    summary = model.judge_summary
+    assert (
+        summary.requested,
+        summary.available,
+        summary.passed,
+        summary.evaluator_failed,
+        summary.unavailable,
+        summary.pass_rate,
+        summary.mean_score,
+    ) == (0, 0, 0, 0, 0, None, None)
+    assert model.judge_aggregates == ()
+    assert model.judge_needs_attention == ()

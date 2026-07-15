@@ -1,3 +1,4 @@
+from collections.abc import Callable
 import json
 from os import close
 from pathlib import Path
@@ -16,6 +17,8 @@ from llm_sandbox_evals.schema import (
     EvalDiagnostics,
     RequiredAction,
 )
+from pydantic_evals.evaluators import EvaluationResult, EvaluatorFailure
+from pydantic_evals.evaluators.spec import EvaluatorSpec
 from pydantic_evals.reporting import EvaluationReport, ReportCase
 import pytest
 
@@ -157,11 +160,52 @@ def _report() -> EvaluationReport:
     )
 
 
+def _report_with_judge_states() -> EvaluationReport:
+    """Build native report records covering each public advisory judge state."""
+    report = _report()
+    source = EvaluatorSpec(name="code_quality_judge", arguments={"model": "judge"})
+    available = next(report_case for report_case in report.cases if report_case.output.case_id == "action-ok")
+    available.metadata["judge_enabled"] = True
+    available.scores["code_quality_score"] = EvaluationResult(
+        name="code_quality_score",
+        value=0.75,
+        reason="judge-reason </script><script>reason_breakout()</script>",
+        source=source,
+    )
+    available.assertions["code_quality_pass"] = EvaluationResult(
+        name="code_quality_pass",
+        value=True,
+        reason="judge-reason </script><script>reason_breakout()</script>",
+        source=source,
+    )
+    failed = next(report_case for report_case in report.cases if report_case.output.case_id == "action-timeout")
+    failed.metadata["judge_enabled"] = True
+    failed.evaluator_failures.append(
+        EvaluatorFailure(
+            name="code_quality_judge",
+            error_message="RAW_JUDGE_ERROR_MESSAGE",
+            error_stacktrace="RAW_JUDGE_STACKTRACE",
+            source=source,
+            error_type="JudgeFailure</script><script>failure_breakout()</script>",
+        )
+    )
+    unavailable = next(
+        report_case
+        for report_case in report.cases
+        if report_case.output.case_id == "brightness-robustness"
+        and report_case.output.request_variant_id == "canonical"
+    )
+    unavailable.metadata["judge_enabled"] = True
+    return report
+
+
 class _EmbeddedReport(TypedDict):
+    counts: dict[str, int]
     cells: list[dict[str, object]]
     aggregates: list[dict[str, object]]
     paraphrase_counts: dict[str, object]
     task_robustness: list[dict[str, object]]
+    category_aggregates: list[dict[str, object]]
 
 
 def _embedded_report(html_text: str) -> _EmbeddedReport:
@@ -170,6 +214,92 @@ def _embedded_report(html_text: str) -> _EmbeddedReport:
     end = html_text.index("</script>", start)
     # render_html neutralizes "</" as "<\/" so the payload never closes its host script early.
     return cast(_EmbeddedReport, json.loads(html_text[start:end].replace("<\\/", "</")))
+
+
+@pytest.mark.parametrize(
+    ("report_factory", "judge_requested"),
+    [
+        pytest.param(_report, False, id="no-requested-judges"),
+        pytest.param(_report_with_judge_states, True, id="requested-judge"),
+    ],
+)
+def test_code_judge_section_is_present_only_when_a_cell_requested_judging(
+    report_factory: Callable[[], EvaluationReport], judge_requested: bool
+) -> None:
+    html_text = render_html(report_factory(), run_id="20260713-100000-000000")
+
+    # The section marker is a stable DOM contract, not its display prose or layout.
+    assert ('id="code-judge"' in html_text) is judge_requested
+
+
+def test_code_judge_payload_projects_mixed_states_without_exposing_failure_details() -> None:
+    html_text = render_html(_report_with_judge_states(), run_id="20260713-100000-000000")
+    payload = _embedded_report(html_text)
+    cells = {(cell["case_id"], cell["request_variant_id"]): cell for cell in payload["cells"]}
+
+    assert cells[("action-fail", "canonical")]["judge"]["status"] == "not_requested"
+    available = cells[("action-ok", "canonical")]["judge"]
+    assert (available["status"], available["score"], available["passed"], available["reason"]) == (
+        "available",
+        0.75,
+        True,
+        "judge-reason </script><script>reason_breakout()</script>",
+    )
+    failed = cells[("action-timeout", "canonical")]["judge"]
+    assert (failed["status"], failed["score"], failed["passed"], failed["reason"]) == (
+        "failed",
+        None,
+        None,
+        None,
+    )
+    assert failed["failure"] == {
+        "error_type": "JudgeFailure</script><script>failure_breakout()</script>",
+        "message": None,
+    }
+    assert cells[("brightness-robustness", "canonical")]["judge"]["status"] == "unavailable"
+    # Raw evaluator details never become report data, including the advisory failure payload.
+    assert "RAW_JUDGE_ERROR_MESSAGE" not in html_text
+    assert "RAW_JUDGE_STACKTRACE" not in html_text
+
+
+def test_code_judge_data_cannot_break_out_of_the_embedded_report_data_script() -> None:
+    html_text = render_html(_report_with_judge_states(), run_id="20260713-100000-000000")
+
+    assert "judge-reason <\\/script><script>reason_breakout()<\\/script>" in html_text
+    assert "JudgeFailure<\\/script><script>failure_breakout()<\\/script>" in html_text
+    assert "judge-reason </script><script>reason_breakout()</script>" not in html_text
+    assert "JudgeFailure</script><script>failure_breakout()</script>" not in html_text
+
+
+def test_code_judge_values_do_not_change_deterministic_report_data() -> None:
+    baseline_html = render_html(_report(), run_id="20260713-100000-000000")
+    judged_html = render_html(_report_with_judge_states(), run_id="20260713-100000-000000")
+    baseline = _embedded_report(baseline_html)
+    judged = _embedded_report(judged_html)
+
+    # Aggregates and charts continue to consume the deterministic scoring projection.
+    for key in ("counts", "paraphrase_counts", "task_robustness", "aggregates", "category_aggregates"):
+        assert baseline[key] == judged[key]
+    deterministic_cell_fields = (
+        "case_id",
+        "request_variant_id",
+        "category",
+        "candidate_id",
+        "model_id",
+        "variant",
+        "result",
+        "cause",
+        "state",
+        "scoring_mode",
+        "score_reason",
+        "diagnostics",
+        "metrics",
+    )
+    assert [{field: cell[field] for field in deterministic_cell_fields} for cell in baseline["cells"]] == [
+        {field: cell[field] for field in deterministic_cell_fields} for cell in judged["cells"]
+    ]
+    # The existing CSV score remains tied to deterministic cell outcome, never advisory judge data.
+    assert "c.state==='correct'?1:0" in judged_html
 
 
 def test_hero_exposes_quality_coverage_variant_config() -> None:
