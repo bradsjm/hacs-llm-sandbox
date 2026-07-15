@@ -1,6 +1,6 @@
 """Safe stderr presentation for eval matrix lifecycle events."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from time import perf_counter
 from typing import Self
 
@@ -16,12 +16,20 @@ from rich.text import Text
 
 from llm_sandbox_evals.config import EvalConfig
 from llm_sandbox_evals.experiment import LanePhaseEvent, MatrixCellRef, MatrixProgressEvent
-from llm_sandbox_evals.presentation import OperationalIssueGroup, PresentationState, result_label, variant_label
+from llm_sandbox_evals.presentation import (
+    OperationalIssueGroup,
+    PresentationCell,
+    PresentationState,
+    result_label,
+    variant_label,
+)
 from llm_sandbox_evals.statistics import (
     canonical_cells,
     category_aggregates,
     pair_aggregates,
+    paraphrase_cells,
     result_counts,
+    task_robustness,
     wilson_interval,
 )
 
@@ -497,6 +505,8 @@ def render_durable_final(state: PresentationState, *, run_dir: str, report_html:
     """Return the sole durable interactive final after Live has stopped."""
     canonical = canonical_cells(state.completed)
     counts = result_counts(cell.trace for cell in canonical)
+    paraphrases = result_counts(cell.trace for cell in paraphrase_cells(state.completed))
+    robustness = task_robustness(state.completed)
     summary = Text()
     summary.append(f"Finished {len(state.completed)}/{state.total}\n", style="bold")
     summary.append("Canonical quality ", style="bold")
@@ -507,6 +517,26 @@ def render_durable_final(state: PresentationState, *, run_dir: str, report_html:
     )
     summary.append("Canonical coverage ", style="bold")
     summary.append(f"{counts.scored}/{counts.total} ({_percentage(counts.coverage_rate)})\n", style=_ACTIVE)
+    summary.append("Paraphrase quality ", style="bold")
+    summary.append(
+        f"{paraphrases.correct}/{paraphrases.scored} ({_percentage(paraphrases.quality_rate)}) "
+        f"utterance-level Wilson 95% CI {_interval(wilson_interval(paraphrases.correct, paraphrases.scored))}\n",
+        style=_PERCENT,
+    )
+    robust_tasks = sum(value.all_passed for value in robustness)
+    summary.append("Task robustness ", style="bold")
+    summary.append(
+        f"{robust_tasks}/{len(robustness)} candidate/model task groups pass all request variants\n",
+        style=_ACTIVE,
+    )
+    for value in robustness:
+        # Branch boundary: only tasks with a request-variant regression need durable detail.
+        if not value.all_passed:
+            summary.append(
+                f"  {value.candidate_id}/{value.case_id} · {value.variant} "
+                f"{value.correct_variants}/{value.total_variants}\n",
+                style=_WARNING,
+            )
     table = Table(box=box.SIMPLE_HEAD, expand=True, pad_edge=False, header_style=_ACTIVE)
     table.add_column("Candidate")
     table.add_column("Variant", overflow="fold")
@@ -528,21 +558,18 @@ def render_durable_final(state: PresentationState, *, run_dir: str, report_html:
             f"{_token_total(aggregate.total_tokens)} / cost "
             f"{aggregate.total_cost if aggregate.total_cost is not None else 'unavailable'}",
         )
-    notable = [cell for cell in state.completed if cell.trace.outcome.state != "correct"]
-    if notable:
-        summary.append("Notable cells:\n")
-        for cell in notable[:5]:
-            glyph, color = _OUTCOME_STYLES[cell.trace.outcome.state]
-            summary.append(f"  {glyph} ", style=color)
-            summary.append(f"{cell.case_id} {result_label(cell.trace)}\n")
     summary.append(f"Artifacts: {run_dir}\n", style="dim")
     summary.append(f"report.html: {report_html}", style="dim")
     category_table = _category_breakdown_table(state)
+    notable_table = _notable_table(state.completed)
+    # Branch boundary: fully correct runs do not reserve an empty notable-cells section.
+    notable_section: tuple[RenderableType, ...] = (Text(), notable_table) if notable_table is not None else ()
     return Panel(
         Group(
             summary,
             Text(),
             table,
+            *notable_section,
             Text(),
             category_table,
             Text(),
@@ -557,7 +584,13 @@ def render_durable_final(state: PresentationState, *, run_dir: str, report_html:
 
 def _category_breakdown_table(state: PresentationState) -> Table:
     """Render the additive candidate by variant by category breakdown."""
-    table = Table(title="By category", box=box.SIMPLE_HEAD, expand=True, pad_edge=False, header_style=_ACTIVE)
+    table = Table(
+        title="By category (all request variants)",
+        box=box.SIMPLE_HEAD,
+        expand=True,
+        pad_edge=False,
+        header_style=_ACTIVE,
+    )
     table.add_column("Candidate")
     table.add_column("Variant", overflow="fold")
     table.add_column("Category")
@@ -573,6 +606,38 @@ def _category_breakdown_table(state: PresentationState) -> Table:
             Text(_percentage(aggregate.counts.coverage_rate), style=_ACTIVE),
             str(aggregate.counts.scored),
         )
+    return table
+
+
+def _notable_table(cells: Sequence[PresentationCell], *, limit: int = 8) -> Table | None:
+    """Render non-correct cells with request-variant identity and honest truncation."""
+    notable = sorted(
+        (cell for cell in cells if cell.trace.outcome.state != "correct"),
+        key=lambda cell: (
+            cell.request_variant_id != "canonical",
+            cell.candidate_id,
+            cell.model_id,
+            cell.case_id,
+            cell.request_variant_id,
+        ),
+    )
+    # Branch boundary: successful runs retain the compact final without an empty failure table.
+    if not notable:
+        return None
+    table = Table(title="Notable cells", box=None, expand=True, pad_edge=False, header_style=_ACTIVE)
+    table.add_column("Cell / model variant / result", overflow="fold")
+    for cell in notable[:limit]:
+        glyph, color = _OUTCOME_STYLES[cell.trace.outcome.state]
+        row = Text(glyph, style=color)
+        row.append(f" {cell.candidate_id}/{cell.case_id}/{cell.request_variant_id}")
+        row.append(f"\n  {cell.variant}", style="dim")
+        row.append("\n  ")
+        row.append(result_label(cell.trace), style=color)
+        table.add_row(row)
+    remaining = len(notable) - limit
+    # Branch boundary: bounded terminal output still reports every omitted result numerically.
+    if remaining > 0:
+        table.add_row(Text(f"+ {remaining} more", style="dim"))
     return table
 
 

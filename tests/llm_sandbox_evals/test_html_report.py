@@ -32,12 +32,13 @@ def _trace(
     usage: dict[str, object] | None = None,
     tool_calls: int = 1,
     action_ledger: ActionLedger | None = None,
+    request_variant_id: str = "canonical",
 ) -> CaseTrace:
     return CaseTrace(
         case_id=case_id,
         candidate_id="baseline",
         model_id="stub",
-        request_variant_id="canonical",
+        request_variant_id=request_variant_id,
         request_text="Turn on bedroom light",
         category="test",
         answer=answer,
@@ -72,7 +73,7 @@ def _case(trace: CaseTrace) -> ReportCase:
         trace.temperature,
     )
     return ReportCase(
-        name=f"baseline/stub/{trace.case_id}",
+        name=f"baseline/stub/{trace.case_id}/{trace.request_variant_id}",
         inputs=cell,
         metadata={
             "run_id": "html-report",
@@ -121,9 +122,33 @@ def _report() -> EvaluationReport:
         tool_calls=0,
         usage=None,
     )
+    robust_canonical = _trace(
+        case_id="brightness-robustness",
+        state="correct",
+        score_reason="ok",
+    )
+    robust_paraphrase_ok = _trace(
+        case_id="brightness-robustness",
+        state="correct",
+        score_reason="ok",
+        request_variant_id="paraphrase_currently",
+    )
+    robust_paraphrase_fail = _trace(
+        case_id="brightness-robustness",
+        state="incorrect",
+        score_reason="wrong_target",
+        request_variant_id="paraphrase_half",
+    )
     return EvaluationReport(
         name="html-report",
-        cases=[_case(fail), _case(ok), _case(incomplete)],
+        cases=[
+            _case(fail),
+            _case(ok),
+            _case(incomplete),
+            _case(robust_canonical),
+            _case(robust_paraphrase_ok),
+            _case(robust_paraphrase_fail),
+        ],
         experiment_metadata={
             "models": [
                 {"model_id": "stub", "reasoning_effort": "high", "temperature": 0.7, "variant_label": "stub(high)"}
@@ -135,6 +160,8 @@ def _report() -> EvaluationReport:
 class _EmbeddedReport(TypedDict):
     cells: list[dict[str, object]]
     aggregates: list[dict[str, object]]
+    paraphrase_counts: dict[str, object]
+    task_robustness: list[dict[str, object]]
 
 
 def _embedded_report(html_text: str) -> _EmbeddedReport:
@@ -207,6 +234,34 @@ def test_payload_carries_variant_usage_and_raw_action_evidence() -> None:
     # Aggregates carry candidate and variant identity.
     assert payload["aggregates"][0]["candidate"] == "baseline"
     assert payload["aggregates"][0]["variant"] == "stub(high)"
+
+
+def test_payload_carries_request_variant_and_paraphrase_robustness() -> None:
+    html_text = render_html(_report(), run_id="20260713-100000-000000")
+    payload = _embedded_report(html_text)
+
+    assert all("request_variant_id" in cell for cell in payload["cells"])
+    assert payload["paraphrase_counts"]["correct"] == 1
+    assert payload["paraphrase_counts"]["scored"] == 2
+    assert payload["paraphrase_counts"]["quality_rate"] == 0.5
+    assert payload["paraphrase_counts"]["quality_interval"]
+    robust = next(value for value in payload["task_robustness"] if value["case_id"] == "brightness-robustness")
+    assert robust["correct_variants"] == 2
+    assert robust["total_variants"] == 3
+    assert robust["all_passed"] is False
+
+
+def test_html_renders_paraphrase_card_robustness_and_request_variant_column() -> None:
+    html_text = render_html(_report(), run_id="20260713-100000-000000")
+
+    assert 'id="paraphrase-quality"' in html_text
+    assert 'id="paraphrase-quality-ci"' in html_text
+    assert 'id="task-robustness"' in html_text
+    assert "<h2>Task robustness</h2>" in html_text
+    assert "By category (all request variants)" in html_text
+    assert "<th>Request variant</th>" in html_text
+    assert "<th>Model variant</th>" in html_text
+    assert "'request_variant_id'" in html_text
 
 
 def test_payload_carries_all_eval_diagnostics_fields() -> None:

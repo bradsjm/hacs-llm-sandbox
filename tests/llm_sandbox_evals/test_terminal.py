@@ -61,8 +61,15 @@ def _reporter(*, human: bool = True, escape_available: bool = True, concurrency:
     )
 
 
-def _cell(case_id: str = "case", reasoning_effort: str | None = None) -> MatrixCellRef:
-    return MatrixCellRef(case_id, "canonical", "baseline", "stub", "home_minimal", reasoning_effort=reasoning_effort)
+def _cell(
+    case_id: str = "case",
+    reasoning_effort: str | None = None,
+    request_variant_id: str = "canonical",
+    model_id: str = "stub",
+) -> MatrixCellRef:
+    return MatrixCellRef(
+        case_id, request_variant_id, "baseline", model_id, "home_minimal", reasoning_effort=reasoning_effort
+    )
 
 
 def _trace(
@@ -79,6 +86,7 @@ def _trace(
     request: str = "Turn on bedroom light",
     answer: str | None = None,
     model_id: str = "stub",
+    request_variant_id: str = "canonical",
     reasoning_effort: str | None = None,
     provider_error: str | None = None,
     execution_error: ExecutionError | None = None,
@@ -87,7 +95,7 @@ def _trace(
         case_id=case_id,
         candidate_id=candidate_id,
         model_id=model_id,
-        request_variant_id="canonical",
+        request_variant_id=request_variant_id,
         request_text=request,
         category="test",
         reasoning_effort=reasoning_effort,
@@ -862,9 +870,112 @@ def test_durable_final_emits_counts_and_artifact_path_once() -> None:
 
     assert "Quality" in output
     assert "Coverage" in output
+    assert "By category (all request variants)" in output
     # The artifact directory and report.html each appear on one dedicated line in the durable final.
     assert "Artifacts: runs/run-1" in output
     assert "report.html: runs/run-1/report.html" in output
+
+
+def test_durable_final_surfaces_paraphrase_quality_and_task_robustness() -> None:
+    reporter = _reporter(human=True)
+    _feed(
+        reporter,
+        (_cell("fragile"), _trace(case_id="fragile")),
+        (
+            _cell("fragile", request_variant_id="paraphrase_ok"),
+            _trace(case_id="fragile", request_variant_id="paraphrase_ok"),
+        ),
+        (
+            _cell("fragile", request_variant_id="paraphrase_fail"),
+            _trace(
+                case_id="fragile",
+                request_variant_id="paraphrase_fail",
+                state="incorrect",
+                score_reason="wrong_target",
+            ),
+        ),
+    )
+
+    console = Console(width=160, force_terminal=False, record=True)
+    console.print(render_durable_final(reporter.state, run_dir="runs/run-1", report_html="runs/run-1/report.html"))
+    output = console.export_text()
+
+    assert "Paraphrase quality 1/2" in output
+    assert "utterance-level" in output
+    assert "Task robustness 0/1 candidate/model task groups" in output
+    assert "baseline/fragile · stub(default) 2/3" in output
+    assert "baseline/fragile/paraphrase_fail" in output
+
+
+def test_durable_final_notable_cells_sort_canonical_first_and_report_overflow() -> None:
+    reporter = _reporter(human=True)
+    cells = [
+        (
+            _cell("z-canonical", request_variant_id="canonical"),
+            _trace(case_id="z-canonical", state="incorrect", score_reason="wrong_target"),
+        ),
+        *[
+            (
+                _cell(f"a-paraphrase-{index}", request_variant_id="paraphrase"),
+                _trace(
+                    case_id=f"a-paraphrase-{index}",
+                    request_variant_id="paraphrase",
+                    state="incorrect",
+                    score_reason="wrong_target",
+                ),
+            )
+            for index in range(9)
+        ],
+    ]
+    _feed(reporter, *cells)
+
+    console = Console(width=160, force_terminal=False, record=True)
+    console.print(render_durable_final(reporter.state, run_dir="runs/run-1", report_html="runs/run-1/report.html"))
+    output = console.export_text()
+
+    assert output.index("baseline/z-canonical/canonical") < output.index("baseline/a-paraphrase-0/paraphrase")
+    assert "+ 2 more" in output
+
+
+def test_durable_final_canonical_only_run_has_safe_paraphrase_placeholders_at_narrow_width() -> None:
+    reporter = _reporter(human=True)
+    _feed(reporter, (_cell(), _trace()))
+
+    console = Console(width=80, force_terminal=False, record=True)
+    console.print(render_durable_final(reporter.state, run_dir="runs/run-1", report_html="runs/run-1/report.html"))
+    output = _normalized_rich_text(console.export_text())
+
+    assert "Paraphrase quality 0/0 (—)" in output
+    assert "Task robustness 1/1" in output
+
+
+def test_durable_final_distinguishes_model_groups_and_preserves_narrow_failure_reason() -> None:
+    reporter = _reporter(human=True)
+    _feed(
+        reporter,
+        (
+            _cell("fragile", model_id="stub-a"),
+            _trace(case_id="fragile", model_id="stub-a", state="incorrect", score_reason="end_state_unsatisfied"),
+        ),
+        (
+            _cell("fragile", model_id="stub-b"),
+            _trace(case_id="fragile", model_id="stub-b", state="incorrect", score_reason="end_state_unsatisfied"),
+        ),
+    )
+
+    console = Console(width=30, force_terminal=False, record=True)
+    console.print(render_durable_final(reporter.state, run_dir="runs/run-1", report_html="runs/run-1/report.html"))
+    output = console.export_text()
+    without_borders = "".join(
+        "" if unicodedata.name(character, "").startswith("BOX DRAWINGS") else character for character in output
+    )
+    compact = "".join(without_borders.split())
+
+    assert "Task robustness 0/2" in output
+    assert "candidate/model task" in output
+    assert "stub-a(default)" in compact
+    assert "stub-b(default)" in compact
+    assert "incorrect·end_state_unsatisfied" in compact
 
 
 def test_recent_variant_keeps_meaningful_suffix_not_head() -> None:
