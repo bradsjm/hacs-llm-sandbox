@@ -128,3 +128,37 @@ def test_answer_oracle_is_primary_and_retains_effect_diagnostics() -> None:
     assert evaluation.tool_call_result is None
     assert evaluation.action_result.passed is True
     assert evaluation.end_state_result.status == "not_authored"
+
+
+@pytest.mark.parametrize(
+    ("predicate", "answer", "extracted"),
+    [
+        pytest.param(
+            AnswerPredicate("count", count=1),
+            "Of the 2 lights in the Utility Room, 1 is on.",
+            "1",
+            id="count-last-match-after-context",
+        ),
+        pytest.param(
+            AnswerPredicate("state", state="on"),
+            "It's not off — it's on.",
+            "on",
+            id="state-last-match-after-negation",
+        ),
+        pytest.param(
+            AnswerPredicate("boolean", value=True),
+            "No, that's not right. Yes, it is on.",
+            "yes",
+            id="boolean-last-match-after-correction",
+        ),
+    ],
+)
+def test_last_match_extracts_answer_from_explanatory_prose(
+    predicate: AnswerPredicate, answer: str, extracted: str
+) -> None:
+    """Last-match extraction handles context-before-answer prose without substring scoring."""
+    result = score_answer(predicate, answer)
+
+    assert result.passed is True
+    assert result.reason == "answer_correct"
+    assert result.extracted_value == extracted

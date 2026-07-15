@@ -36,7 +36,7 @@ async def test_run_matrix_stub_persists_v7_action_trace_and_variant_identity(tmp
         models=["stub"],
         candidates=["baseline"],
         prompt_profile=DEFAULT_PROMPT_PROFILE,
-        cases=["direct_turn_on_utility_room_ceiling"],
+        cases=["direct_turn_off_utility_room_accent"],
         homes=None,
         runs_dir=tmp_path,
         reasoning_effort="low",
@@ -59,7 +59,7 @@ async def test_run_matrix_stub_persists_v7_action_trace_and_variant_identity(tmp
 async def test_run_matrix_emits_plain_text_lifecycle_response(tmp_path: Path) -> None:
     events = []
     report = await run_matrix(
-        _config(tmp_path, cases=["direct_turn_on_utility_room_ceiling"]),
+        _config(tmp_path, cases=["direct_turn_off_utility_room_accent"]),
         run_id="lifecycle-v7",
         on_event=events.append,
     )
@@ -78,7 +78,7 @@ async def test_run_matrix_emits_plain_text_lifecycle_response(tmp_path: Path) ->
 
 async def test_run_matrix_forwards_payload_free_phases_for_the_active_cell(tmp_path: Path) -> None:
     phases: list[LanePhaseEvent] = []
-    case_id = "direct_turn_on_utility_room_ceiling"
+    case_id = "direct_turn_off_utility_room_accent"
     report = await run_matrix(
         _config(tmp_path, cases=[case_id]),
         run_id="phase-forwarding-v7",
@@ -168,7 +168,7 @@ async def test_matrix_summary_lines_emit_scored_vocabulary(tmp_path: Path) -> No
 
 
 async def test_report_case_metrics_carry_tool_calls_for_stub_and_no_tokens(tmp_path: Path) -> None:
-    config = _config(tmp_path, cases=["direct_turn_on_utility_room_ceiling"])
+    config = _config(tmp_path, cases=["direct_turn_off_utility_room_accent"])
     report = await run_matrix(config, run_id="metrics-v7")
 
     metrics = report.cases[0].metrics

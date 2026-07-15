@@ -11,6 +11,8 @@ cases:
       requests:
         - id: canonical
           text: Turn on the Utility Room ceiling light.
+        - id: conversational
+          text: Can you switch on the Utility Room ceiling light?
       required_actions:
         - domain: light
           service: turn_on
@@ -127,6 +129,8 @@ cases:
       requests:
         - id: canonical
           text: Set the Utility Room ceiling light to 50% brightness.
+        - id: paraphrase_half
+          text: Make the Utility Room ceiling light half as bright.
       required_actions:
         - domain: light
           service: turn_on
@@ -229,6 +233,8 @@ cases:
       requests:
         - id: canonical
           text: Turn on the light.
+        - id: paraphrase_switch
+          text: Switch on a light.
       required_actions: []
   - name: ambiguous_ceiling_no_area
     inputs:
@@ -281,6 +287,8 @@ cases:
       requests:
         - id: canonical
           text: How many lights are on in the Utility Room?
+        - id: paraphrase_currently
+          text: How many Utility Room lights are currently on?
       expected_answer:
         kind: count
         count: 1

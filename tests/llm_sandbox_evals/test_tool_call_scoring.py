@@ -66,6 +66,20 @@ def test_extra_successful_events_are_diagnostic_only() -> None:
     assert result.unmatched_events == (extra,)
 
 
+def test_subset_matching_ignores_extra_actual_args() -> None:
+    """Authored expected keys are compared; extra actual keys (optional params) do not fail."""
+    expected = (ExpectedToolCall("get_history", {"entity_ids": ["light.utility_room_ceiling"]}),)
+    actual = _event(
+        "get_history",
+        {"entity_ids": ["light.utility_room_ceiling"], "hours": 6, "limit": 100},
+    )
+
+    result = score_tool_calls(expected, (actual,))
+
+    assert result.passed is True
+    assert result.reason == "tool_calls_matched"
+
+
 def test_failed_events_are_excluded_from_matching_and_extras() -> None:
     failed = _event("get_history", {}, output={"status": "error"})
 

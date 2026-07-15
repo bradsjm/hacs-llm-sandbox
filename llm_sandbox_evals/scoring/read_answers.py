@@ -22,17 +22,17 @@ def score_answer(predicate: AnswerPredicate, answer: str | None) -> AnswerResult
         return AnswerResult(False, "answer_unparseable")
 
     if predicate.kind == "boolean":
-        match = _BOOLEAN_RE.search(answer)
-        if match is None or predicate.value is None:
+        matches = _BOOLEAN_RE.findall(answer)
+        if not matches or predicate.value is None:
             return AnswerResult(False, "answer_unparseable")
-        extracted = match.group(1).lower()
+        extracted = matches[-1].lower()
         return _answer_result((extracted == "yes") is predicate.value, extracted)
 
     if predicate.kind == "count":
-        match = _COUNT_RE.search(answer)
-        if match is None or predicate.count is None:
+        matches = _COUNT_RE.findall(answer)
+        if not matches or predicate.count is None:
             return AnswerResult(False, "answer_unparseable")
-        extracted = match.group(0)
+        extracted = matches[-1]
         return _answer_result(int(extracted) == predicate.count, extracted)
 
     if predicate.kind == "entity_set":
@@ -43,23 +43,23 @@ def score_answer(predicate: AnswerPredicate, answer: str | None) -> AnswerResult
         return _answer_result(set(extracted_ids) == set(predicate.entity_ids), extracted)
 
     if predicate.kind == "scalar":
-        match = _NUMBER_RE.search(answer)
-        if match is None or predicate.scalar_value is None or predicate.tolerance is None:
+        matches = _NUMBER_RE.findall(answer)
+        if not matches or predicate.scalar_value is None or predicate.tolerance is None:
             return AnswerResult(False, "answer_unparseable")
-        extracted = match.group(0)
+        extracted = matches[-1]
         return _answer_result(abs(float(extracted) - predicate.scalar_value) <= predicate.tolerance, extracted)
 
     if predicate.kind == "state":
-        match = _STATE_RE.search(answer)
-        if match is None or predicate.state is None:
+        matches = _STATE_RE.findall(answer)
+        if not matches or predicate.state is None:
             return AnswerResult(False, "answer_unparseable")
-        extracted = match.group(1).lower()
+        extracted = matches[-1].lower()
         return _answer_result(extracted == predicate.state.lower(), extracted)
 
-    match = _TIMESTAMP_RE.search(answer)
-    if match is None or predicate.start is None or predicate.end is None:
+    matches = _TIMESTAMP_RE.findall(answer)
+    if not matches or predicate.start is None or predicate.end is None:
         return AnswerResult(False, "answer_unparseable")
-    extracted = match.group(0)
+    extracted = matches[-1]
     timestamp = _parse_timestamp(extracted)
     start = _parse_timestamp(predicate.start)
     end = _parse_timestamp(predicate.end)

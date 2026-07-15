@@ -208,7 +208,7 @@ def test_eval_resolves_cli_model_ids_for_provider_and_manifest(
             "eval",
             *model_args,
             "--cases",
-            "direct_turn_on_utility_room_ceiling",
+            "direct_turn_off_utility_room_accent",
             "--runs-dir",
             str(tmp_path),
         ]
@@ -442,7 +442,7 @@ def test_post_evaluation_write_failure_writes_failed_partial_preserving_records(
             "--models",
             "stub",
             "--cases",
-            "direct_turn_on_utility_room_ceiling",
+            "direct_turn_off_utility_room_accent",
             "--runs-dir",
             str(tmp_path),
         ]
@@ -463,7 +463,7 @@ def test_post_evaluation_write_failure_writes_failed_partial_preserving_records(
     assert partial.finished == 1
     assert partial.total == 1
     assert len(partial.records) == 1
-    assert partial.records[0].trace.case_id == "direct_turn_on_utility_room_ceiling"
+    assert partial.records[0].trace.case_id == "direct_turn_off_utility_room_accent"
     # No report is written when the post-evaluation write fails.
     assert not (run_dir / "report.json").exists()
 
@@ -481,7 +481,7 @@ def test_cancellation_during_post_evaluation_persistence_writes_cancelled_journa
             "--models",
             "stub",
             "--cases",
-            "direct_turn_on_utility_room_ceiling",
+            "direct_turn_off_utility_room_accent",
             "--runs-dir",
             str(tmp_path),
         ]
@@ -500,7 +500,7 @@ def test_cancellation_during_post_evaluation_persistence_writes_cancelled_journa
     assert partial.finished == 1
     assert partial.total == 1
     assert len(partial.records) == 1
-    assert partial.records[0].trace.case_id == "direct_turn_on_utility_room_ceiling"
+    assert partial.records[0].trace.case_id == "direct_turn_off_utility_room_accent"
     assert not (run_dir / "report.json").exists()
 
 

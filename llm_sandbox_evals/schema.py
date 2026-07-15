@@ -166,7 +166,7 @@ class AnswerPredicate:
     scalar_value: float | None = None
     unit: str | None = None
     tolerance: float | None = None
-    entity_id: str | None = None
+    entity_id: str | None = None  # documentation-only; the deterministic parser does not use this field
     state: str | None = None
     start: str | None = None
     end: str | None = None
@@ -222,6 +222,8 @@ class EvalCase:
             seen.add(predicate.entity_id)
         if self.oracle == "answer" and self.expected_answer is None:
             raise ValueError("answer oracle requires expected_answer")
+        if self.oracle == "tool_calls" and not self.expected_tool_calls:
+            raise ValueError("tool_calls oracle requires at least one expected_tool_call")
 
 
 @dataclass(frozen=True, slots=True)

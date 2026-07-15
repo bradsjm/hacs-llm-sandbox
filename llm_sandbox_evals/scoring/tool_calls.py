@@ -27,7 +27,7 @@ def score_tool_calls(expected: Sequence[ExpectedToolCall], events: Sequence[Tool
                 index
                 for index in available
                 if successful[index].tool_name == expected_call.tool_name
-                and _canonical(successful[index].args) == _canonical(expected_call.args)
+                and _args_match(expected_call.args, successful[index].args)
             ),
             None,
         )
@@ -52,6 +52,21 @@ def score_tool_calls(expected: Sequence[ExpectedToolCall], events: Sequence[Tool
         else "tool_calls_missing"
     )
     return ToolCallResult(False, reason, tuple(comparisons), unmatched_events)
+
+
+def _args_match(expected_args: Mapping[str, object], actual_args: Mapping[str, object]) -> bool:
+    """Match every authored expected arg key; ignore extra actual keys.
+
+    Subset matching preserves determinism (authored keys compared exactly via
+    ``_canonical``) without punishing legal optional arguments that the model
+    may add (e.g. ``hours``, ``limit``) beyond the authored contract.
+    """
+    for key, expected_value in expected_args.items():
+        if key not in actual_args:
+            return False
+        if _canonical(actual_args[key]) != _canonical(expected_value):
+            return False
+    return True
 
 
 def _canonical(value: object) -> object:
