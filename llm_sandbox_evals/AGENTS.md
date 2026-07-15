@@ -10,12 +10,13 @@ end state is unevaluable.
 
 ## Current contract
 
-- Cases contain `id`, `home`, `user_request`, `required_actions`, and optional
-  `desired_states`.
-- `desired_states` is a list of `{entity_id, state}` predicates restricted to
-  `light`/`switch` entities with `on`/`off` state. Omitting it or providing an
-  empty list selects action fallback. Duplicate predicate entity IDs are
-  rejected at construction.
+- Cases contain stable task/category/tags metadata, one canonical request plus
+  optional paraphrases, one declared `effect`, `tool_calls`, or `answer` oracle,
+  and that oracle's persisted expected evidence.
+- `desired_entities` contains sparse `{entity_id, state?, attributes?}` final
+  values. At least one of state or attributes is required. Omitting it or
+  providing an empty list selects action fallback. Duplicate predicate entity
+  IDs are rejected at construction.
 - `required_actions` may be empty and is always retained as action diagnostics
   and fallback. Required actions contain `domain`, `service`, and required
   nonempty `target_entity_ids`. Service data is authored for brightness
@@ -23,13 +24,13 @@ end state is unevaluable.
 - Runtime actions are always enabled without a domain allowlist.
 - Agent output is plain text (`Agent[EvalRuntime, str]`). Prose is display-only
   and is never parsed or scored.
-- When `desired_states` are authored and evaluable (every predicate entity
-  exists in the scoped snapshot with a binary `on`/`off` state and matching
-  `light`/`switch` domain), end-state scoring is primary: all predicates
-  satisfied → correct, any unsatisfied → incorrect. A satisfied state passes
+- When `desired_entities` are authored and evaluable, end-state scoring is
+  primary: authored states require binary `on`/`off` light/switch seeds, and
+  authored attributes support light brightness and color temperature. All
+  predicates satisfied → correct, any unsatisfied → incorrect. A satisfied predicate passes
   even with zero actions, extra actions, or action-ledger mismatches. An
   unsatisfied state fails even if the action ledger matches.
-- When `desired_states` are absent or unevaluable, the exact action multiset
+- When `desired_entities` are absent or unevaluable, the exact action multiset
   determines the outcome. Exact call matching is tried first. If exactly one
   unmatched authored multi-target action remains, the successful concrete
   entity-ID calls may pass as `equivalent_target_partition` only when there are
@@ -39,35 +40,37 @@ end state is unevaluable.
   `service_data` values are identical; and authored `service_data`, when
   present, matches. Duplicate, missing, extra, wrong-service, and
   different-data successes fail.
-- The overlay reducer applies only direct `light`/`switch` `turn_on`,
+- The overlay reducer applies direct `light`/`switch` `turn_on`,
   `turn_off`, and `toggle` transitions from ordered `RecordingInvoker` calls
-  to a copied seed state map. Unsupported services, indirect selectors,
-  attribute effects, and service data leave the overlay unchanged.
+  to a copied seed map. Light turn-on also applies validated `brightness_pct`,
+  `brightness`, and `color_temp_kelvin` effects to authored attribute keys.
+  Unsupported services, indirect selectors, and other service data leave the
+  overlay unchanged.
 - Raw and rejected records are diagnostics only. Action results preserve
   normalized observed effects, one-to-one dimension comparisons, unexpected
   actions, and stable reason codes without weakening action matching.
-- `CaseOutcome` carries `scoring_mode` (`end_state`, `actions`,
-  `cap_exhausted`, or `None` for incomplete) and `score_reason`
-  (`end_state_satisfied`, `end_state_unsatisfied`, an `ActionOutcomeReason`
-  for fallback, `cap_exhausted`, or `None` for incomplete).
+- `CaseOutcome` carries `scoring_mode` (`end_state`, `actions`, `tool_calls`,
+  `answer`, `cap_exhausted`, or `None` for incomplete) and the stable reason
+  selected by that primary scorer.
 - Provider HTTP 429 responses and provider bodies containing
   `token_quota_exceeded` classify incomplete execution failures as `rate_limit`.
   Structured execution metadata is additive diagnostic context only.
-- Traces and reports use scoring version 8. Version 7 and older artifacts are
+- Traces and reports use scoring version 9. Version 8 and older artifacts are
   rejected as legacy; there is no compatibility decoder or rescoring path.
 
-Do not add read scoring, evidence normalization, answer schemas, collections,
-aggregates, relations, no-data, recorder-answer scoring, generic service-data
-coverage, policy/rejection scoring, disabled-action behavior, or
-clarification-quality scoring to this baseline. Conditional state/history/logbook
-cases, true no-action cases, and multi-target selector resolution are now part
-of the corpus with end-state predicates.
+Tool-contract scoring compares persisted normalized successful production-tool
+events. Read-answer scoring uses only the authored deterministic predicate
+types; do not add an LLM judge or permissive substring scoring. Generic
+service-data coverage, policy/rejection scoring, disabled-action behavior, and
+clarification-quality scoring remain out of scope.
 
 ## Dataset and stub
 
-The corpus is 14 `home_full` cases progressing from direct actions to discovery,
-brightness/color service selection, state/history/logbook conditions including
-true no-action, and ambiguity plus ambiguity-with-logic:
+The corpus is 17 canonical-only `home_full` cases in the `direct`, `discovery`,
+`service_data`, `conditional`, `ambiguity`, `tool_contract`, and `read_answer`
+categories. The first 14 cover effects from direct actions through discovery,
+service data, conditions, and ambiguity; one tool-contract case and two
+read-answer cases exercise the richer primary oracles.
 
 | Stage | Cases | Coverage |
 | --- | --- | --- |
@@ -76,6 +79,8 @@ true no-action, and ambiguity plus ambiguity-with-logic:
 | Brightness/color (2) | `brightness_utility_room_ceiling`, `color_utility_room_accent` | Utility Room `light.turn_on` with canonical `brightness_pct: 50` and `color_temp_kelvin: 2700` service data |
 | Conditions (4) | `no_action_light_already_on`, `condition_turn_off_living_room_ceiling`, `condition_history_change_turn_off`, `no_action_history_no_recent_change` | Living Room current state and recent history, Hallway no-recent-change logic, and valid no-op outcomes |
 | Ambiguity (3) | `ambiguous_bare_light`, `ambiguous_ceiling_no_area`, `ambiguous_logic_living_room_recent` | No-op ambiguity and Living Room recorder-based disambiguation |
+| Tool contract (1) | `tool_call_get_history_utility_room` | Exact normalized `get_history` tool event and arguments |
+| Read answer (2) | `answer_count_lights_on_utility_room`, `answer_state_utility_room_accent` | Deterministic count and entity-state answer predicates |
 
 Each multi-target discovery case has one required action whose target list
 contains every resolved entity. Scoring still tries exact call matching first;
@@ -83,7 +88,7 @@ only one unmatched authored multi-target action can accept a complete,
 disjoint, duplicate-free partition across two or more successful concrete
 entity-ID calls with the same domain, service, and comparable service data.
 
-`discover_utility_room_lights` now omits `desired_states` and uses action
+`discover_utility_room_lights` omits `desired_entities` and uses action
 fallback because the Utility Room accent must remain on for the direct turn-off
 case; its shared initial state cannot distinguish a partial target selection.
 `discover_basement_ceiling_lights` remains state-primary with all 12 ceiling
@@ -113,7 +118,7 @@ checks and uses `home_full` for the corpus and its complete 288-entity fixture.
 
 - `schema.py` — case, action, trace, ledger, diagnostic, and outcome
   records.
-- `data/cases.yaml` / `cases_schema.json` — 14 `home_full` cases and their
+- `data/cases.yaml` / `cases_schema.json` — 17 `home_full` cases and their
   focused authoring schema.
 - `agent_runner.py` — plain-text agent, production tool registration, and the
   five-route direct/brightness/color offline stub.
@@ -129,9 +134,10 @@ checks and uses `home_full` for the corpus and its complete 288-entity fixture.
   assessment.
 - `harness.py` — lifecycle, tool events, action extraction, overlay seed
   extraction, minimal successful tool diagnostics, and trace assembly.
-- `experiment.py`, `reports.py`, `presentation.py`, `terminal.py`, `html_report.py` — overall model
-  comparison, v8 persistence, immutable and runtime presentation projections, diagnostics, and end-state
-  plus action-ledger display without category analysis.
+- `experiment.py`, `reports.py`, `presentation.py`, `terminal.py`,
+  `html_report.py`, `markdown_report.py` — v9 persistence, immutable and runtime
+  projections, canonical Wilson intervals, category/task/request-variant views,
+  diagnostics, and reload-only HTML/Markdown rendering.
 
 ## Eval UX and artifacts
 
@@ -142,11 +148,17 @@ checks and uses `home_full` for the corpus and its complete 288-entity fixture.
   `diagnostics.failure`; presentation must use the shared effective cause.
 - Count `total`, `finished`, and `scored`; quality is correct/scored and
   coverage is scored/total. Do not reintroduce user-facing `completed` counts.
+- Canonical quality is the primary candidate/model leaderboard and uses Wilson
+  95% intervals over scored canonical cells. Keep paraphrase cell quality
+  separate and label its intervals utterance-level; task robustness aggregates
+  all request variants for one task/candidate/model variant.
 - Create an atomic `manifest.json` before model calls. A cancelled or failed run
   writes the typed `partial.json` journal, which is explicitly not a report and
   has no HTML/resume path.
 - Completed report folders contain `report.json`, `errors.log`, and
-  `report.html` alongside the manifest. `errors.log` is UTF-8 NDJSON with one
+  `report.html` alongside the manifest; `report <run_id> --markdown` atomically
+  adds deterministic `report.md` from the saved report without model calls.
+  `errors.log` is UTF-8 NDJSON with one
   record per incomplete execution error in report order, including repeats and
   full error/provider detail; it is zero bytes when no execution errors occur
   and is produced only with completed reports. Completed-report writing
@@ -171,23 +183,23 @@ checks and uses `home_full` for the corpus and its complete 288-entity fixture.
   actionable table; exact duplicates group for display with affected cells,
   while `errors.log` remains per-trace and machine output remains payload-free.
 
-Production read tools may remain registered because they are part of the product
-surface. Their eval-specific scoring and stub routes must not return.
+Production read tools remain registered because they are part of the product
+surface. Focused tool-contract and read-answer cases score their persisted
+events and deterministic answers without weakening effect scoring.
 
 ## Staged future work
 
-Expand only through explicit plans and observable contracts. The current
-corpus authors `desired_states` for 9 of 14 cases; the remaining 5
-(`discover_utility_room_lights`, brightness, color, bare ambiguity, ceiling
-ambiguity) use action fallback: Utility discovery requires complete target
-matching, brightness and color require canonical service data, and the
-ambiguity cases require safe abstention. The overlay reducer supports only direct `light`/`switch`
-`turn_on`/`turn_off`/`toggle` state transitions; expanding it to attributes
-or other domains requires a new state-based case and explicit reducer support.
+Expand only through explicit plans and observable contracts. Eleven effect
+cases author `desired_entities`; three effect cases use action fallback, one
+case uses `tool_calls`, and two cases use `answer`. The overlay reducer supports
+direct `light`/`switch`
+`turn_on`/`turn_off`/`toggle` state transitions and narrow light brightness and
+color-temperature effects; expanding it to other attributes or domains
+requires a new case and explicit reducer support.
 Policy/rejection behavior, disabled-action behavior, and
-response/clarification-quality scoring remain deferred. Read-answer scoring
-requires a separate design rather than restoration of v4 models or evidence
-modules.
+response/clarification-quality scoring remain deferred. Read-answer expansion
+must remain deterministic and explicitly authored rather than restoring v4
+models or evidence modules.
 
 ## Safety and commands
 

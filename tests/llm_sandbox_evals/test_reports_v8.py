@@ -71,7 +71,7 @@ async def test_v7_report_round_trip_rescores_equivalent_target_partition(tmp_pat
             "service_data": None,
         }
     ]
-    output["desired_states"] = []
+    output["desired_entities"] = []
     output["overlay_state_seeds"] = []
     output["recorded_invocations"] = []
     output["end_state_result"] = {
@@ -103,9 +103,9 @@ async def test_v7_report_round_trip_rescores_equivalent_target_partition(tmp_pat
     assert restored.answer == original_answer
     assert restored.action_ledger == ActionLedger(successful=successful_actions)
     assert restored.action_result.reason == "equivalent_target_partition"
-    assert restored.scoring_version == 8
-    assert payload["scoring_version"] == 8
-    assert output["scoring_version"] == 8
+    assert restored.scoring_version == 9
+    assert payload["scoring_version"] == 9
+    assert output["scoring_version"] == 9
 
 
 async def test_variant_fields_and_descriptor_survive_write_load(tmp_path: Path) -> None:
@@ -135,6 +135,30 @@ async def test_variant_fields_and_descriptor_survive_write_load(tmp_path: Path) 
     cell = reloaded.cases[0].output
     assert cell.reasoning_effort == "high"
     assert cell.temperature == 0.7
+
+
+@pytest.mark.parametrize(
+    "case_id",
+    ["tool_call_get_history_utility_room", "answer_count_lights_on_utility_room"],
+)
+async def test_dedicated_oracle_trace_round_trip_rescores_from_persisted_evidence(
+    case_id: str, tmp_path: Path
+) -> None:
+    config = EvalConfig(
+        models=["stub"],
+        candidates=["baseline"],
+        prompt_profile=DEFAULT_PROMPT_PROFILE,
+        cases=[case_id],
+        homes=None,
+        runs_dir=tmp_path,
+    )
+    report = await run_matrix(config, run_id=f"{case_id}-run")
+
+    run_dir = write_report_json(report, config, run_id=f"{case_id}-written")
+    restored = load_report(run_dir).cases[0].output
+
+    assert restored.oracle in {"tool_calls", "answer"}
+    assert rescore_trace(restored) == restored.outcome
 
 
 async def test_execution_error_round_trips_and_defaults_for_older_v7_payload(tmp_path: Path) -> None:
@@ -201,7 +225,7 @@ def test_report_writer_preserves_each_incomplete_error_as_ordered_ndjson(tmp_pat
         reasoning_effort="high",
         temperature=0.4,
         conversation_id="conversation-rate-limit",
-        user_request="Turn on the Utility Room ceiling light.",
+        request_text="Turn on the Utility Room ceiling light.",
         classification="rate_limit",
         provider_error=full_rate_limit_detail,
         execution_error=ExecutionError(
@@ -221,7 +245,7 @@ def test_report_writer_preserves_each_incomplete_error_as_ordered_ndjson(tmp_pat
         reasoning_effort=None,
         temperature=None,
         conversation_id=None,
-        user_request="Toggle the Utility Room outlet.",
+        request_text="Toggle the Utility Room outlet.",
         classification="provider_error",
         provider_error=provider_only_detail,
         execution_error=None,
@@ -242,7 +266,10 @@ def test_report_writer_preserves_each_incomplete_error_as_ordered_ndjson(tmp_pat
         "reasoning_effort": "high",
         "temperature": 0.4,
         "conversation_id": "conversation-rate-limit",
-        "user_request": "Turn on the Utility Room ceiling light.",
+        "request_variant_id": "canonical",
+        "request_text": "Turn on the Utility Room ceiling light.",
+        "category": "test",
+        "tags": [],
         "exception_type": "ModelHTTPError",
         "message": "Provider rate limit exceeded",
         "status_code": 429,
@@ -260,7 +287,10 @@ def test_report_writer_preserves_each_incomplete_error_as_ordered_ndjson(tmp_pat
         "reasoning_effort": None,
         "temperature": None,
         "conversation_id": None,
-        "user_request": "Toggle the Utility Room outlet.",
+        "request_variant_id": "canonical",
+        "request_text": "Toggle the Utility Room outlet.",
+        "category": "test",
+        "tags": [],
         "exception_type": None,
         "message": None,
         "status_code": None,
@@ -285,7 +315,7 @@ async def test_legacy_and_invalid_artifacts_are_strictly_rejected(tmp_path: Path
         payload["scoring_version"] = version
     (run_dir / "report.json").write_text(json.dumps(payload), encoding="utf-8")
 
-    with pytest.raises(ValueError, match=r"^legacy scoring artifact; rerun evaluation with scoring v8$"):
+    with pytest.raises(ValueError, match=r"^legacy scoring artifact; rerun evaluation with scoring v9$"):
         load_report(run_dir)
 
 
@@ -297,7 +327,20 @@ async def test_v6_trace_is_rejected_even_inside_a_v7_envelope(tmp_path: Path) ->
     payload["cases"][0]["output"]["scoring_version"] = 6
     (run_dir / "report.json").write_text(json.dumps(payload), encoding="utf-8")
 
-    with pytest.raises(ValueError, match=r"^legacy scoring artifact; rerun evaluation with scoring v8$"):
+    with pytest.raises(ValueError, match=r"^legacy scoring artifact; rerun evaluation with scoring v9$"):
+        load_report(run_dir)
+
+
+async def test_v8_trace_with_legacy_desired_states_field_is_rejected(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    report = await run_matrix(config, run_id="legacy-desired-states")
+    run_dir = write_report_json(report, config, run_id="legacy-desired-states-written")
+    payload = json.loads((run_dir / "report.json").read_text(encoding="utf-8"))
+    output = payload["cases"][0]["output"]
+    output["desired_states"] = output.pop("desired_entities")
+    (run_dir / "report.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=r"^legacy scoring artifact; rerun evaluation with scoring v9$"):
         load_report(run_dir)
 
 
@@ -391,7 +434,7 @@ def _incomplete_trace(
     reasoning_effort: str | None,
     temperature: float | None,
     conversation_id: str | None,
-    user_request: str,
+    request_text: str,
     classification: FailureClassification,
     provider_error: str,
     execution_error: ExecutionError | None,
@@ -400,9 +443,12 @@ def _incomplete_trace(
         case_id=case_id,
         candidate_id=candidate_id,
         model_id=model_id,
+        request_variant_id="canonical",
+        request_text=request_text,
+        category="test",
         answer=None,
         required_actions=(RequiredAction("light", "turn_on", ("light.utility_room_ceiling",)),),
-        desired_states=(),
+        desired_entities=(),
         overlay_state_seeds=(),
         recorded_invocations=(),
         end_state_result=EndStateResult("not_authored", False, False),
@@ -415,7 +461,6 @@ def _incomplete_trace(
         temperature=temperature,
         provider_error=provider_error,
         execution_error=execution_error,
-        user_request=user_request,
         conversation_id=conversation_id,
     )
 
@@ -425,6 +470,7 @@ def _report_with_traces(*traces: CaseTrace) -> reports.MatrixReport:
     for trace in traces:
         cell = MatrixCellRef(
             trace.case_id,
+            trace.request_variant_id,
             trace.candidate_id,
             trace.model_id,
             "home_minimal",
@@ -438,6 +484,7 @@ def _report_with_traces(*traces: CaseTrace) -> reports.MatrixReport:
                 metadata={
                     "run_id": "ordered-errors",
                     "case_id": trace.case_id,
+                    "request_variant_id": trace.request_variant_id,
                     "candidate_id": trace.candidate_id,
                     "model_id": trace.model_id,
                     "home": cell.home,
@@ -465,9 +512,12 @@ def _partial_artifact(*, status: Literal["cancelled", "failed"]) -> PartialRunAr
         case_id="case-a",
         candidate_id="baseline",
         model_id="stub",
+        request_variant_id="canonical",
+        request_text="request",
+        category="test",
         answer="Done.",
         required_actions=(RequiredAction("light", "turn_on", ("light.bedroom",)),),
-        desired_states=(),
+        desired_entities=(),
         overlay_state_seeds=(),
         recorded_invocations=(),
         end_state_result=EndStateResult("not_authored", False, False),
@@ -480,6 +530,7 @@ def _partial_artifact(*, status: Literal["cancelled", "failed"]) -> PartialRunAr
     record = CompletedCellRecord(
         {
             "case_id": "case-a",
+            "request_variant_id": "canonical",
             "candidate_id": "baseline",
             "model_id": "stub",
             "home": "home_minimal",

@@ -43,10 +43,12 @@ from llm_sandbox_evals.schema import (
     ExecutionError,
     FailureClassification,
     PromptCandidate,
+    RequestVariant,
     ToolEvent,
 )
 from llm_sandbox_evals.scoring import assess_end_state, evaluate_case, extract_overlay_seeds, score_actions
 from llm_sandbox_evals.scoring.actions import build_action_ledger
+from llm_sandbox_evals.tool_events import tool_succeeded
 from llm_sandbox_evals.tools import EVAL_SCOPE, _for_scoring, apply_scope
 
 _TOOL_EXECUTE_HOME_CODE = "execute_home_code"
@@ -66,6 +68,7 @@ async def run_case(
     candidate: PromptCandidate,
     model_id: str,
     case: EvalCase,
+    request_variant: RequestVariant,
     config: EvalConfig,
     *,
     profile: PromptProfile,
@@ -110,7 +113,7 @@ async def run_case(
         """Consume the complete native event stream and return its terminal result."""
         emit_phase("awaiting_model")
         async with agent.run_stream_events(
-            case.user_request,
+            request_variant.text,
             deps=runtime,
             model_settings=build_model_settings(
                 model_id,
@@ -146,28 +149,32 @@ async def run_case(
         recorded_actions = _recorded_actions_from_tool_events(tool_events, runtime.invoker.calls)
         conversation_id = _conversation_id(messages)
         emit_phase("scoring")
-        overlay_seeds = extract_overlay_seeds(snapshot, case.desired_states)
+        overlay_seeds = extract_overlay_seeds(snapshot, case.desired_entities)
         recorded_invocations = tuple(dict(call) for call in runtime.invoker.calls)
-        outcome, action_result, action_ledger, end_state_result = evaluate_case(
+        evaluation = evaluate_case(
             case,
             recorded_actions,
             overlay_seeds=overlay_seeds,
             invoker_calls=recorded_invocations,
+            tool_events=tool_events,
+            answer=output,
         )
         return finish_trace(
             CaseTrace(
                 case_id=case.id,
                 candidate_id=candidate.id,
                 model_id=model_id,
+                request_variant_id=request_variant.id,
+                request_text=request_variant.text,
                 answer=output,
                 required_actions=case.required_actions,
-                desired_states=case.desired_states,
+                desired_entities=case.desired_entities,
                 overlay_state_seeds=overlay_seeds,
                 recorded_invocations=recorded_invocations,
-                end_state_result=end_state_result,
-                outcome=outcome,
-                action_result=action_result,
-                action_ledger=action_ledger,
+                end_state_result=evaluation.end_state_result,
+                outcome=evaluation.outcome,
+                action_result=evaluation.action_result,
+                action_ledger=evaluation.action_ledger,
                 tool_events=tool_events,
                 diagnostics=_diagnostics(
                     tool_events,
@@ -178,7 +185,13 @@ async def run_case(
                 ),
                 provider_error=None,
                 conversation_id=conversation_id,
-                user_request=case.user_request,
+                category=case.category,
+                tags=case.tags,
+                oracle=case.oracle,
+                expected_tool_calls=case.expected_tool_calls,
+                expected_answer=case.expected_answer,
+                tool_call_result=evaluation.tool_call_result,
+                answer_result=evaluation.answer_result,
                 reasoning_effort=config.reasoning_effort,
                 temperature=config.temperature,
             ),
@@ -191,6 +204,7 @@ async def run_case(
                 candidate,
                 model_id,
                 case,
+                request_variant,
                 "cap_exhausted",
                 _format_exception(err),
                 diagnostic=False,
@@ -216,6 +230,7 @@ async def run_case(
                 candidate,
                 model_id,
                 case,
+                request_variant,
                 captured_failure.classification,
                 captured_failure.detail,
                 diagnostic=True,
@@ -238,6 +253,7 @@ def _failure_trace(
     candidate: PromptCandidate,
     model_id: str,
     case: EvalCase,
+    request_variant: RequestVariant,
     failure: FailureClassification,
     feedback: str,
     *,
@@ -262,9 +278,9 @@ def _failure_trace(
     action_result = ActionResult(
         False, scored_actions.reason, scored_actions.comparisons, scored_actions.unexpected_actions
     )
-    overlay_seeds = extract_overlay_seeds(snapshot, case.desired_states) if snapshot is not None else ()
+    overlay_seeds = extract_overlay_seeds(snapshot, case.desired_entities) if snapshot is not None else ()
     recorded_invocations = tuple(dict(call) for call in invoker_calls)
-    end_state_result = assess_end_state(case.desired_states, overlay_seeds, recorded_invocations)
+    end_state_result = assess_end_state(case.desired_entities, overlay_seeds, recorded_invocations)
     is_cap_exhausted = failure == "cap_exhausted"
     if is_cap_exhausted:
         # Branch boundary: cap exhaustion overrides both state and action scoring as an operational scored outcome.
@@ -275,9 +291,11 @@ def _failure_trace(
         case_id=case.id,
         candidate_id=candidate.id,
         model_id=model_id,
+        request_variant_id=request_variant.id,
+        request_text=request_variant.text,
         answer=None,
         required_actions=case.required_actions,
-        desired_states=case.desired_states,
+        desired_entities=case.desired_entities,
         overlay_state_seeds=overlay_seeds,
         recorded_invocations=recorded_invocations,
         end_state_result=end_state_result,
@@ -297,7 +315,13 @@ def _failure_trace(
         provider_error=feedback if diagnostic else None,
         execution_error=execution_error if diagnostic else None,
         conversation_id=conversation_id,
-        user_request=case.user_request,
+        category=case.category,
+        tags=case.tags,
+        oracle=case.oracle,
+        expected_tool_calls=case.expected_tool_calls,
+        expected_answer=case.expected_answer,
+        tool_call_result=None,
+        answer_result=None,
         reasoning_effort=reasoning_effort,
         temperature=temperature,
     )
@@ -543,10 +567,8 @@ def _tool_call_count(messages: Sequence[object]) -> int:
 def _tool_events(messages: Sequence[object]) -> tuple[ToolEvent, ...]:
     """Pair each tool call with its return payload, preserving call order.
 
-    Tool-call arguments are captured for traceability but are NOT used as
-    evidence by scoring. Tool returns (``ToolReturnPart.content``) are the
-    production result envelopes and feed the any-source evidence audit and the
-     successful production evidence.
+    Tool-call arguments and production result envelopes are captured for
+    dedicated tool-contract scoring and diagnostics.
     """
     returns_by_id: dict[str, object] = {}
     calls: list[ToolCallPart] = []
@@ -594,7 +616,7 @@ def _diagnostics(
     cap_exhausted: bool = False,
 ) -> EvalDiagnostics:
     """Build diagnostics without turning attempts, timing, or usage into score."""
-    successful = tuple(event for event in events if _tool_succeeded(event))
+    successful = tuple(event for event in events if tool_succeeded(event))
     repairs = 0
     had_execute_error = False
     for event in events:
@@ -621,22 +643,6 @@ def _diagnostics(
         usage=usage,
         failure=failure,
     )
-
-
-def _tool_succeeded(event: ToolEvent) -> bool:
-    """Classify production-shaped tool success for diagnostics only."""
-    if event.output.get("status") == "error":
-        return False
-    if event.tool_name == _TOOL_EXECUTE_HOME_CODE:
-        execution = event.output.get("execution")
-        return isinstance(execution, dict) and execution.get("status") == "ok" and "output" in event.output
-    expected_keys = {
-        "get_history": {"entities", "rows", "summary"},
-        "get_statistics": {"statistics", "summary"},
-        "get_logbook": {"entries"},
-        "get_automation": {"automations"},
-    }.get(event.tool_name)
-    return expected_keys is not None and not expected_keys.isdisjoint(event.output)
 
 
 def _usage(result: object, messages: Sequence[object] = ()) -> dict[str, int | float | bool | None] | None:

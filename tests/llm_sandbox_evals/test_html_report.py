@@ -37,9 +37,12 @@ def _trace(
         case_id=case_id,
         candidate_id="baseline",
         model_id="stub",
+        request_variant_id="canonical",
+        request_text="Turn on bedroom light",
+        category="test",
         answer=answer,
         required_actions=(RequiredAction("light", "turn_on", ("light.bedroom",)),),
-        desired_states=(),
+        desired_entities=(),
         overlay_state_seeds=(),
         recorded_invocations=(),
         end_state_result=EndStateResult("not_authored", False, False),
@@ -55,18 +58,26 @@ def _trace(
         ),
         reasoning_effort=reasoning_effort,
         temperature=0.7,
-        user_request="Turn on bedroom light",
     )
 
 
 def _case(trace: CaseTrace) -> ReportCase:
-    cell = MatrixCellRef(trace.case_id, "baseline", "stub", "home_minimal", trace.reasoning_effort, trace.temperature)
+    cell = MatrixCellRef(
+        trace.case_id,
+        trace.request_variant_id,
+        "baseline",
+        "stub",
+        "home_minimal",
+        trace.reasoning_effort,
+        trace.temperature,
+    )
     return ReportCase(
         name=f"baseline/stub/{trace.case_id}",
         inputs=cell,
         metadata={
             "run_id": "html-report",
             "case_id": trace.case_id,
+            "request_variant_id": trace.request_variant_id,
             "candidate_id": "baseline",
             "model_id": "stub",
             "home": "home_minimal",
@@ -340,7 +351,7 @@ def _failing_named_temporary_file(
 
 
 def _write_valid_report(run_dir: Path) -> None:
-    """Persist a valid scoring-v8 report.json that load_report accepts."""
+    """Persist a valid scoring-v9 report.json that load_report accepts."""
     payload = json.loads(_REPORT_ADAPTER.dump_json(_report()))
-    payload["scoring_version"] = 8
+    payload["scoring_version"] = 9
     (run_dir / "report.json").write_text(json.dumps(payload), encoding="utf-8")

@@ -22,6 +22,7 @@ from llm_sandbox_evals.schema import (
     EvalCase,
     EvalDiagnostics,
     PromptCandidate,
+    RequestVariant,
     RequiredAction,
 )
 from pydantic_evals.reporting.analyses import ScalarResult, TableResult
@@ -47,7 +48,7 @@ async def test_run_matrix_stub_persists_v7_action_trace_and_variant_identity(tmp
     assert trace.outcome.state == "correct"
     assert trace.outcome.score == 1.0
     assert trace.answer == "Done."
-    assert trace.scoring_version == 8
+    assert trace.scoring_version == 9
     assert trace.reasoning_effort == "low"
     assert _scalar(reloaded.analyses, "Quality rate").value == 1.0
     # The run descriptor rides on native experiment_metadata and survives reload.
@@ -84,7 +85,7 @@ async def test_run_matrix_forwards_payload_free_phases_for_the_active_cell(tmp_p
         on_phase=phases.append,
     )
 
-    expected_cell = MatrixCellRef(case_id, "baseline", "stub", "home_full")
+    expected_cell = MatrixCellRef(case_id, "canonical", "baseline", "stub", "home_full")
 
     assert report.cases[0].output.outcome.state == "correct"
     assert [event.cell for event in phases] == [expected_cell] * len(phases)
@@ -231,7 +232,8 @@ def _case(case_id: str) -> EvalCase:
     return EvalCase(
         case_id,
         "home_minimal",
-        "Turn on bedroom light",
+        "test",
+        (RequestVariant("canonical", "Turn on bedroom light"),),
         (RequiredAction("light", "turn_on", ("light.bedroom",)),),
     )
 
@@ -243,9 +245,12 @@ def _trace(cell: MatrixCellRef, state: str) -> CaseTrace:
         case_id=cell.case_id,
         candidate_id=cell.candidate_id,
         model_id=cell.model_id,
+        request_variant_id=cell.request_variant_id,
+        request_text="Turn on bedroom light",
+        category="test",
         answer="Done.",
         required_actions=expected,
-        desired_states=(),
+        desired_entities=(),
         overlay_state_seeds=(),
         recorded_invocations=(),
         end_state_result=EndStateResult("not_authored", False, False),

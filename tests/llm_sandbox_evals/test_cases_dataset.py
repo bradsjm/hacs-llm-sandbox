@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 from llm_sandbox_evals.cases import CASES
-from llm_sandbox_evals.schema import DesiredState, EvalCase
+from llm_sandbox_evals.schema import AnswerPredicate, DesiredEntity, EvalCase, ExpectedToolCall, RequestVariant
 import pytest
 
 
@@ -11,25 +11,38 @@ def test_authoring_schema_contains_the_closed_case_contract() -> None:
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
     case = schema["$defs"]["case"]
 
-    assert set(case["properties"]) == {"id", "home", "user_request", "required_actions", "desired_states"}
-    assert case["required"] == ["id", "home", "user_request", "required_actions"]
+    assert set(case["properties"]) == {
+        "id",
+        "home",
+        "category",
+        "tags",
+        "oracle",
+        "requests",
+        "required_actions",
+        "desired_entities",
+        "expected_tool_calls",
+        "expected_answer",
+    }
+    assert case["required"] == ["id", "home", "category", "requests", "required_actions"]
     assert set(schema["$defs"]["action"]["properties"]) == {
         "domain",
         "service",
         "target_entity_ids",
         "service_data",
     }
-    desired = schema["$defs"]["desired_state"]
-    assert set(desired["properties"]) == {"entity_id", "state"}
-    assert desired["properties"]["entity_id"]["pattern"] == "^(light|switch)\\..+"
-    assert desired["properties"]["state"]["enum"] == ["on", "off"]
+    desired = schema["$defs"]["desired_entity"]
+    assert set(desired["properties"]) == {"entity_id", "state", "attributes"}
+    assert desired["required"] == ["entity_id"]
+    assert desired["anyOf"] == [{"required": ["state"]}, {"required": ["attributes"]}]
 
 
-_STATE_CASE_IDS = {
+_DESIRED_ENTITY_CASE_IDS = {
     "direct_turn_on_utility_room_ceiling",
     "direct_turn_off_utility_room_accent",
     "direct_toggle_utility_room_outlet",
     "discover_basement_ceiling_lights",
+    "brightness_utility_room_ceiling",
+    "color_utility_room_accent",
     "no_action_light_already_on",
     "condition_turn_off_living_room_ceiling",
     "condition_history_change_turn_off",
@@ -39,29 +52,42 @@ _STATE_CASE_IDS = {
 
 _ACTION_ONLY_CASE_IDS = {
     "discover_utility_room_lights",
-    "brightness_utility_room_ceiling",
-    "color_utility_room_accent",
     "ambiguous_bare_light",
     "ambiguous_ceiling_no_area",
 }
 
 
-def test_corpus_state_and_action_only_split_is_exact() -> None:
+def test_effect_corpus_desired_entity_and_action_only_split_is_exact() -> None:
     case_ids = {case.id for case in CASES}
-    state_cases = {case.id for case in CASES if case.desired_states}
-    action_only_cases = {case.id for case in CASES if not case.desired_states}
+    effect_cases = {case.id for case in CASES if case.oracle == "effect"}
+    desired_entity_cases = {case.id for case in CASES if case.oracle == "effect" and case.desired_entities}
+    action_only_cases = {case.id for case in CASES if case.oracle == "effect" and not case.desired_entities}
 
-    assert state_cases == _STATE_CASE_IDS
+    assert desired_entity_cases == _DESIRED_ENTITY_CASE_IDS
     assert action_only_cases == _ACTION_ONLY_CASE_IDS
-    assert len(state_cases) == 9
-    assert len(action_only_cases) == 5
-    assert state_cases | action_only_cases == case_ids
+    assert len(desired_entity_cases) == 11
+    assert len(action_only_cases) == 3
+    assert desired_entity_cases | action_only_cases == effect_cases
+    assert len(case_ids) == 17
+
+
+def test_dedicated_oracle_cases_author_narrow_contracts() -> None:
+    tool_case = next(case for case in CASES if case.id == "tool_call_get_history_utility_room")
+    count_case = next(case for case in CASES if case.id == "answer_count_lights_on_utility_room")
+    state_case = next(case for case in CASES if case.id == "answer_state_utility_room_accent")
+
+    assert tool_case.oracle == "tool_calls"
+    assert tool_case.expected_tool_calls == (
+        ExpectedToolCall("get_history", {"entity_ids": ["light.utility_room_ceiling"]}),
+    )
+    assert count_case.expected_answer == AnswerPredicate("count", count=1)
+    assert state_case.expected_answer == AnswerPredicate("state", entity_id="light.utility_room_accent", state="on")
 
 
 def test_utility_discovery_uses_exact_action_fallback() -> None:
     case = next(case for case in CASES if case.id == "discover_utility_room_lights")
 
-    assert case.desired_states == ()
+    assert case.desired_entities == ()
     assert len(case.required_actions) == 1
     assert case.required_actions[0].target_entity_ids == (
         "light.utility_room_accent",
@@ -72,10 +98,10 @@ def test_utility_discovery_uses_exact_action_fallback() -> None:
 def test_basement_discovery_predicate_covers_every_required_target() -> None:
     case = next(case for case in CASES if case.id == "discover_basement_ceiling_lights")
     required_targets = set(case.required_actions[0].target_entity_ids)
-    predicate_targets = {predicate.entity_id for predicate in case.desired_states}
-    assert len(case.desired_states) == 12
+    predicate_targets = {predicate.entity_id for predicate in case.desired_entities}
+    assert len(case.desired_entities) == 12
     assert predicate_targets == required_targets
-    assert all(predicate.state == "on" for predicate in case.desired_states)
+    assert all(predicate.state == "on" for predicate in case.desired_entities)
 
 
 @pytest.mark.parametrize(
@@ -85,46 +111,48 @@ def test_basement_discovery_predicate_covers_every_required_target() -> None:
         pytest.param("color_utility_room_accent", {"color_temp_kelvin": 2700}, id="color-temperature"),
     ],
 )
-def test_attribute_action_cases_author_canonical_service_data(case_id: str, service_data: dict[str, object]) -> None:
+def test_attribute_action_cases_author_final_values(case_id: str, service_data: dict[str, object]) -> None:
     case = next(case for case in CASES if case.id == case_id)
 
     assert case.required_actions[0].service_data == service_data
+    expected_attributes = {
+        "brightness_utility_room_ceiling": {"brightness": 128},
+        "color_utility_room_accent": {"color_temp_kelvin": 2700},
+    }
+    assert case.desired_entities[0].attributes == expected_attributes[case_id]
 
 
 def test_color_action_case_uses_the_explicit_temperature_request() -> None:
     case = next(case for case in CASES if case.id == "color_utility_room_accent")
 
-    assert case.user_request == "Set the Utility Room accent light to 2700 K warm white."
+    assert case.requests[0].text == "Set the Utility Room accent light to 2700 K warm white."
 
 
 def test_no_action_already_on_case_desires_on_without_actions() -> None:
     case = next(case for case in CASES if case.id == "no_action_light_already_on")
     assert case.required_actions == ()
-    assert case.desired_states == (DesiredState("light.living_room_ceiling", "on"),)
+    assert case.desired_entities == (DesiredEntity("light.living_room_ceiling", "on"),)
 
 
-def test_duplicate_desired_state_entity_ids_are_rejected() -> None:
-    with pytest.raises(ValueError, match="duplicate desired state"):
+def test_duplicate_desired_entity_ids_are_rejected() -> None:
+    with pytest.raises(ValueError, match="duplicate desired entity"):
         EvalCase(
             "dup",
             "home_full",
-            "request",
+            "test",
+            (RequestVariant("canonical", "request"),),
             (),
             (
-                DesiredState("light.bedroom", "on"),
-                DesiredState("light.bedroom", "off"),
+                DesiredEntity("light.bedroom", "on"),
+                DesiredEntity("light.bedroom", "off"),
             ),
         )
 
 
-@pytest.mark.parametrize(
-    ("entity_id", "state"),
-    [
-        pytest.param("media_player.tv", "on", id="unsupported-domain"),
-        pytest.param("light.bedroom", "playing", id="unsupported-state"),
-        pytest.param("naked", "on", id="missing-domain-separator"),
-    ],
-)
-def test_invalid_desired_state_vocabulary_is_rejected(entity_id: str, state: str) -> None:
-    with pytest.raises(ValueError, match="desired state"):
-        DesiredState(entity_id, state)
+def test_desired_entity_requires_an_authored_final_value() -> None:
+    with pytest.raises(ValueError, match="state or attributes"):
+        DesiredEntity("light.bedroom")
+
+
+def test_desired_entity_does_not_restrict_domain_or_state_vocabulary() -> None:
+    assert DesiredEntity("media_player.tv", "playing").state == "playing"

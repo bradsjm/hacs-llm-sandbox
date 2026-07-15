@@ -27,10 +27,11 @@ from dotenv import load_dotenv
 from pydantic_evals.reporting import EvaluationReport
 from rich.console import Console
 
-from llm_sandbox_evals import cases, experiment, html_report, prompts, reports
+from llm_sandbox_evals import cases, experiment, html_report, markdown_report, prompts, reports
 from llm_sandbox_evals.config import EvalConfig, load_config
 from llm_sandbox_evals.experiment import MatrixCellMeta, MatrixCellRef
 from llm_sandbox_evals.harness import _select_cases
+from llm_sandbox_evals.presentation import ReportPresentationModel
 from llm_sandbox_evals.schema import (
     CaseTrace,
     CompletedCellRecord,
@@ -310,6 +311,11 @@ def _add_report_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentP
         action="store_true",
         help="regenerate report.html from the saved report.json (no model calls)",
     )
+    report_parser.add_argument(
+        "--markdown",
+        action="store_true",
+        help="generate report.md from the saved report.json (no model calls)",
+    )
 
 
 def _add_optimize_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -456,6 +462,7 @@ def _run_eval(args: argparse.Namespace) -> int:
                 CompletedCellRecord(
                     {
                         "case_id": event.cell.case_id,
+                        "request_variant_id": event.cell.request_variant_id,
                         "candidate_id": event.cell.candidate_id,
                         "model_id": event.cell.model_id,
                         "home": event.cell.home,
@@ -661,7 +668,7 @@ def _persist_terminal_artifacts(
 
 def _matrix_total(config: EvalConfig, selected_cases: list[EvalCase]) -> int:
     """Return the validated planned matrix size for partial lifecycle metadata."""
-    return len(config.models) * len(config.candidates) * len(selected_cases)
+    return len(config.models) * len(config.candidates) * sum(len(case.requests) for case in selected_cases)
 
 
 def _bounded_error(error: BaseException) -> str:
@@ -687,9 +694,17 @@ def _run_report(args: argparse.Namespace) -> int:
         return 1
 
     report = reports.load_report(report_json.parent)
+    rendered_artifact = False
     if args.html:
         report_html = html_report.write_html(report_json.parent)
         sys.stdout.write(f"report_html: {report_html}\n")
+        rendered_artifact = True
+    if args.markdown:
+        model = ReportPresentationModel.from_report(report)
+        report_markdown = markdown_report.write_markdown(report_json.parent, model)
+        sys.stdout.write(f"report_markdown: {report_markdown}\n")
+        rendered_artifact = True
+    if rendered_artifact:
         return 0
 
     _say("(llm sandbox evals) re-rendering the native report summary from report.json (no model calls).\n")

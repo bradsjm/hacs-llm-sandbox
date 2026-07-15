@@ -8,7 +8,7 @@ from llm_sandbox_evals.agent_runner import build_agent_tools, render_eval_system
 from llm_sandbox_evals.homes import get_home
 from llm_sandbox_evals.prompts import candidate_prompt_sizes, load_candidates
 from llm_sandbox_evals.runtime import build_eval_runtime
-from llm_sandbox_evals.schema import EvalCase, RequiredAction
+from llm_sandbox_evals.schema import EvalCase, RequestVariant, RequiredAction
 from llm_sandbox_evals.tools import EVAL_SCOPE, apply_scope
 import pytest
 from voluptuous_openapi import convert
@@ -32,7 +32,8 @@ def test_load_candidates_accepts_profile_candidate() -> None:
     case = EvalCase(
         id="candidate-tool-descriptions",
         home="home_full",
-        user_request="Describe the available tools.",
+        category="test",
+        requests=(RequestVariant("canonical", "Describe the available tools."),),
         required_actions=(RequiredAction("light", "turn_on", ("light.living",)),),
     )
     fixture = get_home(case.home)

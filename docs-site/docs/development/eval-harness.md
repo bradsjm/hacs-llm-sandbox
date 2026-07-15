@@ -15,6 +15,7 @@ The eval README is [`llm_sandbox_evals/README.md`](https://github.com/bradsjm/ha
 scripts/setup-evals
 scripts/check-evals
 uv run --group dev --group evals python -m llm_sandbox_evals eval --models gpt-4o-mini,stub
+uv run --group dev --group evals python -m llm_sandbox_evals report <run_id> --markdown
 ```
 
 Eval runs write artifacts under `eval_data/runs/<run_id>/`. That output directory is gitignored.
@@ -33,14 +34,13 @@ The shared completed-report writer atomically replaces `errors.log` before
 atomically replacing `report.json`, so a newly completed `report.json` has its
 companion log without making the two files a single transaction.
 
-The harness uses scoring v7. It matches successful actions exactly first. If
-exact matching leaves exactly one unmatched authored multi-target action, the
-remaining successful concrete entity-ID calls may score as
-`equivalent_target_partition` only when at least two calls form a complete,
-disjoint, duplicate-free partition of the authored target set with matching
-domain, service, and comparable service data. Missing, extra, duplicate,
-wrong-service, and different-data calls remain failures; raw calls remain
-diagnostics. Version 6 and older artifacts are rejected without compatibility.
+The harness uses scoring v9 over 17 canonical tasks in the `direct`,
+`discovery`, `service_data`, `conditional`, `ambiguity`, `tool_contract`, and
+`read_answer` categories. The declared oracle is `effect`, `tool_calls`, or
+`answer`: effect scoring uses sparse final-state predicates with exact action
+fallback, tool-contract scoring compares normalized successful tool events, and
+read-answer scoring uses deterministic typed predicates. Version 8 and older
+artifacts are rejected without compatibility.
 It preserves provider `model_id` and records the resolved run-wide reasoning
 effort and temperature separately, deriving labels such as `model(high)` for
 presentation. `quality_rate` is correct/scored and `coverage_rate` is
@@ -48,6 +48,11 @@ scored/total; incomplete cells carry an operational cause, not an action
 mismatch. Provider HTTP 429 responses and provider bodies containing
 `token_quota_exceeded` classify as `rate_limit`; structured execution metadata
 is additive and does not change scoring or action semantics.
+Canonical quality is the primary leaderboard and includes Wilson 95% intervals
+over scored canonical cells. Paraphrases remain distinct utterance-level cells,
+while task robustness aggregates all request variants. HTML and deterministic
+Markdown reports share the same immutable saved-report projection;
+`report <run_id> --markdown` writes `report.md` without model calls.
 
 TTY runs render one transient Rich view and a durable stderr final with the
 artifact location once. Redirected runs, or `--machine`, emit stable KV on

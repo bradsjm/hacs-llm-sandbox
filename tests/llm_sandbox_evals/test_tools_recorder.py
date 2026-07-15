@@ -24,7 +24,7 @@ from homeassistant.helpers import llm
 from llm_sandbox_evals.homes import get_home
 from llm_sandbox_evals.prompts import baseline_candidate
 from llm_sandbox_evals.runtime import build_eval_runtime, build_fixture_recorder_source
-from llm_sandbox_evals.schema import EvalCase, RequiredAction
+from llm_sandbox_evals.schema import EvalCase, RequestVariant, RequiredAction
 from llm_sandbox_evals.tools import EVAL_SCOPE, apply_scope
 import pytest
 
@@ -618,7 +618,8 @@ def _case() -> EvalCase:
     return EvalCase(
         id="production-core-unit",
         home="home_minimal",
-        user_request="exercise production core",
+        category="test",
+        requests=(RequestVariant("canonical", "exercise production core"),),
         required_actions=(RequiredAction("light", "turn_on", ("light.living",)),),
     )
 

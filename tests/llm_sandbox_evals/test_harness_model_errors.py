@@ -160,7 +160,7 @@ async def test_run_case_records_provider_failure_as_incomplete_with_no_action_re
         return FunctionModel(stream_function=_failing_stream, model_name="bad-model")
 
     monkeypatch.setattr("llm_sandbox_evals.agent_runner.make_model", make_model)
-    trace = await run_case(candidate, "bad-model", CASES[0], config, profile=profile)
+    trace = await run_case(candidate, "bad-model", CASES[0], CASES[0].requests[0], config, profile=profile)
 
     assert trace.outcome.state == "incomplete"
     assert trace.outcome.scoring_mode is None
@@ -294,7 +294,14 @@ async def test_run_case_keeps_normal_completion_outside_failure_classification(t
         homes=None,
         runs_dir=tmp_path,
     )
-    trace = await run_case(candidate, "stub", CASES[0], config, profile=resolve_profile(DEFAULT_PROMPT_PROFILE))
+    trace = await run_case(
+        candidate,
+        "stub",
+        CASES[0],
+        CASES[0].requests[0],
+        config,
+        profile=resolve_profile(DEFAULT_PROMPT_PROFILE),
+    )
 
     assert trace.answer is not None
     assert trace.outcome.state in {"correct", "incorrect"}
@@ -325,7 +332,7 @@ async def test_run_case_cap_exhausted_is_scored_with_real_action_reason(
 
     monkeypatch.setattr("llm_sandbox_evals.agent_runner.make_model", make_model)
     case = next(case for case in CASES if case.id == "direct_turn_off_utility_room_accent")
-    trace = await run_case(candidate, "looping-model", case, config, profile=profile)
+    trace = await run_case(candidate, "looping-model", case, case.requests[0], config, profile=profile)
 
     # Cap exhaustion is scored incorrect with the real action reason, not forced to action_mismatch.
     assert trace.answer is None
@@ -367,7 +374,7 @@ async def test_run_case_failure_trace_retains_partial_model_response_usage(
         return FunctionModel(stream_function=_usage_then_fail_stream, model_name="usage-model")
 
     monkeypatch.setattr("llm_sandbox_evals.agent_runner.make_model", make_model)
-    trace = await run_case(candidate, "usage-model", CASES[0], config, profile=profile)
+    trace = await run_case(candidate, "usage-model", CASES[0], CASES[0].requests[0], config, profile=profile)
 
     assert trace.outcome.state == "incomplete"
     assert trace.diagnostics.failure == "provider_error"
@@ -396,6 +403,7 @@ async def test_run_case_observes_native_stream_phases_without_leaking_payloads_o
         candidate,
         "native-stream",
         case,
+        case.requests[0],
         EvalConfig(
             models=["native-stream"],
             candidates=[candidate.id],
@@ -433,6 +441,7 @@ async def test_run_case_isolates_phase_observer_exceptions(tmp_path: Path) -> No
         candidate,
         "stub",
         case,
+        case.requests[0],
         EvalConfig(
             models=["stub"],
             candidates=[candidate.id],
@@ -470,6 +479,7 @@ async def test_run_case_timeout_closes_pending_native_stream(monkeypatch: pytest
         candidate,
         "timeout-model",
         CASES[0],
+        CASES[0].requests[0],
         EvalConfig(
             models=["timeout-model"],
             candidates=[candidate.id],
@@ -608,6 +618,7 @@ async def _run_case_with_model(
         candidate,
         model_name,
         CASES[0],
+        CASES[0].requests[0],
         EvalConfig(
             models=[model_name],
             candidates=[candidate.id],

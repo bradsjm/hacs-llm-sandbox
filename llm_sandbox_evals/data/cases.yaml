@@ -5,43 +5,63 @@ cases:
     inputs:
       id: direct_turn_on_utility_room_ceiling
       home: home_full
-      user_request: Turn on the Utility Room ceiling light.
+      category: direct
+      tags: []
+      oracle: effect
+      requests:
+        - id: canonical
+          text: Turn on the Utility Room ceiling light.
       required_actions:
         - domain: light
           service: turn_on
           target_entity_ids: [light.utility_room_ceiling]
-      desired_states:
+      desired_entities:
         - entity_id: light.utility_room_ceiling
           state: "on"
   - name: direct_turn_off_utility_room_accent
     inputs:
       id: direct_turn_off_utility_room_accent
       home: home_full
-      user_request: Turn off the Utility Room accent light.
+      category: direct
+      tags: []
+      oracle: effect
+      requests:
+        - id: canonical
+          text: Turn off the Utility Room accent light.
       required_actions:
         - domain: light
           service: turn_off
           target_entity_ids: [light.utility_room_accent]
-      desired_states:
+      desired_entities:
         - entity_id: light.utility_room_accent
           state: "off"
   - name: direct_toggle_utility_room_outlet
     inputs:
       id: direct_toggle_utility_room_outlet
       home: home_full
-      user_request: Toggle the Utility Room outlet.
+      category: direct
+      tags: []
+      oracle: effect
+      requests:
+        - id: canonical
+          text: Toggle the Utility Room outlet.
       required_actions:
         - domain: switch
           service: toggle
           target_entity_ids: [switch.utility_room_outlet]
-      desired_states:
+      desired_entities:
         - entity_id: switch.utility_room_outlet
           state: "on"
   - name: discover_utility_room_lights
     inputs:
       id: discover_utility_room_lights
       home: home_full
-      user_request: Turn on all the lights in the Utility Room.
+      category: discovery
+      tags: []
+      oracle: effect
+      requests:
+        - id: canonical
+          text: Turn on all the lights in the Utility Room.
       required_actions:
         - domain: light
           service: turn_on
@@ -50,7 +70,12 @@ cases:
     inputs:
       id: discover_basement_ceiling_lights
       home: home_full
-      user_request: Turn on every ceiling light in the Basement.
+      category: discovery
+      tags: []
+      oracle: effect
+      requests:
+        - id: canonical
+          text: Turn on every ceiling light in the Basement.
       required_actions:
         - domain: light
           service: turn_on
@@ -67,7 +92,7 @@ cases:
             - light.wine_tasting_room_ceiling
             - light.basement_hallway_ceiling
             - light.server_room_ceiling
-      desired_states:
+      desired_entities:
         - entity_id: light.utility_room_ceiling
           state: "on"
         - entity_id: light.storage_room_ceiling
@@ -96,87 +121,181 @@ cases:
     inputs:
       id: brightness_utility_room_ceiling
       home: home_full
-      user_request: Set the Utility Room ceiling light to 50% brightness.
+      category: service_data
+      tags: []
+      oracle: effect
+      requests:
+        - id: canonical
+          text: Set the Utility Room ceiling light to 50% brightness.
       required_actions:
         - domain: light
           service: turn_on
           target_entity_ids: [light.utility_room_ceiling]
           service_data:
             brightness_pct: 50
+      desired_entities:
+        - entity_id: light.utility_room_ceiling
+          attributes:
+            brightness: 128
   - name: color_utility_room_accent
     inputs:
       id: color_utility_room_accent
       home: home_full
-      user_request: Set the Utility Room accent light to 2700 K warm white.
+      category: service_data
+      tags: []
+      oracle: effect
+      requests:
+        - id: canonical
+          text: Set the Utility Room accent light to 2700 K warm white.
       required_actions:
         - domain: light
           service: turn_on
           target_entity_ids: [light.utility_room_accent]
           service_data:
             color_temp_kelvin: 2700
+      desired_entities:
+        - entity_id: light.utility_room_accent
+          attributes:
+            color_temp_kelvin: 2700
   - name: no_action_light_already_on
     inputs:
       id: no_action_light_already_on
       home: home_full
-      user_request: Turn on the Living Room ceiling light if it is off.
+      category: conditional
+      tags: []
+      oracle: effect
+      requests:
+        - id: canonical
+          text: Turn on the Living Room ceiling light if it is off.
       required_actions: []
-      desired_states:
+      desired_entities:
         - entity_id: light.living_room_ceiling
           state: "on"
   - name: condition_turn_off_living_room_ceiling
     inputs:
       id: condition_turn_off_living_room_ceiling
       home: home_full
-      user_request: The Living Room ceiling light is currently on. Turn it off.
+      category: conditional
+      tags: []
+      oracle: effect
+      requests:
+        - id: canonical
+          text: The Living Room ceiling light is currently on. Turn it off.
       required_actions:
         - domain: light
           service: turn_off
           target_entity_ids: [light.living_room_ceiling]
-      desired_states:
+      desired_entities:
         - entity_id: light.living_room_ceiling
           state: "off"
   - name: condition_history_change_turn_off
     inputs:
       id: condition_history_change_turn_off
       home: home_full
-      user_request: If the Living Room ceiling light changed state in the last two hours, turn it off.
+      category: conditional
+      tags: []
+      oracle: effect
+      requests:
+        - id: canonical
+          text: If the Living Room ceiling light changed state in the last two hours, turn it off.
       required_actions:
         - domain: light
           service: turn_off
           target_entity_ids: [light.living_room_ceiling]
-      desired_states:
+      desired_entities:
         - entity_id: light.living_room_ceiling
           state: "off"
   - name: no_action_history_no_recent_change
     inputs:
       id: no_action_history_no_recent_change
       home: home_full
-      user_request: If the Hallway outlet changed state in the last hour, toggle it; otherwise do nothing.
+      category: conditional
+      tags: []
+      oracle: effect
+      requests:
+        - id: canonical
+          text: If the Hallway outlet changed state in the last hour, toggle it; otherwise do nothing.
       required_actions: []
-      desired_states:
+      desired_entities:
         - entity_id: switch.hallway_outlet
           state: "off"
   - name: ambiguous_bare_light
     inputs:
       id: ambiguous_bare_light
       home: home_full
-      user_request: Turn on the light.
+      category: ambiguity
+      tags: []
+      oracle: effect
+      requests:
+        - id: canonical
+          text: Turn on the light.
       required_actions: []
   - name: ambiguous_ceiling_no_area
     inputs:
       id: ambiguous_ceiling_no_area
       home: home_full
-      user_request: Turn on the ceiling light.
+      category: ambiguity
+      tags: []
+      oracle: effect
+      requests:
+        - id: canonical
+          text: Turn on the ceiling light.
       required_actions: []
   - name: ambiguous_logic_living_room_recent
     inputs:
       id: ambiguous_logic_living_room_recent
       home: home_full
-      user_request: Turn off the Living Room light that was switched on most recently.
+      category: ambiguity
+      tags: []
+      oracle: effect
+      requests:
+        - id: canonical
+          text: Turn off the Living Room light that was switched on most recently.
       required_actions:
         - domain: light
           service: turn_off
           target_entity_ids: [light.living_room_accent]
-      desired_states:
+      desired_entities:
         - entity_id: light.living_room_accent
           state: "off"
+  - name: tool_call_get_history_utility_room
+    inputs:
+      id: tool_call_get_history_utility_room
+      home: home_full
+      category: tool_contract
+      oracle: tool_calls
+      requests:
+        - id: canonical
+          text: Has the Utility Room ceiling light changed state recently?
+      expected_tool_calls:
+        - tool_name: get_history
+          args:
+            entity_ids: [light.utility_room_ceiling]
+      required_actions: []
+  - name: answer_count_lights_on_utility_room
+    inputs:
+      id: answer_count_lights_on_utility_room
+      home: home_full
+      category: read_answer
+      oracle: answer
+      requests:
+        - id: canonical
+          text: How many lights are on in the Utility Room?
+      expected_answer:
+        kind: count
+        count: 1
+      required_actions: []
+  - name: answer_state_utility_room_accent
+    inputs:
+      id: answer_state_utility_room_accent
+      home: home_full
+      category: read_answer
+      oracle: answer
+      requests:
+        - id: canonical
+          text: Is the Utility Room accent light on or off?
+      expected_answer:
+        kind: state
+        entity_id: light.utility_room_accent
+        state: "on"
+      required_actions: []

@@ -65,7 +65,8 @@ def run_optimize(config: EvalConfig) -> OptimizerResult:
 
     selected_cases = _select_cases(config.cases, config.homes)
     trainset = [
-        dspy.Example(context=case.user_request, case=case).with_inputs("context", "case") for case in selected_cases
+        dspy.Example(context=case.requests[0].text, case=case).with_inputs("context", "case")
+        for case in selected_cases
     ]
     pydantic_target = _to_pydantic_ai_model_id(target)
     student = _PromptInstructionStudent(baseline, pydantic_target, profile, config)
@@ -199,6 +200,7 @@ class _PromptInstructionStudent(dspy.Module):
                 candidate,
                 self.target_model,
                 case,
+                case.requests[0],
                 scoring_config,
                 profile=self.profile,
             )
@@ -256,7 +258,11 @@ def _candidate_correct_rate(config: EvalConfig) -> float:
         report = asyncio.run(experiment.run_matrix(config, run_id=run_id))
     except Exception:  # noqa: BLE001 - summary scoring should not hide an exported optimizer artifact.
         return 0.0
-    return experiment.overall_correct_rate(report)
+    quality_rate = experiment.overall_correct_rate(report)
+    # Branch boundary: optimizer artifacts require a concrete score; no scored cells cannot be ranked as zero.
+    if quality_rate is None:
+        raise ValueError("candidate quality is unavailable because no cells were scored")
+    return quality_rate
 
 
 def _derive_run_id() -> str:

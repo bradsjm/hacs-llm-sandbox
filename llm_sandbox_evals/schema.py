@@ -1,4 +1,4 @@
-"""Action-only eval case, trace, and report contracts."""
+"""Eval case, oracle, trace, and report contracts."""
 
 from dataclasses import dataclass, field
 from typing import Literal
@@ -30,13 +30,20 @@ type FailureClassification = Literal[
     "provider_error",
 ]
 
-type ScoringMode = Literal["end_state", "actions", "cap_exhausted"]
+type ScoringMode = Literal["end_state", "actions", "tool_calls", "answer", "cap_exhausted"]
 
 type EndStateStatus = Literal["not_authored", "unevaluable", "satisfied", "unsatisfied"]
 
 type ScoreReason = Literal[
     "end_state_satisfied",
     "end_state_unsatisfied",
+    "tool_calls_matched",
+    "tool_calls_missing",
+    "tool_calls_mismatched",
+    "tool_calls_no_events",
+    "answer_correct",
+    "answer_incorrect",
+    "answer_unparseable",
     ActionOutcomeReason,
     "cap_exhausted",
 ]
@@ -124,52 +131,97 @@ class ActionComparison:
     matched: bool
 
 
-_SUPPORTED_STATE_DOMAINS = ("light", "switch")
-_SUPPORTED_STATE_VALUES = ("on", "off")
+@dataclass(frozen=True, slots=True)
+class DesiredEntity:
+    """Sparse authored final values for one predicate-relevant entity."""
+
+    entity_id: str
+    state: str | None = None
+    attributes: dict[str, object] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        """Require entity identity and at least one authored final value."""
+        if not self.entity_id or not isinstance(self.entity_id, str):
+            raise ValueError("desired entity entity_id must be a nonempty string")
+        if self.state is None and not self.attributes:
+            raise ValueError("desired entity must author state or attributes")
 
 
 @dataclass(frozen=True, slots=True)
-class DesiredState:
-    """One desired post-run entity state used as the primary scoring predicate.
+class ExpectedToolCall:
+    """One successful production tool call required by a tool-contract case."""
 
-    Restricted to ``light``/``switch`` domains with a binary ``on``/``off``
-    state so the eval-only overlay reducer can deterministically evaluate it
-    without emulating arbitrary Home Assistant service semantics.
-    """
+    tool_name: str
+    args: dict[str, object] = field(default_factory=dict)
 
-    entity_id: str
-    state: str
+
+@dataclass(frozen=True, slots=True)
+class AnswerPredicate:
+    """One deterministic typed predicate for a plain-text read answer."""
+
+    kind: Literal["boolean", "count", "entity_set", "scalar", "state", "time_range"]
+    value: bool | None = None
+    count: int | None = None
+    entity_ids: tuple[str, ...] = ()
+    scalar_value: float | None = None
+    unit: str | None = None
+    tolerance: float | None = None
+    entity_id: str | None = None
+    state: str | None = None
+    start: str | None = None
+    end: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RequestVariant:
+    """One stable authored request text for an eval task."""
+
+    id: str
+    text: str
 
     def __post_init__(self) -> None:
-        """Validate the predicate's entity domain and desired state vocabulary."""
-        if not self.entity_id or not isinstance(self.entity_id, str):
-            raise ValueError("desired state entity_id must be a nonempty string")
-        domain = self.entity_id.split(".", 1)[0] if "." in self.entity_id else ""
-        if domain not in _SUPPORTED_STATE_DOMAINS:
-            raise ValueError(
-                f"desired state entity_id must be a {_SUPPORTED_STATE_DOMAINS} entity, got {self.entity_id!r}"
-            )
-        if self.state not in _SUPPORTED_STATE_VALUES:
-            raise ValueError(f"desired state must be one of {_SUPPORTED_STATE_VALUES}, got {self.state!r}")
+        """Require stable nonempty variant identity and agent input text."""
+        if not isinstance(self.id, str) or not self.id:
+            raise ValueError("request variant id must be a nonempty string")
+        if not isinstance(self.text, str) or not self.text:
+            raise ValueError("request variant text must be a nonempty string")
 
 
 @dataclass(frozen=True, slots=True)
 class EvalCase:
-    """One action request, its required successful service effects, and optional end-state predicates."""
+    """One stable task with authored request variants and scoring evidence."""
 
     id: str
     home: str
-    user_request: str
+    category: str
+    requests: tuple[RequestVariant, ...]
     required_actions: tuple[RequiredAction, ...]
-    desired_states: tuple[DesiredState, ...] = ()
+    desired_entities: tuple[DesiredEntity, ...] = ()
+    tags: tuple[str, ...] = ()
+    oracle: Literal["effect", "tool_calls", "answer"] = "effect"
+    expected_tool_calls: tuple[ExpectedToolCall, ...] = ()
+    expected_answer: AnswerPredicate | None = None
 
     def __post_init__(self) -> None:
-        """Reject duplicate desired-state entity IDs so contradictory goals cannot silently pick a score."""
+        """Validate task identity, request variants, tags, and desired-entity uniqueness."""
+        if not isinstance(self.category, str) or not self.category:
+            raise ValueError("eval case category must be a nonempty string")
+        if not self.requests:
+            raise ValueError("eval case must contain at least one request variant")
+        if self.requests[0].id != "canonical":
+            raise ValueError("first request variant id must be 'canonical'")
+        variant_ids = [variant.id for variant in self.requests]
+        if len(variant_ids) != len(set(variant_ids)):
+            raise ValueError("request variant ids must be unique")
+        if len(self.tags) != len(set(self.tags)):
+            raise ValueError("eval case tags must be unique")
         seen: set[str] = set()
-        for predicate in self.desired_states:
+        for predicate in self.desired_entities:
             if predicate.entity_id in seen:
-                raise ValueError(f"duplicate desired state entity_id: {predicate.entity_id!r}")
+                raise ValueError(f"duplicate desired entity entity_id: {predicate.entity_id!r}")
             seen.add(predicate.entity_id)
+        if self.oracle == "answer" and self.expected_answer is None:
+            raise ValueError("answer oracle requires expected_answer")
 
 
 @dataclass(frozen=True, slots=True)
@@ -183,6 +235,38 @@ class ToolEvent:
     turn_index: int = 0
     batch_index: int = 0
     batch_size: int = 1
+
+
+@dataclass(frozen=True, slots=True)
+class ToolCallComparison:
+    """One authored tool call and the successful event matched to it, if any."""
+
+    expected: ExpectedToolCall
+    matched_event: ToolEvent | None
+
+
+@dataclass(frozen=True, slots=True)
+class ToolCallResult:
+    """One-to-one successful tool-call contract assessment."""
+
+    passed: bool
+    reason: Literal[
+        "tool_calls_matched",
+        "tool_calls_missing",
+        "tool_calls_mismatched",
+        "tool_calls_no_events",
+    ]
+    comparisons: tuple[ToolCallComparison, ...] = ()
+    unmatched_events: tuple[ToolEvent, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class AnswerResult:
+    """Deterministic typed read-answer assessment."""
+
+    passed: bool
+    reason: Literal["answer_correct", "answer_incorrect", "answer_unparseable"]
+    extracted_value: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -205,7 +289,7 @@ class ActionLedger:
 
 @dataclass(frozen=True, slots=True)
 class OverlayStateSeed:
-    """Frozen initial state for one predicate-relevant entity.
+    """Frozen initial values for one predicate-relevant entity.
 
     Captured from the scoped snapshot so a saved trace can be re-scored
     without consulting fixture code.
@@ -214,14 +298,16 @@ class OverlayStateSeed:
     entity_id: str
     domain: str
     state: str
+    attributes: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
 class EndStateComparison:
-    """Per-predicate observed final state versus the desired state."""
+    """Per-predicate observed final values versus authored desired values."""
 
-    desired: DesiredState
+    desired: DesiredEntity
     actual_state: str | None
+    actual_attributes: dict[str, object]
     matched: bool
 
 
@@ -270,8 +356,9 @@ class CaseOutcome:
 
     ``scoring_mode`` identifies which assessment determined the verdict:
     ``end_state`` for evaluable desired-state predicates, ``actions`` for the
-    exact action-ledger fallback, ``cap_exhausted`` for the operational
-    override, or ``None`` for incomplete execution.  ``score_reason`` carries
+    exact action-ledger fallback, ``tool_calls`` or ``answer`` for their
+    explicitly authored primary oracles, ``cap_exhausted`` for the operational
+    override, or ``None`` for incomplete execution. ``score_reason`` carries
     the stable reason for that mode.
     """
 
@@ -287,14 +374,16 @@ class CaseOutcome:
 
 @dataclass(frozen=True, slots=True)
 class CaseTrace:
-    """Self-contained scoring-v8 eval trace with end-state and action evidence."""
+    """Self-contained scoring-v9 trace with authored inputs and oracle evidence."""
 
     case_id: str
     candidate_id: str
     model_id: str
+    request_variant_id: str
+    request_text: str
     answer: str | None
     required_actions: tuple[RequiredAction, ...]
-    desired_states: tuple[DesiredState, ...]
+    desired_entities: tuple[DesiredEntity, ...]
     overlay_state_seeds: tuple[OverlayStateSeed, ...]
     recorded_invocations: tuple[dict[str, object], ...]
     end_state_result: EndStateResult
@@ -303,12 +392,18 @@ class CaseTrace:
     action_ledger: ActionLedger
     tool_events: tuple[ToolEvent, ...]
     diagnostics: EvalDiagnostics
+    oracle: Literal["effect", "tool_calls", "answer"] = "effect"
+    expected_tool_calls: tuple[ExpectedToolCall, ...] = ()
+    expected_answer: AnswerPredicate | None = None
+    tool_call_result: ToolCallResult | None = None
+    answer_result: AnswerResult | None = None
     reasoning_effort: str | None = None
     temperature: float | None = None
-    scoring_version: Literal[8] = 8
+    scoring_version: Literal[9] = 9
     provider_error: str | None = None
     execution_error: ExecutionError | None = None
-    user_request: str = ""
+    category: str = ""
+    tags: tuple[str, ...] = ()
     conversation_id: str | None = None
 
 

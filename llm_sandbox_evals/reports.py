@@ -10,7 +10,14 @@ from pydantic_evals.reporting import EvaluationReport
 
 from llm_sandbox_evals.config import EvalConfig
 from llm_sandbox_evals.experiment import MatrixCellMeta, MatrixCellRef
-from llm_sandbox_evals.schema import CaseOutcome, CaseTrace, EvalCase, PartialRunArtifact, variant_label
+from llm_sandbox_evals.schema import (
+    CaseOutcome,
+    CaseTrace,
+    EvalCase,
+    PartialRunArtifact,
+    RequestVariant,
+    variant_label,
+)
 from llm_sandbox_evals.scoring import evaluate_case
 
 type MatrixReport = EvaluationReport[MatrixCellRef, CaseTrace, MatrixCellMeta]
@@ -18,7 +25,7 @@ type JsonObject = dict[str, object]
 
 _REPORT_ADAPTER: TypeAdapter[MatrixReport] = TypeAdapter(MatrixReport)
 _PARTIAL_ADAPTER: TypeAdapter[PartialRunArtifact] = TypeAdapter(PartialRunArtifact)
-_SCORING_VERSION = 8
+_SCORING_VERSION = 9
 _CASE_TRACE_FIELDS = frozenset(
     {
         "case_id",
@@ -28,8 +35,11 @@ _CASE_TRACE_FIELDS = frozenset(
         "reasoning_effort",
         "temperature",
         "answer",
+        "oracle",
+        "expected_tool_calls",
+        "expected_answer",
         "required_actions",
-        "desired_states",
+        "desired_entities",
         "overlay_state_seeds",
         "recorded_invocations",
         "end_state_result",
@@ -37,9 +47,14 @@ _CASE_TRACE_FIELDS = frozenset(
         "action_result",
         "action_ledger",
         "tool_events",
+        "tool_call_result",
+        "answer_result",
         "diagnostics",
         "provider_error",
-        "user_request",
+        "request_variant_id",
+        "request_text",
+        "category",
+        "tags",
         "conversation_id",
     }
 )
@@ -68,32 +83,39 @@ def load_report(run_dir: Path) -> MatrixReport:
     if not _contains_current_trace(payload):
         # Deliberately reject before Pydantic validation so legacy artifacts cannot
         # be silently reinterpreted by a future schema-compatible decoder.
-        raise ValueError("legacy scoring artifact; rerun evaluation with scoring v8")
+        raise ValueError("legacy scoring artifact; rerun evaluation with scoring v9")
     return _REPORT_ADAPTER.validate_python(payload)
 
 
 def rescore_trace(trace: CaseTrace) -> CaseOutcome:
-    """Rescore a v8 trace from its persisted overlay seeds, invocations, and ledger."""
+    """Rescore a v9 trace from its persisted oracle evidence and action records."""
     if trace.scoring_version != _SCORING_VERSION:
-        raise ValueError("legacy scoring artifact; rerun evaluation with scoring v8")
+        raise ValueError("legacy scoring artifact; rerun evaluation with scoring v9")
     recorded_actions = trace.action_ledger.successful + trace.action_ledger.rejected
     case = EvalCase(
         id=trace.case_id,
         home="stored-trace",
-        user_request=trace.user_request,
+        category=trace.category,
+        tags=trace.tags,
+        oracle=trace.oracle,
+        requests=(RequestVariant(trace.request_variant_id, trace.request_text),),
         required_actions=trace.required_actions,
-        desired_states=trace.desired_states,
+        desired_entities=trace.desired_entities,
+        expected_tool_calls=trace.expected_tool_calls,
+        expected_answer=trace.expected_answer,
     )
-    outcome, _, _, _ = evaluate_case(
+    evaluation = evaluate_case(
         case,
         recorded_actions,
         overlay_seeds=trace.overlay_state_seeds,
         invoker_calls=trace.recorded_invocations,
+        tool_events=trace.tool_events,
+        answer=trace.answer,
     )
     # Branch boundary: cap exhaustion is an operational override that survives rescoring.
     if trace.diagnostics.cap_exhausted:
         return CaseOutcome("incorrect", "cap_exhausted", "cap_exhausted")
-    return outcome
+    return evaluation.outcome
 
 
 def write_partial_artifact(path: Path, artifact: PartialRunArtifact) -> Path:
@@ -175,7 +197,10 @@ def _error_log_records(payload: object) -> list[JsonObject]:
                 "reasoning_effort": reasoning_effort,
                 "temperature": _field(output, "temperature"),
                 "conversation_id": _field(output, "conversation_id"),
-                "user_request": _field(output, "user_request"),
+                "request_variant_id": _field(output, "request_variant_id"),
+                "request_text": _field(output, "request_text"),
+                "category": _field(output, "category"),
+                "tags": _field(output, "tags"),
                 "exception_type": _field(execution_error, "exception_type"),
                 "message": _field(execution_error, "message"),
                 "status_code": _field(execution_error, "status_code"),

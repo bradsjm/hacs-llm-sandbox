@@ -1,21 +1,16 @@
 # LLM Sandbox evals
 
-`llm_sandbox_evals` is a development-only harness for one capability: whether
-an Assist model reaches the desired Home Assistant end state. It runs the
-production tools against a fresh frozen fixture snapshot, records validated
-service effects through the non-live `RecordingInvoker` seam, and derives a
-post-run overlay from ordered calls to evaluate authored desired-state
-predicates. When no predicate is authored or the end state is unevaluable,
-exact action-ledger matching is used as fallback.
+`llm_sandbox_evals` is a development-only harness for Assist behavior against
+fresh frozen Home Assistant fixture snapshots. Its 17-case corpus uses three
+explicit oracle types: `effect` for sparse final-state effects with exact action
+fallback, `tool_calls` for normalized production-tool events, and `answer` for
+deterministic typed predicates over plain-text read answers.
 
-The baseline does not score reads, evidence, recorder output, answer structure,
-blocked actions, policy rejection, generic service-data coverage, clarification
-quality, collections, aggregates, relations, or no-data behavior. Action
-fallback compares authored canonical service data for brightness and color, but
-service data has no overlay effect. Conditional state,
-history, and logbook action selection, including true no-action outcomes, is
-covered by the current corpus with end-state predicates. The model returns
-plain text. That prose is retained for display and never parsed or scored.
+The narrow effect overlay handles binary light/switch state plus light
+brightness and color temperature. The harness does not score blocked actions,
+policy rejection, generic service-data coverage, or clarification quality.
+Every task has a stable canonical request; future paraphrases remain distinct
+utterance-level cells and also contribute to task-level robustness.
 
 ## Run
 
@@ -26,6 +21,7 @@ scripts/format-evals
 uv run --group dev --group evals python -m llm_sandbox_evals eval --models stub
 uv run --group dev --group evals python -m llm_sandbox_evals eval --models gpt-4o-mini,stub
 uv run --group dev --group evals python -m llm_sandbox_evals report <run_id> --html
+uv run --group dev --group evals python -m llm_sandbox_evals report <run_id> --markdown
 ```
 
 Real Pydantic AI model IDs may replace `stub`; bare IDs such as `gpt-4o-mini`
@@ -54,6 +50,8 @@ replacing `report.json`, so a newly completed `report.json` has its companion
 log without claiming a cross-file transaction. It is written with completed
 reports only, not backfilled for older runs or promised for failed/cancelled
 partial-only folders.
+`report <run_id> --markdown` reloads `report.json` without model calls and
+atomically writes deterministic `report.md` beside those artifacts.
 
 ## Case contract
 
@@ -63,19 +61,23 @@ Each `inputs` object has:
 ```yaml
 id: direct_turn_on_utility_room_ceiling
 home: home_full
-user_request: Turn on the Utility Room ceiling light.
+category: direct
+oracle: effect
+requests:
+  - id: canonical
+    text: Turn on the Utility Room ceiling light.
 required_actions:
   - domain: light
     service: turn_on
     target_entity_ids: [light.utility_room_ceiling]
-desired_states:
+desired_entities:
   - entity_id: light.utility_room_ceiling
     state: "on"
 ```
 
-`desired_states` is optional. Omitting it or providing an empty list selects
-action fallback. Predicates are restricted to `light`/`switch` entities with
-`on`/`off` state. Duplicate predicate entity IDs are rejected.
+`desired_entities` is optional. Omitting it or providing an empty list selects
+action fallback. Each predicate authors a state, one or more named attributes,
+or both. Duplicate predicate entity IDs are rejected.
 
 A valid no-action state case uses an empty required-action list with a
 desired state that is already satisfied:
@@ -85,7 +87,7 @@ id: no_action_light_already_on
 home: home_full
 user_request: Turn on the Living Room ceiling light if it is off.
 required_actions: []
-desired_states:
+desired_entities:
   - entity_id: light.living_room_ceiling
     state: "on"
 ```
@@ -93,25 +95,26 @@ desired_states:
 `target_entity_ids` is required and nonempty. Runtime actions are always
 enabled without a domain allowlist. `required_actions: []` is valid and is
 correct when the desired state is satisfied (even with zero actions) or when
-no desired states are authored and the model produces zero successful actions.
+no desired entities are authored and the model produces zero successful actions.
 
 ## The `home_full` corpus
 
-The corpus contains 14 cases in this progression:
+The corpus contains 17 cases across seven categories:
 
 1. **Direct (3):** `direct_turn_on_utility_room_ceiling`,
    `direct_turn_off_utility_room_accent`, and
    `direct_toggle_utility_room_outlet` act on Utility Room lights and a switch.
 2. **Discovery (2):** `discover_utility_room_lights` selects the two lights in
-   the Utility Room and uses action fallback (no `desired_states`) because its
+   the Utility Room and uses action fallback (no `desired_entities`) because its
    shared initial state cannot distinguish partial target selection;
    `discover_basement_ceiling_lights` remains state-primary with all 12 ceiling
    lights seeded off. Each is authored as one multi-target action.
 3. **Brightness/color service selection (2):**
    `brightness_utility_room_ceiling` and `color_utility_room_accent` both
-   select `light.turn_on` and author canonical service data: `brightness_pct: 50`
-   and `color_temp_kelvin: 2700`. The color request text is `Set the Utility Room
-accent light to 2700 K warm white.`
+   select `light.turn_on`, author canonical service data (`brightness_pct: 50`
+   and `color_temp_kelvin: 2700`), and require the resulting `brightness: 128`
+   and `color_temp_kelvin: 2700` final attributes. The color request text is
+   `Set the Utility Room accent light to 2700 K warm white.`
 4. **State/history/logbook conditions (4):**
    `no_action_light_already_on` and `no_action_history_no_recent_change` have
    empty required-action lists; `condition_turn_off_living_room_ceiling` uses
@@ -123,20 +126,24 @@ accent light to 2700 K warm white.`
    `ambiguous_logic_living_room_recent` uses recorder evidence to select
    `light.living_room_accent`, the most recently switched-on Living Room light,
    from the otherwise ambiguous Living Room lights.
+6. **Tool contract (1):** `tool_call_get_history_utility_room` requires the
+   normalized `get_history` call and arguments through the `tool_calls` oracle.
+7. **Read answer (2):** `answer_count_lights_on_utility_room` and
+   `answer_state_utility_room_accent` use typed count and state predicates
+   through the `answer` oracle.
 
 For a multi-target case, one successful call containing all resolved target IDs
-is the exact match. Scoring v8 has one narrow action equivalence: when exact
+is the exact match. Scoring v9 has one narrow action equivalence: when exact
 matching leaves exactly one unmatched authored multi-target action, the remaining
 successful concrete entity-ID calls may score as `equivalent_target_partition`
 if they form a complete, disjoint, duplicate-free partition of the authored
 target set across at least two calls with matching domain, service, and
 comparable service data. This is not general action merging.
 
-Nine of the fourteen cases author `desired_states` and use end-state primary
-scoring. The remaining five (`discover_utility_room_lights`, brightness, color,
-bare ambiguity, and ceiling ambiguity) use action fallback because Utility
-discovery needs complete target matching, brightness and color require
-canonical service data, and the ambiguity cases require safe abstention.
+Eleven effect cases author `desired_entities` and use end-state primary
+scoring. The remaining three (`discover_utility_room_lights`, bare ambiguity,
+and ceiling ambiguity) use action fallback because Utility discovery needs
+complete target matching and the ambiguity cases require safe abstention.
 
 The three recorder-evidence entities — Living Room ceiling, Living Room accent,
 and Hallway outlet — have snapshot `last_changed` values matching their
@@ -160,24 +167,26 @@ cases are valid no-action stub smoke cases, while the non-empty discovery,
 condition, and ambiguity-with-logic cases are intentionally not routed by the
 stub. This documents stub coverage only; it does not claim real-model results.
 
-## Scoring v8
+## Scoring v9
 
-End-state predicates are scored primary. When `desired_states` are authored
-and evaluable (every predicate entity exists in the scoped snapshot with a
-binary `on`/`off` state and matching `light`/`switch` domain), the overlay
-reducer applies ordered `RecordingInvoker` calls to a copied seed state map
-and evaluates the final state:
+End-state predicates are scored primary. When `desired_entities` are authored
+and evaluable, the overlay reducer applies ordered `RecordingInvoker` calls to
+a copied sparse seed map and evaluates only authored final fields. State fields
+require a binary `on`/`off` light or switch seed. Attribute fields support only
+light `brightness` and `color_temp_kelvin`:
 
 - all predicates satisfied → correct `end_state_satisfied`
 - any predicate unsatisfied → incorrect `end_state_unsatisfied`
 
-A satisfied state passes even with zero actions (e.g. light already on), extra
-actions, or action-ledger mismatches. An unsatisfied state fails even if the
-action ledger matches. The overlay reducer supports only direct `light`/`switch`
-`turn_on`, `turn_off`, and `toggle` transitions; unsupported services, indirect
-selectors, attribute effects, and service data leave the overlay unchanged.
+A satisfied predicate passes even with zero actions (e.g. light already on),
+extra actions, or action-ledger mismatches. An unsatisfied predicate fails even
+if the action ledger matches. The overlay reducer supports direct
+`light`/`switch` `turn_on`, `turn_off`, and `toggle` transitions plus light
+`brightness_pct`, `brightness`, and `color_temp_kelvin` turn-on effects.
+Unsupported services, indirect selectors, and other attributes leave the
+overlay unchanged or make an authored predicate unevaluable.
 
-When no `desired_states` are authored or they are unevaluable, the exact
+When no `desired_entities` are authored or they are unevaluable, the exact
 action multiset is scored as fallback. Required and actual effects are matched
 by exact call equality first across:
 
@@ -204,18 +213,22 @@ cannot satisfy or invalidate an otherwise matched successful ledger. The action
 ledger and comparison are always computed and retained as diagnostics regardless
 of scoring mode.
 
-`CaseOutcome` carries `scoring_mode` (`end_state`, `actions`, `cap_exhausted`,
-or `None` for incomplete) and `score_reason`. Operational provider, timeout, and
+`CaseOutcome` carries `scoring_mode` (`end_state`, `actions`, `tool_calls`,
+`answer`, `cap_exhausted`, or `None` for incomplete) and `score_reason`. The
+declared oracle selects the primary scorer: effect cases use end state/action
+fallback, tool-contract cases compare normalized successful tool events, and
+read-answer cases parse only their declared deterministic predicate type.
+Operational provider, timeout, and
 harness failures remain `incomplete` with `scoring_mode=None` and use
 `diagnostics.failure` as their effective cause. Provider HTTP 429 responses and
 provider bodies containing `token_quota_exceeded` classify as `rate_limit`.
 Cap exhaustion is scored incorrect with `scoring_mode="cap_exhausted"` and the
 distinct effective cause `cap_exhausted`.
 
-Reports use scoring version 8. Version 7 and older artifacts are rejected as
+Reports use scoring version 9. Version 8 and older artifacts are rejected as
 legacy; there is no compatibility decoder or rescoring shim. `rescore_trace()`
-rebuilds the outcome from persisted `desired_states`, `overlay_state_seeds`,
-`recorded_invocations`, and `action_ledger` without consulting fixture code.
+rebuilds the outcome from persisted oracle evidence without consulting fixture
+code.
 
 User-facing counts are `total` cells, `finished` terminal cells, and `scored`
 correct plus incorrect cells. `quality_rate = correct / scored`; `coverage_rate
@@ -223,6 +236,10 @@ correct plus incorrect cells. `quality_rate = correct / scored`; `coverage_rate
 remain visible in coverage and cause groupings. Stub usage and cost are
 unavailable rather than zero; real-model task metrics take precedence over the
 self-contained trace usage fallback.
+Canonical quality is the primary candidate/model leaderboard and uses Wilson
+95% intervals over scored canonical cells. Paraphrase quality remains separate
+at the utterance level; task robustness reports whether every request variant
+for a task passed.
 
 ## Presentation
 
@@ -248,15 +265,17 @@ live and persistent durable final output. Exact duplicate issues group for
 display with affected cells, while `errors.log` remains one record per trace;
 machine output remains payload-free.
 
-`report.html`, CSV export, and `report <run_id> --html` are all rebuilt from an
+`report.html`, deterministic `report.md`, CSV export, and the `report` renderer
+flags are all rebuilt from an
 immutable saved-report presentation model. The HTML hero shows quality,
-coverage, incomplete cells, and resolved variant configuration; incomplete
+Wilson 95% confidence interval, coverage, incomplete cells, category slices,
+and resolved variant configuration; incomplete
 inspectors show their operational cause rather than an action mismatch.
 
 ## Architecture
 
 ```text
-14 home_full YAML cases (10 with desired_states, 4 action-only)
+17 home_full YAML cases (effect, tool_calls, and answer oracles)
          |
 fresh scoped HomeSnapshot
          |
@@ -264,17 +283,16 @@ Pydantic AI Agent[EvalRuntime, str]
          |
 production tools -> RecordingInvoker -> ordered calls + action ledger
          |
-overlay reducer (light/switch turn_on/off/toggle) + exact action matching
+overlay reducer (binary state + light brightness/color temperature) + exact action matching
          |
-end_state primary / actions fallback + diagnostics
+oracle-selected scoring + diagnostics
          |
 correct / incorrect / incomplete + diagnostics
 ```
 
 Production read tools remain registered because they are part of the product
-surface, but their outputs have no scoring role in this baseline. Independent
-production-tool contract tests remain useful for protecting the fixture/runtime
-seam.
+surface. Focused cases can score normalized tool events or deterministic read
+answers without weakening effect scoring.
 
 The fixture registry intentionally exposes `home_minimal` for small synthetic
 tool-contract checks and `home_full`, whose 288 entities support the corpus and
@@ -283,21 +301,19 @@ inventory-scale development checks.
 ## Staged expansion
 
 Future capabilities should be introduced one observable contract at a time.
-The overlay reducer currently supports only direct `light`/`switch`
-`turn_on`/`turn_off`/`toggle` state transitions. Expanding it to attributes
-(brightness, color) or other domains requires a new state-based case and
-explicit reducer support. The following remain deferred:
+The overlay reducer currently supports direct `light`/`switch`
+`turn_on`/`turn_off`/`toggle` state transitions and narrow light brightness and
+color-temperature turn-on effects. Other attributes or domains require a new
+case and explicit reducer support. The following remain deferred:
 
-1. attribute-level end-state predicates (brightness, color);
-2. generic service-data coverage in the corpus;
-3. policy/rejection behavior and disabled-action behavior;
-4. response and clarification-quality scoring.
+1. generic service-data and attribute coverage beyond brightness and color temperature;
+2. policy/rejection behavior and disabled-action behavior;
+3. response and clarification-quality scoring.
 
 Conditional state/history/logbook behavior, true no-action outcomes, and
 multi-target selector resolution are already in scope in the `home_full`
-corpus. Read-answer or recorder-answer scoring is not implicit in those stages;
-it requires a separate design with an observable contract and must not be
-restored through the v4 evidence or structured-answer abstractions.
+corpus. Read-answer scoring remains limited to authored deterministic predicate
+types; it is not permissive prose matching or an LLM judge.
 
 ## Safety
 

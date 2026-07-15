@@ -45,9 +45,12 @@ def _trace(
         case_id=case_id,
         candidate_id=candidate_id,
         model_id=model_id,
+        request_variant_id="canonical",
+        request_text="request",
+        category="test",
         answer=None,
         required_actions=expected,
-        desired_states=(),
+        desired_entities=(),
         overlay_state_seeds=(),
         recorded_invocations=(),
         end_state_result=EndStateResult("not_authored", False, False),
@@ -68,7 +71,7 @@ def _cell(
     model_id: str = "stub",
     reasoning_effort: str | None = None,
 ) -> MatrixCellRef:
-    return MatrixCellRef(case_id, candidate_id, model_id, "home_minimal", reasoning_effort)
+    return MatrixCellRef(case_id, "canonical", candidate_id, model_id, "home_minimal", reasoning_effort)
 
 
 @pytest.mark.parametrize(
@@ -816,9 +819,12 @@ def test_report_presentation_model_reads_metrics_with_usage_fallback() -> None:
         case_id="metric-case",
         candidate_id="baseline",
         model_id="stub",
+        request_variant_id="canonical",
+        request_text="request",
+        category="test",
         answer=None,
         required_actions=(RequiredAction("light", "turn_on", ("light.bedroom",)),),
-        desired_states=(),
+        desired_entities=(),
         overlay_state_seeds=(),
         recorded_invocations=(),
         end_state_result=EndStateResult("not_authored", False, False),

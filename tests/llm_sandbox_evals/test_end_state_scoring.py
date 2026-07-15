@@ -2,7 +2,7 @@
 
 from collections.abc import Mapping
 
-from llm_sandbox_evals.schema import DesiredState
+from llm_sandbox_evals.schema import DesiredEntity
 from llm_sandbox_evals.scoring.end_state import (
     EndStateResult,
     OverlayStateSeed,
@@ -11,9 +11,14 @@ from llm_sandbox_evals.scoring.end_state import (
 import pytest
 
 
-def _seed(entity_id: str, state: str, domain: str | None = None) -> OverlayStateSeed:
+def _seed(
+    entity_id: str,
+    state: str,
+    domain: str | None = None,
+    attributes: dict[str, object] | None = None,
+) -> OverlayStateSeed:
     dom = domain or entity_id.split(".", 1)[0]
-    return OverlayStateSeed(entity_id, dom, state)
+    return OverlayStateSeed(entity_id, dom, state, attributes or {})
 
 
 def _call(
@@ -50,7 +55,7 @@ def test_no_predicates_returns_not_authored() -> None:
 
 
 def test_initially_satisfied_with_no_calls_passes() -> None:
-    desired = (DesiredState("light.bedroom", "on"),)
+    desired = (DesiredEntity("light.bedroom", "on"),)
     seeds = (_seed("light.bedroom", "on"),)
     result = assess_end_state(desired, seeds, ())
     assert result.status == "satisfied"
@@ -74,12 +79,67 @@ def test_initially_satisfied_with_no_calls_passes() -> None:
 )
 def test_direct_transition_satisfies_predicate(domain: str, service: str, initial: str, desired_state: str) -> None:
     entity_id = f"{domain}.device"
-    desired = (DesiredState(entity_id, desired_state),)
+    desired = (DesiredEntity(entity_id, desired_state),)
     seeds = (_seed(entity_id, initial),)
     calls = (_call(domain, service, entity_id),)
     result = assess_end_state(desired, seeds, calls)
     assert result.status == "satisfied"
     assert result.comparisons[0].actual_state == desired_state
+
+
+@pytest.mark.parametrize(
+    ("service_data", "desired_attributes"),
+    [
+        pytest.param({"brightness_pct": 50}, {"brightness": 128}, id="brightness-percent"),
+        pytest.param({"brightness": 64}, {"brightness": 64}, id="brightness-value"),
+        pytest.param(
+            {"color_temp_kelvin": 2700},
+            {"color_temp_kelvin": 2700},
+            id="color-temperature",
+        ),
+    ],
+)
+def test_light_turn_on_applies_supported_attribute_effects(
+    service_data: dict[str, object], desired_attributes: dict[str, object]
+) -> None:
+    desired = (DesiredEntity("light.bedroom", attributes=desired_attributes),)
+    seeds = (_seed("light.bedroom", "off", attributes=dict.fromkeys(desired_attributes, 180)),)
+    calls = (_call("light", "turn_on", "light.bedroom", service_data=service_data),)
+
+    result = assess_end_state(desired, seeds, calls)
+
+    assert result.status == "satisfied"
+    assert result.comparisons[0].actual_attributes == desired_attributes
+
+
+def test_mixed_state_and_attribute_predicate_compares_both_authored_fields() -> None:
+    desired = (DesiredEntity("light.bedroom", "on", {"brightness": 128}),)
+    seeds = (_seed("light.bedroom", "off", attributes={"brightness": 180}),)
+    calls = (
+        _call(
+            "light",
+            "turn_on",
+            "light.bedroom",
+            service_data={"brightness_pct": 50, "unrelated": "ignored"},
+        ),
+    )
+
+    result = assess_end_state(desired, seeds, calls)
+
+    assert result.status == "satisfied"
+    assert result.comparisons[0].actual_state == "on"
+    assert result.comparisons[0].actual_attributes == {"brightness": 128}
+
+
+def test_turn_off_preserves_authored_attributes() -> None:
+    desired = (DesiredEntity("light.bedroom", "off", {"brightness": 180}),)
+    seeds = (_seed("light.bedroom", "on", attributes={"brightness": 180}),)
+    calls = (_call("light", "turn_off", "light.bedroom", service_data={"brightness": 64}),)
+
+    result = assess_end_state(desired, seeds, calls)
+
+    assert result.status == "satisfied"
+    assert result.comparisons[0].actual_attributes == {"brightness": 180}
 
 
 # ---------------------------------------------------------------------------
@@ -88,7 +148,7 @@ def test_direct_transition_satisfies_predicate(domain: str, service: str, initia
 
 
 def test_single_toggle_flips_state() -> None:
-    desired = (DesiredState("switch.outlet", "on"),)
+    desired = (DesiredEntity("switch.outlet", "on"),)
     seeds = (_seed("switch.outlet", "off"),)
     calls = (_call("switch", "toggle", "switch.outlet"),)
     result = assess_end_state(desired, seeds, calls)
@@ -96,7 +156,7 @@ def test_single_toggle_flips_state() -> None:
 
 
 def test_ordered_repeated_toggle_final_call_wins() -> None:
-    desired = (DesiredState("switch.outlet", "off"),)
+    desired = (DesiredEntity("switch.outlet", "off"),)
     seeds = (_seed("switch.outlet", "off"),)
     calls = (
         _call("switch", "toggle", "switch.outlet"),
@@ -108,7 +168,7 @@ def test_ordered_repeated_toggle_final_call_wins() -> None:
 
 
 def test_ordered_calls_where_final_call_wins() -> None:
-    desired = (DesiredState("light.bedroom", "off"),)
+    desired = (DesiredEntity("light.bedroom", "off"),)
     seeds = (_seed("light.bedroom", "off"),)
     calls = (
         _call("light", "turn_on", "light.bedroom"),
@@ -124,7 +184,7 @@ def test_ordered_calls_where_final_call_wins() -> None:
 
 
 def test_multi_target_call_satisfies_all_predicates() -> None:
-    desired = (DesiredState("light.a", "on"), DesiredState("light.b", "on"))
+    desired = (DesiredEntity("light.a", "on"), DesiredEntity("light.b", "on"))
     seeds = (_seed("light.a", "off"), _seed("light.b", "off"))
     calls = (_call("light", "turn_on", ["light.a", "light.b"]),)
     result = assess_end_state(desired, seeds, calls)
@@ -138,7 +198,7 @@ def test_multi_target_call_satisfies_all_predicates() -> None:
 
 
 def test_unsupported_service_has_no_overlay_effect() -> None:
-    desired = (DesiredState("light.bedroom", "off"),)
+    desired = (DesiredEntity("light.bedroom", "off"),)
     seeds = (_seed("light.bedroom", "off"),)
     calls = (_call("light", "set_brightness", "light.bedroom"),)
     result = assess_end_state(desired, seeds, calls)
@@ -146,7 +206,7 @@ def test_unsupported_service_has_no_overlay_effect() -> None:
 
 
 def test_wrong_domain_call_has_no_overlay_effect() -> None:
-    desired = (DesiredState("light.bedroom", "off"),)
+    desired = (DesiredEntity("light.bedroom", "off"),)
     seeds = (_seed("light.bedroom", "off"),)
     # A switch service targeting a light entity must not flip the light.
     calls = (_call("switch", "turn_on", "light.bedroom"),)
@@ -155,16 +215,17 @@ def test_wrong_domain_call_has_no_overlay_effect() -> None:
 
 
 def test_errored_call_has_no_overlay_effect() -> None:
-    desired = (DesiredState("light.bedroom", "off"),)
+    desired = (DesiredEntity("light.bedroom", "off"),)
     seeds = (_seed("light.bedroom", "off"),)
-    # Service data is ignored by the reducer; only the transition matters.
+    # The supported attribute effect does not weaken the authored state comparison.
     calls = (_call("light", "turn_on", "light.bedroom", service_data={"brightness": 128}),)
     result = assess_end_state(desired, seeds, calls)
     assert result.status == "unsatisfied"
+    assert result.comparisons[0].actual_attributes == {}
 
 
 def test_indirect_area_selector_has_no_overlay_effect() -> None:
-    desired = (DesiredState("light.bedroom", "on"),)
+    desired = (DesiredEntity("light.bedroom", "on"),)
     seeds = (_seed("light.bedroom", "off"),)
     calls = ({"domain": "light", "service": "turn_on", "target": {"area_id": "bedroom"}},)
     result = assess_end_state(desired, seeds, calls)
@@ -177,21 +238,21 @@ def test_indirect_area_selector_has_no_overlay_effect() -> None:
 
 
 def test_missing_seed_is_unevaluable() -> None:
-    desired = (DesiredState("light.missing", "on"),)
+    desired = (DesiredEntity("light.missing", "on"),)
     result = assess_end_state(desired, (), ())
     assert result.status == "unevaluable"
     assert result.evaluable is False
 
 
 def test_non_binary_seed_is_unevaluable() -> None:
-    desired = (DesiredState("light.bedroom", "on"),)
+    desired = (DesiredEntity("light.bedroom", "on"),)
     seeds = (_seed("light.bedroom", "playing"),)
     result = assess_end_state(desired, seeds, ())
     assert result.status == "unevaluable"
 
 
 def test_one_missing_seed_makes_entire_set_unevaluable() -> None:
-    desired = (DesiredState("light.bedroom", "on"), DesiredState("light.missing", "on"))
+    desired = (DesiredEntity("light.bedroom", "on"), DesiredEntity("light.missing", "on"))
     seeds = (_seed("light.bedroom", "off"),)
     result = assess_end_state(desired, seeds, ())
     assert result.status == "unevaluable"
@@ -203,7 +264,7 @@ def test_one_missing_seed_makes_entire_set_unevaluable() -> None:
 
 
 def test_action_ran_but_final_state_mismatch_is_unsatisfied() -> None:
-    desired = (DesiredState("light.bedroom", "off"),)
+    desired = (DesiredEntity("light.bedroom", "off"),)
     seeds = (_seed("light.bedroom", "off"),)
     calls = (_call("light", "turn_on", "light.bedroom"),)
     result = assess_end_state(desired, seeds, calls)

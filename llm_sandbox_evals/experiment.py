@@ -16,7 +16,7 @@ from pydantic_evals.evaluators import (
     ReportEvaluator,
     ReportEvaluatorContext,
 )
-from pydantic_evals.reporting import EvaluationReport, ReportCase
+from pydantic_evals.reporting import EvaluationReport
 from pydantic_evals.reporting.analyses import ReportAnalysis, ScalarResult, TableResult
 
 from llm_sandbox_evals import prompts
@@ -31,6 +31,7 @@ from llm_sandbox_evals.schema import (
     RunDescriptor,
     variant_label,
 )
+from llm_sandbox_evals.statistics import nullable_rate
 
 type MatrixCellMeta = dict[str, str | int | float | None]
 type MatrixEventCallback = Callable[[MatrixProgressEvent], None]
@@ -45,6 +46,7 @@ class MatrixCellRef:
     """JSON-native reference stored in pydantic-evals case inputs."""
 
     case_id: str
+    request_variant_id: str
     candidate_id: str
     model_id: str
     home: str
@@ -78,7 +80,7 @@ class LanePhaseEvent:
 
 @dataclass(slots=True)
 class SandboxOutcome(Evaluator[MatrixCellRef, CaseTrace, MatrixCellMeta]):
-    """Expose scoring-v7 quality and operational labels as native eval results."""
+    """Expose scoring-v9 quality and operational labels as native eval results."""
 
     def evaluate(
         self, ctx: EvaluatorContext[MatrixCellRef, CaseTrace, MatrixCellMeta]
@@ -103,11 +105,49 @@ class CandidateMatrixReport(ReportEvaluator[MatrixCellRef, CaseTrace, MatrixCell
 
     def evaluate(self, ctx: ReportEvaluatorContext[MatrixCellRef, CaseTrace, MatrixCellMeta]) -> list[ReportAnalysis]:
         """Return outcome rates, coverage, and non-ranking diagnostics."""
-        cases = list(ctx.report.cases)
-        pairs = _pair_rows(cases, self.candidate_ids, self.model_ids, self.prompt_sizes)
-        ranking = _ranking_rows(pairs, self.candidate_ids, self.model_ids)
-        counts = _counts([case.output for case in cases])
-        return [
+        # Local import avoids reversing the existing presentation-to-runtime type dependency.
+        from llm_sandbox_evals.presentation import ReportPresentationModel
+
+        model = ReportPresentationModel.from_report(ctx.report)
+        pairs = model.aggregates
+        counts = model.counts
+        baseline = max(
+            1,
+            self.prompt_sizes.get("baseline", (0, 0))[1]
+            or max((authored for _, authored in self.prompt_sizes.values()), default=1),
+        )
+        ranking: list[tuple[float, float, int, list[str | int | float | bool | None]]] = []
+        for candidate_id in self.candidate_ids:
+            candidate_pairs = [
+                pair for pair in pairs if pair.candidate_id == candidate_id and pair.model_id in self.model_ids
+            ]
+            candidate_counts = [pair.counts for pair in candidate_pairs]
+            scored = sum(value.scored for value in candidate_counts)
+            correct = sum(value.correct for value in candidate_counts)
+            quality = nullable_rate(correct, scored)
+            model_rates = [value.quality_rate for value in candidate_counts if value.quality_rate is not None]
+            prompt_chars = self.prompt_sizes.get(candidate_id, (0, 0))[1]
+            total = sum(value.total for value in candidate_counts)
+            ranking.append(
+                (
+                    quality if quality is not None else -1.0,
+                    min(model_rates, default=-1.0),
+                    prompt_chars,
+                    [
+                        candidate_id,
+                        correct,
+                        sum(value.incorrect for value in candidate_counts),
+                        sum(value.incomplete for value in candidate_counts),
+                        scored,
+                        _optional_round(quality),
+                        _optional_round(nullable_rate(scored, total)),
+                        prompt_chars,
+                        _round(prompt_chars / baseline),
+                    ],
+                )
+            )
+        ranking.sort(key=lambda row: (-row[0], -row[1], row[2], str(row[3][0])))
+        analyses: list[ReportAnalysis] = [
             TableResult(
                 title="Candidate ranking",
                 columns=[
@@ -121,7 +161,7 @@ class CandidateMatrixReport(ReportEvaluator[MatrixCellRef, CaseTrace, MatrixCell
                     "PromptChars",
                     "SizeRatio",
                 ],
-                rows=ranking,
+                rows=[row[3] for row in ranking if row[0] >= 0],
             ),
             TableResult(
                 title="Candidate x model outcomes",
@@ -147,12 +187,12 @@ class CandidateMatrixReport(ReportEvaluator[MatrixCellRef, CaseTrace, MatrixCell
                     [
                         row.candidate_id,
                         row.variant,
-                        row.correct,
-                        row.incorrect,
-                        row.incomplete,
-                        row.scored,
-                        _optional_round(row.quality_rate),
-                        _round(row.coverage_rate),
+                        row.counts.correct,
+                        row.counts.incorrect,
+                        row.counts.incomplete,
+                        row.counts.scored,
+                        _optional_round(row.counts.quality_rate),
+                        _optional_round(row.counts.coverage_rate),
                         _round(row.mean_calls),
                         _round(row.mean_failed_calls),
                         _round(row.mean_turns),
@@ -165,72 +205,56 @@ class CandidateMatrixReport(ReportEvaluator[MatrixCellRef, CaseTrace, MatrixCell
                     for row in pairs
                 ],
             ),
-            ScalarResult(title="Quality rate", value=_round(_rate(counts["correct"], counts["scored"]))),
-            ScalarResult(title="Correct cells", value=counts["correct"]),
-            ScalarResult(title="Incorrect cells", value=counts["incorrect"]),
-            ScalarResult(title="Incomplete cells", value=counts["incomplete"]),
-            ScalarResult(title="Scored cells", value=counts["scored"]),
-            ScalarResult(title="Coverage rate", value=_round(_rate(counts["scored"], len(cases)))),
+            ScalarResult(title="Correct cells", value=counts.correct),
+            ScalarResult(title="Incorrect cells", value=counts.incorrect),
+            ScalarResult(title="Incomplete cells", value=counts.incomplete),
+            ScalarResult(title="Scored cells", value=counts.scored),
         ]
-
-
-@dataclass(frozen=True, slots=True)
-class _PairRow:
-    candidate_id: str
-    model_id: str
-    variant: str
-    correct: int
-    incorrect: int
-    incomplete: int
-    scored: int
-    quality_rate: float | None
-    coverage_rate: float
-    mean_calls: float
-    mean_failed_calls: float
-    mean_turns: float
-    mean_elapsed: float
-    p50_elapsed: float
-    p95_elapsed: float
-    total_tokens: float | None
-    total_cost: float | None
-    api_prompt_chars: int
-    prompt_chars: int
+        # Branch boundary: pydantic-evals scalar analyses cannot encode None, so unavailable rates are omitted.
+        if counts.quality_rate is not None:
+            analyses.append(ScalarResult(title="Quality rate", value=_round(counts.quality_rate)))
+        if counts.coverage_rate is not None:
+            analyses.append(ScalarResult(title="Coverage rate", value=_round(counts.coverage_rate)))
+        return analyses
 
 
 def build_dataset(
     config: EvalConfig, candidates: Sequence[PromptCandidate], selected_cases: Sequence[EvalCase], run_id: str
 ) -> Dataset[MatrixCellRef, CaseTrace, MatrixCellMeta]:
-    """Build one native dataset containing every candidate/model/case matrix cell."""
+    """Build one native dataset containing every candidate/model/task/request-variant cell."""
     cases: list[Case[MatrixCellRef, CaseTrace, MatrixCellMeta]] = []
     for candidate in candidates:
         for model_id in config.models:
             for case in selected_cases:
-                ref = MatrixCellRef(
-                    case.id,
-                    candidate.id,
-                    model_id,
-                    case.home,
-                    config.reasoning_effort,
-                    config.temperature,
-                )
-                metadata: MatrixCellMeta = {
-                    "run_id": run_id,
-                    "case_id": ref.case_id,
-                    "candidate_id": ref.candidate_id,
-                    "model_id": ref.model_id,
-                    "home": ref.home,
-                    "reasoning_effort": ref.reasoning_effort,
-                    "temperature": ref.temperature,
-                    "variant_label": variant_label(ref.model_id, ref.reasoning_effort),
-                }
-                cases.append(
-                    Case(
-                        name=f"{candidate.id}/{model_id}/{case.id}",
-                        inputs=ref,
-                        metadata=metadata,
-                        evaluators=(SandboxOutcome(),),
+                for request_variant in case.requests:
+                    ref = MatrixCellRef(
+                        case.id,
+                        request_variant.id,
+                        candidate.id,
+                        model_id,
+                        case.home,
+                        config.reasoning_effort,
+                        config.temperature,
                     )
-                )
+                    metadata: MatrixCellMeta = {
+                        "run_id": run_id,
+                        "case_id": ref.case_id,
+                        "request_variant_id": ref.request_variant_id,
+                        "candidate_id": ref.candidate_id,
+                        "model_id": ref.model_id,
+                        "home": ref.home,
+                        "reasoning_effort": ref.reasoning_effort,
+                        "temperature": ref.temperature,
+                        "variant_label": variant_label(ref.model_id, ref.reasoning_effort),
+                    }
+                    cases.append(
+                        Case(
+                            name=f"{candidate.id}/{model_id}/{case.id}/{request_variant.id}",
+                            inputs=ref,
+                            metadata=metadata,
+                            evaluators=(SandboxOutcome(),),
+                        )
+                    )
     return Dataset(
         name="llm_sandbox_matrix",
         cases=cases,
@@ -261,7 +285,8 @@ def make_matrix_task(
     async def task(cell: MatrixCellRef) -> CaseTrace:
         nonlocal completed
         case = case_by_id[cell.case_id]
-        request = _presentation_request(case.user_request)
+        request_variant = next(variant for variant in case.requests if variant.id == cell.request_variant_id)
+        request = _presentation_request(request_variant.text)
         start = perf_counter()
         _emit_event(on_event, MatrixProgressEvent("cell_started", cell=cell, request=request, total=total))
 
@@ -285,6 +310,7 @@ def make_matrix_task(
             candidate_by_id[cell.candidate_id],
             cell.model_id,
             case,
+            request_variant,
             config,
             profile=profile,
             on_tool_boundary=on_tool_boundary,
@@ -376,222 +402,36 @@ def _presentation_request(request: str) -> str:
     return " ".join(request.split())[:240]
 
 
-def overall_correct_rate(report: EvaluationReport[MatrixCellRef, CaseTrace, MatrixCellMeta]) -> float:
+def overall_correct_rate(report: EvaluationReport[MatrixCellRef, CaseTrace, MatrixCellMeta]) -> float | None:
     """Return the scored-cell quality rate retained under the legacy helper name."""
-    for analysis in report.analyses:
-        if isinstance(analysis, ScalarResult) and analysis.title == "Quality rate":
-            return float(analysis.value)
-    raise ValueError("report is missing the Quality rate analysis")
+    from llm_sandbox_evals.presentation import ReportPresentationModel
+
+    return ReportPresentationModel.from_report(report).counts.quality_rate
 
 
 def matrix_summary_lines(report: EvaluationReport[MatrixCellRef, CaseTrace, MatrixCellMeta]) -> list[str]:
     """Return concise machine-readable outcome summaries."""
-    counts = _counts([case.output for case in report.cases])
+    from llm_sandbox_evals.presentation import ReportPresentationModel
+
+    model = ReportPresentationModel.from_report(report)
+    counts = model.counts
     lines = [
-        f"quality_rate: {overall_correct_rate(report):.3f}",
-        f"coverage_rate: {_rate(counts['scored'], counts['total']):.3f}",
-        f"scored: {counts['scored']}",
+        f"quality_rate: {_machine_rate(counts.quality_rate)}",
+        f"coverage_rate: {_machine_rate(counts.coverage_rate)}",
+        f"scored: {counts.scored}",
     ]
-    for analysis in report.analyses:
-        if isinstance(analysis, TableResult) and analysis.title == "Candidate x model outcomes":
-            lines.extend(
-                f"{row[0]}/{row[1]}: quality_rate={row[6]} scored={row[5]} coverage_rate={row[7]}"
-                for row in analysis.rows
-            )
+    lines.extend(
+        f"{aggregate.candidate_id}/{aggregate.variant}: "
+        f"quality_rate={_machine_rate(aggregate.counts.quality_rate)} "
+        f"scored={aggregate.counts.scored} coverage_rate={_machine_rate(aggregate.counts.coverage_rate)}"
+        for aggregate in model.aggregates
+    )
     return lines
 
 
-def _pair_rows(
-    report_cases: Sequence[ReportCase[MatrixCellRef, CaseTrace, MatrixCellMeta]],
-    candidate_ids: Sequence[str],
-    model_ids: Sequence[str],
-    prompt_sizes: dict[str, tuple[int, int]],
-) -> list[_PairRow]:
-    rows: list[_PairRow] = []
-    for candidate_id in candidate_ids:
-        for model_id in model_ids:
-            selected = [
-                c
-                for c in report_cases
-                if _metadata_str(c, "candidate_id") == candidate_id and _metadata_str(c, "model_id") == model_id
-            ]
-            traces = [case.output for case in selected]
-            counts = _counts(traces)
-            diagnostics = [trace.diagnostics for trace in traces]
-            api_chars, authored_chars = prompt_sizes.get(candidate_id, (0, 0))
-            rows.append(
-                _PairRow(
-                    candidate_id,
-                    model_id,
-                    variant_label(
-                        model_id, _metadata_str_or_none(selected[0], "reasoning_effort") if selected else None
-                    ),
-                    counts["correct"],
-                    counts["incorrect"],
-                    counts["incomplete"],
-                    counts["scored"],
-                    _nullable_rate(counts["correct"], counts["scored"]),
-                    _rate(counts["scored"], len(selected)),
-                    _mean(
-                        [
-                            _metric_value(case, "tool_calls", d.tool_calls)
-                            for case, d in zip(selected, diagnostics, strict=True)
-                        ]
-                    ),
-                    _mean(
-                        [
-                            _metric_value(case, "failed_tool_calls", d.failed_tool_calls)
-                            for case, d in zip(selected, diagnostics, strict=True)
-                        ]
-                    ),
-                    _mean(
-                        [
-                            _metric_value(case, "model_turns", d.model_turns)
-                            for case, d in zip(selected, diagnostics, strict=True)
-                        ]
-                    ),
-                    _mean(
-                        [
-                            _metric_value(case, "elapsed_seconds", d.elapsed_seconds)
-                            for case, d in zip(selected, diagnostics, strict=True)
-                        ]
-                    ),
-                    _percentile(
-                        [
-                            _metric_value(case, "elapsed_seconds", d.elapsed_seconds)
-                            for case, d in zip(selected, diagnostics, strict=True)
-                        ],
-                        0.5,
-                    ),
-                    _percentile(
-                        [
-                            _metric_value(case, "elapsed_seconds", d.elapsed_seconds)
-                            for case, d in zip(selected, diagnostics, strict=True)
-                        ],
-                        0.95,
-                    ),
-                    _optional_total([_metric_or_usage(case, "total_tokens") for case in selected]),
-                    _optional_total([_metric_or_usage(case, "cost") for case in selected]),
-                    api_chars,
-                    authored_chars,
-                )
-            )
-    return rows
-
-
-def _ranking_rows(
-    pair_rows: list[_PairRow], candidate_ids: Sequence[str], model_ids: Sequence[str]
-) -> list[list[str | int | float | bool | None]]:
-    baseline = max(
-        1,
-        next(
-            (r.prompt_chars for r in pair_rows if r.candidate_id == "baseline" and r.prompt_chars),
-            max((r.prompt_chars for r in pair_rows), default=1),
-        ),
-    )
-    rendered: list[tuple[float, float, int, list[str | int | float | bool | None]]] = []
-    for candidate_id in candidate_ids:
-        rows = [r for r in pair_rows if r.candidate_id == candidate_id and r.model_id in model_ids]
-        scored = sum(r.scored for r in rows)
-        correct = sum(r.correct for r in rows)
-        rate = _nullable_rate(correct, scored)
-        model_rates = [r.quality_rate for r in rows if r.quality_rate is not None]
-        min_model = min(model_rates, default=-1.0)
-        prompt_chars = rows[0].prompt_chars if rows else 0
-        total_cells = sum(r.correct + r.incorrect + r.incomplete for r in rows)
-        rendered.append(
-            (
-                rate if rate is not None else -1.0,
-                min_model,
-                prompt_chars,
-                [
-                    candidate_id,
-                    correct,
-                    sum(r.incorrect for r in rows),
-                    sum(r.incomplete for r in rows),
-                    scored,
-                    _optional_round(rate),
-                    _round(_rate(scored, total_cells)),
-                    prompt_chars,
-                    _round(prompt_chars / baseline),
-                ],
-            )
-        )
-    rendered.sort(key=lambda row: (-row[0], -row[1], row[2], str(row[3][0])))
-    return [row[3] for row in rendered if row[0] >= 0]
-
-
-def _counts(traces: Sequence[CaseTrace]) -> dict[str, int]:
-    return {
-        "correct": sum(t.outcome.state == "correct" for t in traces),
-        "incorrect": sum(t.outcome.state == "incorrect" for t in traces),
-        "incomplete": sum(t.outcome.state == "incomplete" for t in traces),
-        "scored": sum(t.outcome.state != "incomplete" for t in traces),
-        "total": len(traces),
-    }
-
-
-def _metadata_str(report_case: ReportCase[MatrixCellRef, CaseTrace, MatrixCellMeta], key: str) -> str:
-    return str((report_case.metadata or {})[key])
-
-
-def _metadata_str_or_none(report_case: ReportCase[MatrixCellRef, CaseTrace, MatrixCellMeta], key: str) -> str | None:
-    """Read nullable metadata without stringifying an absent resolved setting."""
-    value = (report_case.metadata or {}).get(key)
-    return str(value) if value is not None else None
-
-
-def _rate(numerator: int, denominator: int) -> float:
-    return numerator / denominator if denominator else 0.0
-
-
-def _nullable_rate(numerator: int, denominator: int) -> float | None:
-    return numerator / denominator if denominator else None
-
-
-def _mean(values: Sequence[float | int | None]) -> float:
-    present = [float(value) for value in values if value is not None]
-    return sum(present) / len(present) if present else 0.0
-
-
-def _optional_mean(values: Sequence[float | int | None]) -> float | None:
-    present = [float(value) for value in values if value is not None]
-    return sum(present) / len(present) if present else None
-
-
-def _optional_total(values: Sequence[float | int | None]) -> float | None:
-    """Return the total known value, preserving unavailable provider metrics."""
-    present = [float(value) for value in values if value is not None]
-    return sum(present) if present else None
-
-
-def _percentile(values: Sequence[float | int | None], fraction: float) -> float:
-    """Return a linear-interpolated percentile for elapsed timing diagnostics."""
-    present = sorted(float(value) for value in values if value is not None)
-    if not present:
-        return 0.0
-    position = (len(present) - 1) * fraction
-    lower = int(position)
-    upper = min(lower + 1, len(present) - 1)
-    return present[lower] + (present[upper] - present[lower]) * (position - lower)
-
-
-def _metric_value(
-    report_case: ReportCase[MatrixCellRef, CaseTrace, MatrixCellMeta], key: str, fallback: float | int | None
-) -> float | int | None:
-    """Prefer native task metrics while retaining trace diagnostics for old provider values."""
-    value = report_case.metrics.get(key)
-    return value if isinstance(value, int | float) and not isinstance(value, bool) else fallback
-
-
-def _metric_or_usage(report_case: ReportCase[MatrixCellRef, CaseTrace, MatrixCellMeta], key: str) -> float | None:
-    """Read persisted task metrics first, then the self-contained trace usage fallback."""
-    metric = report_case.metrics.get(key)
-    if isinstance(metric, int | float) and not isinstance(metric, bool):
-        return float(metric)
-    usage = report_case.output.diagnostics.usage
-    value = usage.get(key) if isinstance(usage, dict) else None
-    return float(value) if isinstance(value, int | float) and not isinstance(value, bool) else None
+def _machine_rate(value: float | None) -> str:
+    """Render one machine-summary rate without turning unavailable into zero."""
+    return "—" if value is None else f"{value:.3f}"
 
 
 def _record_trace_metrics(trace: CaseTrace) -> None:

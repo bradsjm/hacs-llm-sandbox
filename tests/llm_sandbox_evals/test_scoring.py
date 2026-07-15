@@ -10,10 +10,11 @@ from llm_sandbox_evals.prompts import baseline_candidate
 from llm_sandbox_evals.schema import (
     ActionComparison,
     ActionResult,
-    DesiredState,
+    DesiredEntity,
     EvalCase,
     ObservedAction,
     OverlayStateSeed,
+    RequestVariant,
     RequiredAction,
 )
 from llm_sandbox_evals.scoring import evaluate_case, extract_overlay_seeds
@@ -58,7 +59,7 @@ def _home_full_seeds(case: EvalCase) -> tuple[OverlayStateSeed, ...]:
     """Extract predicate seeds from the same scoped fixture snapshot used by the harness."""
     fixture = get_home(case.home)
     snapshot = apply_scope(fixture.snapshot(), EVAL_SCOPE)
-    return extract_overlay_seeds(snapshot, case.desired_states)
+    return extract_overlay_seeds(snapshot, case.desired_entities)
 
 
 _BASEMENT_CEILING_TARGETS = (
@@ -78,30 +79,20 @@ _BASEMENT_CEILING_TARGETS = (
 
 
 @pytest.mark.parametrize(
-    ("case", "expected_mode", "expected_reason"),
+    "case",
     # The offline stub routes only direct_*/brightness_*/color_* requests. Every
     # other family (no_action_*, ambiguous_*, discover_*, condition_*) is
     # intentionally outside this stub smoke and is exercised by real-model runs;
     # do not broaden this allow-list — non-routed non-empty cases would no-op
     # and score incorrect under the stub.
-    [
-        pytest.param(
-            case,
-            "end_state" if case.id.startswith("direct_") else "actions",
-            "end_state_satisfied" if case.id.startswith("direct_") else "ok",
-            id=case.id,
-        )
-        for case in CASES
-        if case.id.startswith(("direct_", "brightness_", "color_"))
-    ],
+    [pytest.param(case, id=case.id) for case in CASES if case.id.startswith(("direct_", "brightness_", "color_"))],
 )
-async def test_each_authored_direct_action_passes(
-    case: EvalCase, expected_mode: str, expected_reason: str, tmp_path: Path
-) -> None:
+async def test_each_authored_direct_action_passes(case: EvalCase, tmp_path: Path) -> None:
     trace = await run_case(
         baseline_candidate(),
         "stub",
         case,
+        case.requests[0],
         EvalConfig(
             models=["stub"],
             candidates=["baseline"],
@@ -114,8 +105,8 @@ async def test_each_authored_direct_action_passes(
     )
 
     assert trace.outcome.state == "correct"
-    assert trace.outcome.scoring_mode == expected_mode
-    assert trace.outcome.score_reason == expected_reason
+    assert trace.outcome.scoring_mode == "end_state"
+    assert trace.outcome.score_reason == "end_state_satisfied"
     assert trace.action_result.reason == "ok"
     assert trace.answer == "Done."
     assert trace.action_result.passed is True
@@ -136,6 +127,7 @@ async def test_stub_attribute_actions_record_canonical_service_data(
         baseline_candidate(),
         "stub",
         case,
+        case.requests[0],
         EvalConfig(
             models=["stub"],
             candidates=["baseline"],
@@ -148,9 +140,11 @@ async def test_stub_attribute_actions_record_canonical_service_data(
     )
 
     assert trace.outcome.state == "correct"
-    assert trace.outcome.scoring_mode == "actions"
+    assert trace.outcome.scoring_mode == "end_state"
+    assert trace.end_state_result.status == "satisfied"
     assert trace.action_result.passed is True
     assert trace.recorded_invocations[0]["service_data"] == expected_service_data
+    assert trace.end_state_result.comparisons[0].actual_attributes == case.desired_entities[0].attributes
 
 
 @pytest.mark.parametrize(
@@ -173,16 +167,16 @@ def test_direct_turn_on_utility_room_ceiling_requires_a_transition(
     recorded: list[dict[str, object]], expected_satisfied: bool
 ) -> None:
     case = _home_full_case("direct_turn_on_utility_room_ceiling")
-    outcome, _result, _ledger, end_state = evaluate_case(
+    evaluation = evaluate_case(
         case,
         recorded,
         overlay_seeds=_home_full_seeds(case),
         invoker_calls=recorded,
     )
 
-    assert outcome.scoring_mode == "end_state"
-    assert outcome.state == ("correct" if expected_satisfied else "incorrect")
-    assert end_state.status == ("satisfied" if expected_satisfied else "unsatisfied")
+    assert evaluation.outcome.scoring_mode == "end_state"
+    assert evaluation.outcome.state == ("correct" if expected_satisfied else "incorrect")
+    assert evaluation.end_state_result.status == ("satisfied" if expected_satisfied else "unsatisfied")
 
 
 @pytest.mark.parametrize(
@@ -210,17 +204,17 @@ def test_utility_room_discovery_uses_exact_action_fallback(
     recorded: list[dict[str, object]], expected_passed: bool
 ) -> None:
     case = _home_full_case("discover_utility_room_lights")
-    outcome, result, _ledger, end_state = evaluate_case(
+    evaluation = evaluate_case(
         case,
         recorded,
         overlay_seeds=_home_full_seeds(case),
         invoker_calls=recorded,
     )
 
-    assert outcome.scoring_mode == "actions"
-    assert outcome.state == ("correct" if expected_passed else "incorrect")
-    assert result.passed is expected_passed
-    assert end_state.status == "not_authored"
+    assert evaluation.outcome.scoring_mode == "actions"
+    assert evaluation.outcome.state == ("correct" if expected_passed else "incorrect")
+    assert evaluation.action_result.passed is expected_passed
+    assert evaluation.end_state_result.status == "not_authored"
 
 
 @pytest.mark.parametrize(
@@ -248,16 +242,16 @@ def test_basement_ceiling_discovery_requires_all_twelve_state_transitions(
     recorded: list[dict[str, object]], expected_satisfied: bool
 ) -> None:
     case = _home_full_case("discover_basement_ceiling_lights")
-    outcome, _result, _ledger, end_state = evaluate_case(
+    evaluation = evaluate_case(
         case,
         recorded,
         overlay_seeds=_home_full_seeds(case),
         invoker_calls=recorded,
     )
 
-    assert outcome.scoring_mode == "end_state"
-    assert outcome.state == ("correct" if expected_satisfied else "incorrect")
-    assert end_state.status == ("satisfied" if expected_satisfied else "unsatisfied")
+    assert evaluation.outcome.scoring_mode == "end_state"
+    assert evaluation.outcome.state == ("correct" if expected_satisfied else "incorrect")
+    assert evaluation.end_state_result.status == ("satisfied" if expected_satisfied else "unsatisfied")
 
 
 @pytest.mark.parametrize(
@@ -293,7 +287,7 @@ def test_basement_ceiling_discovery_requires_all_twelve_state_transitions(
         ),
     ],
 )
-def test_attribute_action_scoring_requires_canonical_service_data(
+def test_attribute_final_value_is_primary_with_action_diagnostics(
     case_id: str,
     service_data: dict[str, object] | None,
     expected_passed: bool,
@@ -302,18 +296,19 @@ def test_attribute_action_scoring_requires_canonical_service_data(
     case = _home_full_case(case_id)
     required = case.required_actions[0]
     recorded = [_action(required.domain, required.service, list(required.target_entity_ids), service_data)]
-    outcome, result, _ledger, end_state = evaluate_case(
+    evaluation = evaluate_case(
         case,
         recorded,
         overlay_seeds=_home_full_seeds(case),
         invoker_calls=recorded,
     )
 
-    assert outcome.scoring_mode == "actions"
-    assert outcome.state == ("correct" if expected_passed else "incorrect")
-    assert outcome.score_reason == result.reason == expected_reason
-    assert result.passed is expected_passed
-    assert end_state.status == "not_authored"
+    assert evaluation.outcome.scoring_mode == "end_state"
+    assert evaluation.outcome.state == ("correct" if expected_passed else "incorrect")
+    assert evaluation.outcome.score_reason == ("end_state_satisfied" if expected_passed else "end_state_unsatisfied")
+    assert evaluation.action_result.reason == expected_reason
+    assert evaluation.action_result.passed is expected_passed
+    assert evaluation.end_state_result.status == ("satisfied" if expected_passed else "unsatisfied")
 
 
 _BEDROOM_ON = RequiredAction("light", "turn_on", ("light.bedroom",))
@@ -322,7 +317,13 @@ _BRIGHT_BEDROOM = RequiredAction("light", "turn_on", ("light.bedroom",), {"brigh
 
 
 def _case(*actions: RequiredAction) -> EvalCase:
-    return EvalCase("action-case", "home_minimal", "Perform actions", actions)
+    return EvalCase(
+        "action-case",
+        "home_minimal",
+        "test",
+        (RequestVariant("canonical", "Perform actions"),),
+        actions,
+    )
 
 
 @pytest.mark.parametrize(
@@ -603,7 +604,8 @@ def test_action_assessment_failure_taxonomy(
     recorded: list[dict[str, object]],
     expected_result: ActionResult,
 ) -> None:
-    outcome, result, _ledger, _end_state = evaluate_case(case, recorded, overlay_seeds=(), invoker_calls=())
+    evaluation = evaluate_case(case, recorded, overlay_seeds=(), invoker_calls=())
+    outcome, result = evaluation.outcome, evaluation.action_result
 
     assert result == expected_result
     assert outcome.score_reason == result.reason
@@ -611,12 +613,13 @@ def test_action_assessment_failure_taxonomy(
 
 
 def test_unset_service_data_is_not_an_implicit_oracle_field() -> None:
-    outcome, result, _ledger, _end_state = evaluate_case(
+    evaluation = evaluate_case(
         _case(_BEDROOM_ON),
         [_action("light", "turn_on", "light.bedroom", {"transition": 1})],
         overlay_seeds=(),
         invoker_calls=(),
     )
+    outcome, result = evaluation.outcome, evaluation.action_result
 
     assert outcome.state == "correct"
     assert result.comparisons[0].service_data_matches is True
@@ -627,9 +630,8 @@ def test_successful_match_remains_correct_when_an_attempt_was_rejected() -> None
     successful = _action("light", "turn_on", "light.bedroom")
     rejected = _action("light", "turn_off", "light.living", status="error")
 
-    outcome, result, ledger, _end_state = evaluate_case(
-        _case(_BEDROOM_ON), [rejected, successful], overlay_seeds=(), invoker_calls=()
-    )
+    evaluation = evaluate_case(_case(_BEDROOM_ON), [rejected, successful], overlay_seeds=(), invoker_calls=())
+    outcome, result, ledger = evaluation.outcome, evaluation.action_result, evaluation.action_ledger
 
     assert outcome.state == "correct"
     assert result.reason == "ok"
@@ -649,9 +651,8 @@ def test_exact_multi_target_action_remains_an_exact_match() -> None:
         )
     ]
 
-    outcome, result, _ledger, _end_state = evaluate_case(
-        _case(_PARTITION_ON), recorded, overlay_seeds=(), invoker_calls=()
-    )
+    evaluation = evaluate_case(_case(_PARTITION_ON), recorded, overlay_seeds=(), invoker_calls=())
+    outcome, result = evaluation.outcome, evaluation.action_result
 
     assert outcome.state == "correct"
     assert result.passed is True
@@ -689,9 +690,8 @@ def test_exact_multi_target_action_remains_an_exact_match() -> None:
 def test_disjoint_target_partitions_are_equivalent(
     recorded: list[dict[str, object]],
 ) -> None:
-    outcome, result, ledger, _end_state = evaluate_case(
-        _case(_PARTITION_ON), recorded, overlay_seeds=(), invoker_calls=()
-    )
+    evaluation = evaluate_case(_case(_PARTITION_ON), recorded, overlay_seeds=(), invoker_calls=())
+    outcome, result, ledger = evaluation.outcome, evaluation.action_result, evaluation.action_ledger
 
     assert outcome.state == "correct"
     assert result.passed is True
@@ -764,7 +764,8 @@ def test_partition_service_data_uses_canonical_equivalence(
     required: RequiredAction,
     recorded: list[dict[str, object]],
 ) -> None:
-    outcome, result, _ledger, _end_state = evaluate_case(_case(required), recorded, overlay_seeds=(), invoker_calls=())
+    evaluation = evaluate_case(_case(required), recorded, overlay_seeds=(), invoker_calls=())
+    outcome, result = evaluation.outcome, evaluation.action_result
 
     assert outcome.state == "correct"
     assert result.passed is True
@@ -877,7 +878,8 @@ def test_invalid_target_partitions_fail(
     required: RequiredAction,
     recorded: list[dict[str, object]],
 ) -> None:
-    outcome, result, _ledger, _end_state = evaluate_case(_case(required), recorded, overlay_seeds=(), invoker_calls=())
+    evaluation = evaluate_case(_case(required), recorded, overlay_seeds=(), invoker_calls=())
+    outcome, result = evaluation.outcome, evaluation.action_result
 
     assert outcome.state == "incorrect"
     assert result.passed is False
@@ -897,9 +899,8 @@ def test_exact_match_is_consumed_before_singular_partition_fallback() -> None:
         _action("light", "turn_on", ["light.beta", "light.alpha"]),
     ]
 
-    outcome, result, _ledger, _end_state = evaluate_case(
-        _case(aggregate, exact), recorded, overlay_seeds=(), invoker_calls=()
-    )
+    evaluation = evaluate_case(_case(aggregate, exact), recorded, overlay_seeds=(), invoker_calls=())
+    outcome, result = evaluation.outcome, evaluation.action_result
 
     assert outcome.state == "correct"
     assert result.passed is True
@@ -920,8 +921,15 @@ def test_exact_match_is_consumed_before_singular_partition_fallback() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _state_case(*desired: DesiredState, actions: tuple[RequiredAction, ...] = ()) -> EvalCase:
-    return EvalCase("state-case", "home_minimal", "Perform actions", actions, desired)
+def _state_case(*desired: DesiredEntity, actions: tuple[RequiredAction, ...] = ()) -> EvalCase:
+    return EvalCase(
+        "state-case",
+        "home_minimal",
+        "test",
+        (RequestVariant("canonical", "Perform actions"),),
+        actions,
+        desired,
+    )
 
 
 def _seed(entity_id: str, state: str) -> OverlayStateSeed:
@@ -929,11 +937,10 @@ def _seed(entity_id: str, state: str) -> OverlayStateSeed:
 
 
 def test_initially_satisfied_with_no_calls_is_end_state_correct() -> None:
-    desired = (DesiredState("light.bedroom", "on"),)
+    desired = (DesiredEntity("light.bedroom", "on"),)
     seeds = (_seed("light.bedroom", "on"),)
-    outcome, _result, _ledger, end_state = evaluate_case(
-        _state_case(*desired), [], overlay_seeds=seeds, invoker_calls=()
-    )
+    evaluation = evaluate_case(_state_case(*desired), [], overlay_seeds=seeds, invoker_calls=())
+    outcome, end_state = evaluation.outcome, evaluation.end_state_result
     assert outcome.state == "correct"
     assert outcome.scoring_mode == "end_state"
     assert outcome.score_reason == "end_state_satisfied"
@@ -942,15 +949,20 @@ def test_initially_satisfied_with_no_calls_is_end_state_correct() -> None:
 
 def test_satisfied_state_overrides_wrong_action_diagnostics() -> None:
     # The light is already on; a wrong-target call does not change the overlay.
-    desired = (DesiredState("light.bedroom", "on"),)
+    desired = (DesiredEntity("light.bedroom", "on"),)
     seeds = (_seed("light.bedroom", "on"),)
     required = RequiredAction("light", "turn_on", ("light.bedroom",))
     wrong_call = _action("light", "turn_on", "light.living")
-    outcome, result, _ledger, end_state = evaluate_case(
+    evaluation = evaluate_case(
         _state_case(*desired, actions=(required,)),
         [wrong_call],
         overlay_seeds=seeds,
         invoker_calls=[wrong_call],
+    )
+    outcome, result, end_state = (
+        evaluation.outcome,
+        evaluation.action_result,
+        evaluation.end_state_result,
     )
     # State is primary: satisfied despite the action ledger showing a wrong-target mismatch.
     assert outcome.state == "correct"
@@ -962,12 +974,11 @@ def test_satisfied_state_overrides_wrong_action_diagnostics() -> None:
 
 
 def test_satisfied_state_overrides_extra_action() -> None:
-    desired = (DesiredState("light.bedroom", "on"),)
+    desired = (DesiredEntity("light.bedroom", "on"),)
     seeds = (_seed("light.bedroom", "on"),)
     extra_call = _action("light", "turn_on", "light.living")
-    outcome, result, _ledger, _end_state = evaluate_case(
-        _state_case(*desired), [extra_call], overlay_seeds=seeds, invoker_calls=[extra_call]
-    )
+    evaluation = evaluate_case(_state_case(*desired), [extra_call], overlay_seeds=seeds, invoker_calls=[extra_call])
+    outcome, result = evaluation.outcome, evaluation.action_result
     assert outcome.state == "correct"
     assert outcome.scoring_mode == "end_state"
     assert outcome.score_reason == "end_state_satisfied"
@@ -977,15 +988,20 @@ def test_satisfied_state_overrides_extra_action() -> None:
 
 def test_evaluable_unsatisfied_state_is_incorrect_even_if_actions_pass() -> None:
     # The desired state is off but the call turns the light on.
-    desired = (DesiredState("light.bedroom", "off"),)
+    desired = (DesiredEntity("light.bedroom", "off"),)
     seeds = (_seed("light.bedroom", "off"),)
     call = _action("light", "turn_on", "light.bedroom")
     required = RequiredAction("light", "turn_on", ("light.bedroom",))
-    outcome, result, _ledger, end_state = evaluate_case(
+    evaluation = evaluate_case(
         _state_case(*desired, actions=(required,)),
         [call],
         overlay_seeds=seeds,
         invoker_calls=[call],
+    )
+    outcome, result, end_state = (
+        evaluation.outcome,
+        evaluation.action_result,
+        evaluation.end_state_result,
     )
     # State is primary: unsatisfied even though the action ledger matches.
     assert outcome.state == "incorrect"
@@ -995,12 +1011,17 @@ def test_evaluable_unsatisfied_state_is_incorrect_even_if_actions_pass() -> None
     assert result.passed is True
 
 
-def test_no_desired_states_uses_action_fallback() -> None:
-    outcome, result, _ledger, end_state = evaluate_case(
+def test_no_desired_entities_uses_action_fallback() -> None:
+    evaluation = evaluate_case(
         _case(_BEDROOM_ON),
         [_action("light", "turn_on", "light.bedroom")],
         overlay_seeds=(),
         invoker_calls=(),
+    )
+    outcome, result, end_state = (
+        evaluation.outcome,
+        evaluation.action_result,
+        evaluation.end_state_result,
     )
     assert outcome.scoring_mode == "actions"
     assert outcome.score_reason == result.reason == "ok"
@@ -1008,35 +1029,58 @@ def test_no_desired_states_uses_action_fallback() -> None:
 
 
 def test_unevaluable_predicate_uses_action_fallback() -> None:
-    desired = (DesiredState("light.missing", "on"),)
-    outcome, result, _ledger, end_state = evaluate_case(
+    desired = (DesiredEntity("light.missing", "on"),)
+    evaluation = evaluate_case(
         _state_case(*desired, actions=(_BEDROOM_ON,)),
         [_action("light", "turn_on", "light.bedroom")],
         overlay_seeds=(),
         invoker_calls=(),
+    )
+    outcome, result, end_state = (
+        evaluation.outcome,
+        evaluation.action_result,
+        evaluation.end_state_result,
     )
     assert outcome.scoring_mode == "actions"
     assert outcome.score_reason == result.reason == "ok"
     assert end_state.status == "unevaluable"
 
 
+def test_unsupported_attribute_predicate_uses_action_fallback() -> None:
+    desired = (DesiredEntity("light.bedroom", attributes={"hue": 120}),)
+    call = _action("light", "turn_on", "light.bedroom")
+    evaluation = evaluate_case(
+        _state_case(*desired, actions=(_BEDROOM_ON,)),
+        [call],
+        overlay_seeds=(OverlayStateSeed("light.bedroom", "light", "off", {"hue": 0}),),
+        invoker_calls=[call],
+    )
+    outcome, result, end_state = (
+        evaluation.outcome,
+        evaluation.action_result,
+        evaluation.end_state_result,
+    )
+
+    assert outcome.scoring_mode == "actions"
+    assert outcome.score_reason == result.reason == "ok"
+    assert end_state.status == "unevaluable"
+
+
 def test_ordered_toggle_changes_final_state_verdict() -> None:
-    desired = (DesiredState("switch.outlet", "on"),)
+    desired = (DesiredEntity("switch.outlet", "on"),)
     seeds = (_seed("switch.outlet", "off"),)
     single_toggle = _action("switch", "toggle", "switch.outlet")
     double_toggle = [single_toggle, _action("switch", "toggle", "switch.outlet")]
 
-    outcome1, _, _, end1 = evaluate_case(
+    evaluation1 = evaluate_case(
         _state_case(*desired), [single_toggle], overlay_seeds=seeds, invoker_calls=[single_toggle]
     )
-    outcome2, _, _, end2 = evaluate_case(
-        _state_case(*desired), double_toggle, overlay_seeds=seeds, invoker_calls=double_toggle
-    )
-    assert outcome1.state == "correct"
-    assert end1.status == "satisfied"
+    evaluation2 = evaluate_case(_state_case(*desired), double_toggle, overlay_seeds=seeds, invoker_calls=double_toggle)
+    assert evaluation1.outcome.state == "correct"
+    assert evaluation1.end_state_result.status == "satisfied"
     # Two toggles return to off — unsatisfied.
-    assert outcome2.state == "incorrect"
-    assert end2.status == "unsatisfied"
+    assert evaluation2.outcome.state == "incorrect"
+    assert evaluation2.end_state_result.status == "unsatisfied"
 
 
 @pytest.mark.parametrize(
@@ -1050,6 +1094,7 @@ async def test_no_action_already_on_passes_state_primary(case_id: str, tmp_path:
         baseline_candidate(),
         "stub",
         case,
+        case.requests[0],
         EvalConfig(
             models=["stub"],
             candidates=["baseline"],

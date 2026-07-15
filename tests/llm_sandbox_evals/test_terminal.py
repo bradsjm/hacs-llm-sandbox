@@ -62,7 +62,7 @@ def _reporter(*, human: bool = True, escape_available: bool = True, concurrency:
 
 
 def _cell(case_id: str = "case", reasoning_effort: str | None = None) -> MatrixCellRef:
-    return MatrixCellRef(case_id, "baseline", "stub", "home_minimal", reasoning_effort=reasoning_effort)
+    return MatrixCellRef(case_id, "canonical", "baseline", "stub", "home_minimal", reasoning_effort=reasoning_effort)
 
 
 def _trace(
@@ -87,10 +87,13 @@ def _trace(
         case_id=case_id,
         candidate_id=candidate_id,
         model_id=model_id,
+        request_variant_id="canonical",
+        request_text=request,
+        category="test",
         reasoning_effort=reasoning_effort,
         answer=answer,
         required_actions=(RequiredAction("light", "turn_on", ("light.bedroom",)),),
-        desired_states=(),
+        desired_entities=(),
         overlay_state_seeds=(),
         recorded_invocations=(),
         end_state_result=EndStateResult("not_authored", False, False),
@@ -112,14 +115,13 @@ def _trace(
         ),
         provider_error=provider_error,
         execution_error=execution_error,
-        user_request=request,
     )
 
 
 def _feed(reporter: MatrixTerminalReporter, *cells: tuple[MatrixCellRef, CaseTrace]) -> None:
     reporter._state.total = len(cells)
     for index, (cell, trace) in enumerate(cells, start=1):
-        reporter.handle(MatrixProgressEvent("cell_started", cell=cell, request=trace.user_request, total=len(cells)))
+        reporter.handle(MatrixProgressEvent("cell_started", cell=cell, request=trace.request_text, total=len(cells)))
         reporter.handle(
             MatrixProgressEvent("cell_finished", cell=cell, trace=trace, completion_index=index, total=len(cells))
         )
@@ -524,7 +526,7 @@ def test_operational_issues_group_rate_limits_with_full_actionable_detail() -> N
     _feed(
         reporter,
         (
-            MatrixCellRef("case-z", "zeta", "cerebras", "home_minimal"),
+            MatrixCellRef("case-z", "canonical", "zeta", "cerebras", "home_minimal"),
             _trace(
                 case_id="case-z",
                 candidate_id="zeta",
@@ -537,7 +539,7 @@ def test_operational_issues_group_rate_limits_with_full_actionable_detail() -> N
             ),
         ),
         (
-            MatrixCellRef("case-a", "alpha", "cerebras", "home_minimal"),
+            MatrixCellRef("case-a", "canonical", "alpha", "cerebras", "home_minimal"),
             _trace(
                 case_id="case-a",
                 candidate_id="alpha",
@@ -659,7 +661,7 @@ def test_operational_issues_preview_cells_when_group_has_many_occurrences() -> N
         reporter,
         *tuple(
             (
-                MatrixCellRef(f"case-{index}", "baseline", "provider", "home_minimal"),
+                MatrixCellRef(f"case-{index}", "canonical", "baseline", "provider", "home_minimal"),
                 _trace(
                     case_id=f"case-{index}",
                     state="incomplete",
@@ -689,7 +691,7 @@ def test_operational_issues_render_provider_markup_as_literal_text_live_and_dura
     _feed(
         reporter,
         (
-            MatrixCellRef("literal-markup", "baseline", "cerebras", "home_minimal"),
+            MatrixCellRef("literal-markup", "canonical", "baseline", "cerebras", "home_minimal"),
             _trace(
                 case_id="literal-markup",
                 state="incomplete",

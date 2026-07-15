@@ -4,10 +4,16 @@
 
 ### Improve eval harness lifecycle and presentation
 
-- Bumped `llm_sandbox_evals` artifacts to scoring v7 with exact-first action
-  matching, narrow multi-target partition equivalence, persisted model variants,
-  strict legacy rejection, separate action reasons and operational causes, and
-  corrected native usage metrics.
+- Evolved the eval corpus to 17 categorized canonical tasks with explicit
+  effect, tool-call, and deterministic answer oracles, and bumped persisted
+  artifacts to scoring v9 with strict v8-and-older rejection and reload-safe
+  rescoring from persisted evidence.
+- Added canonical Wilson 95% intervals, category slices, canonical/paraphrase
+  identity, task robustness, and deterministic reload-only Markdown reports
+  alongside the shared terminal and HTML presentation model.
+- Retained exact-first action matching, narrow multi-target partition
+  equivalence, persisted model variants, separate scoring and operational
+  causes, and corrected native usage metrics.
 - Added atomic run manifests and typed cancellation/failure journals that are
   explicitly not reports, plus pre-flight matrix validation.
 - Added completed-report `errors.log` artifacts with ordered UTF-8 NDJSON
@@ -19,7 +25,7 @@
   and report-model-driven HTML/CSV presentation.
 - Classified provider HTTP 429 and `token_quota_exceeded` failures as
   `rate_limit`, and rendered grouped actionable `Operational issues` tables
-  without changing v7 scoring or payload-free machine output.
+  without changing payload-free machine output.
 
 ### Restore safe configuration minima
 

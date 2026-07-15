@@ -587,7 +587,7 @@ async def test_run_eval_matrix_delivers_phase_callbacks_in_every_terminal_mode(
         homes=None,
         runs_dir=tmp_path,
     )
-    phase = LanePhaseEvent(MatrixCellRef("phase-case", "baseline", "stub", "home_minimal"), "thinking")
+    phase = LanePhaseEvent(MatrixCellRef("phase-case", "canonical", "baseline", "stub", "home_minimal"), "thinking")
     delivered: list[LanePhaseEvent] = []
 
     async def emit_phase(
@@ -620,8 +620,8 @@ async def test_run_eval_matrix_delivers_phase_callbacks_in_every_terminal_mode(
     [
         pytest.param({"scoring_version": 6, "cases": []}, id="v6-envelope"),
         pytest.param(
-            {"scoring_version": 8, "cases": [{"output": {"scoring_version": 6}}]},
-            id="v6-trace-in-v8-envelope",
+            {"scoring_version": 9, "cases": [{"output": {"scoring_version": 6}}]},
+            id="v6-trace-in-v9-envelope",
         ),
     ],
 )
@@ -637,7 +637,7 @@ def test_report_html_rejects_legacy_artifacts(
 
     assert exit_code == 1
     assert captured.out == ""
-    assert "legacy scoring artifact; rerun evaluation with scoring v8" in captured.err
+    assert "legacy scoring artifact; rerun evaluation with scoring v9" in captured.err
     assert not (run_dir / "report.html").exists()
 
 

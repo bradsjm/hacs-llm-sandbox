@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Self, get_args
 
 from pydantic_evals.reporting import EvaluationReport
 
+from llm_sandbox_evals import statistics as _statistics
 from llm_sandbox_evals.experiment import (
     LanePhaseEvent,
     MatrixCellMeta,
@@ -18,6 +19,14 @@ from llm_sandbox_evals.schema import CaseTrace, variant_label
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
+
+PairAggregate = _statistics.PairAggregate
+CategoryAggregate = _statistics.CategoryAggregate
+ResultCounts = _statistics.ResultCounts
+TaskRobustness = _statistics.TaskRobustness
+pair_aggregates = _statistics.pair_aggregates
+rate = _statistics.rate
+result_counts = _statistics.result_counts
 
 # Valid phase vocabulary derived from the backend LanePhase alias, never hand-maintained.
 _VALID_PHASES: frozenset[str] = frozenset(get_args(LanePhase.__value__))
@@ -40,52 +49,13 @@ def result_label(trace: CaseTrace) -> str:
     return f"{trace.outcome.state}·{effective_cause(trace)}"
 
 
-def rate(numerator: int, denominator: int) -> float:
-    """Return a safe display rate."""
-    return numerator / denominator if denominator else 0.0
-
-
-@dataclass(frozen=True, slots=True)
-class ResultCounts:
-    """Count vocabulary shared by runtime and saved-report views."""
-
-    total: int
-    correct: int
-    incorrect: int
-    incomplete: int
-
-    @property
-    def scored(self) -> int:
-        """Return cells whose action outcome is scoreable."""
-        return self.correct + self.incorrect
-
-    @property
-    def quality_rate(self) -> float:
-        """Return correct/scored."""
-        return rate(self.correct, self.scored)
-
-    @property
-    def coverage_rate(self) -> float:
-        """Return scored/total."""
-        return rate(self.scored, self.total)
-
-
-def result_counts(traces: Iterable[CaseTrace]) -> ResultCounts:
-    """Aggregate terminal traces using the public scored vocabulary."""
-    values = tuple(traces)
-    return ResultCounts(
-        total=len(values),
-        correct=sum(trace.outcome.state == "correct" for trace in values),
-        incorrect=sum(trace.outcome.state == "incorrect" for trace in values),
-        incomplete=sum(trace.outcome.state == "incomplete" for trace in values),
-    )
-
-
 @dataclass(frozen=True, slots=True)
 class PresentationCell:
     """Normalized per-cell facts used by every presentation surface."""
 
     case_id: str
+    request_variant_id: str
+    category: str
     candidate_id: str
     model_id: str
     variant: str
@@ -109,20 +79,6 @@ class OperationalIssueGroup:
     detail: str
 
 
-@dataclass(frozen=True, slots=True)
-class PairAggregate:
-    """Candidate by resolved-variant aggregate for compact comparison views."""
-
-    candidate_id: str
-    variant: str
-    counts: ResultCounts
-    mean_calls: float
-    mean_failed_calls: float
-    mean_elapsed: float
-    total_tokens: float | None
-    total_cost: float | None
-
-
 type _OperationalIssueKey = tuple[
     str,
     str,
@@ -134,43 +90,6 @@ type _OperationalIssueKey = tuple[
     str | None,
     str | None,
 ]
-
-
-def pair_aggregates(cells: Iterable[PresentationCell]) -> tuple[PairAggregate, ...]:
-    """Group normalized cells by candidate and display variant."""
-    grouped: dict[tuple[str, str], list[PresentationCell]] = {}
-    for cell in cells:
-        grouped.setdefault((cell.candidate_id, cell.variant), []).append(cell)
-    aggregates: list[PairAggregate] = []
-    for (candidate_id, variant), values in sorted(grouped.items()):
-        traces = [cell.trace for cell in values]
-        calls = [float(cell.metrics.get("tool_calls", cell.trace.diagnostics.tool_calls)) for cell in values]
-        failures = [
-            float(cell.metrics.get("failed_tool_calls", cell.trace.diagnostics.failed_tool_calls)) for cell in values
-        ]
-        elapsed = [
-            float(cell.metrics.get("elapsed_seconds", cell.trace.diagnostics.elapsed_seconds or 0.0))
-            for cell in values
-        ]
-        tokens = [_metric_or_usage(cell, "total_tokens") for cell in values]
-        costs = [_metric_or_usage(cell, "cost") for cell in values]
-        aggregates.append(
-            PairAggregate(
-                candidate_id,
-                variant,
-                result_counts(traces),
-                sum(calls) / len(calls) if calls else 0.0,
-                sum(failures) / len(failures) if failures else 0.0,
-                sum(elapsed) / len(elapsed) if elapsed else 0.0,
-                sum(value for value in tokens if value is not None)
-                if any(value is not None for value in tokens)
-                else None,
-                sum(value for value in costs if value is not None)
-                if any(value is not None for value in costs)
-                else None,
-            )
-        )
-    return tuple(aggregates)
 
 
 def operational_issue_groups(cells: Iterable[PresentationCell]) -> tuple[OperationalIssueGroup, ...]:
@@ -249,15 +168,6 @@ def operational_issue_groups(cells: Iterable[PresentationCell]) -> tuple[Operati
             ),
         )
     )
-
-
-def _metric_or_usage(cell: PresentationCell, name: str) -> float | None:
-    value = cell.metrics.get(name)
-    if isinstance(value, int | float) and not isinstance(value, bool):
-        return float(value)
-    usage = cell.trace.diagnostics.usage
-    fallback = usage.get(name) if usage else None
-    return float(fallback) if isinstance(fallback, int | float) and not isinstance(fallback, bool) else None
 
 
 @dataclass(slots=True)
@@ -407,11 +317,39 @@ class ReportPresentationModel:
         """Return immutable candidate by variant aggregates."""
         return pair_aggregates(self.cells)
 
+    @property
+    def category_aggregates(self) -> tuple[CategoryAggregate, ...]:
+        """Return immutable candidate by variant by category aggregates."""
+        return _statistics.category_aggregates(self.cells)
+
+    @property
+    def canonical_counts(self) -> ResultCounts:
+        """Return counts for canonical request variants only."""
+        return result_counts(cell.trace for cell in _statistics.canonical_cells(self.cells))
+
+    @property
+    def paraphrase_counts(self) -> ResultCounts:
+        """Return counts for non-canonical request variants only."""
+        return result_counts(cell.trace for cell in _statistics.paraphrase_cells(self.cells))
+
+    @property
+    def canonical_quality_interval(self) -> tuple[float | None, float | None]:
+        """Return the Wilson 95% interval over scored canonical cells."""
+        counts = self.canonical_counts
+        return _statistics.wilson_interval(counts.correct, counts.scored)
+
+    @property
+    def task_robustness(self) -> tuple[TaskRobustness, ...]:
+        """Return task-level robustness across request variants."""
+        return _statistics.task_robustness(self.cells)
+
 
 def _presentation_cell(cell: MatrixCellRef, trace: CaseTrace, metrics: dict[str, float | int]) -> PresentationCell:
     """Normalize a cell and trace into the common presentation shape."""
     return PresentationCell(
         cell.case_id,
+        cell.request_variant_id,
+        trace.category,
         cell.candidate_id,
         cell.model_id,
         variant_label(trace.model_id, trace.reasoning_effort),

@@ -17,6 +17,13 @@ from rich.text import Text
 from llm_sandbox_evals.config import EvalConfig
 from llm_sandbox_evals.experiment import LanePhaseEvent, MatrixCellRef, MatrixProgressEvent
 from llm_sandbox_evals.presentation import OperationalIssueGroup, PresentationState, result_label, variant_label
+from llm_sandbox_evals.statistics import (
+    canonical_cells,
+    category_aggregates,
+    pair_aggregates,
+    result_counts,
+    wilson_interval,
+)
 
 _ACTIVE = "#38b6ca"
 _SUCCESS = "#55c97c"
@@ -290,7 +297,8 @@ class MatrixTerminalReporter:
         line.append(f"Running {running}", style=_ACTIVE)
         line.append(f"  Queued {queued}", style="dim")
         line.append(
-            f"    Scored {counts.scored}  Quality {counts.quality_rate:.1%}  Coverage {counts.coverage_rate:.1%}",
+            f"    Scored {counts.scored}  Quality {_percentage(counts.quality_rate)}  "
+            f"Coverage {_percentage(counts.coverage_rate)}",
             style="bold",
         )
         line.append(f"    Elapsed {_live_duration(perf_counter() - self._state.started_at)}", style=_WARNING)
@@ -395,7 +403,7 @@ class MatrixTerminalReporter:
             table.add_row(
                 Text(glyph, style=color),
                 str(index),
-                Text(trace.user_request or cell.case_id),
+                Text(trace.request_text or cell.case_id),
                 _LeftEllipsisText(cell.variant, style="dim"),
                 # Single Result column, colored by outcome, still reads as state·cause.
                 Text(result_label(trace), style=color),
@@ -487,27 +495,34 @@ def _operational_issue_cells(cells: tuple[str, ...]) -> Text:
 
 def render_durable_final(state: PresentationState, *, run_dir: str, report_html: str) -> Panel:
     """Return the sole durable interactive final after Live has stopped."""
-    counts = state.counts
+    canonical = canonical_cells(state.completed)
+    counts = result_counts(cell.trace for cell in canonical)
     summary = Text()
     summary.append(f"Finished {len(state.completed)}/{state.total}\n", style="bold")
-    summary.append("Quality ", style="bold")
-    summary.append(f"{counts.correct}/{counts.scored} ({counts.quality_rate:.1%})\n", style=_SUCCESS)
-    summary.append("Coverage ", style="bold")
-    summary.append(f"{counts.scored}/{counts.total} ({counts.coverage_rate:.1%})\n", style=_ACTIVE)
+    summary.append("Canonical quality ", style="bold")
+    summary.append(
+        f"{counts.correct}/{counts.scored} ({_percentage(counts.quality_rate)}) "
+        f"Wilson 95% CI {_interval(wilson_interval(counts.correct, counts.scored))}\n",
+        style=_SUCCESS,
+    )
+    summary.append("Canonical coverage ", style="bold")
+    summary.append(f"{counts.scored}/{counts.total} ({_percentage(counts.coverage_rate)})\n", style=_ACTIVE)
     table = Table(box=box.SIMPLE_HEAD, expand=True, pad_edge=False, header_style=_ACTIVE)
     table.add_column("Candidate")
     table.add_column("Variant", overflow="fold")
     table.add_column("Quality", justify="right")
+    table.add_column("Wilson 95% CI", justify="right")
     table.add_column("Coverage", justify="right")
     table.add_column("Calls/failures", justify="right")
     table.add_column("Avg elapsed", justify="right")
     table.add_column("Tokens / cost", justify="right")
-    for aggregate in state.aggregates:
+    for aggregate in pair_aggregates(canonical):
         table.add_row(
             aggregate.candidate_id,
             aggregate.variant,
-            Text(f"{aggregate.counts.quality_rate:.1%}", style=_SUCCESS),
-            Text(f"{aggregate.counts.coverage_rate:.1%}", style=_ACTIVE),
+            Text(_percentage(aggregate.counts.quality_rate), style=_SUCCESS),
+            Text(_interval(wilson_interval(aggregate.counts.correct, aggregate.counts.scored)), style=_SUCCESS),
+            Text(_percentage(aggregate.counts.coverage_rate), style=_ACTIVE),
             f"{aggregate.mean_calls:.1f}/{aggregate.mean_failed_calls:.1f}",
             _duration(aggregate.mean_elapsed),
             f"{_token_total(aggregate.total_tokens)} / cost "
@@ -522,13 +537,43 @@ def render_durable_final(state: PresentationState, *, run_dir: str, report_html:
             summary.append(f"{cell.case_id} {result_label(cell.trace)}\n")
     summary.append(f"Artifacts: {run_dir}\n", style="dim")
     summary.append(f"report.html: {report_html}", style="dim")
+    category_table = _category_breakdown_table(state)
     return Panel(
-        Group(summary, Text(), table, Text(), _operational_issues_panel(state.operational_issue_groups)),
+        Group(
+            summary,
+            Text(),
+            table,
+            Text(),
+            category_table,
+            Text(),
+            _operational_issues_panel(state.operational_issue_groups),
+        ),
         title="Eval complete",
         border_style=_SUCCESS,
         box=box.ROUNDED,
         expand=True,
     )
+
+
+def _category_breakdown_table(state: PresentationState) -> Table:
+    """Render the additive candidate by variant by category breakdown."""
+    table = Table(title="By category", box=box.SIMPLE_HEAD, expand=True, pad_edge=False, header_style=_ACTIVE)
+    table.add_column("Candidate")
+    table.add_column("Variant", overflow="fold")
+    table.add_column("Category")
+    table.add_column("Quality", justify="right")
+    table.add_column("Coverage", justify="right")
+    table.add_column("Scored", justify="right")
+    for aggregate in category_aggregates(state.completed):
+        table.add_row(
+            aggregate.candidate_id,
+            aggregate.variant,
+            aggregate.category,
+            Text(_percentage(aggregate.counts.quality_rate), style=_SUCCESS),
+            Text(_percentage(aggregate.counts.coverage_rate), style=_ACTIVE),
+            str(aggregate.counts.scored),
+        )
+    return table
 
 
 def _left_ellipsis(value: str, width: int) -> str:
@@ -543,6 +588,17 @@ def _token_total(tokens: float | None) -> str:
     if tokens is None:
         return "tokens unavailable"
     return f"tokens {int(tokens / 1_000 + 0.5):,}k"
+
+
+def _percentage(value: float | None) -> str:
+    """Format one shared rate without coercing unavailable data to zero."""
+    return "—" if value is None else f"{value:.1%}"
+
+
+def _interval(interval: tuple[float | None, float | None]) -> str:
+    """Format one optional Wilson interval for terminal output."""
+    low, high = interval
+    return "—" if low is None or high is None else f"[{low:.1%}, {high:.1%}]"
 
 
 def _duration(seconds: float) -> str:

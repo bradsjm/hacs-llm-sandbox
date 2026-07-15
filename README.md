@@ -151,15 +151,21 @@ This is a community integration. To contribute, set up a dev environment, or rep
 Documentation source lives under [`docs-site/docs/`](docs-site/docs/). Build it with `pnpm build` from `docs-site/` before changing docs navigation, Docusaurus config, or source-grounded behavior pages.
 
 Eval runs for the dev-only `llm_sandbox_evals` package create `manifest.json`
-under `eval_data/runs/<run_id>/` before model calls. Complete scoring-v7 runs
+under `eval_data/runs/<run_id>/` before model calls. Complete scoring-v9 runs
 write `report.json` and `report.html`; cancelled or failed runs write a typed
 `partial.json` journal instead, which is not a report and has no HTML/resume
-path. v6 and older artifacts are rejected without compatibility. Reports
-preserve provider model IDs and show resolved reasoning variants, quality
-(`correct/scored`), coverage (`scored/total`), and operational causes.
+path. v8 and older artifacts are rejected without compatibility. The 17-case
+corpus spans direct, discovery, service-data, conditional, ambiguity,
+tool-contract, and read-answer categories with effect, tool-call, and answer
+oracles. Reports preserve provider model IDs and show resolved reasoning
+variants, quality (`correct/scored`), coverage (`scored/total`), canonical
+Wilson 95% intervals, category slices, and operational causes.
 TTY runs render one human stderr summary; redirected runs or `--machine` emit
 deterministic KV. `python -m llm_sandbox_evals report <run_id> --html`
 regenerates the complete report without model calls.
+`python -m llm_sandbox_evals report <run_id> --markdown` similarly writes a
+deterministic Markdown report. Canonical requests define the primary
+leaderboard; paraphrase cells and task robustness remain distinct views.
 Interactive evals consume native Pydantic AI streaming events; their Activity
 column appears only after an observed thinking event; transient phase/activity
 data is not persisted to reports or artifacts and is not rendered in machine
