@@ -1,9 +1,17 @@
+from collections import Counter
 from collections.abc import Callable
 import json
 from pathlib import Path
 
 from llm_sandbox_evals.cases import CASES
-from llm_sandbox_evals.schema import AnswerPredicate, DesiredEntity, EvalCase, ExpectedToolCall, RequestVariant
+from llm_sandbox_evals.schema import (
+    AnswerPredicate,
+    DesiredEntity,
+    EvalCase,
+    ExpectedToolCall,
+    RequestVariant,
+    RequiredAction,
+)
 import pytest
 
 
@@ -52,6 +60,7 @@ _DESIRED_ENTITY_CASE_IDS = {
     "condition_history_change_turn_off",
     "no_action_history_no_recent_change",
     "ambiguous_logic_living_room_recent",
+    "selector_evening_lights_living_room_off",
 }
 
 _ACTION_ONLY_CASE_IDS = {
@@ -77,23 +86,62 @@ def test_effect_corpus_desired_entity_and_action_only_split_is_exact() -> None:
 
     assert desired_entity_cases == _DESIRED_ENTITY_CASE_IDS
     assert action_only_cases == _ACTION_ONLY_CASE_IDS
-    assert len(desired_entity_cases) == 11
+    assert len(desired_entity_cases) == 12
     assert len(action_only_cases) == 3
     assert desired_entity_cases | action_only_cases == effect_cases
-    assert len(case_ids) == 17
+    assert len(case_ids) == 25
 
+
+
+def test_corpus_category_distribution_is_exact() -> None:
+    assert Counter(case.category for case in CASES) == {
+        "direct": 3,
+        "discovery": 3,
+        "service_data": 2,
+        "conditional": 4,
+        "ambiguity": 3,
+        "tool_contract": 3,
+        "read_answer": 7,
+    }
 
 def test_dedicated_oracle_cases_author_narrow_contracts() -> None:
-    tool_case = next(case for case in CASES if case.id == "tool_call_get_history_utility_room")
-    count_case = next(case for case in CASES if case.id == "answer_count_lights_on_utility_room")
-    state_case = next(case for case in CASES if case.id == "answer_state_utility_room_accent")
+    cases_by_id = {case.id: case for case in CASES}
 
-    assert tool_case.oracle == "tool_calls"
-    assert tool_case.expected_tool_calls == (
+    assert cases_by_id["tool_call_get_history_utility_room"].oracle == "tool_calls"
+    assert cases_by_id["tool_call_get_history_utility_room"].expected_tool_calls == (
         ExpectedToolCall("get_history", {"entity_ids": ["light.utility_room_ceiling"]}),
     )
-    assert count_case.expected_answer == AnswerPredicate("count", count=1)
-    assert state_case.expected_answer == AnswerPredicate("state", entity_id="light.utility_room_accent", state="on")
+    assert cases_by_id["answer_count_lights_on_utility_room"].expected_answer == AnswerPredicate("count", count=1)
+    assert cases_by_id["answer_state_utility_room_accent"].expected_answer == AnswerPredicate(
+        "state",
+        entity_id="light.utility_room_accent",
+        state="on",
+    )
+    assert cases_by_id["tool_call_get_statistics_balcony_power"].expected_tool_calls == (
+        ExpectedToolCall("get_statistics", {"statistic_ids": ["sensor.balcony_power"]}),
+    )
+    assert cases_by_id["tool_call_get_logbook_living_room_accent"].expected_tool_calls == (
+        ExpectedToolCall("get_logbook", {"entity_ids": ["light.living_room_accent"]}),
+    )
+    assert cases_by_id["answer_mean_balcony_power"].expected_answer == AnswerPredicate(
+        "scalar",
+        scalar_value=40,
+        tolerance=0,
+    )
+    assert cases_by_id["answer_both_living_room_lights_turned_on"].expected_answer == AnswerPredicate(
+        "boolean",
+        value=True,
+    )
+    assert cases_by_id["answer_living_room_lights_turned_on_set"].expected_answer == AnswerPredicate(
+        "entity_set",
+        entity_ids=("light.living_room_ceiling", "light.living_room_accent"),
+    )
+    assert cases_by_id["answer_living_room_accent_turn_on_time"].expected_answer == AnswerPredicate(
+        "time_range",
+        start="2026-06-29T11:50:00+00:00",
+        end="2026-06-29T11:50:00+00:00",
+    )
+    assert cases_by_id["answer_count_climate_label_second_floor"].expected_answer == AnswerPredicate("count", count=9)
 
 
 def test_authored_code_judge_selection_is_exact() -> None:
@@ -160,6 +208,22 @@ def test_utility_discovery_uses_exact_action_fallback() -> None:
     assert case.required_actions[0].target_entity_ids == (
         "light.utility_room_accent",
         "light.utility_room_ceiling",
+    )
+
+
+def test_evening_living_room_selector_uses_state_primary_scoring() -> None:
+    case = next(case for case in CASES if case.id == "selector_evening_lights_living_room_off")
+
+    assert case.required_actions == (
+        RequiredAction(
+            "light",
+            "turn_off",
+            ("light.living_room_ceiling", "light.living_room_accent"),
+        ),
+    )
+    assert case.desired_entities == (
+        DesiredEntity("light.living_room_ceiling", state="off"),
+        DesiredEntity("light.living_room_accent", state="off"),
     )
 
 

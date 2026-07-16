@@ -312,3 +312,130 @@ cases:
         entity_id: light.utility_room_accent
         state: "on"
       required_actions: []
+  - name: tool_call_get_statistics_balcony_power
+    inputs:
+      id: tool_call_get_statistics_balcony_power
+      home: home_full
+      category: tool_contract
+      oracle: tool_calls
+      requests:
+        - id: canonical
+          text: Get the recorded statistics for Balcony power.
+      expected_tool_calls:
+        - tool_name: get_statistics
+          args:
+            statistic_ids: [sensor.balcony_power]
+      required_actions: []
+  - name: tool_call_get_logbook_living_room_accent
+    inputs:
+      id: tool_call_get_logbook_living_room_accent
+      home: home_full
+      category: tool_contract
+      oracle: tool_calls
+      requests:
+        - id: canonical
+          text: What logbook activity is available for the Living Room accent light?
+      expected_tool_calls:
+        - tool_name: get_logbook
+          args:
+            entity_ids: [light.living_room_accent]
+      required_actions: []
+  - name: answer_mean_balcony_power
+    inputs:
+      id: answer_mean_balcony_power
+      home: home_full
+      category: read_answer
+      oracle: answer
+      requests:
+        - id: canonical
+          text: >-
+            The Balcony power sensor has two hourly statistics recorded between
+            10:00 and 12:00 UTC. What is the arithmetic mean of their mean
+            values? Return only the number.
+      expected_answer:
+        kind: scalar
+        scalar_value: 40
+        tolerance: 0
+      required_actions: []
+  - name: answer_both_living_room_lights_turned_on
+    inputs:
+      id: answer_both_living_room_lights_turned_on
+      home: home_full
+      category: read_answer
+      oracle: answer
+      requests:
+        - id: canonical
+          text: >-
+            Did both Living Room lights turn on between 11:00 and 12:00 UTC?
+            Answer exactly Yes or No.
+      expected_answer:
+        kind: boolean
+        value: true
+      required_actions: []
+  - name: answer_living_room_lights_turned_on_set
+    inputs:
+      id: answer_living_room_lights_turned_on_set
+      home: home_full
+      category: read_answer
+      oracle: answer
+      requests:
+        - id: canonical
+          text: >-
+            Which Living Room lights turned on between 11:00 and 12:00 UTC?
+            Return only their entity IDs.
+      expected_answer:
+        kind: entity_set
+        entity_ids:
+          - light.living_room_ceiling
+          - light.living_room_accent
+      required_actions: []
+  - name: answer_living_room_accent_turn_on_time
+    inputs:
+      id: answer_living_room_accent_turn_on_time
+      home: home_full
+      category: read_answer
+      oracle: answer
+      requests:
+        - id: canonical
+          text: >-
+            When did the Living Room accent light turn on? Return exactly one
+            RFC3339 timestamp.
+      expected_answer:
+        kind: time_range
+        start: "2026-06-29T11:50:00+00:00"
+        end: "2026-06-29T11:50:00+00:00"
+      required_actions: []
+  - name: selector_evening_lights_living_room_off
+    inputs:
+      id: selector_evening_lights_living_room_off
+      home: home_full
+      category: discovery
+      tags: []
+      oracle: effect
+      requests:
+        - id: canonical
+          text: Turn off every light in the Living Room tagged Evening.
+      required_actions:
+        - domain: light
+          service: turn_off
+          target_entity_ids: [light.living_room_ceiling, light.living_room_accent]
+      desired_entities:
+        - entity_id: light.living_room_ceiling
+          state: "off"
+        - entity_id: light.living_room_accent
+          state: "off"
+  - name: answer_count_climate_label_second_floor
+    inputs:
+      id: answer_count_climate_label_second_floor
+      home: home_full
+      category: read_answer
+      oracle: answer
+      requests:
+        - id: canonical
+          text: >-
+            How many climate entities on the Second Floor have the Climate
+            label? Return only the integer.
+      expected_answer:
+        kind: count
+        count: 9
+      required_actions: []

@@ -33,6 +33,33 @@ def test_full_home_preserves_312_entity_inventory() -> None:
     assert len(snapshot.entities) == 312
 
 
+def test_full_home_exposes_balcony_statistics() -> None:
+    fixture = get_home("home_full")
+    snapshot = fixture.snapshot()
+    statistics = cast(dict[str, list[dict[str, object]]], fixture.recorder()["statistics"])
+    rows = statistics["sensor.balcony_power"]
+
+    assert snapshot.states["sensor.balcony_power"].attributes["state_class"] == "measurement"
+    assert [row["mean"] for row in rows] == [38.0, 42.0]
+
+
+def test_full_home_selector_indexes_match_eval_cases() -> None:
+    snapshot = get_home("home_full").snapshot()
+    indexes = snapshot.indexes
+    living_room_evening_entities = set(indexes.entity_ids_by_area_id["living_room"]) & set(
+        indexes.entity_ids_by_label["label_evening"]
+    )
+    second_floor_climate_entities = {
+        f"climate.{area_id}" for area_id in indexes.area_ids_by_floor_id["floor_second"]
+    }
+
+    assert living_room_evening_entities == {
+        "light.living_room_ceiling",
+        "light.living_room_accent",
+    }
+    assert len(second_floor_climate_entities) == 9
+    assert second_floor_climate_entities <= set(indexes.entity_ids_by_label["label_climate"])
+
 def test_full_home_basement_ceiling_lights_start_off() -> None:
     snapshot = get_home("home_full").snapshot()
     basement_ceiling_ids = {

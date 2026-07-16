@@ -284,7 +284,17 @@ def _state_record(entity: EntityRecord) -> StateRecord:
                 {"device_class": "humidity", "unit_of_measurement": "%"},
             )
         case "sensor" if object_id.endswith("_power"):
-            return (entity_id, "42", name, last_changed, {"device_class": "power", "unit_of_measurement": "W"})
+            return (
+                entity_id,
+                "42",
+                name,
+                last_changed,
+                {
+                    "device_class": "power",
+                    "state_class": "measurement",
+                    "unit_of_measurement": "W",
+                },
+            )
         case "switch":
             return (entity_id, "off", name, last_changed, {})
         case _:
