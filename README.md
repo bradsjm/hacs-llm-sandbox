@@ -20,6 +20,8 @@ This is an early **0.1.0** release. Treat it as an experimental preview.
 
 I wrote this to see how effective it would be to give a language model a python sandbox inside home assistant to increase the assist capabilities without needing hundreds of tools given that most language models have some knowledge already of the internals of Home Assistant to varying degrees. With a sufficiently capable model the results have been encouraging as proven out using the evals included. I am currently using this with my [local voice assistant](https://www.home-assistant.io/voice_control/).
 
+Assist Agent Sandbox is designed to complement — not replace — Home Assistant's built-in Assist pipeline. Requests that built-in Assist can satisfy should use it first; the sandbox is for requests that need additional discovery, recorder access, computation, or composed conditional actions.
+
 This is **not designed as a general purpose tool**, for that there are some great MCP servers to allow coding harnesses (claude, codex etc.) access to Home Assistant including [ha-mcp](https://github.com/homeassistant-ai/ha-mcp) and [opencode add-on](https://github.com/magnusoverli/opencode).
 
 Full user and developer documentation is published with GitHub Pages from the source in [`docs-site/`](docs-site/). To preview it locally, run `pnpm install`, `pnpm build`, and `pnpm serve` from `docs-site/`.
@@ -28,7 +30,7 @@ Full user and developer documentation is published with GitHub Pages from the so
 
 ## What it gives Assist
 
-Once enabled, the assistant can call these tools during a conversation. Recorder-backed tools are offered only when Home Assistant's recorder integration is available; `get_logbook` also requires logbook runtime data.
+Once enabled alongside Home Assistant's built-in Assist API, the assistant can call these additional tools during a conversation. Recorder-backed tools are offered only when Home Assistant's recorder integration is available; `get_logbook` also requires logbook runtime data.
 
 | Tool                    | What it's for                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -39,7 +41,7 @@ Once enabled, the assistant can call these tools during a conversation. Recorder
 | **`get_automation`**    | Reads authorized automation summaries, optional administrator-only complete configuration, and optional recent automation-triggered Logbook runs. It is always offered; recorder and logbook are required only for runs.                                                                                                                                                                                                                                                                                                         |
 | **`get_camera_image`**  | Captures a **live frame** from a camera or image entity so a multimodal model can look at it ("what's on the front porch right now?"). **NOTE! This only works with the hacs-pydantic-ai component at this time.**                                                                                                                                                                                                                                                                                                               |
 
-For a direct history, statistics, or logbook answer, use the matching recorder tool. Independent direct reads can run in parallel. When recorder evidence depends on current state or registries, needs computation, drives a condition/action, or must be compared with another source, use one `execute_home_code` call instead. Scope direct reads with selectors rather than discovery calls, and do not retrieve the same evidence twice.
+Use Home Assistant's built-in Assist tools for standard intents and direct device control. For requests that need the sandbox, use the matching recorder tool for a direct history, statistics, or logbook answer. Independent direct reads can run in parallel. When recorder evidence depends on current state or registries, needs computation, drives a condition/action, or must be compared with another source, use one `execute_home_code` call instead. Scope direct reads with selectors rather than discovery calls, and do not retrieve the same evidence twice.
 
 ## Why you'd install it
 
@@ -72,7 +74,7 @@ The assistant figures out the answer itself — there's nothing for you to scrip
 
 ## Enable for your conversation (Critical Step!)
 
-Make sure your **conversation agent exposes these tools**: open your agent's settings (e.g. the OpenAI Conversation entry), and enable the **Assist Agent Sandbox** tool set so the model is allowed to call it.
+Keep Home Assistant's built-in **Assist** tool set enabled, then also enable the **Assist Agent Sandbox** tool set in your conversation agent settings. The assistant should use native Assist for supported standard intents and direct device control, and use the sandbox only when the request needs capabilities the built-in path does not provide.
 
 ## Configuration
 
@@ -160,6 +162,8 @@ tool-contract, and read-answer categories with effect, tool-call, and answer
 oracles. Reports preserve provider model IDs and show resolved reasoning
 variants, quality (`correct/scored`), coverage (`scored/total`), canonical
 Wilson 95% intervals, category slices, and operational causes.
+
+The eval harness does not invoke or benchmark Home Assistant's built-in Assist pipeline. Its results measure the sandbox tool set in isolation and should be interpreted only for requests that require sandbox capabilities after Assist-first routing.
 TTY runs render one human stderr summary; redirected runs or `--machine` emit
 deterministic KV. `python -m llm_sandbox_evals report <run_id> --html`
 regenerates the complete report without model calls.
