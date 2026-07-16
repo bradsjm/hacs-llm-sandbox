@@ -311,6 +311,137 @@ def test_attribute_final_value_is_primary_with_action_diagnostics(
     assert evaluation.end_state_result.status == ("satisfied" if expected_passed else "unsatisfied")
 
 
+@pytest.mark.parametrize(
+    ("recorded", "expected_satisfied"),
+    [
+        pytest.param(
+            [_action("light", "turn_off", "light.utility_room_accent")],
+            False,
+            id="missing-turn-on",
+        ),
+        pytest.param(
+            [_action("light", "turn_on", "light.utility_room_ceiling")],
+            False,
+            id="missing-turn-off",
+        ),
+        pytest.param(
+            [
+                _action("light", "turn_off", "light.utility_room_accent"),
+                _action("light", "turn_on", "light.utility_room_ceiling"),
+            ],
+            True,
+            id="authored-order",
+        ),
+        pytest.param(
+            [
+                _action("light", "turn_on", "light.utility_room_ceiling"),
+                _action("light", "turn_off", "light.utility_room_accent"),
+            ],
+            True,
+            id="reverse-order",
+        ),
+    ],
+)
+def test_multi_action_case_requires_both_unordered_effects(
+    recorded: list[dict[str, object]],
+    expected_satisfied: bool,
+) -> None:
+    case = _home_full_case("multi_action_swap_utility_room_lights")
+
+    evaluation = evaluate_case(
+        case,
+        recorded,
+        overlay_seeds=_home_full_seeds(case),
+        invoker_calls=recorded,
+    )
+
+    assert evaluation.outcome.state == ("correct" if expected_satisfied else "incorrect")
+    assert evaluation.end_state_result.status == ("satisfied" if expected_satisfied else "unsatisfied")
+
+
+@pytest.mark.parametrize(
+    ("recorded", "expected_satisfied"),
+    [
+        pytest.param([], False, id="missing-call"),
+        pytest.param(
+            [_action("climate", "set_temperature", "climate.workshop", {"temperature": 21})],
+            False,
+            id="wrong-temperature",
+        ),
+        pytest.param(
+            [_action("climate", "set_temperature", "climate.workshop", {"temperature": 22})],
+            True,
+            id="correct-temperature",
+        ),
+    ],
+)
+def test_climate_true_case_requires_correct_temperature_effect(
+    recorded: list[dict[str, object]],
+    expected_satisfied: bool,
+) -> None:
+    case = _home_full_case("condition_climate_below_threshold_set_temperature")
+
+    evaluation = evaluate_case(
+        case,
+        recorded,
+        overlay_seeds=_home_full_seeds(case),
+        invoker_calls=recorded,
+    )
+
+    assert evaluation.outcome.state == ("correct" if expected_satisfied else "incorrect")
+    assert evaluation.end_state_result.status == ("satisfied" if expected_satisfied else "unsatisfied")
+
+
+@pytest.mark.parametrize(
+    ("recorded", "expected_satisfied"),
+    [
+        pytest.param([], True, id="no-call"),
+        pytest.param(
+            [_action("climate", "set_temperature", "climate.storage_room", {"temperature": 22})],
+            False,
+            id="unconditional-call",
+        ),
+    ],
+)
+def test_climate_noop_case_rejects_unconditional_set(
+    recorded: list[dict[str, object]],
+    expected_satisfied: bool,
+) -> None:
+    case = _home_full_case("no_action_climate_not_below_threshold")
+
+    evaluation = evaluate_case(
+        case,
+        recorded,
+        overlay_seeds=_home_full_seeds(case),
+        invoker_calls=recorded,
+    )
+
+    assert evaluation.outcome.state == ("correct" if expected_satisfied else "incorrect")
+    assert evaluation.end_state_result.status == ("satisfied" if expected_satisfied else "unsatisfied")
+
+
+@pytest.mark.parametrize(
+    ("position", "expected_satisfied"),
+    [
+        pytest.param(50, True, id="correct-position"),
+        pytest.param(60, False, id="wrong-position"),
+    ],
+)
+def test_cover_position_case_requires_exact_final_position(position: int, expected_satisfied: bool) -> None:
+    case = _home_full_case("cover_position_office_blinds_half")
+    recorded = [_action("cover", "set_cover_position", "cover.office_blinds", {"position": position})]
+
+    evaluation = evaluate_case(
+        case,
+        recorded,
+        overlay_seeds=_home_full_seeds(case),
+        invoker_calls=recorded,
+    )
+
+    assert evaluation.outcome.state == ("correct" if expected_satisfied else "incorrect")
+    assert evaluation.end_state_result.status == ("satisfied" if expected_satisfied else "unsatisfied")
+
+
 _BEDROOM_ON = RequiredAction("light", "turn_on", ("light.bedroom",))
 _LIVING_OFF = RequiredAction("light", "turn_off", ("light.living",))
 _BRIGHT_BEDROOM = RequiredAction("light", "turn_on", ("light.bedroom",), {"brightness": 100})

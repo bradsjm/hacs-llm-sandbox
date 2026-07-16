@@ -61,6 +61,13 @@ _DESIRED_ENTITY_CASE_IDS = {
     "no_action_history_no_recent_change",
     "ambiguous_logic_living_room_recent",
     "selector_evening_lights_living_room_off",
+    "multi_action_swap_utility_room_lights",
+    "condition_climate_below_threshold_set_temperature",
+    "no_action_climate_not_below_threshold",
+    "cover_open_office_blinds",
+    "cover_close_bedroom_shade",
+    "cover_position_office_blinds_half",
+    "cover_no_action_bedroom_shade_not_closed",
 }
 
 _ACTION_ONLY_CASE_IDS = {
@@ -86,22 +93,23 @@ def test_effect_corpus_desired_entity_and_action_only_split_is_exact() -> None:
 
     assert desired_entity_cases == _DESIRED_ENTITY_CASE_IDS
     assert action_only_cases == _ACTION_ONLY_CASE_IDS
-    assert len(desired_entity_cases) == 12
+    assert len(desired_entity_cases) == 19
     assert len(action_only_cases) == 3
     assert desired_entity_cases | action_only_cases == effect_cases
-    assert len(case_ids) == 25
+    assert len(case_ids) == 36
 
 
 
 def test_corpus_category_distribution_is_exact() -> None:
     assert Counter(case.category for case in CASES) == {
-        "direct": 3,
+        "direct": 5,
         "discovery": 3,
-        "service_data": 2,
-        "conditional": 4,
+        "service_data": 3,
+        "conditional": 7,
         "ambiguity": 3,
-        "tool_contract": 3,
-        "read_answer": 7,
+        "tool_contract": 6,
+        "read_answer": 8,
+        "composition": 1,
     }
 
 def test_dedicated_oracle_cases_author_narrow_contracts() -> None:
@@ -264,6 +272,82 @@ def test_no_action_already_on_case_desires_on_without_actions() -> None:
     case = next(case for case in CASES if case.id == "no_action_light_already_on")
     assert case.required_actions == ()
     assert case.desired_entities == (DesiredEntity("light.living_room_ceiling", "on"),)
+
+
+def test_second_tranche_effect_case_contracts_are_exact() -> None:
+    cases = {case.id: case for case in CASES}
+
+    assert cases["multi_action_swap_utility_room_lights"].required_actions == (
+        RequiredAction("light", "turn_off", ("light.utility_room_accent",)),
+        RequiredAction("light", "turn_on", ("light.utility_room_ceiling",)),
+    )
+    assert cases["multi_action_swap_utility_room_lights"].desired_entities == (
+        DesiredEntity("light.utility_room_accent", "off"),
+        DesiredEntity("light.utility_room_ceiling", "on"),
+    )
+    assert cases["condition_climate_below_threshold_set_temperature"].required_actions == (
+        RequiredAction("climate", "set_temperature", ("climate.workshop",), {"temperature": 22}),
+    )
+    assert cases["condition_climate_below_threshold_set_temperature"].desired_entities == (
+        DesiredEntity("climate.workshop", attributes={"temperature": 22}),
+    )
+    assert cases["no_action_climate_not_below_threshold"].required_actions == ()
+    assert cases["no_action_climate_not_below_threshold"].desired_entities == (
+        DesiredEntity("climate.storage_room", attributes={"temperature": 20.0}),
+    )
+    assert cases["cover_open_office_blinds"].required_actions == (
+        RequiredAction("cover", "open_cover", ("cover.office_blinds",)),
+    )
+    assert cases["cover_open_office_blinds"].desired_entities == (
+        DesiredEntity("cover.office_blinds", "open", {"current_position": 100}),
+    )
+    assert cases["cover_close_bedroom_shade"].required_actions == (
+        RequiredAction("cover", "close_cover", ("cover.bedroom_shade",)),
+    )
+    assert cases["cover_close_bedroom_shade"].desired_entities == (
+        DesiredEntity("cover.bedroom_shade", "closed", {"current_position": 0}),
+    )
+    assert cases["cover_position_office_blinds_half"].required_actions == (
+        RequiredAction("cover", "set_cover_position", ("cover.office_blinds",), {"position": 50}),
+    )
+    assert cases["cover_position_office_blinds_half"].desired_entities == (
+        DesiredEntity("cover.office_blinds", "open", {"current_position": 50}),
+    )
+    assert cases["cover_no_action_bedroom_shade_not_closed"].required_actions == ()
+    assert cases["cover_no_action_bedroom_shade_not_closed"].desired_entities == (
+        DesiredEntity("cover.bedroom_shade", "open", {"current_position": 100}),
+    )
+
+
+def test_second_tranche_automation_case_contracts_are_exact() -> None:
+    cases = {case.id: case for case in CASES}
+
+    assert cases["tool_call_get_automation_motion_lights"].expected_tool_calls == (
+        ExpectedToolCall("get_automation", {"query": "motion lights"}),
+    )
+    assert cases["tool_call_get_automation_motion_lights_content"].expected_tool_calls == (
+        ExpectedToolCall(
+            "get_automation",
+            {
+                "entity_ids": ["automation.living_room_motion_lights"],
+                "include": ["content"],
+            },
+        ),
+    )
+    assert cases["tool_call_get_automation_motion_lights_runs"].expected_tool_calls == (
+        ExpectedToolCall(
+            "get_automation",
+            {
+                "entity_ids": ["automation.living_room_motion_lights"],
+                "include": ["runs"],
+                "hours": 1,
+            },
+        ),
+    )
+    assert cases["answer_living_room_motion_automation_ran_last_hour"].expected_answer == AnswerPredicate(
+        "boolean",
+        value=True,
+    )
 
 
 def test_duplicate_desired_entity_ids_are_rejected() -> None:

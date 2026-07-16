@@ -1,5 +1,6 @@
 from typing import cast
 
+from homeassistant.core import SupportsResponse
 from llm_sandbox_evals.homes import get_home
 import pytest
 
@@ -26,11 +27,92 @@ def test_minimal_home_has_only_the_action_case_surface() -> None:
     assert fixture.recorder() == {"history": {}, "statistics": {}, "logbook": {}}
 
 
+def test_cover_home_exposes_exact_frozen_capability_surface() -> None:
+    fixture = get_home("home_cover")
+    snapshot = fixture.snapshot()
+
+    assert snapshot.created_at == "2026-06-29T12:00:00+00:00"
+    assert {entity_id: state.state for entity_id, state in snapshot.states.items()} == {
+        "cover.office_blinds": "closed",
+        "cover.bedroom_shade": "open",
+    }
+    assert {
+        entity_id: (
+            state.name,
+            state.attributes["current_position"],
+            state.attributes["device_class"],
+            state.attributes["supported_features"],
+            state.area_id,
+            state.device_id,
+        )
+        for entity_id, state in snapshot.states.items()
+    } == {
+        "cover.office_blinds": ("Office Blinds", 0, "blind", 7, "area_office", "device_office_blinds"),
+        "cover.bedroom_shade": ("Bedroom Shade", 100, "shade", 7, "area_bedroom", "device_bedroom_shade"),
+    }
+    assert {
+        entity_id: (entity.device_id, entity.area_id, entity.config_entry_id, entity.supported_features)
+        for entity_id, entity in snapshot.entities.items()
+    } == {
+        "cover.office_blinds": ("device_office_blinds", None, "entry_cover", 7),
+        "cover.bedroom_shade": ("device_bedroom_shade", None, "entry_cover", 7),
+    }
+    assert {device_id: (device.name, device.area_id) for device_id, device in snapshot.devices.items()} == {
+        "device_office_blinds": ("Office Blinds", "area_office"),
+        "device_bedroom_shade": ("Bedroom Shade", "area_bedroom"),
+    }
+    assert {area_id: area.name for area_id, area in snapshot.areas.items()} == {
+        "area_office": "Office",
+        "area_bedroom": "Bedroom",
+    }
+    assert snapshot.indexes.entity_ids_by_device_id == {
+        "device_office_blinds": ("cover.office_blinds",),
+        "device_bedroom_shade": ("cover.bedroom_shade",),
+    }
+    assert snapshot.indexes.entity_ids_by_area_id == {
+        "area_office": ("cover.office_blinds",),
+        "area_bedroom": ("cover.bedroom_shade",),
+    }
+    assert snapshot.indexes.device_ids_by_area_id == {
+        "area_office": ("device_office_blinds",),
+        "area_bedroom": ("device_bedroom_shade",),
+    }
+    assert snapshot.indexes.entity_ids_by_config_entry_id == {
+        "entry_cover": ("cover.bedroom_shade", "cover.office_blinds")
+    }
+    assert snapshot.services == {"cover": ("close_cover", "open_cover", "set_cover_position")}
+    assert snapshot.services_supports_response == {
+        "cover": {
+            "close_cover": SupportsResponse.NONE.value,
+            "open_cover": SupportsResponse.NONE.value,
+            "set_cover_position": SupportsResponse.NONE.value,
+        }
+    }
+    assert snapshot.services_schema == {}
+    assert fixture.recorder() == {"history": {}, "statistics": {}, "logbook": {}}
+
+
 def test_full_home_preserves_312_entity_inventory() -> None:
     snapshot = get_home("home_full").snapshot()
 
     assert len(snapshot.states) == 312
     assert len(snapshot.entities) == 312
+
+
+def test_full_home_climate_inputs_select_conditional_branches() -> None:
+    snapshot = get_home("home_full").snapshot()
+
+    assert {
+        entity_id: (
+            snapshot.states[entity_id].state,
+            snapshot.states[entity_id].attributes["current_temperature"],
+            snapshot.states[entity_id].attributes["temperature"],
+        )
+        for entity_id in ("climate.workshop", "climate.storage_room")
+    } == {
+        "climate.workshop": ("heat", 21.0, 20.0),
+        "climate.storage_room": ("heat", 21.0, 20.0),
+    }
 
 
 def test_full_home_exposes_balcony_statistics() -> None:

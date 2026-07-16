@@ -1,7 +1,7 @@
 """Pure narrow post-run overlay reducer for end-state predicate scoring.
 
-Applies direct ``light``/``switch`` state transitions plus narrow light
-brightness and color-temperature effects from ordered ``RecordingInvoker``
+Applies explicit ``light``/``switch``/``cover`` state transitions plus narrow
+light, climate, and cover attribute effects from ordered ``RecordingInvoker``
 calls to a copied seed map. Unsupported services, selectors, and attributes
 leave the overlay unchanged. This eval-only primitive never touches live Home
 Assistant objects.
@@ -18,13 +18,24 @@ from llm_sandbox_evals.schema import (
     OverlayStateSeed,
 )
 
+_SUPPORTED_STATES_BY_DOMAIN: dict[str, frozenset[str]] = {
+    "light": frozenset({"on", "off"}),
+    "switch": frozenset({"on", "off"}),
+    "cover": frozenset({"open", "closed"}),
+}
+_SUPPORTED_ATTRIBUTES_BY_DOMAIN: dict[str, frozenset[str]] = {
+    "light": frozenset({"brightness", "color_temp_kelvin"}),
+    "climate": frozenset({"temperature"}),
+    "cover": frozenset({"current_position"}),
+}
 _SUPPORTED_TRANSITIONS: dict[tuple[str, str], str] = {
     ("light", "turn_on"): "on",
     ("light", "turn_off"): "off",
     ("switch", "turn_on"): "on",
     ("switch", "turn_off"): "off",
+    ("cover", "open_cover"): "open",
+    ("cover", "close_cover"): "closed",
 }
-_SUPPORTED_LIGHT_ATTRIBUTES = frozenset({"brightness", "color_temp_kelvin"})
 
 
 def extract_overlay_seeds(
@@ -66,10 +77,12 @@ def assess_end_state(
         # Branch boundary: every predicate must have a seed and reducer support for all authored fields.
         if seed is None:
             return EndStateResult("unevaluable", False, False)
-        if predicate.state is not None and (seed.domain not in ("light", "switch") or seed.state not in ("on", "off")):
+        if predicate.state is not None and seed.state not in _SUPPORTED_STATES_BY_DOMAIN.get(
+            seed.domain, frozenset()
+        ):
             return EndStateResult("unevaluable", False, False)
-        if predicate.attributes and (
-            seed.domain != "light" or not predicate.attributes.keys() <= _SUPPORTED_LIGHT_ATTRIBUTES
+        if predicate.attributes and not predicate.attributes.keys() <= _SUPPORTED_ATTRIBUTES_BY_DOMAIN.get(
+            seed.domain, frozenset()
         ):
             return EndStateResult("unevaluable", False, False)
 
@@ -101,11 +114,14 @@ def assess_end_state(
 
 
 def _apply_call(overlay: dict[str, OverlayStateSeed], call: Mapping[str, object]) -> None:
-    """Apply one ordered call to the overlay if it is a supported direct transition.
+    """Apply one ordered call to the overlay if it has a supported direct effect.
 
-    Unsupported services, indirect selectors, and unsupported service data have
-    no overlay effect.
+    Unsupported services, indirect selectors, errored calls, and unsupported
+    service data have no overlay effect.
     """
+    if call.get("status") == "error":
+        return
+
     domain = call.get("domain")
     service = call.get("service")
     if not isinstance(domain, str) or not isinstance(service, str):
@@ -113,15 +129,13 @@ def _apply_call(overlay: dict[str, OverlayStateSeed], call: Mapping[str, object]
 
     transition = _SUPPORTED_TRANSITIONS.get((domain, service))
     is_toggle = service == "toggle"
-    if transition is None and not is_toggle:
+    effects = _attribute_effects(domain, service, call.get("service_data"))
+    if transition is None and not is_toggle and effects is None:
         return
 
     targets = _direct_targets(call)
     if not targets:
         return
-
-    service_data = call.get("service_data")
-    effects = _light_attribute_effects(service_data) if domain == "light" and service == "turn_on" else {}
 
     for entity_id in targets:
         seed = overlay.get(entity_id)
@@ -133,30 +147,54 @@ def _apply_call(overlay: dict[str, OverlayStateSeed], call: Mapping[str, object]
             new_state = "off" if seed.state == "on" else "on"
         elif transition is not None:
             new_state = transition
+        elif domain == "cover" and service == "set_cover_position" and effects is not None:
+            new_state = "closed" if effects["current_position"] == 0 else "open"
         else:
-            continue
+            new_state = seed.state
         attributes = dict(seed.attributes)
-        attributes.update((key, value) for key, value in effects.items() if key in attributes)
+        if effects is not None:
+            attributes.update((key, value) for key, value in effects.items() if key in attributes)
         # Mutation point: replace the eval-only seed; never mutate the frozen snapshot.
         overlay[entity_id] = OverlayStateSeed(seed.entity_id, seed.domain, new_state, attributes)
 
 
-def _light_attribute_effects(service_data: object) -> dict[str, object]:
-    """Return only supported light attribute effects from service data."""
+def _attribute_effects(domain: str, service: str, service_data: object) -> dict[str, object] | None:
+    """Return supported sparse attribute effects for one explicit service."""
+    if domain == "cover" and service == "open_cover":
+        return {"current_position": 100}
+    if domain == "cover" and service == "close_cover":
+        return {"current_position": 0}
     if not isinstance(service_data, Mapping):
-        return {}
+        return {} if domain == "light" and service == "turn_on" else None
 
-    effects: dict[str, object] = {}
-    brightness_pct = service_data.get("brightness_pct")
-    if isinstance(brightness_pct, int | float) and not isinstance(brightness_pct, bool) and 0 <= brightness_pct <= 100:
-        effects["brightness"] = round(255 * brightness_pct / 100)
-    brightness = service_data.get("brightness")
-    if isinstance(brightness, int) and not isinstance(brightness, bool) and 0 <= brightness <= 255:
-        effects["brightness"] = brightness
-    color_temp_kelvin = service_data.get("color_temp_kelvin")
-    if isinstance(color_temp_kelvin, int) and not isinstance(color_temp_kelvin, bool):
-        effects["color_temp_kelvin"] = color_temp_kelvin
-    return effects
+    if domain == "light" and service == "turn_on":
+        effects: dict[str, object] = {}
+        brightness_pct = service_data.get("brightness_pct")
+        if (
+            isinstance(brightness_pct, int | float)
+            and not isinstance(brightness_pct, bool)
+            and 0 <= brightness_pct <= 100
+        ):
+            effects["brightness"] = round(255 * brightness_pct / 100)
+        brightness = service_data.get("brightness")
+        if isinstance(brightness, int) and not isinstance(brightness, bool) and 0 <= brightness <= 255:
+            effects["brightness"] = brightness
+        color_temp_kelvin = service_data.get("color_temp_kelvin")
+        if isinstance(color_temp_kelvin, int) and not isinstance(color_temp_kelvin, bool):
+            effects["color_temp_kelvin"] = color_temp_kelvin
+        return effects
+
+    if domain == "climate" and service == "set_temperature":
+        temperature = service_data.get("temperature")
+        if isinstance(temperature, int | float) and not isinstance(temperature, bool):
+            return {"temperature": temperature}
+        return None
+
+    if domain == "cover" and service == "set_cover_position":
+        position = service_data.get("position")
+        if isinstance(position, int) and not isinstance(position, bool) and 0 <= position <= 100:
+            return {"current_position": position}
+    return None
 
 
 def _direct_targets(call: Mapping[str, object]) -> tuple[str, ...]:

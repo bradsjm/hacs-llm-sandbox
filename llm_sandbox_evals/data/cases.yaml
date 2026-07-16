@@ -439,3 +439,193 @@ cases:
         kind: count
         count: 9
       required_actions: []
+  - name: multi_action_swap_utility_room_lights
+    inputs:
+      id: multi_action_swap_utility_room_lights
+      home: home_full
+      category: composition
+      tags: []
+      oracle: effect
+      requests:
+        - id: canonical
+          text: Turn off the Utility Room accent light and turn on the Utility Room ceiling light.
+      required_actions:
+        - domain: light
+          service: turn_off
+          target_entity_ids: [light.utility_room_accent]
+        - domain: light
+          service: turn_on
+          target_entity_ids: [light.utility_room_ceiling]
+      desired_entities:
+        - entity_id: light.utility_room_accent
+          state: "off"
+        - entity_id: light.utility_room_ceiling
+          state: "on"
+  - name: condition_climate_below_threshold_set_temperature
+    inputs:
+      id: condition_climate_below_threshold_set_temperature
+      home: home_full
+      category: conditional
+      tags: []
+      oracle: effect
+      requests:
+        - id: canonical
+          text: If the Workshop temperature is below 22 °C, set the Workshop thermostat target temperature to 22 °C.
+      required_actions:
+        - domain: climate
+          service: set_temperature
+          target_entity_ids: [climate.workshop]
+          service_data:
+            temperature: 22
+      desired_entities:
+        - entity_id: climate.workshop
+          attributes:
+            temperature: 22
+  - name: no_action_climate_not_below_threshold
+    inputs:
+      id: no_action_climate_not_below_threshold
+      home: home_full
+      category: conditional
+      tags: []
+      oracle: effect
+      requests:
+        - id: canonical
+          text: If the Storage Room temperature is below 20 °C, set its thermostat target temperature to 22 °C; otherwise do nothing.
+      required_actions: []
+      desired_entities:
+        - entity_id: climate.storage_room
+          attributes:
+            temperature: 20.0
+  - name: cover_open_office_blinds
+    inputs:
+      id: cover_open_office_blinds
+      home: home_cover
+      category: direct
+      tags: []
+      oracle: effect
+      requests:
+        - id: canonical
+          text: Open the Office blinds.
+      required_actions:
+        - domain: cover
+          service: open_cover
+          target_entity_ids: [cover.office_blinds]
+      desired_entities:
+        - entity_id: cover.office_blinds
+          state: open
+          attributes:
+            current_position: 100
+  - name: cover_close_bedroom_shade
+    inputs:
+      id: cover_close_bedroom_shade
+      home: home_cover
+      category: direct
+      tags: []
+      oracle: effect
+      requests:
+        - id: canonical
+          text: Close the Bedroom shade.
+      required_actions:
+        - domain: cover
+          service: close_cover
+          target_entity_ids: [cover.bedroom_shade]
+      desired_entities:
+        - entity_id: cover.bedroom_shade
+          state: closed
+          attributes:
+            current_position: 0
+  - name: cover_position_office_blinds_half
+    inputs:
+      id: cover_position_office_blinds_half
+      home: home_cover
+      category: service_data
+      tags: []
+      oracle: effect
+      requests:
+        - id: canonical
+          text: Set the Office blinds to 50%.
+      required_actions:
+        - domain: cover
+          service: set_cover_position
+          target_entity_ids: [cover.office_blinds]
+          service_data:
+            position: 50
+      desired_entities:
+        - entity_id: cover.office_blinds
+          state: open
+          attributes:
+            current_position: 50
+  - name: cover_no_action_bedroom_shade_not_closed
+    inputs:
+      id: cover_no_action_bedroom_shade_not_closed
+      home: home_cover
+      category: conditional
+      tags: []
+      oracle: effect
+      requests:
+        - id: canonical
+          text: If the Bedroom shade is closed, set it to 50%; otherwise do nothing.
+      required_actions: []
+      desired_entities:
+        - entity_id: cover.bedroom_shade
+          state: open
+          attributes:
+            current_position: 100
+  - name: tool_call_get_automation_motion_lights
+    inputs:
+      id: tool_call_get_automation_motion_lights
+      home: home_full
+      category: tool_contract
+      oracle: tool_calls
+      requests:
+        - id: canonical
+          text: Search automations for "motion lights".
+      expected_tool_calls:
+        - tool_name: get_automation
+          args:
+            query: motion lights
+      required_actions: []
+  - name: tool_call_get_automation_motion_lights_content
+    inputs:
+      id: tool_call_get_automation_motion_lights_content
+      home: home_full
+      category: tool_contract
+      oracle: tool_calls
+      requests:
+        - id: canonical
+          text: Retrieve the complete content for automation.living_room_motion_lights.
+      expected_tool_calls:
+        - tool_name: get_automation
+          args:
+            entity_ids: [automation.living_room_motion_lights]
+            include: [content]
+      required_actions: []
+  - name: tool_call_get_automation_motion_lights_runs
+    inputs:
+      id: tool_call_get_automation_motion_lights_runs
+      home: home_full
+      category: tool_contract
+      oracle: tool_calls
+      requests:
+        - id: canonical
+          text: Retrieve runs from the last hour for automation.living_room_motion_lights.
+      expected_tool_calls:
+        - tool_name: get_automation
+          args:
+            entity_ids: [automation.living_room_motion_lights]
+            include: [runs]
+            hours: 1
+      required_actions: []
+  - name: answer_living_room_motion_automation_ran_last_hour
+    inputs:
+      id: answer_living_room_motion_automation_ran_last_hour
+      home: home_full
+      category: read_answer
+      oracle: answer
+      requests:
+        - id: canonical
+          text: Did automation.living_room_motion_lights run in the last hour? Answer exactly Yes or No.
+      expected_answer:
+        kind: boolean
+        value: true
+      required_actions: []

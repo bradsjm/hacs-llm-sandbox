@@ -445,6 +445,128 @@ def recorder() -> RecorderData:
     }
 
 
+def automation() -> dict[str, object]:
+    """Return fresh deterministic automation summaries, content, and run rows."""
+    living_room_id = "automation.living_room_motion_lights"
+    living_room_title = "Living Room Motion Lights"
+    server_room_id = "automation.server_room_temperature_protection"
+    server_room_title = "Server Room Temperature Protection"
+    return {
+        "records": [
+            {
+                "entity_id": living_room_id,
+                "title": living_room_title,
+                "state": "on",
+                "is_on": True,
+                "available": True,
+                "description": "Turn on the Living Room lights when motion is detected.",
+                "references": {
+                    "entities": [
+                        {"id": "binary_sensor.living_room_motion", "name": "Living Room Motion"},
+                        {"id": "light.living_room_ceiling", "name": "Living Room Ceiling"},
+                        {"id": "light.living_room_accent", "name": "Living Room Accent"},
+                    ]
+                },
+                "search_terms": (
+                    living_room_title,
+                    "motion lights",
+                    "living room",
+                    "binary_sensor.living_room_motion",
+                    "light.living_room_ceiling",
+                    "light.living_room_accent",
+                ),
+                "content": {
+                    "id": "living_room_motion_lights",
+                    "alias": living_room_title,
+                    "description": "Turn on the Living Room lights when motion is detected.",
+                    "triggers": [
+                        {
+                            "trigger": "state",
+                            "entity_id": "binary_sensor.living_room_motion",
+                            "to": "on",
+                        }
+                    ],
+                    "actions": [
+                        {
+                            "action": "light.turn_on",
+                            "target": {
+                                "entity_id": [
+                                    "light.living_room_ceiling",
+                                    "light.living_room_accent",
+                                ]
+                            },
+                        }
+                    ],
+                    "mode": "single",
+                },
+            },
+            {
+                "entity_id": server_room_id,
+                "title": server_room_title,
+                "state": "on",
+                "is_on": True,
+                "available": True,
+                "description": "Turn off the Server Room outlet when its temperature is too high.",
+                "references": {
+                    "entities": [
+                        {"id": "sensor.server_room_temperature", "name": "Server Room Temperature"},
+                        {"id": "switch.server_room_outlet", "name": "Server Room Outlet"},
+                    ]
+                },
+                "search_terms": (
+                    server_room_title,
+                    "server room temperature",
+                    "sensor.server_room_temperature",
+                    "switch.server_room_outlet",
+                ),
+                "content": {
+                    "id": "server_room_temperature_protection",
+                    "alias": server_room_title,
+                    "description": "Turn off the Server Room outlet when its temperature is too high.",
+                    "triggers": [
+                        {
+                            "trigger": "numeric_state",
+                            "entity_id": "sensor.server_room_temperature",
+                            "above": 28,
+                        }
+                    ],
+                    "actions": [
+                        {
+                            "action": "switch.turn_off",
+                            "target": {"entity_id": "switch.server_room_outlet"},
+                        }
+                    ],
+                    "mode": "single",
+                },
+            },
+        ],
+        "runs": {
+            living_room_id: [
+                {
+                    "entity_id": living_room_id,
+                    "when": "2026-06-29T11:40:00+00:00",
+                    "name": living_room_title,
+                    "message": "triggered",
+                },
+                {
+                    "entity_id": living_room_id,
+                    "when": "2026-06-29T09:30:00+00:00",
+                    "name": living_room_title,
+                    "message": "triggered",
+                },
+            ],
+            server_room_id: [
+                {
+                    "entity_id": server_room_id,
+                    "when": "2026-06-29T09:15:00+00:00",
+                    "name": server_room_title,
+                    "message": "triggered",
+                }
+            ],
+        },
+    }
+
+
 def _config() -> SafeConfig:
     """Build a minimal frozen config record for snapshot helpers."""
     return SafeConfig(
