@@ -4,8 +4,11 @@
 
 This repository contains the `llm_sandbox` Home Assistant custom integration. It exposes Assist LLM API tools — `execute_home_code`, `get_history`, `get_statistics`, and `get_logbook` — that run bounded Python/Monty code and bounded recorder queries against a fresh, frozen, visibility-filtered Home Assistant snapshot. The live `hass` object, registries, event bus, auth, config, filesystem, network, and OS/process APIs never reach Monty; only frozen facade objects built from snapshot records do. Service calls are read-only by default and, when enabled, execute live through a private runtime invoker after snapshot validation.
 
+Home Assistant's built-in Assist pipeline remains the first choice for requests it can satisfy. This integration complements rather than replaces native Assist: use the sandbox only when a request needs reasoning or data surfaces beyond the built-in path.
+
 ## Non-Negotiables
 
+- Preserve Assist-first routing. Do not duplicate or displace Home Assistant's built-in intents and tools; sandbox tools are for requests that native Assist cannot satisfy or for composed reasoning that requires sandbox-only data.
 - Never pass live Home Assistant objects, live registries, service handles, event bus, config, auth, filesystem, network, or OS/process APIs into Monty.
 - Build a fresh snapshot for every `execute_home_code` call.
 - Keep Monty-visible objects safe, JSON-compatible, and derived from snapshot records.
@@ -35,6 +38,7 @@ This repository contains the `llm_sandbox` Home Assistant custom integration. It
 ## Testing Guidance
 
 - Avoid creating regression tests unless explicitly requested.
+- Sandbox evals do not invoke or benchmark Home Assistant's built-in Assist pipeline. Keep cases and conclusions scoped to requests that require sandbox capabilities, and never use sandbox-only results to justify replacing native Assist behavior.
 - Prefer assertions on user-visible behavior, persisted data, emitted events, stable error keys, and runtime side effects over assertions on constructor kwargs, mock call choreography, private helpers, import paths, or other implementation details that can change during harmless refactors.
 - When changing config flows, assert flow result types, translated error keys, placeholders, created subentry data, and reconfigure behavior. Do not over-specify serialized selector structure, field ordering, or exact UI text unless that exact presentation is itself the contract being protected.
 - When changing runtime behavior, cover metrics, repairs, diagnostics, system health counts, live overlay state, and cleanup/unload when relevant.
