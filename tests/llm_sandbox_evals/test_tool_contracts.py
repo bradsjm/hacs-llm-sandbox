@@ -2,7 +2,13 @@ from typing import cast
 
 from custom_components.llm_sandbox.const import DEFAULT_PROMPT_PROFILE
 from custom_components.llm_sandbox.llm_api.prompts.profiles import resolve_profile
-from custom_components.llm_sandbox.llm_api.tools.recorder import GetHistoryTool, RecorderSource
+from custom_components.llm_sandbox.llm_api.tools.automation import GetAutomationTool
+from custom_components.llm_sandbox.llm_api.tools.recorder import (
+    GetHistoryTool,
+    GetLogbookTool,
+    GetStatisticsTool,
+    RecorderSource,
+)
 from custom_components.llm_sandbox.snapshot.models import HomeSnapshot
 from homeassistant.helpers import llm
 from llm_sandbox_evals.agent_runner import _validate_recorder_tool
@@ -11,6 +17,51 @@ from llm_sandbox_evals.prompts import baseline_candidate
 from llm_sandbox_evals.runtime import build_eval_runtime, build_fixture_recorder_source
 from llm_sandbox_evals.schema import EvalCase, RequestVariant, RequiredAction
 from llm_sandbox_evals.tools import EVAL_SCOPE, apply_scope
+from voluptuous_openapi import convert
+
+
+def _provider_schema(tool: llm.Tool) -> dict[str, object]:
+    return cast(
+        dict[str, object],
+        convert(tool.parameters, custom_serializer=llm.selector_serializer),
+    )
+
+
+def test_provider_schemas_expose_canonical_tool_inputs() -> None:
+    automation = cast(dict[str, dict[str, object]], _provider_schema(GetAutomationTool("eval"))["properties"])
+    history = cast(dict[str, dict[str, object]], _provider_schema(GetHistoryTool("eval"))["properties"])
+    statistics = cast(dict[str, dict[str, object]], _provider_schema(GetStatisticsTool("eval"))["properties"])
+    logbook = cast(dict[str, dict[str, object]], _provider_schema(GetLogbookTool("eval"))["properties"])
+
+    assert automation["query"]["type"] == "string"
+    for properties in (automation, history, logbook):
+        assert properties["entity_ids"]["type"] == "array"
+        assert cast(dict[str, object], properties["entity_ids"]["items"])["type"] == "string"
+    assert automation["include"]["type"] == "array"
+    assert cast(dict[str, object], automation["include"]["items"])["enum"] == ["content", "runs"]
+    assert statistics["statistic_ids"]["type"] == "array"
+    assert cast(dict[str, object], statistics["statistic_ids"]["items"])["type"] == "string"
+
+    for properties in (automation, history, statistics, logbook):
+        assert properties["start"]["type"] == "string"
+        assert properties["start"]["format"] == "date-time"
+        assert properties["end"]["type"] == "string"
+        assert properties["end"]["format"] == "date-time"
+
+    bounded_arrays = (
+        automation["entity_ids"],
+        automation["include"],
+        history["entity_ids"],
+        history["attributes"],
+        history["value_operations"],
+        history["group_by"],
+        statistics["statistic_ids"],
+        statistics["types"],
+        logbook["entity_ids"],
+    )
+    for field_schema in bounded_arrays:
+        assert "minLength" not in field_schema
+        assert "maxLength" not in field_schema
 
 
 async def test_recorder_selector_no_match_returns_error_with_guidance() -> None:
@@ -41,6 +92,31 @@ def test_eval_recorder_validation_returns_invalid_tool_input_for_bad_iso() -> No
     assert error["key"] == "invalid_tool_input"
     assert isinstance(error["message"], str)
     assert error["message"] != error["key"]
+
+
+def test_eval_recorder_validation_omits_empty_cursor_before_cursor_handling() -> None:
+    """Empty cursor placeholders follow production normalization semantics."""
+    statistics = _validate_recorder_tool(
+        GetStatisticsTool("eval"),
+        {
+            "statistic_ids": ["sensor.balcony_power"],
+            "cursor": "",
+        },
+    )
+    logbook = _validate_recorder_tool(
+        GetLogbookTool("eval"),
+        {
+            "entity_ids": ["light.living_room_accent"],
+            "cursor": "",
+        },
+    )
+
+    assert statistics.error is None
+    assert statistics.data["statistic_ids"] == ["sensor.balcony_power"]
+    assert "cursor" not in statistics.data
+    assert logbook.error is None
+    assert logbook.data["entity_ids"] == ["light.living_room_accent"]
+    assert "cursor" not in logbook.data
 
 
 async def test_recorder_window_too_large_returns_stable_error_key() -> None:

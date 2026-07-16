@@ -4,6 +4,7 @@ from custom_components.llm_sandbox.const import DEFAULT_PROMPT_PROFILE
 from custom_components.llm_sandbox.llm_api.data.history import AGGREGATORS, NUMERIC_OPS
 from custom_components.llm_sandbox.llm_api.prompts import resolve_profile
 from custom_components.llm_sandbox.llm_api.tools.recorder import GetHistoryTool
+from homeassistant.helpers import llm
 from llm_sandbox_evals.agent_runner import build_agent_tools, render_eval_system_prompt
 from llm_sandbox_evals.homes import get_home
 from llm_sandbox_evals.prompts import candidate_prompt_sizes, load_candidates
@@ -95,7 +96,10 @@ def test_load_candidates_rejects_unknown_profile() -> None:
 
 
 def test_get_history_function_schema_exposes_aggregate_filters() -> None:
-    parameters = convert(GetHistoryTool("eval").parameters)
+    parameters = convert(
+        GetHistoryTool("eval").parameters,
+        custom_serializer=llm.selector_serializer,
+    )
 
     properties = parameters["properties"]
     assert properties["aggregate"]["type"] == "string"

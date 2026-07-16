@@ -1,14 +1,16 @@
 """Behavior tests for recorder-backed LLM tools."""
 
 import base64
-from collections.abc import Mapping
-from datetime import timedelta
+from collections.abc import Callable, Mapping
+from datetime import UTC, datetime, timedelta
 import json
 import time
 from typing import cast
 
 from custom_components.llm_sandbox.const import TOOL_GET_HISTORY, TOOL_GET_LOGBOOK, TOOL_GET_STATISTICS
+from custom_components.llm_sandbox.llm_api.data.history import HistoryRow
 from custom_components.llm_sandbox.llm_api.tools import recorder
+from custom_components.llm_sandbox.llm_api.tools._recorder_runtime import RecorderSource
 from custom_components.llm_sandbox.llm_api.tools.recorder import GetHistoryTool, GetLogbookTool, GetStatisticsTool
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.db_schema import Statistics
@@ -20,6 +22,8 @@ from homeassistant.util import dt as dt_util
 from homeassistant.util.json import JsonObjectType
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+from .test_analytics import _snapshot
 
 
 def _raw_cursor(payload: dict[str, object]) -> str:
@@ -1067,6 +1071,76 @@ async def test_cursor_cannot_be_combined_with_window_args(
     assert result["error"]["message"]
 
 
+@pytest.mark.parametrize(
+    "data",
+    [
+        pytest.param(
+            {
+                "entity_ids": ["sensor.temp"],
+                "to_state": "on",
+            },
+            id="to-state-without-aggregate",
+        ),
+        pytest.param(
+            {
+                "entity_ids": ["sensor.temp"],
+                "aggregate": "state_counts",
+                "from_state": "off",
+            },
+            id="from-state-with-incompatible-aggregate",
+        ),
+    ],
+)
+async def test_history_analytics_validation_precedes_recorder_fetch(
+    data: dict[str, object],
+) -> None:
+    """Invalid analytics combinations return envelopes without recorder I/O."""
+    fetch_calls = 0
+
+    async def _run_in_executor(fn: Callable[[], object]) -> object:
+        return fn()
+
+    async def _fetch_history(
+        _entity_ids: list[str],
+        _start: datetime,
+        _end: datetime,
+    ) -> dict[str, list[HistoryRow]]:
+        nonlocal fetch_calls
+        fetch_calls += 1
+        return {}
+
+    async def _fetch_statistics(
+        _statistic_ids: list[str],
+        _start: datetime,
+        _end: datetime,
+        _period: str,
+        _types: set[str],
+    ) -> Mapping[str, list[dict[str, object]]]:
+        return {}
+
+    async def _fetch_logbook(
+        _entity_ids: list[str],
+        _start: datetime,
+        _end: datetime,
+    ) -> list[dict[str, object]]:
+        return []
+
+    source = RecorderSource(
+        now=datetime(2026, 1, 1, 1, tzinfo=UTC),
+        logbook_available=True,
+        run_in_executor=_run_in_executor,
+        fetch_history=_fetch_history,
+        fetch_statistics=_fetch_statistics,
+        fetch_logbook=_fetch_logbook,
+    )
+
+    result = await GetHistoryTool("eval").run_query(_snapshot(), data, source)
+
+    assert result["status"] == "error"
+    assert result["error"]["key"] == "invalid_tool_input"
+    assert fetch_calls == 0
+
+
 async def test_history_rejects_hours_with_explicit_start(
     hass: HomeAssistant,
     recorder_entry: MockConfigEntry,
@@ -1107,11 +1181,41 @@ async def test_history_accepts_hours_with_explicit_end(
     assert timedelta(hours=2) - timedelta(seconds=5) <= end - start <= timedelta(hours=2) + timedelta(seconds=5)
 
 
+def test_recorder_schemas_keep_runtime_scalar_id_tolerance() -> None:
+    """Provider arrays remain forgiving singleton inputs at the runtime boundary."""
+    history = cast(
+        dict[str, object],
+        GetHistoryTool("eval").parameters(
+            {
+                "entity_ids": "sensor.temp",
+                "start": "2026-01-01T00:00:00+00:00",
+            }
+        ),
+    )
+    statistics = cast(
+        dict[str, object],
+        GetStatisticsTool("eval").parameters({"statistic_ids": "sensor.temp"}),
+    )
+    logbook = cast(
+        dict[str, object],
+        GetLogbookTool("eval").parameters({"entity_ids": "sensor.temp"}),
+    )
+
+    assert history["entity_ids"] == ["sensor.temp"]
+    assert history["start"] == datetime(2026, 1, 1, tzinfo=UTC)
+    assert statistics["statistic_ids"] == ["sensor.temp"]
+    assert logbook["entity_ids"] == ["sensor.temp"]
+
+
 @pytest.mark.parametrize(
     "tool_args",
     [
         pytest.param({"entity_ids": []}, id="empty-entity-list"),
         pytest.param({"entity_ids": ["not-an-entity"]}, id="malformed-entity-id"),
+        pytest.param(
+            {"entity_ids": {"value": ["light.bedroom"]}},
+            id="entity-ids-wrapper",
+        ),
         pytest.param(
             {
                 "entity_ids": ["light.bedroom"],

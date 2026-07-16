@@ -21,7 +21,13 @@ from ...const import (
     MAX_RECORDER_LOOKBACK_HOURS,
 )
 from ...snapshot.models import HomeSnapshot, SafeConfig, SafeState
-from ..data.history import HistoryRow, analytics_spec_from_data, run_analytics
+from ..data.history import (
+    AnalyticsSpec,
+    HistoryRow,
+    analytics_spec_from_data,
+    history_analytics_requested,
+    run_analytics,
+)
 from ..data.home_db import MAX_HISTORY_LOAD_ROWS, HomeDatabase, QueryResult, ensure_sql_allowed
 from ..data.recorder_scope import _clamp_window, resolve_entity_ids
 from ..errors import HelperExecutionError, RecoverableToolError
@@ -128,6 +134,64 @@ def _coerce_id_list(value: str | list[str] | None) -> list[str] | None:
     return [str(item) for item in value]
 
 
+def _coerce_history_datetime(
+    value: str | _datetime | SafeDateTime | None,
+    field: str,
+) -> _datetime | None:
+    """Normalize one facade history boundary to a UTC datetime."""
+    if value is None:
+        return None
+    if isinstance(value, _datetime):
+        return dt_util.as_utc(value)
+    source = value.iso if isinstance(value, SafeDateTime) else value
+    if isinstance(source, str) and (parsed := dt_util.parse_datetime(source)) is not None:
+        return dt_util.as_utc(parsed)
+    raise RecoverableToolError(
+        "invalid_tool_input",
+        {"error": f"{field} must be an ISO datetime"},
+    )
+
+
+def _resolve_facade_recorder_scope(
+    snapshot: HomeSnapshot,
+    *,
+    helper: str,
+    entity_ids: str | list[str] | None,
+    area_id: str | list[str] | None,
+    floor_id: str | list[str] | None,
+    device_id: str | list[str] | None,
+    label_id: str | list[str] | None,
+    domain: str | list[str] | None,
+) -> list[str]:
+    """Resolve explicit facade recorder scope against the fresh snapshot."""
+    data: dict[str, object] = {
+        "entity_ids": _coerce_id_list(entity_ids),
+        "area_id": _coerce_id_list(area_id),
+        "floor_id": _coerce_id_list(floor_id),
+        "device_id": _coerce_id_list(device_id),
+        "label_id": _coerce_id_list(label_id),
+        "domain": _coerce_id_list(domain),
+    }
+    # An explicitly supplied empty scope must not widen to the resolver's
+    # all-visible default.
+    if not any(data.values()):
+        raise HelperExecutionError(
+            helper,
+            "invalid_tool_input",
+            {"reason": f"scope must resolve to 1..{MAX_RECORDER_ENTITY_IDS} visible entities"},
+        )
+    try:
+        return resolve_entity_ids(snapshot, data, "entity_ids")
+    except RecoverableToolError as err:
+        guidance = _recorder_scope_guidance(snapshot, data, err.placeholders)
+        raise HelperExecutionError(
+            helper,
+            err.key,
+            err.placeholders,
+            guidance=guidance,
+        ) from err
+
+
 def _logbook_entry_when(entry: Mapping[str, object]) -> str:
     """Return a comparable ISO timestamp for one copied logbook entry."""
     when = entry["when"]
@@ -140,11 +204,11 @@ def _query_scope(
     snapshot: HomeSnapshot,
     sql: str,
     entity_ids: str | list[str] | None,
-    area_id: str | None,
-    floor_id: str | None,
-    device_id: str | None,
-    label_id: str | None,
-    domain: str | None,
+    area_id: str | list[str] | None,
+    floor_id: str | list[str] | None,
+    device_id: str | list[str] | None,
+    label_id: str | list[str] | None,
+    domain: str | list[str] | None,
 ) -> tuple[list[str], bool]:
     """Resolve query recorder scope from explicit ids, HA-native selectors, or SQL literals.
 
@@ -156,22 +220,23 @@ def _query_scope(
     Returns the resolved ids and a flag that is True when scope was inferred from SQL
     literals (the fallback path), so the caller can surface that to the LLM.
     """
-    data: dict[str, object] = {
-        "entity_ids": _coerce_id_list(entity_ids),
-        "area_id": area_id,
-        "floor_id": floor_id,
-        "device_id": device_id,
-        "label_id": label_id,
-        "domain": domain,
-    }
-    # Branch boundary: an explicit id or selector routes through the recorder resolver,
-    # which validates visibility, expands selectors, and caps at MAX_RECORDER_ENTITY_IDS.
-    if any(data[key] for key in ("entity_ids", "area_id", "floor_id", "device_id", "label_id", "domain")):
-        try:
-            return resolve_entity_ids(snapshot, data, "entity_ids"), False
-        except RecoverableToolError as err:
-            guidance = _query_scope_guidance(snapshot, data, err.placeholders)
-            raise HelperExecutionError("query", err.key, err.placeholders, guidance=guidance) from err
+    scope_values = (entity_ids, area_id, floor_id, device_id, label_id, domain)
+    # Branch boundary: any supplied id or selector routes through the recorder
+    # resolver, including explicit empty lists that must fail closed.
+    if any(value is not None for value in scope_values):
+        return (
+            _resolve_facade_recorder_scope(
+                snapshot,
+                helper="query",
+                entity_ids=entity_ids,
+                area_id=area_id,
+                floor_id=floor_id,
+                device_id=device_id,
+                label_id=label_id,
+                domain=domain,
+            ),
+            False,
+        )
     # Advisory literal scan: only accept single-quoted values outside comments
     # that are real visible entity ids. Quoted identifiers and comments do not
     # describe recorder scope.
@@ -243,30 +308,62 @@ class SafeHass:
         group_by: str | list[str] | None = None,
         bucket: str | None = None,
         limit: int | None = None,
+        start: str | _datetime | SafeDateTime | None = None,
+        end: str | _datetime | SafeDateTime | None = None,
+        area_id: str | list[str] | None = None,
+        device_id: str | list[str] | None = None,
+        floor_id: str | list[str] | None = None,
+        label_id: str | list[str] | None = None,
+        domain: str | list[str] | None = None,
+        where: dict[str, object] | list[dict[str, object]] | None = None,
+        order_by: str | None = None,
+        from_state: str | None = None,
+        to_state: str | None = None,
     ) -> list[dict[str, object]]:
         """Return raw or aggregated recorder history for visible snapshot entities."""
 
         async def _call() -> object:
             runtime = require_runtime(None)
             snapshot = require_snapshot()
-            analytics = (
-                aggregate is not None
-                or value_operations is not None
-                or group_by is not None
-                or bucket is not None
-                or limit is not None
-            )
-            start, end = _clamp_window(
+            analytics_data: dict[str, object] = {
+                "aggregate": aggregate,
+                "value_operations": value_operations,
+                "group_by": group_by,
+                "bucket": bucket,
+                "where": where,
+                "order_by": order_by,
+                "limit": limit,
+                "from_state": from_state,
+                "to_state": to_state,
+            }
+            analytics = history_analytics_requested(analytics_data)
+            start_value = _coerce_history_datetime(start, "start")
+            end_value = _coerce_history_datetime(end, "end")
+            window_start, window_end = _clamp_window(
                 runtime._utcnow(),
-                None,
-                None,
+                start_value,
+                end_value,
                 hours=hours,
                 default_hours=DEFAULT_HISTORY_WINDOW_HOURS,
                 max_hours=MAX_HISTORY_AGGREGATE_LOOKBACK_HOURS if analytics else MAX_RECORDER_LOOKBACK_HOURS,
             )
-            ids = _recorder_entity_ids(snapshot, entity_ids, "history")
-            rows = await runtime.fetch_history(ids, start, end)
-            if not analytics:
+            scope_values = (entity_ids, area_id, floor_id, device_id, label_id, domain)
+            if any(value is not None for value in scope_values):
+                ids = _resolve_facade_recorder_scope(
+                    snapshot,
+                    helper="history",
+                    entity_ids=entity_ids,
+                    area_id=area_id,
+                    floor_id=floor_id,
+                    device_id=device_id,
+                    label_id=label_id,
+                    domain=domain,
+                )
+            else:
+                ids = _recorder_entity_ids(snapshot, None, "history")
+            spec: AnalyticsSpec | None = analytics_spec_from_data(analytics_data) if analytics else None
+            rows = await runtime.fetch_history(ids, window_start, window_end)
+            if spec is None:
                 if len(rows) > MAX_HISTORY_STATES:
                     runtime.state.notes.append(f"history result capped at {MAX_HISTORY_STATES} rows")
                     capped_rows = rows[:MAX_HISTORY_STATES]
@@ -286,21 +383,25 @@ class SafeHass:
                         for row in capped_rows
                     ]
                 return [
-                    {"entity_id": row["entity_id"], "when": row["when"], "state": row["state"], "value": row["value"]}
+                    {
+                        "entity_id": row["entity_id"],
+                        "when": row["when"],
+                        "state": row["state"],
+                        "value": row["value"],
+                    }
                     for row in rows
                 ]
-            spec = analytics_spec_from_data(
-                {
-                    "aggregate": aggregate,
-                    "value_operations": value_operations,
-                    "group_by": group_by,
-                    "bucket": bucket,
-                    "limit": limit,
-                }
+            return run_analytics(
+                cast(list[HistoryRow], rows),
+                spec,
+                (window_start, window_end),
+                snapshot,
             )
-            return run_analytics(cast(list[HistoryRow], rows), spec, (start, end), snapshot)
 
-        return cast(list[dict[str, object]], await helper_response(require_runtime(None).state, "history", _call))
+        return cast(
+            list[dict[str, object]],
+            await helper_response(require_runtime(None).state, "history", _call),
+        )
 
     async def logbook(
         self,
@@ -346,11 +447,11 @@ class SafeHass:
         sql: str,
         hours: float | None = None,
         entity_ids: str | list[str] | None = None,
-        area_id: str | None = None,
-        floor_id: str | None = None,
-        device_id: str | None = None,
-        label_id: str | None = None,
-        domain: str | None = None,
+        area_id: str | list[str] | None = None,
+        floor_id: str | list[str] | None = None,
+        device_id: str | list[str] | None = None,
+        label_id: str | list[str] | None = None,
+        domain: str | list[str] | None = None,
     ) -> JsonValueType:
         """Run bounded read-only SQLite over states plus optional recorder rows."""
 
@@ -599,24 +700,34 @@ def _datetime_from_dt(dt: _datetime) -> SafeDateTime:
     )
 
 
-def _query_scope_guidance(
+def _recorder_scope_guidance(
     snapshot: HomeSnapshot,
     data: Mapping[str, object],
     placeholders: Mapping[str, str],
 ) -> Mapping[str, object] | None:
-    """Return QUERY_HISTORY guidance for facade query selector failures."""
-    requested = str(placeholders.get("entity_id") or placeholders.get("area_id") or placeholders.get("selector") or "")
-    domain = str(data.get("domain") or "")
+    """Return QUERY_HISTORY guidance for facade recorder selector failures."""
+    requested = str(placeholders.get("entity_id") or placeholders.get("selector_id") or "")
     entity_ids = data.get("entity_ids")
     if not requested and isinstance(entity_ids, list) and entity_ids:
         requested = str(entity_ids[0])
     if not requested:
         return None
+    domain_value = data.get("domain")
+    if isinstance(domain_value, str):
+        domain = domain_value
+    elif isinstance(domain_value, list):
+        domain = next((item for item in domain_value if isinstance(item, str)), "")
+    else:
+        domain = ""
     if not domain and "." in requested:
         domain = requested.split(".", 1)[0]
     return advise(
         snapshot,
-        FailureContext(intent=Intent.QUERY_HISTORY, requested=requested, domain=domain),
+        FailureContext(
+            intent=Intent.QUERY_HISTORY,
+            requested=requested,
+            domain=domain,
+        ),
     ).to_payload()
 
 

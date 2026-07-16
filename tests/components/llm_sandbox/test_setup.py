@@ -10,11 +10,13 @@ from custom_components.llm_sandbox.const import (
     DEFAULT_NAME,
     DEFAULT_PROMPT_PROFILE,
     DOMAIN,
+    TOOL_GET_AUTOMATION,
 )
 from custom_components.llm_sandbox.llm_api.prompts import resolve_profile
 from homeassistant.core import Context, HomeAssistant
 from homeassistant.helpers import llm
 from pytest_homeassistant_custom_component.common import MockConfigEntry
+from voluptuous_openapi import convert
 
 
 async def test_setup_assigns_runtime_data(
@@ -70,6 +72,20 @@ async def test_api_prompt_uses_default_profile_and_one_action_section(hass: Home
     assert api_instance.api_prompt.count("## Service calls") == 1
     assert "## Service calls (disabled)" in api_instance.api_prompt
     assert "## Service calls (enabled)" not in api_instance.api_prompt
+    assert api_instance.custom_serializer is llm.selector_serializer
+    automation_tool = next(tool for tool in api_instance.tools if tool.name == TOOL_GET_AUTOMATION)
+    automation_schema = convert(
+        automation_tool.parameters,
+        custom_serializer=api_instance.custom_serializer,
+    )
+    automation_properties = automation_schema["properties"]
+    assert automation_properties["query"]["type"] == "string"
+    assert automation_properties["entity_ids"]["type"] == "array"
+    assert automation_properties["entity_ids"]["items"]["type"] == "string"
+    assert automation_properties["include"]["type"] == "array"
+    assert automation_properties["include"]["items"]["enum"] == ["content", "runs"]
+    assert automation_properties["start"] == {"format": "date-time", "type": "string"}
+    assert automation_properties["end"] == {"format": "date-time", "type": "string"}
 
 
 async def test_unload_cleans_up(

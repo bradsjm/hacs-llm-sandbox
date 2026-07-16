@@ -2,7 +2,7 @@
 
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import replace
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 import json
 import time
 from typing import Any, cast
@@ -654,6 +654,399 @@ async def test_hass_query_capped_history_load_does_not_mark_window_complete() ->
         f"history load capped at {MAX_HISTORY_LOAD_ROWS} rows",
         "query scope inferred from SQL literals: sensor.other",
     ]
+
+
+async def test_hass_history_exact_window_reaches_fetch_seam() -> None:
+    """Exact ISO boundaries are normalized to UTC before recorder fetch."""
+    calls: list[tuple[tuple[str, ...], datetime, datetime]] = []
+
+    async def _fetch_history(
+        entity_ids: Sequence[str],
+        start: datetime,
+        end: datetime,
+    ) -> list[dict[str, object]]:
+        calls.append((tuple(entity_ids), start, end))
+        return []
+
+    hass_facade, _runtime = _history_facade(_snapshot(), _fetch_history)
+    try:
+        result = await hass_facade.history(
+            entity_ids=["sensor.temp"],
+            start="2026-01-01T00:00:00+00:00",
+            end="2026-01-01T01:00:00+00:00",
+        )
+    finally:
+        clear_runtime()
+
+    assert result == []
+    assert calls == [
+        (
+            ("sensor.temp",),
+            datetime(2026, 1, 1, tzinfo=UTC),
+            datetime(2026, 1, 1, 1, tzinfo=UTC),
+        )
+    ]
+
+
+async def test_hass_history_invalid_iso_fails_before_fetch() -> None:
+    """Invalid exact boundaries stay inside the helper error envelope."""
+    fetched = False
+
+    async def _fetch_history(
+        _entity_ids: Sequence[str],
+        _start: datetime,
+        _end: datetime,
+    ) -> list[dict[str, object]]:
+        nonlocal fetched
+        fetched = True
+        return []
+
+    hass_facade, _runtime = _history_facade(_snapshot(), _fetch_history)
+    try:
+        with pytest.raises(HelperExecutionError) as err:
+            await hass_facade.history(entity_ids="sensor.temp", start="not-a-date")
+    finally:
+        clear_runtime()
+
+    assert err.value.helper == "history"
+    assert err.value.key == "invalid_tool_input"
+    assert fetched is False
+
+
+async def test_hass_history_resolves_area_and_domain_from_snapshot() -> None:
+    """History selector scope expands only matching visible snapshot entities."""
+    base = _snapshot()
+    sensor = base.states["sensor.temp"]
+    light = replace(
+        sensor,
+        entity_id="light.other",
+        domain="light",
+        object_id="other",
+    )
+    snapshot = replace(
+        base,
+        states={**base.states, light.entity_id: light},
+        indexes=replace(
+            base.indexes,
+            entity_ids_by_area_id={"area-main": ("sensor.temp", "light.other")},
+        ),
+    )
+    fetch_calls: list[tuple[str, ...]] = []
+
+    async def _fetch_history(
+        entity_ids: Sequence[str],
+        _start: datetime,
+        _end: datetime,
+    ) -> list[dict[str, object]]:
+        fetch_calls.append(tuple(entity_ids))
+        return []
+
+    hass_facade, _runtime = _history_facade(snapshot, _fetch_history)
+    try:
+        result = await hass_facade.history(
+            area_id="area-main",
+            domain="sensor",
+        )
+    finally:
+        clear_runtime()
+
+    assert result == []
+    assert fetch_calls == [("sensor.temp",)]
+
+
+async def test_hass_history_unknown_area_fails_before_fetch() -> None:
+    """Unknown snapshot selectors return selector_no_match without recorder I/O."""
+    fetched = False
+
+    async def _fetch_history(
+        _entity_ids: Sequence[str],
+        _start: datetime,
+        _end: datetime,
+    ) -> list[dict[str, object]]:
+        nonlocal fetched
+        fetched = True
+        return []
+
+    hass_facade, _runtime = _history_facade(_snapshot(), _fetch_history)
+    try:
+        with pytest.raises(HelperExecutionError) as err:
+            await hass_facade.history(area_id="missing")
+    finally:
+        clear_runtime()
+
+    assert err.value.key == "selector_no_match"
+    assert fetched is False
+
+
+async def test_hass_history_empty_selector_does_not_widen_scope() -> None:
+    """An explicitly empty selector fails instead of selecting all visible states."""
+    fetched = False
+
+    async def _fetch_history(
+        _entity_ids: Sequence[str],
+        _start: datetime,
+        _end: datetime,
+    ) -> list[dict[str, object]]:
+        nonlocal fetched
+        fetched = True
+        return []
+
+    hass_facade, _runtime = _history_facade(_snapshot(), _fetch_history)
+    try:
+        with pytest.raises(HelperExecutionError) as err:
+            await hass_facade.history(area_id=[])
+    finally:
+        clear_runtime()
+
+    assert err.value.key == "invalid_tool_input"
+    assert fetched is False
+
+
+async def test_hass_history_oversized_selector_fails_before_fetch() -> None:
+    """A selector resolving above the recorder cap is rejected before I/O."""
+    base = _snapshot()
+    template = base.states["sensor.temp"]
+    states = {
+        f"sensor.item_{index}": replace(
+            template,
+            entity_id=f"sensor.item_{index}",
+            object_id=f"item_{index}",
+        )
+        for index in range(MAX_RECORDER_ENTITY_IDS + 1)
+    }
+    snapshot = replace(
+        base,
+        states=states,
+        indexes=replace(
+            base.indexes,
+            entity_ids_by_area_id={"area-main": tuple(states)},
+        ),
+    )
+    fetched = False
+
+    async def _fetch_history(
+        _entity_ids: Sequence[str],
+        _start: datetime,
+        _end: datetime,
+    ) -> list[dict[str, object]]:
+        nonlocal fetched
+        fetched = True
+        return []
+
+    hass_facade, _runtime = _history_facade(snapshot, _fetch_history)
+    try:
+        with pytest.raises(HelperExecutionError) as err:
+            await hass_facade.history(area_id="area-main")
+    finally:
+        clear_runtime()
+
+    assert err.value.key == "invalid_tool_input"
+    assert fetched is False
+
+
+async def test_hass_history_transition_filters_return_flat_analytics() -> None:
+    """Transition filters use shared analytics semantics and retain flat output."""
+    rows: list[dict[str, object]] = [
+        {
+            "entity_id": "sensor.temp",
+            "when": "2026-01-01T00:00:00+00:00",
+            "state": "off",
+            "value": None,
+        },
+        {
+            "entity_id": "sensor.temp",
+            "when": "2026-01-01T00:01:00+00:00",
+            "state": "on",
+            "value": None,
+        },
+    ]
+
+    async def _fetch_history(
+        _entity_ids: Sequence[str],
+        _start: datetime,
+        _end: datetime,
+    ) -> list[dict[str, object]]:
+        return rows
+
+    hass_facade, _runtime = _history_facade(_snapshot(), _fetch_history)
+    try:
+        result = await hass_facade.history(
+            entity_ids="sensor.temp",
+            aggregate="count_transitions",
+            from_state="off",
+            to_state="on",
+        )
+    finally:
+        clear_runtime()
+
+    assert result == [{"transitions": 1}]
+
+
+async def test_hass_history_incompatible_to_state_fails_before_fetch() -> None:
+    """A transition-only filter without a compatible mode performs no I/O."""
+    fetched = False
+
+    async def _fetch_history(
+        _entity_ids: Sequence[str],
+        _start: datetime,
+        _end: datetime,
+    ) -> list[dict[str, object]]:
+        nonlocal fetched
+        fetched = True
+        return []
+
+    hass_facade, _runtime = _history_facade(_snapshot(), _fetch_history)
+    try:
+        with pytest.raises(HelperExecutionError) as err:
+            await hass_facade.history(entity_ids="sensor.temp", to_state="on")
+    finally:
+        clear_runtime()
+
+    assert err.value.key == "invalid_tool_input"
+    assert fetched is False
+
+
+async def test_hass_history_where_grouping_and_order_share_analytics_spec() -> None:
+    """Facade where/group/order arguments produce filtered deterministic groups."""
+    base = _snapshot()
+    other = replace(
+        base.states["sensor.temp"],
+        entity_id="sensor.other",
+        object_id="other",
+    )
+    snapshot = replace(base, states={**base.states, other.entity_id: other})
+    rows: list[dict[str, object]] = [
+        {
+            "entity_id": "sensor.temp",
+            "when": "2026-01-01T00:00:00+00:00",
+            "state": "off",
+            "value": None,
+        },
+        {
+            "entity_id": "sensor.temp",
+            "when": "2026-01-01T00:01:00+00:00",
+            "state": "on",
+            "value": None,
+        },
+        {
+            "entity_id": "sensor.other",
+            "when": "2026-01-01T00:02:00+00:00",
+            "state": "on",
+            "value": None,
+        },
+    ]
+
+    async def _fetch_history(
+        _entity_ids: Sequence[str],
+        _start: datetime,
+        _end: datetime,
+    ) -> list[dict[str, object]]:
+        return rows
+
+    hass_facade, _runtime = _history_facade(snapshot, _fetch_history)
+    try:
+        result = await hass_facade.history(
+            entity_ids=["sensor.temp", "sensor.other"],
+            where={"field": "state", "op": "eq", "value": "on"},
+            group_by="entity_id",
+            order_by="entity_id",
+        )
+    finally:
+        clear_runtime()
+
+    assert result == [
+        {"entity_id": "sensor.other", "count": 1},
+        {"entity_id": "sensor.temp", "count": 1},
+    ]
+
+
+async def test_execute_home_code_history_exact_window_returns_flat_rows() -> None:
+    """The execution path accepts exact windows and preserves flat history output."""
+    rows = [
+        {
+            "entity_id": "sensor.temp",
+            "when": "2026-01-01T00:30:00+00:00",
+            "state": "20",
+            "value": 20.0,
+        }
+    ]
+    calls: list[tuple[datetime, datetime]] = []
+
+    async def _fetch_history(
+        _entity_ids: Sequence[str],
+        start: datetime,
+        end: datetime,
+    ) -> list[dict[str, object]]:
+        calls.append((start, end))
+        return rows
+
+    snapshot = _snapshot()
+    _hass_facade, runtime = _history_facade(snapshot, _fetch_history)
+    tool = ExecuteHomeCodeTool("test-entry")
+    data = cast(
+        dict[str, object],
+        tool.parameters(
+            {
+                "code": (
+                    "result = await hass.history(entity_ids=['sensor.temp'], "
+                    "start='2026-01-01T00:00:00+00:00', "
+                    "end='2026-01-01T01:00:00+00:00')"
+                )
+            }
+        ),
+    )
+    llm_context = llm.LLMContext("test", Context(), "en", None, None)
+    try:
+        result = await tool.run_execute(snapshot, data, llm_context, runtime)
+    finally:
+        clear_runtime()
+
+    assert result["execution"]["status"] == "ok"
+    assert result["output"] == rows
+    assert calls == [
+        (
+            datetime(2026, 1, 1, tzinfo=UTC),
+            datetime(2026, 1, 1, 1, tzinfo=UTC),
+        )
+    ]
+
+
+async def test_execute_home_code_history_accepts_safe_datetime() -> None:
+    """Monty's datetime facade value is accepted as an exact history boundary."""
+    starts: list[datetime] = []
+
+    async def _fetch_history(
+        _entity_ids: Sequence[str],
+        start: datetime,
+        _end: datetime,
+    ) -> list[dict[str, object]]:
+        starts.append(start)
+        return []
+
+    snapshot = _snapshot()
+    _hass_facade, runtime = _history_facade(snapshot, _fetch_history)
+    tool = ExecuteHomeCodeTool("test-entry")
+    data = cast(
+        dict[str, object],
+        tool.parameters(
+            {
+                "code": (
+                    "result = await hass.history("
+                    "entity_ids=['sensor.temp'], "
+                    "start=datetime.fromisoformat('2026-01-01T00:00:00+00:00'), "
+                    "end='2026-01-01T01:00:00+00:00')"
+                )
+            }
+        ),
+    )
+    llm_context = llm.LLMContext("test", Context(), "en", None, None)
+    try:
+        result = await tool.run_execute(snapshot, data, llm_context, runtime)
+    finally:
+        clear_runtime()
+
+    assert result["execution"]["status"] == "ok"
+    assert starts == [datetime(2026, 1, 1, tzinfo=UTC)]
 
 
 async def test_hass_history_raw_caps_rows_and_adds_note() -> None:

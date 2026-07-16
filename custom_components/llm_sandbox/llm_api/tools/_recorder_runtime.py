@@ -26,7 +26,6 @@ from ...const import (
 from ...snapshot.models import HomeSnapshot
 from ..data.history import (
     AGGREGATORS,
-    AggregateFilters,
     AggregateMode,
     HistoryRow,
     analytics_spec_from_data,
@@ -580,10 +579,8 @@ async def _aggregate_history(
         default_hours=DEFAULT_HISTORY_WINDOW_HOURS,
         max_hours=MAX_HISTORY_AGGREGATE_LOOKBACK_HOURS,
     )
-    filters = AggregateFilters(
-        from_state=cast(str | None, data.get("from_state")),
-        to_state=cast(str | None, data.get("to_state")),
-    )
+    spec = analytics_spec_from_data(data)
+    filters = spec.filters
 
     raw = await source.fetch_history(entity_ids, start, end)
 
@@ -626,8 +623,8 @@ async def _declarative_history(
         default_hours=DEFAULT_HISTORY_WINDOW_HOURS,
         max_hours=MAX_HISTORY_AGGREGATE_LOOKBACK_HOURS,
     )
-    raw = await source.fetch_history(entity_ids, start, end)
     spec = analytics_spec_from_data(data)
+    raw = await source.fetch_history(entity_ids, start, end)
 
     def _analyze() -> list[dict[str, object]]:
         flat = flat_history_rows(raw, snapshot)

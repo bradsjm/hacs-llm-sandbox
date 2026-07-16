@@ -55,6 +55,10 @@ def test_profile_describes_awaitable_facades(profile: PromptProfile) -> None:
     assert "flat list" in profile.base_prompt
     assert "hass.query(...)" in profile.base_prompt
     assert "hass.logbook(...)" in profile.base_prompt
+    assert (
+        "hass.history accepts exact start/end, entity IDs or snapshot-backed area/device/floor/label/domain scope, "
+        "and analytics arguments; results stay flat with no cursor/window." in profile.base_prompt
+    )
     assert "hass.services.async_call" in profile.base_prompt
     assert "service-catalog reads" in profile.base_prompt
     assert "sync" in profile.base_prompt.lower()

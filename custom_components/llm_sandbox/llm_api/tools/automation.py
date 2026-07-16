@@ -24,7 +24,7 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import floor_registry as fr
 from homeassistant.helpers import label_registry as lr
-from homeassistant.helpers import llm
+from homeassistant.helpers import llm, selector
 from homeassistant.helpers.recorder import DATA_INSTANCE
 from homeassistant.util import dt as dt_util
 from homeassistant.util.json import JsonObjectType
@@ -42,7 +42,12 @@ from ..errors import RecoverableToolError, tool_error_envelope, tool_error_from_
 from ..executor_support import json_safe
 from ..prompts import build_get_automation_description
 from ._recorder_runtime import _sync_recorder_for_query
-from ._support import _omit_empty_optional_args, _require_loaded_entry_error, _require_sandbox_runtime
+from ._support import (
+    _bounded_list,
+    _omit_empty_optional_args,
+    _require_loaded_entry_error,
+    _require_sandbox_runtime,
+)
 
 _NULL_KEYS = frozenset({"query", "entity_ids", "include", "hours", "start", "end", "limit", "cursor"})
 _EMPTY_STRINGS = frozenset({"query", "start", "end", "cursor"})
@@ -102,6 +107,13 @@ def _automation_entity_id(value: object) -> str:
     if not entity_id.startswith("automation."):
         raise vol.Invalid("entity_ids must contain automation entities")
     return entity_id
+
+
+def _automation_entity_ids(value: object) -> list[str]:
+    """Validate a whole list of automation entity IDs."""
+    if not isinstance(value, list):
+        raise vol.Invalid("entity_ids must be a list")
+    return [_automation_entity_id(item) for item in value]
 
 
 def _canonical_include(value: object) -> list[str]:
@@ -213,14 +225,30 @@ class GetAutomationTool(llm.Tool):
     description = build_get_automation_description()
     parameters: vol.Schema = vol.Schema(
         {
-            vol.Optional("query"): _query_value,
+            vol.Optional("query"): vol.All(selector.TextSelector(), _query_value),
             vol.Optional("entity_ids"): vol.All(
-                cv.ensure_list, [_automation_entity_id], vol.Length(min=1, max=MAX_RECORDER_ENTITY_IDS)
+                cv.ensure_list,
+                selector.EntitySelector(selector.EntitySelectorConfig(domain="automation", multiple=True)),
+                _automation_entity_ids,
+                _bounded_list(
+                    "entity_ids",
+                    min_items=1,
+                    max_items=MAX_RECORDER_ENTITY_IDS,
+                ),
             ),
-            vol.Optional("include"): vol.All(_canonical_include, vol.Length(min=1, max=2)),
+            vol.Optional("include"): vol.All(
+                selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=list(_INCLUDE),
+                        multiple=True,
+                    )
+                ),
+                _canonical_include,
+                _bounded_list("include", min_items=1, max_items=2),
+            ),
             vol.Optional("hours"): vol.All(vol.Coerce(float), vol.Range(min=0)),
-            vol.Optional("start"): _iso_datetime,
-            vol.Optional("end"): _iso_datetime,
+            vol.Optional("start"): vol.All(selector.DateTimeSelector(), _iso_datetime),
+            vol.Optional("end"): vol.All(selector.DateTimeSelector(), _iso_datetime),
             vol.Optional("limit", default=10): vol.All(vol.Coerce(int), vol.Range(min=1, max=MAX_RECORDER_ENTITY_IDS)),
             vol.Optional("cursor"): str,
         }

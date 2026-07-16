@@ -8,7 +8,7 @@ from typing import Literal, cast, final, override
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
-from homeassistant.helpers import llm
+from homeassistant.helpers import llm, selector
 from homeassistant.util import dt as dt_util
 from homeassistant.util.json import JsonObjectType
 import voluptuous as vol
@@ -32,7 +32,14 @@ from ...const import (
 from ...snapshot import build_recorder_snapshot
 from ...snapshot.models import HomeSnapshot
 from ...types import TranslationPlaceholders
-from ..data.history import AGGREGATORS, NUMERIC_OPS, AggregateMode, HistoryRow
+from ..data.history import (
+    AGGREGATORS,
+    HISTORY_ANALYTICS_FIELDS,
+    NUMERIC_OPS,
+    AggregateMode,
+    HistoryRow,
+    history_analytics_requested,
+)
 from ..data.recorder_scope import (
     ENTITY_NOT_VISIBLE,
     SELECTOR_NO_MATCH,
@@ -82,7 +89,12 @@ from ._recorder_runtime import (
 from ._recorder_runtime import (
     logbook_available as logbook_available,
 )
-from ._support import _omit_empty_optional_args, _require_loaded_entry_error, _require_sandbox_runtime
+from ._support import (
+    _bounded_list,
+    _omit_empty_optional_args,
+    _require_loaded_entry_error,
+    _require_sandbox_runtime,
+)
 
 RECORDER_UNAVAILABLE = "recorder_unavailable"
 QUERY_FAILED = "query_failed"
@@ -474,22 +486,39 @@ class GetHistoryTool(_RecorderTool):
         {
             vol.Optional("entity_ids", description="One or up to 20 entity IDs."): vol.All(
                 cv.ensure_list,
+                selector.TextSelector(selector.TextSelectorConfig(multiple=True)),
                 [cv.entity_id],
-                vol.Length(min=1, max=MAX_RECORDER_ENTITY_IDS),
+                _bounded_list(
+                    "entity_ids",
+                    min_items=1,
+                    max_items=MAX_RECORDER_ENTITY_IDS,
+                ),
             ),
             **_SELECTOR_FIELDS,
             vol.Optional(
                 "hours", description="Relative window size in hours; used when start/end are omitted."
             ): _HOURS_ARG,
-            vol.Optional("start", description="Window start (ISO-8601). Default now-1h."): _iso_datetime,
-            vol.Optional("end", description="Window end (ISO-8601). Default now."): _iso_datetime,
+            vol.Optional("start", description="Window start (ISO-8601). Default now-1h."): vol.All(
+                selector.DateTimeSelector(), _iso_datetime
+            ),
+            vol.Optional("end", description="Window end (ISO-8601). Default now."): vol.All(
+                selector.DateTimeSelector(), _iso_datetime
+            ),
             vol.Optional(
                 "attributes",
                 description=(
                     "Optional attribute names to include per row. Each row then appends "
                     "{name: value} for requested attributes present on that row; absent names are omitted."
                 ),
-            ): vol.All(cv.ensure_list, [str], vol.Length(min=1, max=MAX_HISTORY_ATTRIBUTES)),
+            ): vol.All(
+                cv.ensure_list,
+                [str],
+                _bounded_list(
+                    "attributes",
+                    min_items=1,
+                    max_items=MAX_HISTORY_ATTRIBUTES,
+                ),
+            ),
             vol.Optional(
                 "aggregate",
                 description="Optional server-side summary mode instead of raw rows.",
@@ -497,9 +526,15 @@ class GetHistoryTool(_RecorderTool):
             vol.Optional(
                 "value_operations",
                 description="Numeric operations over each history row's numeric value.",
-            ): vol.All(cv.ensure_list, [vol.In(tuple(sorted(NUMERIC_OPS)))], vol.Length(min=1)),
+            ): vol.All(
+                cv.ensure_list,
+                [vol.In(tuple(sorted(NUMERIC_OPS)))],
+                _bounded_list("value_operations", min_items=1),
+            ),
             vol.Optional("group_by", description="Optional analytics group key(s)."): vol.All(
-                cv.ensure_list, [str], vol.Length(min=1, max=4)
+                cv.ensure_list,
+                [str],
+                _bounded_list("group_by", min_items=1, max_items=4),
             ),
             vol.Optional("bucket", description="Optional analytics bucket, e.g. 15m, 1h, 1d."): str,
             vol.Optional("where", description="Optional analytics row filters."): vol.All(cv.ensure_list, [dict]),
@@ -535,12 +570,9 @@ class GetHistoryTool(_RecorderTool):
         entity_ids = resolve_entity_ids(snapshot, data, "entity_ids")
         requested_attributes = cast(list[str] | None, data.get("attributes"))
         aggregate = cast(AggregateMode | None, data.get("aggregate"))
-        analytics_requested = any(
-            key in data
-            for key in ("aggregate", "value_operations", "group_by", "bucket", "where", "order_by", "limit")
-        )
+        analytics_requested = history_analytics_requested(data)
         if isinstance(aggregate, str) and not any(
-            key in data for key in ("value_operations", "group_by", "bucket", "where", "order_by", "limit")
+            data.get(key) is not None for key in HISTORY_ANALYTICS_FIELDS - {"aggregate", "from_state", "to_state"}
         ):
             return await _aggregate_history(source, entity_ids, data, aggregate)
         if analytics_requested:
@@ -613,15 +645,24 @@ class GetStatisticsTool(_RecorderTool):
                 description="One or up to 20 statistic IDs (usually entity IDs).",
             ): vol.All(
                 cv.ensure_list,
+                selector.TextSelector(selector.TextSelectorConfig(multiple=True)),
                 [str],
-                vol.Length(min=1, max=MAX_RECORDER_ENTITY_IDS),
+                _bounded_list(
+                    "statistic_ids",
+                    min_items=1,
+                    max_items=MAX_RECORDER_ENTITY_IDS,
+                ),
             ),
             **_SELECTOR_FIELDS,
             vol.Optional(
                 "hours", description="Relative window size in hours; used when start/end are omitted."
             ): _HOURS_ARG,
-            vol.Optional("start", description="Window start (ISO-8601). Default now-24h."): _iso_datetime,
-            vol.Optional("end", description="Window end (ISO-8601). Default now."): _iso_datetime,
+            vol.Optional("start", description="Window start (ISO-8601). Default now-24h."): vol.All(
+                selector.DateTimeSelector(), _iso_datetime
+            ),
+            vol.Optional("end", description="Window end (ISO-8601). Default now."): vol.All(
+                selector.DateTimeSelector(), _iso_datetime
+            ),
             vol.Optional("period", default="hour", description="Aggregation bucket."): vol.In(
                 ("5minute", "hour", "day")
             ),
@@ -631,7 +672,7 @@ class GetStatisticsTool(_RecorderTool):
             ): vol.All(
                 cv.ensure_list,
                 [vol.In(STATISTIC_VALUE_TYPES)],
-                vol.Length(min=1),
+                _bounded_list("types", min_items=1),
             ),
             vol.Optional(
                 "cursor",
@@ -751,15 +792,24 @@ class GetLogbookTool(_RecorderTool):
         {
             vol.Optional("entity_ids", description="One or up to 20 entity IDs to scope the logbook."): vol.All(
                 cv.ensure_list,
+                selector.TextSelector(selector.TextSelectorConfig(multiple=True)),
                 [cv.entity_id],
-                vol.Length(min=1, max=MAX_RECORDER_ENTITY_IDS),
+                _bounded_list(
+                    "entity_ids",
+                    min_items=1,
+                    max_items=MAX_RECORDER_ENTITY_IDS,
+                ),
             ),
             **_SELECTOR_FIELDS,
             vol.Optional(
                 "hours", description="Relative window size in hours; used when start/end are omitted."
             ): _HOURS_ARG,
-            vol.Optional("start", description="Window start (ISO-8601). Default now-24h."): _iso_datetime,
-            vol.Optional("end", description="Window end (ISO-8601). Default now."): _iso_datetime,
+            vol.Optional("start", description="Window start (ISO-8601). Default now-24h."): vol.All(
+                selector.DateTimeSelector(), _iso_datetime
+            ),
+            vol.Optional("end", description="Window end (ISO-8601). Default now."): vol.All(
+                selector.DateTimeSelector(), _iso_datetime
+            ),
             vol.Optional(
                 "cursor",
                 description=(

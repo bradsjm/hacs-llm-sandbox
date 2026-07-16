@@ -224,6 +224,33 @@ async def test_oversized_first_automation_still_advances(
 @pytest.mark.parametrize(
     "tool_args",
     [
+        pytest.param({"query": {"value": "lights"}}, id="query-wrapper"),
+        pytest.param(
+            {"entity_ids": {"value": ["automation.test"]}},
+            id="entity-ids-wrapper",
+        ),
+        pytest.param({"include": "content"}, id="scalar-include"),
+        pytest.param(
+            {"entity_ids": ["12345678-1234-1234-1234-123456789abc"]},
+            id="uuid-entity-selector",
+        ),
+    ],
+)
+async def test_canonical_automation_inputs_reject_provider_shape_mismatches(
+    hass: HomeAssistant,
+    loaded_entry: MockConfigEntry,
+    tool_args: dict[str, object],
+) -> None:
+    """Malformed provider shapes fail before authorization or query execution."""
+    result = await _call(hass, loaded_entry, tool_args)
+
+    assert result["status"] == "error"
+    assert result["error"]["key"] == "invalid_tool_input"
+
+
+@pytest.mark.parametrize(
+    "tool_args",
+    [
         pytest.param({"cursor": "bad", "limit": 1}, id="cursor-conflict"),
         pytest.param({"cursor": "bad", "query": "test"}, id="query-conflict"),
     ],

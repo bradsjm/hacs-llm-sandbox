@@ -77,6 +77,35 @@ def test_monty_type_stubs_expose_required_surface(symbol: str) -> None:
     assert symbol in MONTY_TYPE_STUBS
 
 
+def test_monty_type_stubs_expose_widened_history_signature() -> None:
+    """The generated facade contract preserves positional history compatibility."""
+    signature = re.search(r"async def history\([^\n]+", MONTY_TYPE_STUBS)
+
+    assert signature is not None
+    rendered = signature.group()
+    assert rendered.startswith(
+        "async def history(self, entity_ids: str | list[str] | None = None, "
+        "hours: float | None = None, aggregate: str | None = None, "
+        "value_operations: str | list[str] | None = None, "
+        "group_by: str | list[str] | None = None, bucket: str | None = None, "
+        "limit: int | None = None, "
+    )
+    for argument in (
+        "start: str | datetime | SafeDateTime | None = None",
+        "end: str | datetime | SafeDateTime | None = None",
+        "area_id: str | list[str] | None = None",
+        "device_id: str | list[str] | None = None",
+        "floor_id: str | list[str] | None = None",
+        "label_id: str | list[str] | None = None",
+        "domain: str | list[str] | None = None",
+        "where: dict[str, object] | list[dict[str, object]] | None = None",
+        "order_by: str | None = None",
+        "from_state: str | None = None",
+        "to_state: str | None = None",
+    ):
+        assert argument in rendered
+
+
 def test_monty_type_stubs_expose_bounded_logbook_signature() -> None:
     """The generated facade contract exposes only the public logbook inputs."""
     assert re.search(

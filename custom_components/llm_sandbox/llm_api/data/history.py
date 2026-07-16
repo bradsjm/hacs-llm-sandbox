@@ -34,6 +34,24 @@ DEFAULT_ANALYTICS_LIMIT = 500
 _SEQUENCE_DEPENDENT_MODES = frozenset({"count_transitions", "time_in_state", "on_duration"})
 _TIMESTAMP_ORDERED_MODES = frozenset({"first_seen", "last_seen"})
 _BUCKETED_CARRY_FORWARD_MODES = frozenset({"time_in_state", "on_duration"})
+HISTORY_ANALYTICS_FIELDS = frozenset(
+    {
+        "aggregate",
+        "value_operations",
+        "group_by",
+        "bucket",
+        "where",
+        "order_by",
+        "limit",
+        "from_state",
+        "to_state",
+    }
+)
+
+
+def history_analytics_requested(data: Mapping[str, object]) -> bool:
+    """Return whether any analytics argument was explicitly supplied."""
+    return any(data.get(field) is not None for field in HISTORY_ANALYTICS_FIELDS)
 
 
 @dataclass(frozen=True, slots=True)

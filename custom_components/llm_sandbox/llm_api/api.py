@@ -92,6 +92,7 @@ class LlmSandboxAPI(llm.API):
             ),
             llm_context=llm_context,
             tools=tools,
+            custom_serializer=llm.selector_serializer,
         )
 
 

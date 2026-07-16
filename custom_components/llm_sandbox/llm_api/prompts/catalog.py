@@ -2,6 +2,12 @@
 
 from ..data.home_db import render_query_schema_prompt
 
+_HISTORY_CONTRACT = (
+    "hass.history accepts exact start/end, entity IDs or snapshot-backed area/device/floor/label/domain scope, "
+    "and analytics arguments; results stay flat with no cursor/window."
+)
+
+
 _CONFIG_UNITS: tuple[str, ...] = (
     "temperature_unit",
     "length_unit",
@@ -206,6 +212,7 @@ def _render_readable_catalog() -> str:
             "entries. hass.history(...) returns a flat list of {entity_id, when, state, value} rows (or flat analytics "
             "result dicts); it does not return the standalone get_history envelope, cursor, or window. Raw results above "
             "1000 rows are capped and reported through the top-level overflow.history field and a note. "
+            f"{_HISTORY_CONTRACT}\n"
             "hass.states.get('<entity_id>') -> State | None; hass.states.async_all('<domain>') lists visible "
             "states, optionally by domain; hass.states.is_state('<entity_id>', '<state>') -> bool.\n"
             f"- State fields: {_items(_STATE_FIELDS)}.",
@@ -281,6 +288,7 @@ def _render_compact_catalog() -> str:
             "{entity_id,when,state,value} rows or flat analytics result dicts; it has no standalone get_history "
             "envelope/cursor/window. Raw results above 1000 rows are capped and reported through top-level "
             "overflow.history plus a note. states.get(id)->State|None; async_all(domain); is_state(id,state). "
+            f"{_HISTORY_CONTRACT} "
             f"State: {_items(_STATE_FIELDS)}.",
             "## Registries/records\n"
             "- Resolve er/dr/ar/fr/lr/cr with async_get(hass); aliases: "

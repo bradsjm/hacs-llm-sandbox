@@ -6,15 +6,36 @@ Kept in a neutral module so neither ``code.py`` nor ``recorder.py`` has to
 import from ``api.py`` (which would recreate a cycle).
 """
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import cast
 
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
+import voluptuous as vol
 
 from ...const import DOMAIN
 from ...runtime import SandboxConfigEntry, SandboxRuntime
 from ..errors import setup_error_payload
+
+
+def _bounded_list(
+    field: str,
+    *,
+    min_items: int = 0,
+    max_items: int | None = None,
+) -> Callable[[object], list[object]]:
+    """Return a converter-transparent whole-list bounds validator."""
+
+    def validate(value: object) -> list[object]:
+        if not isinstance(value, list):
+            raise vol.Invalid(f"{field} must be a list")
+        if len(value) < min_items:
+            raise vol.Invalid(f"{field} must contain at least {min_items} item(s)")
+        if max_items is not None and len(value) > max_items:
+            raise vol.Invalid(f"{field} must contain at most {max_items} item(s)")
+        return value
+
+    return validate
 
 
 def _omit_empty_optional_args(

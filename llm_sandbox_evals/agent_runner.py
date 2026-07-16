@@ -89,7 +89,7 @@ def build_agent_tools(runtime: EvalRuntime) -> list[Tool[EvalRuntime]]:
 
 def _make_automation_tool(tool: GetAutomationTool, description: str) -> Tool[EvalRuntime]:
     """Return a Pydantic AI tool backed by the production automation query core."""
-    json_schema = convert(tool.parameters)
+    json_schema = convert(tool.parameters, custom_serializer=llm.selector_serializer)
 
     async def execute(ctx: RunContext[EvalRuntime], **kwargs: object) -> JsonObjectType:
         _notify_tool_boundary(ctx.deps, tool.name, started=True)
@@ -114,7 +114,7 @@ def _make_recorder_tool(
     tool: GetHistoryTool | GetStatisticsTool | GetLogbookTool, description: str
 ) -> Tool[EvalRuntime]:
     """Return one pydantic-ai Tool backed by _RecorderTool.run_query."""
-    json_schema = convert(tool.parameters)
+    json_schema = convert(tool.parameters, custom_serializer=llm.selector_serializer)
 
     async def execute(ctx: RunContext[EvalRuntime], **kwargs: object) -> JsonObjectType:
         _notify_tool_boundary(ctx.deps, tool.name, started=True)
@@ -137,7 +137,7 @@ def _make_recorder_tool(
 
 def _make_code_tool(tool: ExecuteHomeCodeTool, description: str) -> Tool[EvalRuntime]:
     """Return one pydantic-ai Tool backed by ExecuteHomeCodeTool.run_execute."""
-    json_schema = convert(tool.parameters)
+    json_schema = convert(tool.parameters, custom_serializer=llm.selector_serializer)
 
     async def execute(ctx: RunContext[EvalRuntime], **kwargs: object) -> JsonObjectType:
         _notify_tool_boundary(ctx.deps, tool.name, started=True)
@@ -181,14 +181,15 @@ def _notify_tool_boundary(runtime: EvalRuntime, tool_name: str, *, started: bool
 def _validate_recorder_tool(tool: _EvalTool, kwargs: dict[str, object]) -> _ValidationResult:
     """Validate recorder args in production ordering."""
     try:
-        if "cursor" in kwargs:
-            data = cast(dict[str, object], tool.parameters({"cursor": kwargs["cursor"]}))  # type: ignore[attr-defined]
+        normalized = tool._normalize_args(kwargs)
+        if "cursor" in normalized:
+            data = cast(dict[str, object], tool.parameters({"cursor": normalized["cursor"]}))  # type: ignore[attr-defined]
             # The private eval wrapper retains the already-resolved cursor scope for
             # production run_query; only the opaque cursor is used for continuation state.
-            if isinstance(kwargs.get("entity_ids"), list):
-                data["entity_ids"] = kwargs["entity_ids"]
+            if isinstance(normalized.get("entity_ids"), list):
+                data["entity_ids"] = normalized["entity_ids"]
             return _ValidationResult(data, None)
-        return _ValidationResult(cast(dict[str, object], tool.parameters(tool._normalize_args(kwargs))), None)  # type: ignore[attr-defined]
+        return _ValidationResult(cast(dict[str, object], tool.parameters(normalized)), None)  # type: ignore[attr-defined]
     except Exception as err:
         mapped = tool_error_from_exception(err)
         if mapped is None:
