@@ -3,6 +3,7 @@ from typing import cast
 from custom_components.llm_sandbox.const import DEFAULT_PROMPT_PROFILE
 from custom_components.llm_sandbox.llm_api.prompts.profiles import resolve_profile
 from custom_components.llm_sandbox.llm_api.tools.automation import GetAutomationTool
+from custom_components.llm_sandbox.llm_api.tools.energy import GetEnergyTool
 from custom_components.llm_sandbox.llm_api.tools.recorder import (
     GetHistoryTool,
     GetLogbookTool,
@@ -30,6 +31,7 @@ def _provider_schema(tool: llm.Tool) -> dict[str, object]:
 def test_provider_schemas_expose_canonical_tool_inputs() -> None:
     automation = cast(dict[str, dict[str, object]], _provider_schema(GetAutomationTool("eval"))["properties"])
     history = cast(dict[str, dict[str, object]], _provider_schema(GetHistoryTool("eval"))["properties"])
+    energy = cast(dict[str, dict[str, object]], _provider_schema(GetEnergyTool("eval"))["properties"])
     statistics = cast(dict[str, dict[str, object]], _provider_schema(GetStatisticsTool("eval"))["properties"])
     logbook = cast(dict[str, dict[str, object]], _provider_schema(GetLogbookTool("eval"))["properties"])
 
@@ -41,6 +43,39 @@ def test_provider_schemas_expose_canonical_tool_inputs() -> None:
     assert cast(dict[str, object], automation["include"]["items"])["enum"] == ["content", "runs"]
     assert statistics["statistic_ids"]["type"] == "array"
     assert cast(dict[str, object], statistics["statistic_ids"]["items"])["type"] == "string"
+    assert energy["hours"]["type"] == "number"
+    assert energy["hours"]["minimum"] == 0
+    assert tuple(cast(tuple[str, ...], energy["period"]["enum"])) == (
+        "auto",
+        "5minute",
+        "hour",
+        "day",
+        "week",
+        "month",
+        "year",
+    )
+    assert tuple(cast(tuple[str, ...], cast(dict[str, object], energy["source_types"]["items"])["enum"])) == (
+        "grid",
+        "solar",
+        "battery",
+        "gas",
+        "water",
+        "device",
+        "device_water",
+    )
+    assert tuple(cast(tuple[str, ...], cast(dict[str, object], energy["include"]["items"])["enum"])) == (
+        "summary",
+        "series",
+        "current",
+        "forecast",
+        "carbon",
+        "validation",
+    )
+    assert tuple(cast(tuple[str, ...], energy["compare"]["enum"])) == ("previous", "year_over_year")
+    assert "device_statistic_ids" in energy
+    for field in ("start", "end"):
+        assert energy[field]["type"] == "string"
+        assert energy[field]["format"] == "date-time"
 
     for properties in (automation, history, statistics, logbook):
         assert properties["start"]["type"] == "string"

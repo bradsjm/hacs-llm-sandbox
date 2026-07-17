@@ -9,7 +9,9 @@ from types import ModuleType
 from typing import cast
 
 from custom_components.llm_sandbox.const import DEFAULT_SERVICE_CALL_LIMIT
+from custom_components.llm_sandbox.llm_api.data.energy import EnergyPeriod, _floor_bucket, sanitize_energy_preferences
 from custom_components.llm_sandbox.llm_api.data.history import HistoryRow, flat_history_rows
+from custom_components.llm_sandbox.llm_api.data.numeric import finite_float
 from custom_components.llm_sandbox.llm_api.errors import RecoverableToolError
 from custom_components.llm_sandbox.llm_api.executor_support import ExecutionState, json_safe
 from custom_components.llm_sandbox.llm_api.prompts import PromptProfile
@@ -21,6 +23,14 @@ from custom_components.llm_sandbox.llm_api.tools.automation import (
     GetAutomationTool,
 )
 from custom_components.llm_sandbox.llm_api.tools.code import ExecuteHomeCodeTool
+from custom_components.llm_sandbox.llm_api.tools.energy import (
+    EnergyQuerySource,
+    GetEnergyTool,
+    _sanitize_validation,
+    _validation_private_locators,
+    _validation_public_locators,
+    run_energy_query,
+)
 from custom_components.llm_sandbox.llm_api.tools.recorder import (
     GetHistoryTool,
     GetLogbookTool,
@@ -30,6 +40,7 @@ from custom_components.llm_sandbox.llm_api.tools.recorder import (
 from custom_components.llm_sandbox.runtime import SandboxSettings
 from custom_components.llm_sandbox.snapshot.models import HomeSnapshot
 from homeassistant.util import dt as dt_util
+from homeassistant.util.json import JsonObjectType
 
 from llm_sandbox_evals.schema import EvalCase, PromptCandidate
 from llm_sandbox_evals.tools import EVAL_SCOPE, RecordingInvoker
@@ -47,10 +58,12 @@ class EvalRuntime:
     settings: SandboxSettings
     recorder_source: RecorderSource
     invoker: RecordingInvoker
+    energy_source: EnergyQuerySource | None
     runtime_context_factory: Callable[[], RuntimeContext]
     code_tool: ExecuteHomeCodeTool
     recorder_tools: tuple[GetHistoryTool | GetStatisticsTool | GetLogbookTool, ...]
     automation_tool: GetAutomationTool
+    energy_tool: GetEnergyTool
     automation_source: AutomationSource
     entry_id: str
     on_tool_boundary: ToolBoundaryCallback | None = None
@@ -82,8 +95,10 @@ def build_eval_runtime(
         snapshot=snapshot,
         settings=settings,
         recorder_source=build_fixture_recorder_source(snapshot, fixture),
+        energy_source=build_fixture_energy_source(snapshot, fixture),
         automation_tool=GetAutomationTool(entry_id),
         automation_source=build_fixture_automation_source(snapshot, fixture),
+        energy_tool=GetEnergyTool(entry_id),
         invoker=invoker,
         runtime_context_factory=_eval_runtime_context_factory(snapshot, settings, invoker, fixture),
         code_tool=ExecuteHomeCodeTool(entry_id),
@@ -137,6 +152,107 @@ def build_fixture_recorder_source(snapshot: HomeSnapshot, fixture: ModuleType) -
     )
 
 
+def build_fixture_energy_source(snapshot: HomeSnapshot, fixture: ModuleType) -> EnergyQuerySource | None:
+    """Build the production Energy core over copied deterministic fixture data."""
+    if not hasattr(fixture, "energy"):
+        return None
+    raw = cast(Callable[[], dict[str, object]], fixture.energy)()
+    expected = {"preferences", "cost_sensors", "metadata", "forecast", "validation"}
+    if set(raw) != expected:
+        raise ValueError(f"energy fixture keys must be exactly {sorted(expected)}")
+    preferences = cast(Mapping[str, object], raw["preferences"])
+    cost_sensors = cast(Mapping[str, str], raw["cost_sensors"])
+    validation_price_locators: dict[int, dict[str, dict[str, str]]] = {}
+    catalog, forecast_entries = sanitize_energy_preferences(
+        snapshot,
+        preferences,
+        cost_sensors,
+        validation_price_locators=validation_price_locators,
+    )
+    validation_data = cast(Mapping[str, object], raw["validation"])
+    metadata = cast(dict[str, dict[str, object]], raw["metadata"])
+    forecast_data = cast(dict[str, dict[str, object]], raw["forecast"])
+    recorder_statistics = _recorder_section(_recorder_data(fixture), "statistics")
+
+    async def fetch_metadata(statistic_ids: set[str]) -> dict[str, dict[str, object]]:
+        return {statistic_id: dict(metadata[statistic_id]) for statistic_id in statistic_ids if statistic_id in metadata}
+
+    async def fetch_statistics(
+        statistic_ids: set[str],
+        start: datetime,
+        end: datetime,
+        period: EnergyPeriod,
+        units: dict[str, str] | None,
+        types: set[str],
+    ) -> Mapping[str, list[dict[str, object]]]:
+        result: dict[str, list[dict[str, object]]] = {}
+        for statistic_id in statistic_ids:
+            rows = _windowed_statistics_rows(
+                recorder_statistics.get(statistic_id, []), start, end, _statistics_timestamp
+            )
+            # Branch boundary: daily fixture rows already have production-shaped buckets.
+            if period == "day":
+                selected = rows
+            else:
+                selected = _aggregate_fixture_statistics(
+                    rows, period, snapshot.config.time_zone
+                )
+            result[statistic_id] = []
+            for row in selected:
+                copied = {
+                    key: value
+                    for key, value in row.items()
+                    if key == "start" or key == "last_reset" or key in types
+                }
+                if (
+                    units is not None
+                    and units.get("power") == "kW"
+                    and metadata.get(statistic_id, {}).get("unit_class") == "power"
+                    and (mean := copied.get("mean")) is not None
+                ):
+                    copied["mean"] = float(cast(float, mean)) / 1000
+                result[statistic_id].append(copied)
+        return result
+
+    async def fetch_forecasts(source_ids: tuple[str, ...]) -> dict[str, dict[str, object]]:
+        result: dict[str, dict[str, object]] = {}
+        for source_id in source_ids:
+            points: dict[str, float] = {}
+            for config_entry_id in forecast_entries.get(source_id, ()):
+                forecast = forecast_data.get(config_entry_id)
+                wh_hours = forecast.get("wh_hours") if forecast is not None else None
+                if not isinstance(wh_hours, Mapping):
+                    continue
+                for timestamp, raw_value in wh_hours.items():
+                    if isinstance(timestamp, str) and (value := finite_float(raw_value)) is not None:
+                        points[timestamp] = points.get(timestamp, 0.0) + value
+            if points:
+                result[source_id] = {"points": [[timestamp, value] for timestamp, value in sorted(points.items())]}
+        return result
+
+    public = _validation_public_locators(catalog)
+    private = _validation_private_locators(catalog, forecast_entries)
+
+    async def fetch_validation() -> tuple[dict[str, object], ...]:
+        return _sanitize_validation(
+            validation_data,
+            public,
+            private,
+            validation_price_locators,
+        )
+
+    return EnergyQuerySource(
+        now=_parse_datetime(snapshot.created_at),
+        catalog=catalog,
+        time_zone=snapshot.config.time_zone,
+        visible_entity_ids=frozenset(snapshot.states),
+        fetch_metadata=fetch_metadata,
+        fetch_statistics=fetch_statistics,
+        fetch_forecasts=fetch_forecasts,
+        fetch_validation=fetch_validation,
+    )
+
+
 def build_fixture_automation_source(snapshot: HomeSnapshot, fixture: ModuleType) -> AutomationSource:
     """Build the production automation source over copied fixture values."""
     if not hasattr(fixture, "automation"):
@@ -185,6 +301,13 @@ def _eval_runtime_context_factory(
 ) -> Callable[[], RuntimeContext]:
     """Return a factory because execute_home_code state is per tool invocation."""
 
+    energy_source = build_fixture_energy_source(snapshot, fixture)
+
+    async def fetch_energy(data: dict[str, object]) -> JsonObjectType:
+        if energy_source is None:
+            raise RecoverableToolError("energy_not_configured", {})
+        return await run_energy_query(data, energy_source)
+
     def factory() -> RuntimeContext:
         # State mutation point: each execute_home_code call gets fresh service/action accounting.
         state = ExecutionState(service_call_limit=settings.service_call_limit)
@@ -205,6 +328,7 @@ def _eval_runtime_context_factory(
             run_blocking=_eval_run_blocking,
             _utcnow=lambda: fixture_now,
             deadline=time.monotonic() + settings.execution_timeout_seconds,
+            fetch_energy=fetch_energy,
             memory=ResolutionMemory(),
         )
 
@@ -282,6 +406,48 @@ def _recorder_data(fixture: ModuleType) -> dict[str, object]:
 def _recorder_section(recorder: Mapping[str, object], section: str) -> dict[str, list[dict[str, object]]]:
     """Return one typed canned recorder section from a fixture recorder mapping."""
     return cast(dict[str, list[dict[str, object]]], recorder[section])
+
+
+def _aggregate_fixture_statistics(
+    rows: list[dict[str, object]], period: EnergyPeriod, time_zone: str
+) -> list[dict[str, object]]:
+    """Aggregate deterministic daily rows on production calendar boundaries."""
+    buckets: dict[datetime, list[dict[str, object]]] = {}
+    for row in rows:
+        bucket_start = _floor_bucket(_statistics_timestamp(row), period, time_zone)
+        # State mutation point: retain source order within each calendar bucket.
+        buckets.setdefault(bucket_start, []).append(row)
+
+    aggregated: list[dict[str, object]] = []
+    for bucket_start, bucket_rows in sorted(buckets.items()):
+        result: dict[str, object] = {"start": bucket_start.isoformat()}
+        for field in ("change", "mean", "min", "max", "state", "sum"):
+            values = [
+                value
+                for row in bucket_rows
+                if (value := finite_float(row.get(field))) is not None
+            ]
+            # Branch boundary: recorder omits statistic fields absent from a bucket.
+            if not values:
+                continue
+            if field == "change":
+                result[field] = sum(values)
+            elif field == "mean":
+                result[field] = sum(values) / len(values)
+            elif field == "min":
+                result[field] = min(values)
+            elif field == "max":
+                result[field] = max(values)
+            else:
+                result[field] = values[-1]
+        for row in reversed(bucket_rows):
+            # Branch boundary: retain an explicit null reset just like recorder output.
+            if "last_reset" in row:
+                result["last_reset"] = row["last_reset"]
+                break
+        # State mutation point: emit one completed production-shaped calendar bucket.
+        aggregated.append(result)
+    return aggregated
 
 
 def _windowed_statistics_rows(

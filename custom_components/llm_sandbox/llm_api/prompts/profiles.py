@@ -29,8 +29,8 @@ class PromptProfile:
 def _guided_guidance() -> str:
     """Return explicit routing and compact examples for weaker models."""
     return """## Working route
-- Automation lookup, complete content, or recent-run questions use the standalone get_automation tool; direct history, statistics, or logbook retrieval uses the matching standalone tool. Current state, registry joins, computation, conditions, composed recorder data, or actions use one execute_home_code call. Independent direct reads may run in parallel. Stop after sufficient evidence; do not refetch it.
-- Await hass.history(...), hass.query(...), hass.logbook(...), and enabled hass.services.async_call(...). State, registry, config, repairs, notification, and service-catalog reads are synchronous despite async_-style names. Put the serializable final answer in result or use a final bare expression.
+- Automation lookup, complete content, or recent-run questions use get_automation; direct history/statistics/logbook retrieval uses the matching standalone tool; direct Energy dashboard totals, tracked-device usage, forecasts, comparisons, or trends use get_energy. Energy or recorder data combined with current state, registries, computation, conditions, or actions uses one execute_home_code call. Simple current state/control stays on built-in Assist first. Independent direct reads may run in parallel. Stop after sufficient evidence; do not refetch it.
+- Await hass.history(...), hass.query(...), hass.logbook(...), hass.energy(...), and enabled hass.services.async_call(...). State, registry, config, repairs, notification, and service-catalog reads are synchronous despite async_-style names. Put the serializable final answer in result or use a final bare expression.
 
 ### Current state
 ```python
@@ -63,16 +63,16 @@ Use the action form only when the later service-call section says actions are en
 def _balanced_guidance() -> str:
     """Return the readable default guidance without tutorial examples."""
     return """## Working route
-Use the standalone get_automation tool for automation lookup, complete content, or recent-run questions, and the matching standalone tool for direct history, statistics, or logbook retrieval; use one execute_home_code call when current state, registry joins, computation, conditions, composed recorder data, or actions depend on each other. Independent direct reads may run in parallel; stop after sufficient evidence and do not refetch it.
+Use standalone get_automation for automation lookup/content/runs, matching standalone tools for direct recorder retrieval, and get_energy for direct Energy dashboard totals, tracked-device usage, forecasts, comparisons, or trends. Use one execute_home_code call when Energy or recorder data depends on current state, registries, computation, conditions, or actions. Simple current state/control stays on built-in Assist first. Independent direct reads may run in parallel; stop after sufficient evidence and do not refetch it.
 
 ## Execution and output
-Await hass.history(...), hass.query(...), hass.logbook(...), and enabled hass.services.async_call(...); state, registry, config, repairs, notification, and service-catalog reads are synchronous despite async_-style names. Return the useful serializable answer in result or a final bare expression."""
+Await hass.history(...), hass.query(...), hass.logbook(...), hass.energy(...), and enabled hass.services.async_call(...); state, registry, config, repairs, notification, and service-catalog reads are synchronous despite async_-style names. Return the useful serializable answer in result or a final bare expression."""
 
 
 def _frontier_guidance() -> str:
     """Return the compact outcome contract for capable models."""
     return """## Outcome contract
-Use the least evidence needed for a grounded answer. Choose direct get_automation and recorder tools for independent automation or recorder retrieval, and one composed code call when dependencies require current snapshot data, joins, computation, conditions, recorder access, or actions. Return the useful serializable result."""
+Use the least evidence needed for a grounded answer. Choose direct get_automation/recorder/get_energy tools for independent automation, recorder, or Energy-dashboard retrieval, and one composed code call when dependencies require current snapshot data, joins, computation, conditions, recorder/Energy access, or actions. Simple current state/control stays on built-in Assist first. Return the useful serializable result."""
 
 
 def _base_prompt(detail: PromptDetail) -> str:

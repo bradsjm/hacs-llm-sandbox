@@ -122,7 +122,27 @@ def test_full_home_exposes_balcony_statistics() -> None:
     rows = statistics["sensor.balcony_power"]
 
     assert snapshot.states["sensor.balcony_power"].attributes["state_class"] == "measurement"
-    assert [row["mean"] for row in rows] == [38.0, 42.0]
+    assert len(rows) == 9
+    assert rows[-2:] == [
+        {
+            "start": "2026-06-29T10:00:00+00:00",
+            "end": "2026-06-29T11:00:00+00:00",
+            "state": 38.0,
+            "sum": 38.0,
+            "min": 34.0,
+            "max": 45.0,
+            "mean": 38.0,
+        },
+        {
+            "start": "2026-06-29T11:00:00+00:00",
+            "end": "2026-06-29T12:00:00+00:00",
+            "state": 42.0,
+            "sum": 42.0,
+            "min": 36.0,
+            "max": 49.0,
+            "mean": 42.0,
+        },
+    ]
 
 
 def test_full_home_selector_indexes_match_eval_cases() -> None:

@@ -7,7 +7,7 @@ description: The required conversation-agent step after installation.
 
 After installing the integration, open the settings for the conversation agent you use with Assist and enable the `Assist Agent Sandbox` tool set.
 
-This is the most common missing step. If the tools are not enabled in the agent, the integration can be installed correctly but the model will never call `execute_home_code`, `get_automation`, `get_history`, `get_statistics`, `get_logbook`, or `get_camera_image`.
+This is the most common missing step. If the tools are not enabled in the agent, the integration can be installed correctly but the model will never call `execute_home_code`, `get_automation`, `get_history`, `get_statistics`, `get_energy`, `get_logbook`, or `get_camera_image`.
 
 ## What should be enabled
 
@@ -16,6 +16,7 @@ Enable the tool set exposed by the integration entry. Tool availability is built
 - `execute_home_code` is always registered for a loaded entry.
 - `get_automation` is always registered; its optional `runs` projection checks recorder and logbook availability when called.
 - `get_history` and `get_statistics` are added when recorder support is available.
+- `get_energy` is added when recorder is available and the Energy dashboard is configured. Calls return a structured error if none of its sources are visible in the fresh snapshot.
 - `get_logbook` is added when logbook support is available.
 - `get_camera_image` is always added, but it can only capture visible `camera.*` or `image.*` entities.
 

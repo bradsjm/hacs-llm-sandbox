@@ -11,7 +11,7 @@
   "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/reference/tools/get-history.md",
   "tags": [],
   "version": "current",
-  "lastUpdatedAt": 1783689467000,
+  "lastUpdatedAt": 1784065926000,
   "frontMatter": {
     "title": "get_history",
     "description": "Reference for bounded recorder state-history queries."

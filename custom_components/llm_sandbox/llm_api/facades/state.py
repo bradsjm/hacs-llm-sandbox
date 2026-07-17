@@ -34,6 +34,7 @@ from ..errors import HelperExecutionError, RecoverableToolError
 from ..executor_support import helper_response, overflow_metadata
 from ..guidance import FailureContext, Intent, advise
 from ..sandbox_context import require_runtime, require_snapshot
+from ..tools.energy import validate_energy_args
 from .services import SafeServiceRegistry
 
 
@@ -441,6 +442,37 @@ class SafeHass:
             return ordered_entries
 
         return await helper_response(require_runtime(None).state, "logbook", _call)
+
+    async def energy(
+        self,
+        hours: float | None = None,
+        period: str = "auto",
+        source_types: str | list[str] | None = None,
+        device_statistic_ids: str | list[str] | None = None,
+        include: str | list[str] | None = None,
+        compare: str | None = None,
+        start: str | _datetime | SafeDateTime | None = None,
+        end: str | _datetime | SafeDateTime | None = None,
+    ) -> JsonValueType:
+        """Return Energy dashboard data through the shared validated core."""
+
+        async def _call() -> object:
+            runtime = require_runtime(None)
+            start_value = _coerce_history_datetime(start, "start")
+            end_value = _coerce_history_datetime(end, "end")
+            args: dict[str, object] = {
+                "hours": hours,
+                "period": period,
+                "source_types": source_types,
+                "device_statistic_ids": device_statistic_ids,
+                "include": include,
+                "compare": compare,
+                "start": start_value.isoformat() if start_value is not None else None,
+                "end": end_value.isoformat() if end_value is not None else None,
+            }
+            return await runtime.fetch_energy(validate_energy_args(args))
+
+        return await helper_response(require_runtime(None).state, "energy", _call)
 
     async def query(
         self,

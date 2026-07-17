@@ -27,5 +27,11 @@ The current limits are defined mainly in [`const.py`](https://github.com/bradsjm
 | Loaded history/statistics rows for SQL | Up to 20000 rows. |
 | Camera target width | 384 to 1920 pixels, default 1280. |
 | Image attachment size | Up to 5 MiB. |
+| Energy source/device records | Up to 100 selected records per query; when validation is requested, the ceiling applies to all configured records. |
+| Energy statistic IDs | Up to 40 per primary or comparison query. |
+| Energy query points | Up to 12,000 per primary or comparison window. |
+| Energy returned series points | Up to 500 historical series points across one response. |
+| Energy forecast points | Up to 96 across at most 8 solar sources. |
+| Energy response | Compact output is fitted to the 16 KiB recorder response budget, preserving reported totals. |
 
 Only dispatched service calls consume the service-call limit, including failures and timeouts after dispatch; reads and pre-dispatch blocks do not. Raw standalone recorder pages preserve whole records and use their existing `next_cursor` to continue with older data. The `hass.logbook` helper is not a standalone page and does not use the 16 KiB cursor-page budget.

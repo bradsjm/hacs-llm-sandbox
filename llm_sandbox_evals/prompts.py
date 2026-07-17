@@ -11,6 +11,7 @@ from custom_components.llm_sandbox.llm_api.prompts import (
     build_execute_home_code_description,
     build_get_automation_description,
     build_get_history_description,
+    build_get_energy_description,
     build_get_logbook_description,
     build_get_statistics_description,
     resolve_profile,
@@ -24,8 +25,7 @@ _BASELINE_ID = "baseline"
 def candidate_prompt_sizes(candidate: PromptCandidate) -> tuple[int, int]:
     """Return ``(api_prompt_chars, authored_prompt_chars)`` for a candidate.
 
-    ``api_prompt_chars`` is the length of the COPRO-mutable instruction.
-    ``authored_prompt_chars`` adds the four tool-description fields. Action
+    ``authored_prompt_chars`` adds the six tool-description fields. Action
     sections and JSON-schema scaffolding are excluded because they are
     candidate-invariant (identical across candidates) and only add a constant
     offset, so they would dilute size-comparison signal.
@@ -35,6 +35,7 @@ def candidate_prompt_sizes(candidate: PromptCandidate) -> tuple[int, int]:
         len(candidate.execute_home_code_description)
         + len(candidate.get_history_description)
         + len(candidate.get_statistics_description)
+        + len(candidate.get_energy_description)
         + len(candidate.get_logbook_description)
         + len(candidate.get_automation_description)
     )
@@ -50,6 +51,7 @@ def baseline_candidate(prompt_profile_id: str = DEFAULT_PROMPT_PROFILE) -> Promp
         execute_home_code_description=build_execute_home_code_description(),
         get_history_description=build_get_history_description(),
         get_statistics_description=build_get_statistics_description(),
+        get_energy_description=build_get_energy_description(),
         get_logbook_description=build_get_logbook_description(),
         get_automation_description=build_get_automation_description(),
     )
@@ -89,6 +91,7 @@ def _load_optimized(path: str) -> PromptCandidate:
         execute_home_code_description=_string_field(decoded, "execute_home_code_description"),
         get_history_description=_string_field(decoded, "get_history_description"),
         get_statistics_description=_string_field(decoded, "get_statistics_description"),
+        get_energy_description=_string_field(decoded, "get_energy_description"),
         get_logbook_description=_string_field(decoded, "get_logbook_description"),
         get_automation_description=_string_field(decoded, "get_automation_description"),
     )

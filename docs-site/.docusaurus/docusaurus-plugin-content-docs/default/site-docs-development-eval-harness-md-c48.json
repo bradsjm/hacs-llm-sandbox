@@ -11,7 +11,7 @@
   "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/development/eval-harness.md",
   "tags": [],
   "version": "current",
-  "lastUpdatedAt": 1784043669000,
+  "lastUpdatedAt": 1784129537000,
   "frontMatter": {
     "title": "Eval Harness",
     "description": "Development-only evaluation package for tool behavior."

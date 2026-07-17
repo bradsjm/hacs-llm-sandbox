@@ -1,7 +1,7 @@
 {
   "domain": "llm_sandbox",
   "name": "Assist Agent Sandbox",
-  "after_dependencies": ["logbook", "recorder"],
+  "after_dependencies": ["energy", "logbook", "recorder"],
   "codeowners": ["@bradsjm"],
   "config_flow": true,
   "documentation": "https://github.com/bradsjm/hacs-llm-sandbox",

@@ -4,15 +4,15 @@ import ComponentCreator from '@docusaurus/ComponentCreator';
 export default [
   {
     path: '/hacs-llm-sandbox/',
-    component: ComponentCreator('/hacs-llm-sandbox/', 'cc5'),
+    component: ComponentCreator('/hacs-llm-sandbox/', '69b'),
     routes: [
       {
         path: '/hacs-llm-sandbox/',
-        component: ComponentCreator('/hacs-llm-sandbox/', 'bb5'),
+        component: ComponentCreator('/hacs-llm-sandbox/', 'ab4'),
         routes: [
           {
             path: '/hacs-llm-sandbox/',
-            component: ComponentCreator('/hacs-llm-sandbox/', '8ec'),
+            component: ComponentCreator('/hacs-llm-sandbox/', 'f0f'),
             routes: [
               {
                 path: '/hacs-llm-sandbox/architecture/facade-surface',
@@ -148,7 +148,7 @@ export default [
               },
               {
                 path: '/hacs-llm-sandbox/development/eval-harness',
-                component: ComponentCreator('/hacs-llm-sandbox/development/eval-harness', '130'),
+                component: ComponentCreator('/hacs-llm-sandbox/development/eval-harness', 'c58'),
                 exact: true,
                 sidebar: "docsSidebar"
               },
@@ -214,13 +214,13 @@ export default [
               },
               {
                 path: '/hacs-llm-sandbox/reference/limits',
-                component: ComponentCreator('/hacs-llm-sandbox/reference/limits', 'b9b'),
+                component: ComponentCreator('/hacs-llm-sandbox/reference/limits', 'caf'),
                 exact: true,
                 sidebar: "docsSidebar"
               },
               {
                 path: '/hacs-llm-sandbox/reference/monty-globals',
-                component: ComponentCreator('/hacs-llm-sandbox/reference/monty-globals', 'f8f'),
+                component: ComponentCreator('/hacs-llm-sandbox/reference/monty-globals', '91f'),
                 exact: true,
                 sidebar: "docsSidebar"
               },
@@ -232,7 +232,7 @@ export default [
               },
               {
                 path: '/hacs-llm-sandbox/reference/tools/execute-home-code',
-                component: ComponentCreator('/hacs-llm-sandbox/reference/tools/execute-home-code', 'd9c'),
+                component: ComponentCreator('/hacs-llm-sandbox/reference/tools/execute-home-code', 'd18'),
                 exact: true,
                 sidebar: "docsSidebar"
               },
@@ -249,8 +249,14 @@ export default [
                 sidebar: "docsSidebar"
               },
               {
+                path: '/hacs-llm-sandbox/reference/tools/get-energy',
+                component: ComponentCreator('/hacs-llm-sandbox/reference/tools/get-energy', 'f3d'),
+                exact: true,
+                sidebar: "docsSidebar"
+              },
+              {
                 path: '/hacs-llm-sandbox/reference/tools/get-history',
-                component: ComponentCreator('/hacs-llm-sandbox/reference/tools/get-history', '520'),
+                component: ComponentCreator('/hacs-llm-sandbox/reference/tools/get-history', 'aa6'),
                 exact: true,
                 sidebar: "docsSidebar"
               },
@@ -298,7 +304,7 @@ export default [
               },
               {
                 path: '/hacs-llm-sandbox/usage/history-statistics-logbook',
-                component: ComponentCreator('/hacs-llm-sandbox/usage/history-statistics-logbook', 'cd9'),
+                component: ComponentCreator('/hacs-llm-sandbox/usage/history-statistics-logbook', 'af2'),
                 exact: true,
                 sidebar: "docsSidebar"
               },

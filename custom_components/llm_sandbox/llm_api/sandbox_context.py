@@ -8,6 +8,7 @@ import math
 from typing import Any, Protocol
 
 from homeassistant.util import dt as dt_util
+from homeassistant.util.json import JsonObjectType
 
 from ..runtime import SandboxSettings
 from ..snapshot.models import HomeSnapshot
@@ -28,6 +29,7 @@ type HistoryFetcher = Callable[[Sequence[str], datetime, datetime], Awaitable[li
 type StatisticsFetcher = Callable[[Sequence[str], datetime, datetime], Awaitable[list[dict[str, object]]]]
 type LogbookFetcher = Callable[[Sequence[str], datetime, datetime], Awaitable[list[dict[str, object]]]]
 type BlockingRunner = Callable[[Callable[[], object]], Awaitable[object]]
+type EnergyFetcher = Callable[[dict[str, object]], Awaitable[JsonObjectType]]
 type UtcNow = Callable[[], datetime]
 
 
@@ -52,6 +54,11 @@ async def _unavailable_logbook_fetcher(
     raise RuntimeError("LLM Sandbox logbook fetcher is unavailable outside execute_home_code")
 
 
+async def _unavailable_energy_fetcher(_data: dict[str, object]) -> JsonObjectType:
+    """Raise when Energy is used without execute_home_code wiring."""
+    raise RuntimeError("LLM Sandbox Energy fetcher is unavailable outside execute_home_code")
+
+
 async def _unavailable_blocking_runner[T](_fn: Callable[[], T]) -> T:
     """Raise when blocking execution is used without execute_home_code wiring."""
     raise RuntimeError("LLM Sandbox blocking runner is unavailable outside execute_home_code")
@@ -74,6 +81,7 @@ class RuntimeContext:
     fetch_statistics: StatisticsFetcher = _unavailable_statistics_fetcher
     fetch_short_term_statistics: StatisticsFetcher = _unavailable_statistics_fetcher
     fetch_logbook: LogbookFetcher = _unavailable_logbook_fetcher
+    fetch_energy: EnergyFetcher = _unavailable_energy_fetcher
     run_blocking: BlockingRunner = _unavailable_blocking_runner
     _utcnow: UtcNow = dt_util.utcnow
     deadline: float = math.inf

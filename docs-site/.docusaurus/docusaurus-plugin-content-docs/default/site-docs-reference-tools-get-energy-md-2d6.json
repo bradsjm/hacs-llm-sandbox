@@ -1,0 +1,28 @@
+{
+  "id": "reference/tools/get-energy",
+  "title": "get_energy",
+  "description": "Reference for bounded Home Assistant Energy dashboard queries.",
+  "source": "@site/docs/reference/tools/get-energy.md",
+  "sourceDirName": "reference/tools",
+  "slug": "/reference/tools/get-energy",
+  "permalink": "/hacs-llm-sandbox/reference/tools/get-energy",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/reference/tools/get-energy.md",
+  "tags": [],
+  "version": "current",
+  "lastUpdatedAt": null,
+  "frontMatter": {
+    "title": "get_energy",
+    "description": "Reference for bounded Home Assistant Energy dashboard queries."
+  },
+  "sidebar": "docsSidebar",
+  "previous": {
+    "title": "get_statistics",
+    "permalink": "/hacs-llm-sandbox/reference/tools/get-statistics"
+  },
+  "next": {
+    "title": "get_logbook",
+    "permalink": "/hacs-llm-sandbox/reference/tools/get-logbook"
+  }
+}

@@ -10,6 +10,7 @@ export default {
   "1ec4ae1c": [() => import(/* webpackChunkName: "1ec4ae1c" */ "@site/docs/concepts/sandbox-boundaries.md"), "@site/docs/concepts/sandbox-boundaries.md", require.resolveWeak("@site/docs/concepts/sandbox-boundaries.md")],
   "1f833153": [() => import(/* webpackChunkName: "1f833153" */ "@site/docs/installation/prerequisites.md"), "@site/docs/installation/prerequisites.md", require.resolveWeak("@site/docs/installation/prerequisites.md")],
   "2432d8ae": [() => import(/* webpackChunkName: "2432d8ae" */ "@site/docs/architecture/facade-surface.md"), "@site/docs/architecture/facade-surface.md", require.resolveWeak("@site/docs/architecture/facade-surface.md")],
+  "2d65d330": [() => import(/* webpackChunkName: "2d65d330" */ "@site/docs/reference/tools/get-energy.md"), "@site/docs/reference/tools/get-energy.md", require.resolveWeak("@site/docs/reference/tools/get-energy.md")],
   "31ee89e3": [() => import(/* webpackChunkName: "31ee89e3" */ "@site/docs/architecture/recorder-tools.md"), "@site/docs/architecture/recorder-tools.md", require.resolveWeak("@site/docs/architecture/recorder-tools.md")],
   "3526f8af": [() => import(/* webpackChunkName: "3526f8af" */ "@site/docs/architecture/snapshot-pipeline.md"), "@site/docs/architecture/snapshot-pipeline.md", require.resolveWeak("@site/docs/architecture/snapshot-pipeline.md")],
   "37e243a2": [() => import(/* webpackChunkName: "37e243a2" */ "@site/docs/installation/enable-in-assist.md"), "@site/docs/installation/enable-in-assist.md", require.resolveWeak("@site/docs/installation/enable-in-assist.md")],

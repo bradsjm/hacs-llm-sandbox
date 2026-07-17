@@ -15,6 +15,7 @@ def tool_succeeded(event: ToolEvent) -> bool:
     expected_keys = {
         "get_history": {"entities", "rows", "summary"},
         "get_statistics": {"statistics", "summary"},
+        "get_energy": {"summary", "sources", "devices", "forecast", "carbon"},
         "get_logbook": {"entries"},
         "get_automation": {"automations"},
     }.get(event.tool_name)

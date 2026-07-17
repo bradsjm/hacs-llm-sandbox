@@ -63,6 +63,7 @@ class PromptCandidate:
     execute_home_code_description: str
     get_history_description: str
     get_statistics_description: str
+    get_energy_description: str
     get_logbook_description: str
     get_automation_description: str
 
@@ -156,6 +157,7 @@ class ExpectedToolCall:
 
     tool_name: str
     args: dict[str, object] = field(default_factory=dict)
+    arg_contains: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)

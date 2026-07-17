@@ -14,7 +14,7 @@ from llm_sandbox_evals.tool_events import tool_succeeded
 
 
 def score_tool_calls(expected: Sequence[ExpectedToolCall], events: Sequence[ToolEvent]) -> ToolCallResult:
-    """Match every expected call to one successful event by exact name and canonical args."""
+    """Match every expected call to one successful event by name and authored argument evidence."""
     successful = tuple(event for event in events if tool_succeeded(event))
     if not expected:
         return ToolCallResult(False, "tool_calls_no_events", unmatched_events=successful)
@@ -27,7 +27,7 @@ def score_tool_calls(expected: Sequence[ExpectedToolCall], events: Sequence[Tool
                 index
                 for index in available
                 if successful[index].tool_name == expected_call.tool_name
-                and _args_match(expected_call.args, successful[index].args)
+                and _args_match(expected_call, successful[index].args)
             ),
             None,
         )
@@ -54,17 +54,23 @@ def score_tool_calls(expected: Sequence[ExpectedToolCall], events: Sequence[Tool
     return ToolCallResult(False, reason, tuple(comparisons), unmatched_events)
 
 
-def _args_match(expected_args: Mapping[str, object], actual_args: Mapping[str, object]) -> bool:
-    """Match every authored expected arg key; ignore extra actual keys.
-
-    Subset matching preserves determinism (authored keys compared exactly via
-    ``_canonical``) without punishing legal optional arguments that the model
-    may add (e.g. ``hours``, ``limit``) beyond the authored contract.
-    """
-    for key, expected_value in expected_args.items():
+def _args_match(expected: ExpectedToolCall, actual_args: Mapping[str, object]) -> bool:
+    """Match exact/subset args plus authored string-substring evidence."""
+    for key, expected_value in expected.args.items():
+        # Branch boundary: every exactly authored argument must be present.
         if key not in actual_args:
             return False
+        # Branch boundary: exactly authored values retain canonical subset matching.
         if _canonical(actual_args[key]) != _canonical(expected_value):
+            return False
+
+    for key, required_substrings in expected.arg_contains.items():
+        actual_value = actual_args.get(key)
+        # Branch boundary: contains evidence applies only to actual string arguments.
+        if not isinstance(actual_value, str):
+            return False
+        # Branch boundary: every authored substring must occur in the actual string.
+        if any(required_substring not in actual_value for required_substring in required_substrings):
             return False
     return True
 

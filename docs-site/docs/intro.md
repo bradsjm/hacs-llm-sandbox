@@ -7,7 +7,7 @@ sidebar_position: 1
 
 # Assist Agent Sandbox
 
-Assist Agent Sandbox is a Home Assistant custom integration that gives Assist conversation agents a bounded tool set for reasoning over your home. It lets a capable tool-calling model inspect current state, ask bounded recorder questions, read the logbook, capture a camera frame, and optionally call services through policy gates.
+Assist Agent Sandbox is a Home Assistant custom integration that gives Assist conversation agents a bounded tool set for reasoning over your home. It lets a capable tool-calling model inspect current state, ask bounded recorder and Energy dashboard questions, read the logbook, capture a camera frame, and optionally call services through policy gates.
 
 The integration is intentionally built around snapshots and an isolated Monty Python runtime. The model never receives the live Home Assistant object, live registries, event bus, auth objects, config files, network access, filesystem access, or OS/process APIs.
 
@@ -26,6 +26,7 @@ The integration is intentionally built around snapshots and an isolated Monty Py
 | `execute_home_code` | Runs bounded Python/Monty over frozen Home Assistant snapshot facades. |
 | `get_history` | Reads bounded state history from recorder. |
 | `get_statistics` | Reads bounded long-term statistics. |
+| `get_energy` | Reads bounded, dashboard-configured Energy totals, trends, rates, costs, forecasts, and comparisons. |
 | `get_logbook` | Reads bounded activity timeline entries. |
 | `get_automation` | Reads Home Assistant-authorized automation summaries, optional administrator-only configuration, and optional trigger runs. |
 | `get_camera_image` | Captures a visible camera or image entity for a multimodal model. |

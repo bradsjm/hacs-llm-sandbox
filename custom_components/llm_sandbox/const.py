@@ -44,6 +44,7 @@ TOOL_GET_STATISTICS: Final = "get_statistics"
 TOOL_GET_LOGBOOK: Final = "get_logbook"
 TOOL_GET_AUTOMATION: Final = "get_automation"
 TOOL_GET_CAMERA_IMAGE: Final = "get_camera_image"
+TOOL_GET_ENERGY: Final = "get_energy"
 
 # Recorder-backed tool windowing.
 DEFAULT_HISTORY_WINDOW_HOURS: Final = 1
@@ -59,6 +60,12 @@ MAX_RECORDER_PAGE_BYTES: Final = 16 * 1024
 MAX_HISTORY_STATES: Final = 1000
 MAX_LOGBOOK_ENTRIES: Final = 200
 MAX_STATISTICS_ROWS: Final = 1000
+MAX_ENERGY_STATISTIC_IDS: Final = 40
+MAX_ENERGY_SOURCE_RECORDS: Final = 100
+MAX_ENERGY_QUERY_POINTS: Final = 12_000
+MAX_ENERGY_SERIES_POINTS: Final = 500
+MAX_ENERGY_FORECAST_POINTS: Final = 96
+MAX_ENERGY_FORECAST_SOURCES: Final = 8
 
 # Recorder-backed tool input caps.
 MAX_RECORDER_ENTITY_IDS: Final = 20

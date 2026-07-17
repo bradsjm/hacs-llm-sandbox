@@ -492,7 +492,7 @@ def _config(
 
 
 def _candidate(candidate_id: str, *, api_prompt: str = "prompt") -> PromptCandidate:
-    return PromptCandidate(candidate_id, api_prompt, "execute", "history", "statistics", "logbook", "automation")
+    return PromptCandidate(candidate_id, api_prompt, "execute", "history", "statistics", "energy", "logbook", "automation")
 
 
 def _case(case_id: str) -> EvalCase:

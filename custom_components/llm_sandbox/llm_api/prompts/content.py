@@ -1,5 +1,7 @@
 """Action sections and tool description builders for LLM-facing prompts."""
 
+from collections.abc import Mapping
+
 from homeassistant.helpers import llm
 
 from ...snapshot.models import HomeSnapshot, SafeAreaEntry
@@ -85,24 +87,33 @@ def _render_error_guidance(detail: PromptDetail) -> str:
 
 
 def render_tool_capabilities(tools: list[llm.Tool]) -> str:
-    """Render cross-tool decision guidance not covered by provider tool schemas.
-
-    Each tool's full description is already sent as a provider function schema,
-    so this returns only the recorder-routing guidance — which tool to pick for
-    a given recorder need — that no single tool description can express alone.
-    """
+    """Render direct-versus-composed recorder and Energy routing."""
     tool_names = {tool.name for tool in tools}
-    if not (tool_names & {"get_history", "get_statistics", "get_logbook"}):
+    recorder_tools = tool_names & {"get_history", "get_statistics", "get_logbook"}
+    energy_available = "get_energy" in tool_names
+    if not recorder_tools and not energy_available:
         return ""
-    return "\n".join(
-        (
-            "## Recorder routing",
-            "- For direct history, statistics, or logbook retrieval/summarization, use the matching standalone tool.",
-            "- For recorder data combined with current state/registries, computation, conditional reasoning, or actions, use one "
-            "execute_home_code call with await hass.history(...), hass.query(...), or hass.logbook(...).",
-            "- Run independent direct reads in parallel. Scope them with selectors instead of discovery calls, and never retrieve the same evidence twice.",
+    lines = ["## Recorder and Energy routing"]
+    if recorder_tools:
+        lines.extend(
+            (
+                "- For direct history, statistics, or logbook retrieval/summarization, use the matching standalone tool.",
+                "- For recorder data combined with current state/registries, computation, conditional reasoning, or actions, use one "
+                "execute_home_code call with await hass.history(...), hass.query(...), or hass.logbook(...).",
+            )
         )
+    if energy_available:
+        lines.extend(
+            (
+                "- Direct Energy-dashboard configuration, totals, tracked-device usage, forecasts, comparisons, and trends use get_energy.",
+                "- Energy combined with current state/registries, computation, conditions, or actions uses one execute_home_code call "
+                "with await hass.energy(...). Simple current entity state or control remains on built-in Assist first.",
+            )
+        )
+    lines.append(
+        "- Run independent direct reads in parallel. Scope them instead of making discovery calls, and never retrieve the same evidence twice."
     )
+    return "\n".join(lines)
 
 
 def render_home_inventory(
@@ -110,9 +121,10 @@ def render_home_inventory(
     *,
     recorder_available: bool,
     logbook_available: bool,
+    energy_source_counts: Mapping[str, int] | None,
 ) -> str | None:
     """Render a compact visible-inventory digest plus data-availability caveats."""
-    if not snapshot.states and recorder_available and logbook_available:
+    if not snapshot.states and recorder_available and logbook_available and energy_source_counts is None:
         return None
 
     lines = ["## Home inventory"]
@@ -136,6 +148,11 @@ def render_home_inventory(
             lines.append(
                 "- No visible entities expose long-term statistics (state_class); get_statistics will return empty."
             )
+    if energy_source_counts is not None:
+        counts = ", ".join(
+            f"{source_type}{_DOMAIN_COUNT_SEPARATOR}{count}" for source_type, count in energy_source_counts.items()
+        )
+        lines.append(f"- Energy dashboard configured: {counts or 'no visible sources'}.")
 
     return "\n".join(lines)
 
@@ -245,8 +262,8 @@ def build_execute_home_code_description() -> str:
         "Read states and registries using the native Home Assistant patterns documented in the API prompt. "
         f"{render_query_schema_prompt(compact=True, include_heading=False).removeprefix('- ')} "
         "The query load can be narrowed with entity_ids or area_id/floor_id/device_id/label_id/domain. "
-        "Use await hass.history(...), hass.query(...), or hass.logbook(...) to compose bounded recorder data with "
-        "current state, registries, computation, conditional reasoning, or an action in this one call. "
+        "Use await hass.history(...), hass.query(...), hass.logbook(...), or hass.energy(...) to compose bounded recorder "
+        "or Energy data with current state, registries, computation, conditional reasoning, or an action in this one call. "
         "hass.history(...) returns a flat list of rows or analytics result dicts, not the standalone get_history envelope "
         "or cursor. "
         "Service-call availability follows the API prompt. "
@@ -305,6 +322,19 @@ def build_get_statistics_description() -> str:
         "which statistic fields to include; omitted or null fields are left out. The first page returns the newest rows; when more remain, "
         "next_cursor and overflow appear — pass next_cursor back as cursor to the same tool with the same resolved scope "
         "(omit start, end, and hours) to fetch the next older page. "
+        "Errors return {status:'error', error:{key, message, guidance?}}."
+    )
+
+
+def build_get_energy_description() -> str:
+    """Return the get_energy tool description."""
+    return (
+        "Return Home Assistant Energy dashboard totals, trends, current rates and prices, tracked-device usage, "
+        "comparisons, solar forecasts, carbon estimates, and validation results from visible configured sources. "
+        "Use this standalone tool for direct Energy dashboard questions; use one execute_home_code call with "
+        "await hass.energy(...) when Energy must be combined with current state, registries, computation, conditions, "
+        "or actions. Scope with source_types and device_statistic_ids, choose summary/series/current/forecast/carbon/"
+        "validation with include, and size the window with hours or ISO start/end. "
         "Errors return {status:'error', error:{key, message, guidance?}}."
     )
 

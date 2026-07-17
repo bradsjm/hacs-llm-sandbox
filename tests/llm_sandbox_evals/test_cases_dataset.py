@@ -96,7 +96,7 @@ def test_effect_corpus_desired_entity_and_action_only_split_is_exact() -> None:
     assert len(desired_entity_cases) == 19
     assert len(action_only_cases) == 3
     assert desired_entity_cases | action_only_cases == effect_cases
-    assert len(case_ids) == 36
+    assert len(case_ids) == 41
 
 
 
@@ -107,8 +107,8 @@ def test_corpus_category_distribution_is_exact() -> None:
         "service_data": 3,
         "conditional": 7,
         "ambiguity": 3,
-        "tool_contract": 6,
-        "read_answer": 8,
+        "tool_contract": 8,
+        "read_answer": 11,
         "composition": 1,
     }
 
@@ -120,6 +120,15 @@ def test_dedicated_oracle_cases_author_narrow_contracts() -> None:
         ExpectedToolCall("get_history", {"entity_ids": ["light.utility_room_ceiling"]}),
     )
     assert cases_by_id["answer_count_lights_on_utility_room"].expected_answer == AnswerPredicate("count", count=1)
+    assert cases_by_id["answer_energy_home_consumption_week"].expected_answer == AnswerPredicate(
+        "scalar", scalar_value=117, unit="kWh", tolerance=0
+    )
+    assert cases_by_id["answer_energy_workshop_circuit_exclusive_week"].expected_answer == AnswerPredicate(
+        "scalar", scalar_value=22, unit="kWh", tolerance=0
+    )
+    assert cases_by_id["answer_energy_solar_generation_week"].expected_answer == AnswerPredicate(
+        "scalar", scalar_value=47, unit="kWh", tolerance=0
+    )
     assert cases_by_id["answer_state_utility_room_accent"].expected_answer == AnswerPredicate(
         "state",
         entity_id="light.utility_room_accent",
@@ -130,6 +139,26 @@ def test_dedicated_oracle_cases_author_narrow_contracts() -> None:
     )
     assert cases_by_id["tool_call_get_logbook_living_room_accent"].expected_tool_calls == (
         ExpectedToolCall("get_logbook", {"entity_ids": ["light.living_room_accent"]}),
+    )
+    assert cases_by_id["tool_call_get_energy_workshop_circuit_daily_trend"].expected_tool_calls == (
+        ExpectedToolCall(
+            "get_energy",
+            {
+                "start": "2026-06-22T00:00:00Z",
+                "end": "2026-06-29T00:00:00Z",
+                "period": "day",
+                "source_types": ["device"],
+                "include": ["summary", "series"],
+            },
+        ),
+    )
+    assert cases_by_id["tool_call_execute_home_code_energy_and_balcony_power"].oracle == "tool_calls"
+    assert cases_by_id["tool_call_execute_home_code_energy_and_balcony_power"].expected_tool_calls == (
+        ExpectedToolCall(
+            "execute_home_code",
+            {},
+            arg_contains={"code": ("hass.energy", "sensor.balcony_power")},
+        ),
     )
     assert cases_by_id["answer_mean_balcony_power"].expected_answer == AnswerPredicate(
         "scalar",

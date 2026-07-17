@@ -616,6 +616,41 @@ cases:
             include: [runs]
             hours: 1
       required_actions: []
+  - name: tool_call_get_energy_workshop_circuit_daily_trend
+    inputs:
+      id: tool_call_get_energy_workshop_circuit_daily_trend
+      home: home_full
+      category: tool_contract
+      tags: [energy]
+      oracle: tool_calls
+      requests:
+        - id: canonical
+          text: Show the tracked-device daily Energy trend from June 22 through June 28, 2026.
+      expected_tool_calls:
+        - tool_name: get_energy
+          args:
+            start: "2026-06-22T00:00:00Z"
+            end: "2026-06-29T00:00:00Z"
+            period: day
+            source_types: [device]
+            include: [summary, series]
+      required_actions: []
+  - name: tool_call_execute_home_code_energy_and_balcony_power
+    inputs:
+      id: tool_call_execute_home_code_energy_and_balcony_power
+      home: home_full
+      category: tool_contract
+      tags: [energy]
+      oracle: tool_calls
+      requests:
+        - id: canonical
+          text: What was the home's electricity consumption from June 22 through June 28, 2026, together with the current sensor.balcony_power state?
+      expected_tool_calls:
+        - tool_name: execute_home_code
+          args: {}
+          arg_contains:
+            code: [hass.energy, sensor.balcony_power]
+      required_actions: []
   - name: answer_living_room_motion_automation_ran_last_hour
     inputs:
       id: answer_living_room_motion_automation_ran_last_hour
@@ -628,4 +663,52 @@ cases:
       expected_answer:
         kind: boolean
         value: true
+      required_actions: []
+  - name: answer_energy_home_consumption_week
+    inputs:
+      id: answer_energy_home_consumption_week
+      home: home_full
+      category: read_answer
+      tags: [energy]
+      oracle: answer
+      requests:
+        - id: canonical
+          text: How much electricity did the home consume from June 22 through June 28, 2026? Answer with one number and unit.
+      expected_answer:
+        kind: scalar
+        scalar_value: 117
+        unit: kWh
+        tolerance: 0
+      required_actions: []
+  - name: answer_energy_workshop_circuit_exclusive_week
+    inputs:
+      id: answer_energy_workshop_circuit_exclusive_week
+      home: home_full
+      category: read_answer
+      tags: [energy]
+      oracle: answer
+      requests:
+        - id: canonical
+          text: Excluding its tracked child, how much energy did the Workshop circuit consume from June 22 through June 28, 2026? Answer with one number and unit.
+      expected_answer:
+        kind: scalar
+        scalar_value: 22
+        unit: kWh
+        tolerance: 0
+      required_actions: []
+  - name: answer_energy_solar_generation_week
+    inputs:
+      id: answer_energy_solar_generation_week
+      home: home_full
+      category: read_answer
+      tags: [energy]
+      oracle: answer
+      requests:
+        - id: canonical
+          text: How much solar energy was generated from June 22 through June 28, 2026? Answer with one number and unit.
+      expected_answer:
+        kind: scalar
+        scalar_value: 47
+        unit: kWh
+        tolerance: 0
       required_actions: []

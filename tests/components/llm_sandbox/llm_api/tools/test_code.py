@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 import json
 import time
 from typing import Any, cast
+from unittest.mock import AsyncMock, patch
 
 from custom_components.llm_sandbox.const import (
     CONF_ACTIONS_ENABLED,
@@ -15,7 +16,7 @@ from custom_components.llm_sandbox.const import (
 )
 from custom_components.llm_sandbox.llm_api import executor
 from custom_components.llm_sandbox.llm_api.data.home_db import MAX_HISTORY_LOAD_ROWS
-from custom_components.llm_sandbox.llm_api.errors import HelperExecutionError
+from custom_components.llm_sandbox.llm_api.errors import HelperExecutionError, RecoverableToolError
 from custom_components.llm_sandbox.llm_api.executor_support import ExecutionState
 from custom_components.llm_sandbox.llm_api.facades import (
     SafeHass as SandboxHass,
@@ -272,6 +273,111 @@ async def test_hass_history_recorder_unavailable_is_helper_error(
 
     assert result["execution"]["status"] == "helper_error"
     assert result["execution"]["kind"] == "recorder_unavailable"
+
+
+async def test_hass_energy_combines_summary_with_visible_state(
+    hass: HomeAssistant,
+    recorder_entry: MockConfigEntry,
+) -> None:
+    """Energy sanitizes manager-owned private config against the current snapshot."""
+    from homeassistant.components.energy.const import DOMAIN as energy_domain
+    from homeassistant.components.energy.data import async_get_manager
+
+    private_energy_id = "sensor.private_grid_export"
+    raw_preferences: dict[str, object] = {
+        "energy_sources": [
+            {
+                "type": "grid",
+                "stat_energy_from": "sensor.grid_import",
+                "stat_energy_to": private_energy_id,
+            }
+        ],
+        "device_consumption": [],
+    }
+    hass.data[energy_domain] = {"cost_sensors": {}}
+    manager = await async_get_manager(hass)
+    await manager.async_update(raw_preferences)
+
+    entity_registry = er.async_get(hass)
+    private_entry = entity_registry.async_get_or_create(
+        "sensor",
+        "test",
+        "private_grid_export",
+        suggested_object_id="private_grid_export",
+    )
+    entity_registry.async_update_entity(
+        private_entry.entity_id,
+        hidden_by=er.RegistryEntryHider.USER,
+    )
+    hass.states.async_set("sensor.grid_import", "12")
+    hass.states.async_set(private_energy_id, "99")
+    hass.states.async_set("sensor.temp", "stale")
+
+    async def _list_statistic_ids(
+        _hass: HomeAssistant,
+        statistic_ids: set[str],
+    ) -> list[dict[str, object]]:
+        return [
+            {
+                "statistic_id": statistic_id,
+                "has_sum": True,
+                "unit_class": "energy",
+                "unit_of_measurement": "kWh",
+            }
+            for statistic_id in statistic_ids
+        ]
+
+    def _statistics_during_period(**kwargs: object) -> dict[str, list[dict[str, object]]]:
+        statistic_ids = cast(set[str], kwargs["statistic_ids"])
+        start = cast(datetime, kwargs["start_time"])
+        return {statistic_id: [{"start": start, "change": 12.0}] for statistic_id in statistic_ids}
+
+    # The private ID is genuinely owned by Energy before the production copy/sanitize boundary.
+    assert private_energy_id in json.dumps(manager.data)
+
+    # Mutate after the stale value so only this execution's fresh snapshot composes state 21.
+    hass.states.async_set("sensor.temp", "21")
+    with (
+        patch(
+            "custom_components.llm_sandbox.llm_api.tools.energy.recorder_statistics.async_list_statistic_ids",
+            new=_list_statistic_ids,
+        ),
+        patch(
+            "custom_components.llm_sandbox.llm_api.tools.energy.recorder_statistics.statistics_during_period",
+            new=_statistics_during_period,
+        ),
+    ):
+        result = await _run_code(
+            hass,
+            recorder_entry,
+            """
+energy = await hass.energy(hours=24, include=["summary"])
+state = states.get("sensor.temp")
+result = {"energy": energy, "state": state.state}
+""",
+        )
+
+    assert result["execution"]["status"] == "ok"
+    output = cast(dict[str, object], result["output"])
+    energy = cast(dict[str, Any], output["energy"])
+    assert energy["summary"]["electricity"]["home_consumption"]["value"] == 12.0
+    assert output["state"] == "21"
+    assert private_energy_id not in json.dumps(result)
+
+
+async def test_hass_energy_not_configured_is_helper_error(
+    hass: HomeAssistant,
+    loaded_entry: MockConfigEntry,
+) -> None:
+    """Energy source construction errors retain their stable helper key."""
+    with patch(
+        "custom_components.llm_sandbox.llm_api.tools.code.async_build_energy_source",
+        new=AsyncMock(side_effect=RecoverableToolError("energy_not_configured", {})),
+    ):
+        result = await _run_code(hass, loaded_entry, "result = await hass.energy(hours=24)")
+
+    assert result["execution"]["status"] != "ok"
+    assert result["execution"]["kind"] == "energy_not_configured"
 
 
 @pytest.mark.parametrize(

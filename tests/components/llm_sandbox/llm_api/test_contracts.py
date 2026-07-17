@@ -55,6 +55,7 @@ def test_monty_type_stubs_exclude_private_methods() -> None:
         pytest.param("async def history", id="history"),
         pytest.param("async def logbook", id="logbook"),
         pytest.param("async def query", id="query"),
+        pytest.param("async def energy", id="energy"),
         pytest.param("class SafeConfig:", id="safe-config"),
         pytest.param("class SafeUnitSystem:", id="safe-unit-system"),
         pytest.param("class SafeDate:", id="safe-date"),

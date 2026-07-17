@@ -15,6 +15,7 @@ from custom_components.llm_sandbox.llm_api.prompts import (
 )
 from custom_components.llm_sandbox.llm_api.tools.automation import GetAutomationTool
 from custom_components.llm_sandbox.llm_api.tools.code import ExecuteHomeCodeTool
+from custom_components.llm_sandbox.llm_api.tools.energy import GetEnergyTool
 from custom_components.llm_sandbox.llm_api.tools.recorder import GetHistoryTool, GetLogbookTool, GetStatisticsTool
 from custom_components.llm_sandbox.llm_api.tools.vision import GetCameraImageTool
 import pytest
@@ -55,6 +56,7 @@ def test_profile_describes_awaitable_facades(profile: PromptProfile) -> None:
     assert "flat list" in profile.base_prompt
     assert "hass.query(...)" in profile.base_prompt
     assert "hass.logbook(...)" in profile.base_prompt
+    assert "hass.energy(...)" in profile.base_prompt
     assert (
         "hass.history accepts exact start/end, entity IDs or snapshot-backed area/device/floor/label/domain scope, "
         "and analytics arguments; results stay flat with no cursor/window." in profile.base_prompt
@@ -71,6 +73,7 @@ def test_recorder_routing_guidance_present_with_recorder_tools() -> None:
         GetAutomationTool("entry-id"),
         GetHistoryTool("entry-id"),
         GetStatisticsTool("entry-id"),
+        GetEnergyTool("entry-id"),
         GetLogbookTool("entry-id"),
         GetCameraImageTool("entry-id"),
     ]
@@ -78,9 +81,11 @@ def test_recorder_routing_guidance_present_with_recorder_tools() -> None:
     summary = render_tool_capabilities(tools)
 
     assert "direct history, statistics, or logbook retrieval/summarization" in summary
+    assert "get_energy" in summary
+    assert "hass.energy(...)" in summary
     assert "one execute_home_code call" in summary
     assert "in parallel" in summary
-    assert "selectors instead of discovery calls" in summary
+    assert "Scope them instead of making discovery calls" in summary
     assert "never retrieve the same evidence twice" in summary
 
 

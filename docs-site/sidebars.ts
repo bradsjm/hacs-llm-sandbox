@@ -75,6 +75,7 @@ const sidebars: SidebarsConfig = {
             'reference/tools/execute-home-code',
             'reference/tools/get-history',
             'reference/tools/get-statistics',
+            'reference/tools/get-energy',
             'reference/tools/get-logbook',
             'reference/tools/get-automation',
             'reference/tools/get-camera-image',

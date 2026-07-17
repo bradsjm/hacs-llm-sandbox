@@ -211,6 +211,11 @@
               "sidebar": "docsSidebar"
             },
             {
+              "id": "reference/tools/get-energy",
+              "path": "/hacs-llm-sandbox/reference/tools/get-energy",
+              "sidebar": "docsSidebar"
+            },
+            {
               "id": "reference/tools/get-history",
               "path": "/hacs-llm-sandbox/reference/tools/get-history",
               "sidebar": "docsSidebar"

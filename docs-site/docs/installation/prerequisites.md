@@ -21,9 +21,10 @@ You need a conversation agent that supports Home Assistant LLM tools and is conf
 
 Use a strong tool-calling model. The main tool asks the model to write short Python snippets, pick APIs, interpret results, and recover from structured guidance. Weak models may fail by writing unsupported code or using the wrong tool.
 
-## Recorder, logbook, and camera requirements
+## Recorder, Energy, logbook, and camera requirements
 
 - `get_history` and `get_statistics` require Home Assistant recorder runtime support.
+- `get_energy` and `hass.energy(...)` require recorder runtime support plus a configured Home Assistant Energy dashboard. If none of its sources are visible to the assistant, Energy queries return a structured error.
 - `get_logbook` requires logbook runtime data in addition to recorder support.
 - `get_automation` summaries do not require recorder or logbook; its optional `runs` projection requires both.
 - `get_camera_image` requires a visible `camera.*` or `image.*` entity and a multimodal model that can interpret the returned image.

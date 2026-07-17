@@ -113,7 +113,14 @@
       "required": ["tool_name"],
       "properties": {
         "tool_name": {"type": "string", "minLength": 1},
-        "args": {"type": "object"}
+        "args": {"type": "object"},
+        "arg_contains": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {"type": "string"}
+          }
+        }
       }
     },
     "answer_predicate": {

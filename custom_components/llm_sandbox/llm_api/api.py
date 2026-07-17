@@ -22,6 +22,7 @@ from .prompts import (
 )
 from .tools.automation import GetAutomationTool
 from .tools.code import ExecuteHomeCodeTool
+from .tools.energy import GetEnergyTool, async_copy_energy_catalog, energy_source_counts
 from .tools.recorder import GetHistoryTool, GetLogbookTool, GetStatisticsTool, logbook_available, recorder_available
 from .tools.vision import GetCameraImageTool
 
@@ -54,7 +55,7 @@ class LlmSandboxAPI(llm.API):
         inventory_section: str | None = None
         recorder_ok = recorder_available(self._hass)
         logbook_ok = logbook_available(self._hass)
-        tools = _build_tools(self.entry_id, recorder_ok=recorder_ok, logbook_ok=logbook_ok)
+        energy_catalog = None
         # Missing, wrong-domain, unloaded, or uninitialized entries get a conservative prompt.
         if (
             entry is not None
@@ -75,11 +76,20 @@ class LlmSandboxAPI(llm.API):
                 scope=settings.scope,
                 anchor_device_id=llm_context.device_id,
             )
+            if recorder_ok and (copied_energy := await async_copy_energy_catalog(self._hass, snapshot)) is not None:
+                energy_catalog = copied_energy[0]
             inventory_section = render_home_inventory(
                 snapshot,
                 recorder_available=recorder_ok,
                 logbook_available=logbook_ok,
+                energy_source_counts=energy_source_counts(energy_catalog) if energy_catalog is not None else None,
             )
+        tools = _build_tools(
+            self.entry_id,
+            recorder_ok=recorder_ok,
+            logbook_ok=logbook_ok,
+            energy_ok=recorder_ok and energy_catalog is not None,
+        )
         return llm.APIInstance(
             api=self,
             api_prompt=_build_api_prompt(
@@ -116,12 +126,20 @@ def _build_api_prompt(
     )
 
 
-def _build_tools(entry_id: str, *, recorder_ok: bool, logbook_ok: bool) -> list[llm.Tool]:
-    """Return the per-request tools in stable order, omitting unavailable recorder tools."""
+def _build_tools(
+    entry_id: str,
+    *,
+    recorder_ok: bool,
+    logbook_ok: bool,
+    energy_ok: bool,
+) -> list[llm.Tool]:
+    """Return the per-request tools in stable order, omitting unavailable optional tools."""
     tools: list[llm.Tool] = [ExecuteHomeCodeTool(entry_id), GetAutomationTool(entry_id)]
     if recorder_ok:
         tools.append(GetHistoryTool(entry_id))
         tools.append(GetStatisticsTool(entry_id))
+        if energy_ok:
+            tools.append(GetEnergyTool(entry_id))
         if logbook_ok:
             tools.append(GetLogbookTool(entry_id))
     tools.append(GetCameraImageTool(entry_id))

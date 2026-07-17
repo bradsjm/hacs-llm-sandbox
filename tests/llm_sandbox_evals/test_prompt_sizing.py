@@ -27,6 +27,7 @@ def test_load_candidates_accepts_profile_candidate() -> None:
         execute_home_code_description="Candidate code capability. Extra detail.",
         get_history_description="Candidate history capability. Extra detail.",
         get_statistics_description="Candidate statistics capability. Extra detail.",
+        get_energy_description="Candidate Energy capability. Extra detail.",
         get_logbook_description="Candidate logbook capability. Extra detail.",
         get_automation_description="Candidate automation capability. Extra detail.",
     )
@@ -54,6 +55,7 @@ def test_load_candidates_accepts_profile_candidate() -> None:
         "execute_home_code": candidate.execute_home_code_description,
         "get_history": candidate.get_history_description,
         "get_statistics": candidate.get_statistics_description,
+        "get_energy": candidate.get_energy_description,
         "get_logbook": candidate.get_logbook_description,
         "get_automation": candidate.get_automation_description,
     }

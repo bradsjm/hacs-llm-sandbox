@@ -193,7 +193,7 @@ def _render_readable_catalog() -> str:
             "- Each tool call receives a fresh, frozen visible snapshot. Service calls do not change reads in the same "
             "execute_home_code call; call again to observe changes. Discover real IDs and names from visible data; "
             "instruction placeholders such as <entity_id> are not real IDs.\n"
-            "- Await hass.history(...), hass.query(...), hass.logbook(...), and enabled hass.services.async_call(...). "
+            "- Await hass.history(...), hass.query(...), hass.logbook(...), hass.energy(...), and enabled hass.services.async_call(...). "
             "State, registry, config, repairs, notification, and service-catalog reads are synchronous despite async_-style names. "
             "Final output must be serializable: assign result or end with a bare expression. print() is captured in printed.",
             "## Globals and frozen time\n"
@@ -207,11 +207,12 @@ def _render_readable_catalog() -> str:
             "date.today(), date.fromisoformat(s), datetime.now(), datetime.utcnow(), datetime.fromisoformat(s), and "
             "SafeDateTime.timestamp. There is no live wall clock, timedelta, timezone, strftime, strptime, or "
             "SafeDateTime subtraction; subtract numeric timestamps for durations.",
-            "## State, history, and logbook\n"
-            "- Await hass.history(...) for bounded recorder-backed state history and hass.logbook(...) for bounded activity "
-            "entries. hass.history(...) returns a flat list of {entity_id, when, state, value} rows (or flat analytics "
-            "result dicts); it does not return the standalone get_history envelope, cursor, or window. Raw results above "
-            "1000 rows are capped and reported through the top-level overflow.history field and a note. "
+            "## State, history, Energy, and logbook\n"
+            "- Await hass.history(...) for bounded recorder-backed state history, hass.energy(...) for Energy dashboard "
+            "totals/trends/current data/comparisons/forecasts, and hass.logbook(...) for bounded activity entries. "
+            "hass.history(...) returns a flat list of {entity_id, when, state, value} rows (or flat analytics result dicts); "
+            "it does not return the standalone get_history envelope, cursor, or window. Raw results above 1000 rows are "
+            "capped and reported through the top-level overflow.history field and a note. "
             f"{_HISTORY_CONTRACT}\n"
             "hass.states.get('<entity_id>') -> State | None; hass.states.async_all('<domain>') lists visible "
             "states, optionally by domain; hass.states.is_state('<entity_id>', '<state>') -> bool.\n"
@@ -274,7 +275,7 @@ def _render_compact_catalog() -> str:
         (
             "## Snapshot/output\n"
             "- Fresh frozen visible snapshot per call; service calls do not update same-call reads. Discover visible IDs/names; "
-            "<entity_id> is a placeholder. Await hass.history(...),hass.query(...),hass.logbook(...),enabled "
+            "<entity_id> is a placeholder. Await hass.history(...),hass.query(...),hass.logbook(...),hass.energy(...),enabled "
             "hass.services.async_call(...); state/registry/config/repairs/notification/service-catalog reads sync. "
             "Serializable result or final bare expression; print()->printed.",
             "## Globals/time\n"
@@ -283,8 +284,8 @@ def _render_compact_catalog() -> str:
             "elevation,time_zone,language,country,currency,internal_url,external_url,units."
             f"{_items(_CONFIG_UNITS)}. Context: {_items(_CONTEXT_FIELDS)} via attr/get(). date/datetime: today/fromisoformat/"
             "now/utcnow/timestamp only; no live clock,timedelta,timezone,strftime,strptime,SafeDateTime subtraction; use numeric timestamps.",
-            "## State/history/logbook\n"
-            "- await hass.history(...), hass.logbook(...). hass.history(...) returns a flat list of "
+            "## State/history/Energy/logbook\n"
+            "- await hass.history(...), hass.energy(...), hass.logbook(...). hass.history(...) returns a flat list of "
             "{entity_id,when,state,value} rows or flat analytics result dicts; it has no standalone get_history "
             "envelope/cursor/window. Raw results above 1000 rows are capped and reported through top-level "
             "overflow.history plus a note. states.get(id)->State|None; async_all(domain); is_state(id,state). "

@@ -290,8 +290,25 @@ _TOOL_ERROR_MESSAGES: dict[str, _ToolErrorMessageBuilder] = {
     "time_window_too_large": lambda p: (
         f"Requested time window is too large; shorten start/end or use hours <= {p.get('max_hours', 'the limit')}."
     ),
+    "energy_unavailable": lambda _p: "Home Assistant Energy must be loaded before querying dashboard data.",
+    "energy_not_configured": lambda _p: "Configure the Home Assistant Energy dashboard before querying it.",
+    "no_visible_energy_sources": lambda _p: (
+        "No Energy dashboard sources are visible under this assistant's current visibility scope."
+    ),
+    "energy_source_limit_exceeded": lambda p: (
+        f"Energy scope contains {p.get('source_count', 'too many')} records; narrow it to at most "
+        f"{p.get('max_sources', 'the allowed limit')}."
+    ),
+    "energy_query_too_large": lambda p: (
+        f"Energy query estimates {p.get('statistic_count', 'too many')} statistics across "
+        f"{p.get('bucket_count', 'too many')} buckets; use a coarser period or narrower scope "
+        f"within {p.get('max_points', 'the point budget')} points."
+    ),
+    "energy_result_too_large": lambda _p: (
+        "The Energy totals and metadata exceed the response budget even without historical or forecast points."
+    ),
     "recorder_unavailable": lambda _p: (
-        "Recorder-backed history/statistics/logbook queries require the recorder integration."
+        "Recorder-backed history/statistics/logbook/Energy queries require the recorder integration."
     ),
     "logbook_unavailable": lambda _p: "get_logbook requires the logbook integration.",
     "authorization_denied": lambda _p: (

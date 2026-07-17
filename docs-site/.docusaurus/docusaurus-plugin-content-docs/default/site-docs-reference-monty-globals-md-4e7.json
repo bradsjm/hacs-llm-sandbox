@@ -11,7 +11,7 @@
   "editUrl": "https://github.com/bradsjm/hacs-llm-sandbox/edit/main/docs-site/docs/reference/monty-globals.md",
   "tags": [],
   "version": "current",
-  "lastUpdatedAt": 1783733116000,
+  "lastUpdatedAt": 1784065926000,
   "frontMatter": {
     "title": "Monty Globals",
     "description": "Main globals and APIs visible to execute_home_code."

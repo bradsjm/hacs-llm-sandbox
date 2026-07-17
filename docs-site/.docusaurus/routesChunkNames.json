@@ -1,15 +1,15 @@
 {
-  "/hacs-llm-sandbox/-cc5": {
+  "/hacs-llm-sandbox/-69b": {
     "__comp": "5e95c892",
     "__context": {
       "plugin": "aba21aa0"
     }
   },
-  "/hacs-llm-sandbox/-bb5": {
+  "/hacs-llm-sandbox/-ab4": {
     "__comp": "a7bd4aaa",
     "__props": "a9d49d59"
   },
-  "/hacs-llm-sandbox/-8ec": {
+  "/hacs-llm-sandbox/-f0f": {
     "__comp": "a94703ab"
   },
   "/hacs-llm-sandbox/architecture/facade-surface-338": {
@@ -100,7 +100,7 @@
     "__comp": "17896441",
     "content": "9463d0c6"
   },
-  "/hacs-llm-sandbox/development/eval-harness-130": {
+  "/hacs-llm-sandbox/development/eval-harness-c58": {
     "__comp": "17896441",
     "content": "c48d32e0"
   },
@@ -144,11 +144,11 @@
     "__comp": "17896441",
     "content": "52cb5a0c"
   },
-  "/hacs-llm-sandbox/reference/limits-b9b": {
+  "/hacs-llm-sandbox/reference/limits-caf": {
     "__comp": "17896441",
     "content": "42f88e99"
   },
-  "/hacs-llm-sandbox/reference/monty-globals-f8f": {
+  "/hacs-llm-sandbox/reference/monty-globals-91f": {
     "__comp": "17896441",
     "content": "4e79db9b"
   },
@@ -156,7 +156,7 @@
     "__comp": "17896441",
     "content": "d8d164cf"
   },
-  "/hacs-llm-sandbox/reference/tools/execute-home-code-d9c": {
+  "/hacs-llm-sandbox/reference/tools/execute-home-code-d18": {
     "__comp": "17896441",
     "content": "01034e48"
   },
@@ -168,7 +168,11 @@
     "__comp": "17896441",
     "content": "61cd334f"
   },
-  "/hacs-llm-sandbox/reference/tools/get-history-520": {
+  "/hacs-llm-sandbox/reference/tools/get-energy-f3d": {
+    "__comp": "17896441",
+    "content": "2d65d330"
+  },
+  "/hacs-llm-sandbox/reference/tools/get-history-aa6": {
     "__comp": "17896441",
     "content": "6e53bc48"
   },
@@ -200,7 +204,7 @@
     "__comp": "17896441",
     "content": "5240cecd"
   },
-  "/hacs-llm-sandbox/usage/history-statistics-logbook-cd9": {
+  "/hacs-llm-sandbox/usage/history-statistics-logbook-af2": {
     "__comp": "17896441",
     "content": "41d188d1"
   },

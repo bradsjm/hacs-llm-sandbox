@@ -18,8 +18,8 @@
   },
   "sidebar": "docsSidebar",
   "previous": {
-    "title": "get_statistics",
-    "permalink": "/hacs-llm-sandbox/reference/tools/get-statistics"
+    "title": "get_energy",
+    "permalink": "/hacs-llm-sandbox/reference/tools/get-energy"
   },
   "next": {
     "title": "get_automation",

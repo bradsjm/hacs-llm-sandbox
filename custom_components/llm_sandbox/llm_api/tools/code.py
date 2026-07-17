@@ -28,6 +28,7 @@ from ..facades import build_llm_context
 from ..prompts import build_execute_home_code_description
 from ..sandbox_context import RuntimeContext
 from ._support import _require_loaded_entry_error, _require_sandbox_runtime
+from .energy import EnergyQuerySource, async_build_energy_source, run_energy_query
 from .recorder import (
     RECORDER_UNAVAILABLE,
     fetch_flat_history_rows,
@@ -249,6 +250,7 @@ def _production_runtime(
     real_context = llm_context.context if llm_context.context is not None else Context()
     state = ExecutionState(service_call_limit=settings.service_call_limit)
     recorder_fetcher = _production_recorder_fetcher(hass, snapshot, deadline, state)
+    energy_source: EnergyQuerySource | None = None
 
     async def _invoke(action: ProposedAction) -> object:
         return await hass.services.async_call(
@@ -264,6 +266,13 @@ def _production_runtime(
     async def _run_blocking(fn: Callable[[], object]) -> object:
         return await hass.async_add_executor_job(fn)
 
+    async def _fetch_energy(data: dict[str, object]) -> JsonObjectType:
+        nonlocal energy_source
+        if energy_source is None:
+            # Cache only the sanitized source for this one fresh-snapshot execution.
+            energy_source = await async_build_energy_source(hass, snapshot, deadline, state)
+        return await run_energy_query(data, energy_source)
+
     return RuntimeContext(
         state=state,
         settings=settings,
@@ -273,6 +282,7 @@ def _production_runtime(
         fetch_short_term_statistics=recorder_fetcher.fetch_short_term_statistics,
         fetch_logbook=recorder_fetcher.fetch_logbook,
         run_blocking=_run_blocking,
+        fetch_energy=_fetch_energy,
         deadline=deadline,
         memory=sandbox_runtime.memory_store.for_context(llm_context),
     )

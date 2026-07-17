@@ -245,6 +245,7 @@ def save_candidate(candidate: PromptCandidate, path: Path) -> None:
         "execute_home_code_description": candidate.execute_home_code_description,
         "get_history_description": candidate.get_history_description,
         "get_statistics_description": candidate.get_statistics_description,
+        "get_energy_description": candidate.get_energy_description,
         "get_logbook_description": candidate.get_logbook_description,
         "get_automation_description": candidate.get_automation_description,
     }

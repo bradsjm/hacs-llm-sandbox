@@ -12,12 +12,15 @@ from llm_sandbox_evals.schema import (
     ActionResult,
     DesiredEntity,
     EvalCase,
+    ExpectedToolCall,
     ObservedAction,
     OverlayStateSeed,
     RequestVariant,
     RequiredAction,
+    ToolEvent,
 )
 from llm_sandbox_evals.scoring import evaluate_case, extract_overlay_seeds
+from llm_sandbox_evals.scoring.tool_calls import score_tool_calls
 from llm_sandbox_evals.tools import EVAL_SCOPE, apply_scope
 import pytest
 
@@ -1241,3 +1244,74 @@ async def test_no_action_already_on_passes_state_primary(case_id: str, tmp_path:
     assert trace.outcome.score_reason == "end_state_satisfied"
     assert trace.end_state_result.status == "satisfied"
     assert trace.recorded_invocations == ()
+
+
+def _successful_execute_home_code(code: object = "") -> ToolEvent:
+    """Build one production-shaped successful composed-code event."""
+    return ToolEvent(
+        "execute_home_code",
+        {"code": code},
+        {"execution": {"status": "ok"}, "output": {}},
+    )
+
+
+def test_tool_call_arg_contains_matches_all_authored_substrings() -> None:
+    case = _home_full_case("tool_call_execute_home_code_energy_and_balcony_power")
+
+    result = score_tool_calls(
+        case.expected_tool_calls,
+        (_successful_execute_home_code("energy = hass.energy\nstate = sensor.balcony_power"),),
+    )
+
+    assert result.passed is True
+    assert result.reason == "tool_calls_matched"
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        pytest.param("", id="semantically-empty"),
+        pytest.param("state = sensor.balcony_power", id="state-only"),
+        pytest.param("energy = hass.energy", id="energy-only"),
+    ],
+)
+def test_composed_energy_case_requires_every_authored_substring(code: str) -> None:
+    case = _home_full_case("tool_call_execute_home_code_energy_and_balcony_power")
+
+    result = score_tool_calls(case.expected_tool_calls, (_successful_execute_home_code(code),))
+
+    assert case.expected_tool_calls[0].arg_contains == {
+        "code": ("hass.energy", "sensor.balcony_power")
+    }
+    assert result.passed is False
+    assert result.reason == "tool_calls_mismatched"
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        pytest.param({}, id="absent"),
+        pytest.param({"code": ["hass.energy", "sensor.balcony_power"]}, id="non-string"),
+    ],
+)
+def test_tool_call_arg_contains_rejects_absent_or_non_string_arg(args: dict[str, object]) -> None:
+    expected = ExpectedToolCall("execute_home_code", arg_contains={"code": ("hass.energy",)})
+    event = ToolEvent(
+        "execute_home_code",
+        args,
+        {"execution": {"status": "ok"}, "output": {}},
+    )
+
+    result = score_tool_calls((expected,), (event,))
+
+    assert result.passed is False
+    assert result.reason == "tool_calls_mismatched"
+
+
+def test_tool_call_empty_args_still_matches_without_contains_evidence() -> None:
+    expected = ExpectedToolCall("execute_home_code", args={})
+
+    result = score_tool_calls((expected,), (_successful_execute_home_code(),))
+
+    assert result.passed is True
+    assert result.reason == "tool_calls_matched"

@@ -354,6 +354,14 @@ def snapshot() -> HomeSnapshot:
     )
 
 
+def _daily_statistics(field: str, values: tuple[float, ...]) -> list[dict[str, object]]:
+    """Return seven aligned daily Energy statistic rows."""
+    return [
+        {"start": f"2026-06-{22 + index:02d}T00:00:00+00:00", field: value}
+        for index, value in enumerate(values)
+    ]
+
+
 def recorder() -> RecorderData:
     """Return modest recorder rows for representative full-home entities."""
     return {
@@ -408,7 +416,9 @@ def recorder() -> RecorderData:
             ],
         },
         "statistics": {
+            "sensor.utility_room_power": _daily_statistics("change", (10, 11, 9, 12, 10, 8, 10)),
             "sensor.balcony_power": [
+                *_daily_statistics("change", (6, 7, 5, 8, 7, 6, 8)),
                 {
                     "start": "2026-06-29T10:00:00+00:00",
                     "end": "2026-06-29T11:00:00+00:00",
@@ -427,7 +437,13 @@ def recorder() -> RecorderData:
                     "max": 49.0,
                     "mean": 42.0,
                 },
-            ]
+            ],
+            "sensor.storage_room_power": _daily_statistics("change", (4, 4, 5, 5, 4, 4, 4)),
+            "sensor.workshop_power": _daily_statistics("change", (1, 1, 2, 1, 1, 1, 1)),
+            "sensor.server_room_power": _daily_statistics("mean", (800, 850, 700, 900, 820, 760, 810)),
+            "sensor.laundry_room_power": _daily_statistics("mean", (300, 320, 280, 350, 310, 290, 305)),
+            "sensor.hallway_power": _daily_statistics("change", (2, 2.2, 1.8, 2.4, 2, 1.6, 2)),
+            "sensor.living_room_power": _daily_statistics("change", (0.5, 0.6, 0.4, 0.7, 0.5, 0.4, 0.6)),
         },
         "logbook": {
             "light.living_room_ceiling": [
@@ -441,6 +457,113 @@ def recorder() -> RecorderData:
             "switch.hallway_outlet": [
                 {"when": "2026-06-29T09:00:00+00:00", "name": "Hallway Outlet", "message": "turned off"},
             ],
+        },
+    }
+
+
+def energy() -> dict[str, object]:
+    """Return deterministic raw Energy preferences and copied platform data."""
+    return {
+        "preferences": {
+            "energy_sources": [
+                {
+                    "type": "grid",
+                    "name": "Main grid",
+                    "stat_energy_from": "sensor.utility_room_power",
+                    "stat_energy_to": None,
+                    "stat_cost": "sensor.hallway_power",
+                    "entity_energy_price": None,
+                    "number_energy_price": 0.28,
+                    "stat_compensation": "sensor.living_room_power",
+                    "entity_energy_price_export": None,
+                    "number_energy_price_export": 0.08,
+                    "stat_rate": "sensor.server_room_power",
+                    "cost_adjustment_day": 0,
+                },
+                {
+                    "type": "solar",
+                    "name": "Roof solar",
+                    "stat_energy_from": "sensor.balcony_power",
+                    "config_entry_solar_forecast": ["forecast-config-private"],
+                },
+            ],
+            "device_consumption": [
+                {
+                    "name": "Workshop circuit",
+                    "stat_consumption": "sensor.storage_room_power",
+                    "stat_rate": "sensor.laundry_room_power",
+                },
+                {
+                    "name": "Workshop tools",
+                    "stat_consumption": "sensor.workshop_power",
+                    "included_in_stat": "sensor.storage_room_power",
+                },
+            ],
+            "device_consumption_water": [],
+        },
+        "cost_sensors": {"sensor.external_raw_source": "sensor.raw_cost_private"},
+        "metadata": {
+            "sensor.utility_room_power": {
+                "has_sum": True,
+                "has_mean": False,
+                "unit_class": "energy",
+                "unit_of_measurement": "kWh",
+            },
+            "sensor.balcony_power": {
+                "has_sum": True,
+                "has_mean": False,
+                "unit_class": "energy",
+                "unit_of_measurement": "kWh",
+            },
+            "sensor.storage_room_power": {
+                "has_sum": True,
+                "has_mean": False,
+                "unit_class": "energy",
+                "unit_of_measurement": "kWh",
+            },
+            "sensor.workshop_power": {
+                "has_sum": True,
+                "has_mean": False,
+                "unit_class": "energy",
+                "unit_of_measurement": "kWh",
+            },
+            "sensor.server_room_power": {
+                "has_sum": False,
+                "has_mean": True,
+                "unit_class": "power",
+                "unit_of_measurement": "W",
+            },
+            "sensor.laundry_room_power": {
+                "has_sum": False,
+                "has_mean": True,
+                "unit_class": "power",
+                "unit_of_measurement": "W",
+            },
+            "sensor.hallway_power": {
+                "has_sum": True,
+                "has_mean": False,
+                "unit_class": None,
+                "unit_of_measurement": "USD",
+            },
+            "sensor.living_room_power": {
+                "has_sum": True,
+                "has_mean": False,
+                "unit_class": None,
+                "unit_of_measurement": "USD",
+            },
+        },
+        "forecast": {
+            "forecast-config-private": {
+                "wh_hours": {
+                    "2026-06-29T13:00:00+00:00": 900,
+                    "2026-06-29T14:00:00+00:00": 700,
+                }
+            }
+        },
+        "validation": {
+            "energy_sources": [[], []],
+            "device_consumption": [[], []],
+            "device_consumption_water": [],
         },
     }
 

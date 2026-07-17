@@ -6,11 +6,13 @@ from typing import Literal, Protocol, cast
 from custom_components.llm_sandbox.const import (
     TOOL_EXECUTE_HOME_CODE,
     TOOL_GET_AUTOMATION,
+    TOOL_GET_ENERGY,
     TOOL_GET_HISTORY,
     TOOL_GET_LOGBOOK,
     TOOL_GET_STATISTICS,
 )
 from custom_components.llm_sandbox.llm_api.errors import (
+    RecoverableToolError,
     setup_error_payload,
     tool_error_envelope,
     tool_error_from_exception,
@@ -22,6 +24,11 @@ from custom_components.llm_sandbox.llm_api.prompts import (
 )
 from custom_components.llm_sandbox.llm_api.tools.automation import GetAutomationTool
 from custom_components.llm_sandbox.llm_api.tools.code import ExecuteHomeCodeTool
+from custom_components.llm_sandbox.llm_api.tools.energy import (
+    GetEnergyTool,
+    energy_source_counts,
+    validate_energy_args,
+)
 from custom_components.llm_sandbox.llm_api.tools.recorder import (
     GetHistoryTool,
     GetLogbookTool,
@@ -72,6 +79,7 @@ def build_agent_tools(runtime: EvalRuntime) -> list[Tool[EvalRuntime]]:
     descriptions = {
         TOOL_GET_HISTORY: runtime.candidate.get_history_description,
         TOOL_GET_STATISTICS: runtime.candidate.get_statistics_description,
+        TOOL_GET_ENERGY: runtime.candidate.get_energy_description,
         TOOL_GET_LOGBOOK: runtime.candidate.get_logbook_description,
         TOOL_GET_AUTOMATION: runtime.candidate.get_automation_description,
     }
@@ -84,6 +92,8 @@ def build_agent_tools(runtime: EvalRuntime) -> list[Tool[EvalRuntime]]:
         if isinstance(tool, GetLogbookTool) and not runtime.recorder_source.logbook_available:
             continue
         tools.append(_make_recorder_tool(tool, descriptions[tool.name]))
+        if isinstance(tool, GetStatisticsTool) and runtime.energy_source is not None:
+            tools.append(_make_energy_tool(runtime.energy_tool, descriptions[TOOL_GET_ENERGY]))
     return tools
 
 
@@ -123,6 +133,30 @@ def _make_recorder_tool(
             if validation.error is not None:
                 return validation.error
             return await tool.run_query(ctx.deps.snapshot, validation.data, ctx.deps.recorder_source)
+        finally:
+            _notify_tool_boundary(ctx.deps, tool.name, started=False)
+
+    return Tool.from_schema(
+        execute,
+        name=tool.name,
+        description=description,
+        json_schema=json_schema,
+        takes_ctx=True,
+    )
+
+
+def _make_energy_tool(tool: GetEnergyTool, description: str) -> Tool[EvalRuntime]:
+    """Return a Pydantic AI tool backed by the shared Energy query core."""
+    json_schema = convert(tool.parameters, custom_serializer=llm.selector_serializer)
+
+    async def execute(ctx: RunContext[EvalRuntime], **kwargs: object) -> JsonObjectType:
+        _notify_tool_boundary(ctx.deps, tool.name, started=True)
+        try:
+            validation = _validate_energy_tool(kwargs)
+            if validation.error is not None:
+                return validation.error
+            assert ctx.deps.energy_source is not None
+            return await tool.run_query(validation.data, ctx.deps.energy_source)
         finally:
             _notify_tool_boundary(ctx.deps, tool.name, started=False)
 
@@ -213,6 +247,14 @@ def _validate_automation_tool(tool: GetAutomationTool, kwargs: dict[str, object]
         return _ValidationResult({}, tool_error_envelope(*mapped))
 
 
+def _validate_energy_tool(kwargs: dict[str, object]) -> _ValidationResult:
+    """Validate Energy args through the production normalizer and schema."""
+    try:
+        return _ValidationResult(validate_energy_args(kwargs), None)
+    except RecoverableToolError as err:
+        return _ValidationResult({}, tool_error_envelope(err.key, err.placeholders))
+
+
 def _validate_code_tool(tool: ExecuteHomeCodeTool, kwargs: dict[str, object]) -> _ValidationResult:
     """Validate execute_home_code args in production ordering."""
     try:
@@ -231,6 +273,11 @@ def render_eval_system_prompt(runtime: EvalRuntime, tools: list[Tool[EvalRuntime
         runtime.snapshot,
         recorder_available=True,
         logbook_available=runtime.recorder_source.logbook_available,
+        energy_source_counts=(
+            energy_source_counts(runtime.energy_source.catalog)
+            if runtime.energy_source is not None
+            else None
+        ),
     )
     return compose_system_prompt(
         runtime.settings.prompt_profile,

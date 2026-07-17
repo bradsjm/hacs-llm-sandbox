@@ -22,7 +22,7 @@
     "permalink": "/hacs-llm-sandbox/reference/tools/get-history"
   },
   "next": {
-    "title": "get_logbook",
-    "permalink": "/hacs-llm-sandbox/reference/tools/get-logbook"
+    "title": "get_energy",
+    "permalink": "/hacs-llm-sandbox/reference/tools/get-energy"
   }
 }
