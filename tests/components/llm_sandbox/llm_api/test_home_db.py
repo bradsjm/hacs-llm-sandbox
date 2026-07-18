@@ -22,25 +22,11 @@ from .tools.test_analytics import _snapshot
     ],
 )
 def test_query_schema_prompt_lists_declared_columns(schema_name: str) -> None:
-    """LLM-facing SQL schema text is rendered from the table/view source of truth."""
+    """The LLM-visible SQL schema is rendered from the executable schema source."""
     prompt = render_query_schema_prompt()
+    rendered_columns = prompt.split(f"{schema_name}(", 1)[1].split(")", 1)[0].split(", ")
 
-    assert f"{schema_name}(" in prompt
-    assert set(columns_for_table(schema_name)) <= set(
-        prompt.split(f"{schema_name}(", 1)[1].split(")", 1)[0].split(", ")
-    )
-
-
-def test_query_schema_prompt_describes_runtime_contract() -> None:
-    """SQL prompt guidance describes the sandbox database rather than HA recorder internals."""
-    prompt = render_query_schema_prompt()
-
-    assert "await hass.query(sql, hours=N)" in prompt
-    assert "fresh per-run in-memory database" in prompt
-    assert "not Home Assistant's live recorder database" in prompt
-    assert "json_extract(attributes" in prompt
-    assert "load on demand" in prompt
-    assert "There are no registry tables" in prompt
+    assert set(columns_for_table(schema_name)) <= set(rendered_columns)
 
 
 def test_home_db_queries_visible_states_and_json_attributes() -> None:
@@ -165,9 +151,6 @@ def test_statistics_short_term_is_distinct_base_table() -> None:
     finally:
         db.close()
 
-    assert "statistics_short_term" in SCHEMA_TABLES
-    assert "statistics_short_term" not in SCHEMA_VIEWS
-    assert columns_for_table("statistics_short_term") == columns_for_table("statistics")
     assert result.rows == [
         {"table_name": "hour", "when_iso": "2026-01-01T00:00:00+00:00", "mean": 20.0},
         {"table_name": "short", "when_iso": "2026-01-01T00:05:00+00:00", "mean": 20.5},

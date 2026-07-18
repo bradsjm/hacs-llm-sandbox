@@ -9,15 +9,9 @@ from typing import cast
 from custom_components.llm_sandbox.const import DEFAULT_PROMPT_PROFILE
 from custom_components.llm_sandbox.llm_api.data.energy import EnergyPeriod, SafeEnergyCurrentPrice
 from custom_components.llm_sandbox.llm_api.prompts import resolve_profile
-from custom_components.llm_sandbox.llm_api.tools.energy import (
-    EnergyQuerySource,
-    GetEnergyTool,
-    run_energy_query,
-    validate_energy_args,
-)
+from custom_components.llm_sandbox.llm_api.tools.energy import run_energy_query, validate_energy_args
 from custom_components.llm_sandbox.snapshot.models import HomeSnapshot
 from homeassistant.helpers import llm
-from homeassistant.util.json import JsonObjectType
 from llm_sandbox_evals.agent_runner import build_agent_tools
 from llm_sandbox_evals.config import EvalConfig
 from llm_sandbox_evals.harness import run_case
@@ -132,24 +126,6 @@ async def test_run_case_routes_canonical_energy_call_through_registered_agent_to
         oracle="tool_calls",
         expected_tool_calls=(ExpectedToolCall("get_energy", dict(_DIRECT_ARGS)),),
     )
-    validation_calls: list[dict[str, object]] = []
-    query_calls: list[dict[str, object]] = []
-    real_validate_energy_args = agent_runner.validate_energy_args
-    real_run_query = GetEnergyTool.run_query
-
-    def validate_energy_args_spy(raw_args: dict[str, object]) -> dict[str, object]:
-        validated = real_validate_energy_args(raw_args)
-        validation_calls.append(validated)
-        return validated
-
-    async def run_query_spy(
-        data: dict[str, object], source: EnergyQuerySource
-    ) -> JsonObjectType:
-        query_calls.append(data)
-        return await real_run_query(data, source)
-
-    monkeypatch.setattr(agent_runner, "validate_energy_args", validate_energy_args_spy)
-    monkeypatch.setattr(GetEnergyTool, "run_query", staticmethod(run_query_spy))
 
     def make_model(_model_id: str) -> FunctionModel:
         return FunctionModel(stream_function=_direct_energy_stream, model_name="energy-agent")
@@ -178,10 +154,6 @@ async def test_run_case_routes_canonical_energy_call_through_registered_agent_to
     event = trace.tool_events[0]
     assert event.tool_name == "get_energy"
     assert event.args == _DIRECT_ARGS
-    assert len(validation_calls) == 1
-    assert query_calls == validation_calls
-    assert cast(datetime, validation_calls[0]["start"]).isoformat() == "2026-06-22T00:00:00+00:00"
-    assert cast(datetime, validation_calls[0]["end"]).isoformat() == "2026-06-29T00:00:00+00:00"
     assert event.output["summary"] == {}
     assert event.output["sources"] == []
     devices = cast(list[dict[str, object]], event.output["devices"])

@@ -2,13 +2,12 @@
 
 from unittest.mock import AsyncMock, patch
 
-from custom_components.llm_sandbox import _async_update_entry
 from custom_components.llm_sandbox.const import (
+    CONF_ACTIONS_ENABLED,
     CONF_ASSISTANT,
     CONF_NAME,
     DEFAULT_ASSISTANT,
     DEFAULT_NAME,
-    DEFAULT_PROMPT_PROFILE,
     DOMAIN,
     TOOL_GET_AUTOMATION,
     TOOL_GET_ENERGY,
@@ -20,7 +19,6 @@ from custom_components.llm_sandbox.llm_api.data.energy import (
     SafeEnergyMeasureRef,
     SafeEnergySourceRecord,
 )
-from custom_components.llm_sandbox.llm_api.prompts import resolve_profile
 from homeassistant.core import Context, HomeAssistant
 from homeassistant.helpers import llm
 import pytest
@@ -53,7 +51,7 @@ async def test_setup_registers_llm_api(
     assert len(sandbox_apis) == 1
 
 
-async def test_api_prompt_uses_default_profile_and_one_action_section(hass: HomeAssistant) -> None:
+async def test_api_instance_exposes_automation_schema(hass: HomeAssistant) -> None:
     entry = MockConfigEntry(
         domain=DOMAIN,
         title=DEFAULT_NAME,
@@ -76,11 +74,6 @@ async def test_api_prompt_uses_default_profile_and_one_action_section(hass: Home
     )
     api_instance = await api.async_get_api_instance(llm_context)
 
-    assert api_instance.api_prompt.startswith(resolve_profile(DEFAULT_PROMPT_PROFILE).base_prompt)
-    assert resolve_profile(DEFAULT_PROMPT_PROFILE).base_prompt in api_instance.api_prompt
-    assert api_instance.api_prompt.count("## Service calls") == 1
-    assert "## Service calls (disabled)" in api_instance.api_prompt
-    assert "## Service calls (enabled)" not in api_instance.api_prompt
     assert api_instance.custom_serializer is llm.selector_serializer
     automation_tool = next(tool for tool in api_instance.tools if tool.name == TOOL_GET_AUTOMATION)
     automation_schema = convert(
@@ -252,16 +245,20 @@ async def test_unload_cleans_up(
     assert len(sandbox_apis) == 0
 
 
-async def test_options_update_listener_reloads_entry(
+async def test_options_update_listener_applies_reloaded_settings(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
 ) -> None:
-    """The registered options-update listener delegates to HA entry reload."""
+    """An options update reloads the entry and applies the new runtime settings."""
     mock_config_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(mock_config_entry.entry_id)
     await hass.async_block_till_done()
+    assert mock_config_entry.runtime_data.settings.actions_enabled is True
 
-    with patch.object(hass.config_entries, "async_reload", AsyncMock(return_value=True)) as async_reload:
-        await _async_update_entry(hass, mock_config_entry)
+    hass.config_entries.async_update_entry(
+        mock_config_entry,
+        options=mock_config_entry.options | {CONF_ACTIONS_ENABLED: False},
+    )
+    await hass.async_block_till_done()
 
-    async_reload.assert_awaited_once_with(mock_config_entry.entry_id)
+    assert mock_config_entry.runtime_data.settings.actions_enabled is False

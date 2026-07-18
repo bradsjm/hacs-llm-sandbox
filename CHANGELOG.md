@@ -3,9 +3,11 @@
 ## [Unreleased]
 
 ### Added
+
 - Added the optional `get_energy` tool and `await hass.energy(...)` facade for dashboard-configured Energy queries
 - Shared one bounded, visibility-safe Energy query core across direct, Monty, and eval execution
 - Extended prompts, documentation, translations, fixtures, and focused production/eval coverage for Energy routing and output contracts
+
 ## 0.1.0
 
 - Initial `llm_sandbox` custom integration scaffold.

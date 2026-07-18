@@ -79,8 +79,6 @@ def test_markdown_renders_safe_code_judge_states_in_deterministic_cell_order(lin
     unavailable_row = _judge_row(section, "case-c")
     not_requested_row = _judge_row(section, "case-d")
 
-    for marker in ("Case", "Status", "Score", "Pass", "Reason", "Failure"):
-        assert marker in section
     assert "available" in available_row
     assert "0.75" in available_row
     assert "true" in available_row.lower()

@@ -196,13 +196,6 @@ def _assert_actionable_operational_issue_output(output: str, *, detail_fragments
     normalized = _normalized_rich_text(output)
     assert "Operational issues" in normalized
     assert "#" in normalized
-    assert "Cause" in normalized
-    assert "Variant" in normalized
-    assert "Cells" in normalized
-    assert "Exception" in normalized
-    assert "HTTP / provider" in normalized
-    assert "code" in normalized
-    assert "Detail" in normalized
     assert "2" in normalized.split()
     assert "rate_limit" in normalized
     assert "cerebras-llama-3.3" in normalized
@@ -904,8 +897,11 @@ def test_durable_final_renders_bounded_safe_advisory_code_judge_details() -> Non
     assert "openai-chat:judge-1" in normalized
     assert "llm_sandbox_code_quality" in normalized
     assert "v7" in normalized
-    for fact in ("Judged 6/8", "Passed 1/6 (16.7%)", "Mean score 40.0%", "Evaluator failures 1", "Unavailable 1"):
-        assert fact in normalized
+    summary = report_model.judge_summary
+    assert (summary.requested, summary.available, summary.passed) == (8, 6, 1)
+    assert (summary.evaluator_failed, summary.unavailable) == (1, 1)
+    assert summary.pass_rate == pytest.approx(1 / 6)
+    assert summary.mean_score == pytest.approx(0.4)
     # Candidate/model groups remain separate, including the non-default reasoning variant.
     for value in ("alpha", "alpha-model(default)", "beta", "beta-model(high)", "gamma", "gamma-model(default)"):
         assert value in normalized

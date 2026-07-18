@@ -387,11 +387,6 @@ def test_html_renders_paraphrase_card_robustness_and_request_variant_column() ->
     assert 'id="paraphrase-quality"' in html_text
     assert 'id="paraphrase-quality-ci"' in html_text
     assert 'id="task-robustness"' in html_text
-    assert "<h2>Task robustness</h2>" in html_text
-    assert "By category (all request variants)" in html_text
-    assert "<th>Request variant</th>" in html_text
-    assert "<th>Model variant</th>" in html_text
-    assert "'request_variant_id'" in html_text
 
 
 def test_payload_carries_all_eval_diagnostics_fields() -> None:

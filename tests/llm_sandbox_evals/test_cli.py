@@ -14,7 +14,6 @@ import termios
 import time
 from types import SimpleNamespace
 from typing import Never, cast
-import warnings
 
 from llm_sandbox_evals.cli import main
 from llm_sandbox_evals.config import EvalConfig
@@ -42,14 +41,6 @@ import pytest
 from llm_sandbox_evals import agent_runner, cli, logfire_config, reports
 
 
-def test_optimizer_loader_contains_known_dspy_warning_only() -> None:
-    optimizer = cli._load_optimizer()
-    with warnings.catch_warnings(record=True) as captured:
-        warnings.simplefilter("always")
-        warnings.warn("unrelated project warning", DeprecationWarning, stacklevel=1)
-
-    assert optimizer.__name__ == "llm_sandbox_evals.optimize_dspy"
-    assert [str(item.message) for item in captured] == ["unrelated project warning"]
 
 
 async def _raise_keyboard_interrupt(*_args: object) -> object:

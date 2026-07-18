@@ -2233,22 +2233,63 @@ async def test_carbon_result_uses_full_fossil_fallback_for_missing_buckets() -> 
 
 
 @pytest.mark.parametrize(
-    ("limit", "expected_key", "expected_placeholders"),
+    ("catalog", "args", "expected_key", "expected_placeholders"),
     [
         pytest.param(
-            "statistic_ids",
+            SafeEnergyCatalog(
+                (),
+                tuple(
+                    SafeEnergyDeviceRecord("device", f"Device {index}", f"sensor.device_{index:02}")
+                    for index in range(41)
+                ),
+                (),
+                None,
+                41,
+            ),
+            {
+                "hours": 1,
+                "period": "hour",
+                "source_types": ["device"],
+                "include": ["summary", "validation"],
+            },
             "energy_query_too_large",
             {"statistic_count": "41", "bucket_count": "1", "max_points": "40"},
             id="statistic-ids",
         ),
         pytest.param(
-            "source_records",
+            _gas_catalog(101),
+            {
+                "hours": 1,
+                "period": "hour",
+                "source_types": ["gas"],
+                "include": ["summary", "validation"],
+            },
             "energy_source_limit_exceeded",
             {"source_count": "101", "max_sources": "100"},
             id="source-records",
         ),
         pytest.param(
-            "forecast_sources",
+            SafeEnergyCatalog(
+                tuple(
+                    SafeEnergySourceRecord(
+                        f"solar:{index}",
+                        "solar",
+                        f"Solar {index}",
+                        (SafeEnergyMeasureRef("solar_generation", f"sensor.solar_{index:02}"),),
+                    )
+                    for index in range(9)
+                ),
+                (),
+                (),
+                None,
+                9,
+            ),
+            {
+                "hours": 1,
+                "period": "hour",
+                "source_types": ["solar"],
+                "include": ["forecast", "validation"],
+            },
             "energy_source_limit_exceeded",
             {"source_count": "9", "max_sources": "8"},
             id="forecast-sources",
@@ -2256,48 +2297,12 @@ async def test_carbon_result_uses_full_fossil_fallback_for_missing_buckets() -> 
     ],
 )
 async def test_cardinality_limits_reject_before_every_host_fetcher(
-    limit: Literal["statistic_ids", "source_records", "forecast_sources"],
+    catalog: SafeEnergyCatalog,
+    args: dict[str, object],
     expected_key: str,
     expected_placeholders: dict[str, str],
 ) -> None:
     """Every cardinality guard rejects before metadata, recorder, forecast, or validation work."""
-    if limit == "statistic_ids":
-        devices = tuple(
-            SafeEnergyDeviceRecord("device", f"Device {index}", f"sensor.device_{index:02}") for index in range(41)
-        )
-        catalog = SafeEnergyCatalog((), devices, (), None, len(devices))
-        args: dict[str, object] = {
-            "hours": 1,
-            "period": "hour",
-            "source_types": ["device"],
-            "include": ["summary", "validation"],
-        }
-    elif limit == "source_records":
-        catalog = _gas_catalog(101)
-        args = {
-            "hours": 1,
-            "period": "hour",
-            "source_types": ["gas"],
-            "include": ["summary", "validation"],
-        }
-    else:
-        sources = tuple(
-            SafeEnergySourceRecord(
-                f"solar:{index}",
-                "solar",
-                f"Solar {index}",
-                (SafeEnergyMeasureRef("solar_generation", f"sensor.solar_{index:02}"),),
-            )
-            for index in range(9)
-        )
-        catalog = SafeEnergyCatalog(sources, (), (), None, len(sources))
-        args = {
-            "hours": 1,
-            "period": "hour",
-            "source_types": ["solar"],
-            "include": ["forecast", "validation"],
-        }
-
     recorded_source, metadata_calls, statistics_calls = _recording_source(catalog, {}, {})
     forecast_calls: list[tuple[str, ...]] = []
     validation_calls: list[bool] = []

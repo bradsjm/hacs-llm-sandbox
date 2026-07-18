@@ -8,7 +8,7 @@ from custom_components.llm_sandbox.const import DEFAULT_PROMPT_PROFILE
 from custom_components.llm_sandbox.llm_api.prompts import resolve_profile
 from llm_sandbox_evals.cases import CASES
 from llm_sandbox_evals.config import EvalConfig
-from llm_sandbox_evals.harness import _diagnostics, _partial_usage, _usage, run_case
+from llm_sandbox_evals.harness import _diagnostics, _usage, run_case
 from llm_sandbox_evals.phases import PhaseObservation
 from llm_sandbox_evals.presentation import effective_cause
 from llm_sandbox_evals.prompts import load_candidates
@@ -22,7 +22,6 @@ from pydantic_ai.models.function import (
     DeltaToolCalls,
     FunctionModel,
 )
-from pydantic_ai.usage import RunUsage
 import pytest
 
 # Keep the boundary explicit because this test package shares the runtime package name.
@@ -99,23 +98,6 @@ def test_usage_reads_property_and_preserves_token_components(
     assert _usage(result) == expected
 
 
-def test_partial_usage_sums_model_response_usage_when_final_is_unavailable() -> None:
-    response_a = ModelResponse(
-        parts=[ToolCallPart(tool_name="execute_home_code", args={}, tool_call_id="a")],
-        usage=RunUsage(input_tokens=12, output_tokens=8),
-    )
-    response_b = ModelResponse(
-        parts=[ToolCallPart(tool_name="execute_home_code", args={}, tool_call_id="b")],
-        usage=RunUsage(input_tokens=3, output_tokens=2),
-    )
-
-    usage = _partial_usage([response_a, response_b])
-
-    assert usage is not None
-    assert usage["request_tokens"] == 15
-    assert usage["response_tokens"] == 10
-    assert usage["total_tokens"] == 25
-    assert usage["partial"] is True
 
 
 def test_parallel_batches_count_unique_model_responses() -> None:

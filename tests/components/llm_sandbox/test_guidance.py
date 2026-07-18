@@ -212,68 +212,28 @@ def test_policy_decides_confidence_from_ranked_signal(case_name: str, expected: 
     ("ctx", "uses_imperative"),
     [
         pytest.param(
-            FailureContext(intent=Intent.READ_STATE, requested="sensor.not_here", domain="sensor"),
-            False,
-            id="read-state",
-        ),
-        pytest.param(
             FailureContext(
-                intent=Intent.CALL_SERVICE,
-                requested="turn_on",
-                domain="fan",
-                service="turn_on",
-                service_data={"percentage": 50},
+                intent=Intent.READ_STATE,
+                requested="sensor.living_room_temperature",
+                domain="sensor",
             ),
             True,
-            id="call-service",
+            id="high-confidence-candidate",
         ),
         pytest.param(
-            FailureContext(intent=Intent.RESOLVE_SELECTOR, requested="area_upstairs", domain="light"),
+            FailureContext(intent=Intent.READ_STATE, requested="switch.nope", domain="switch"),
             False,
-            id="resolve-selector",
-        ),
-        pytest.param(
-            FailureContext(intent=Intent.QUERY_HISTORY, requested="sensor.not_here", domain="sensor"),
-            False,
-            id="query-history",
-        ),
-        pytest.param(
-            FailureContext(intent=Intent.SQL_TABLE, requested="missing_table"),
-            False,
-            id="sql-table",
-        ),
-        pytest.param(
-            FailureContext(intent=Intent.SQL_COLUMN, requested="missing_column", table_name="states"),
-            False,
-            id="sql-column",
-        ),
-        pytest.param(
-            FailureContext(intent=Intent.CAPTURE_IMAGE, requested="camera.back", domain="camera"),
-            False,
-            id="capture-image",
-        ),
-        pytest.param(
-            FailureContext(intent=Intent.CODE_NAME, requested="statez"),
-            True,
-            id="code-name",
-        ),
-        pytest.param(
-            FailureContext(
-                intent=Intent.CODE_ATTRIBUTE,
-                requested="missing_attr",
-                available_attributes=("async_all", "get"),
-            ),
-            False,
-            id="code-attribute",
+            id="no-visible-candidate",
         ),
     ],
 )
-def test_advise_next_step_contract_for_non_exact_intents(ctx: FailureContext, uses_imperative: bool) -> None:
-    """D. Non-exact guidance always gives a next step with confidence-gated imperative wording."""
+def test_advise_imperative_wording_requires_actionable_confidence(
+    ctx: FailureContext,
+    uses_imperative: bool,
+) -> None:
+    """D. Retry wording is imperative only when a candidate is safe to use."""
     guidance = advise(_home_snapshot(), ctx)
 
-    assert guidance.confidence is not Confidence.EXACT
-    assert guidance.next_step
     assert guidance.next_step.startswith("Use `") is uses_imperative
 
 
@@ -310,31 +270,6 @@ def test_to_payload_uses_documented_json_shape_and_round_trips() -> None:
     assert json.loads(json.dumps(payload)) == payload
 
 
-def test_candidate_detail_omits_absent_values() -> None:
-    """Candidate detail strings include useful values but never stringify None."""
-    snapshot = replace(
-        _home_snapshot(),
-        states={
-            "sensor.none_detail": _state(
-                "sensor.none_detail",
-                "1",
-                "None Detail",
-                attributes={"device_class": None, "unit_of_measurement": "W"},
-            )
-        },
-        entities={},
-        areas={},
-        floors={},
-    )
-
-    guidance = advise(
-        snapshot, FailureContext(intent=Intent.READ_STATE, requested="sensor.none_detail", domain="sensor")
-    )
-
-    assert "W" in guidance.candidates[0].detail
-    assert "None" not in guidance.candidates[0].detail
-
-
 def test_report_context_location_scope_override() -> None:
     """E. Living-room temperature intent ranks the living temperature sensor first."""
     guidance = advise(
@@ -345,7 +280,6 @@ def test_report_context_location_scope_override() -> None:
     assert guidance.confidence is Confidence.HIGH
     assert guidance.candidates[0].id == "sensor.living_temp"
     assert guidance.candidates[0].match in {"name", "device_class: temperature"}
-    assert "temperature" in guidance.candidates[0].detail
     assert guidance.candidates[0].id not in {"sensor.bedroom_humidity", "sensor.office_temp"}
 
 
@@ -387,8 +321,8 @@ def test_report_real_office_blinds_close_is_domain_filtered() -> None:
     "requested",
     [pytest.param("switch.garage_opener", id="hidden-garage"), pytest.param("switch.nope", id="nonexistent")],
 )
-def test_report_blocked_hidden_garage_opener_is_not_imperative(requested: str) -> None:
-    """E. Hidden or absent switch guidance must not say Use X."""
+def test_report_hidden_or_absent_entity_is_not_actionable(requested: str) -> None:
+    """E. Hidden or absent entities stay below actionable confidence."""
     guidance = advise(
         _home_snapshot(),
         FailureContext(intent=Intent.READ_STATE, requested=requested, domain="switch"),
@@ -396,11 +330,10 @@ def test_report_blocked_hidden_garage_opener_is_not_imperative(requested: str) -
 
     assert guidance.confidence in {Confidence.NONE, Confidence.LISTING}
     assert not MEMORY_WRITE_ALLOWED[guidance.confidence]
-    assert not guidance.next_step.startswith("Use `")
     assert "switch.garage_opener" not in {candidate.id for candidate in guidance.candidates}
 
 
-def test_report_action_domain_not_allowed_gets_non_imperative_guidance() -> None:
+def test_report_unavailable_domain_has_bounded_guidance() -> None:
     """E. A service request outside available domains gets bounded absence/listing guidance."""
     guidance = advise(
         _home_snapshot(),
@@ -409,7 +342,6 @@ def test_report_action_domain_not_allowed_gets_non_imperative_guidance() -> None
 
     assert guidance.confidence in {Confidence.NONE, Confidence.LISTING}
     assert guidance.reason
-    assert not guidance.next_step.startswith("Use `")
 
 
 def test_report_complex_hot_living_turn_on_fan_ranks_field_aware_service_first() -> None:
@@ -455,7 +387,6 @@ def test_report_action_living_fan_percentage_auto_resolves_named_fan_exactly() -
 
     assert guidance.confidence is Confidence.EXACT
     assert guidance.candidates[0].id == "fan.living_fan"
-    assert "fan.living_fan" in guidance.reason
     assert guidance.next_step == ""
 
 

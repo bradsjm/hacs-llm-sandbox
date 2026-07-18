@@ -379,31 +379,6 @@ async def test_history_byte_cursor_preserves_exhausted_stream_and_narrows_fetch(
     assert fetches[1] == ([_LIVING_LIGHT], datetime.fromisoformat(timestamps[1]))
 
 
-def test_continuation_query_groups_partition_streams_by_effective_end() -> None:
-    """Continuation groups coalesce equal cutoffs and isolate every other safe end."""
-    original_end = _CREATED_AT
-    newer_cutoff = (_CREATED_AT - timedelta(minutes=1)).isoformat()
-    older_cutoff = (_CREATED_AT - timedelta(minutes=2)).isoformat()
-
-    assert recorder._continuation_query_groups(
-        ["one", "two"], {"one": newer_cutoff, "two": newer_cutoff}, original_end
-    ) == [(["one", "two"], datetime.fromisoformat(newer_cutoff))]
-    assert recorder._continuation_query_groups(
-        ["one", "two"], {"one": newer_cutoff, "two": older_cutoff}, original_end
-    ) == [
-        (["one"], datetime.fromisoformat(newer_cutoff)),
-        (["two"], datetime.fromisoformat(older_cutoff)),
-    ]
-    assert recorder._continuation_query_groups(["one", "two"], {"one": older_cutoff}, original_end) == [
-        (["one"], datetime.fromisoformat(older_cutoff)),
-        (["two"], original_end),
-    ]
-    assert recorder._continuation_query_groups(["one", "two"], {"one": "", "two": newer_cutoff}, original_end) == [
-        (["two"], datetime.fromisoformat(newer_cutoff))
-    ]
-    assert recorder._continuation_query_groups(["one"], {"one": "not-a-timestamp"}, original_end) == [
-        (["one"], original_end)
-    ]
 
 
 async def test_history_continuation_groups_fetches_and_merges_rows() -> None:

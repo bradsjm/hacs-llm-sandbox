@@ -264,15 +264,27 @@ async def test_cursor_conflicts_are_invalid_input(
     assert result["error"]["key"] == "invalid_tool_input"
 
 
-async def test_cursor_validates_full_automation_ids(hass: HomeAssistant, loaded_entry: MockConfigEntry) -> None:
-    """Malformed domains in both explicit IDs and the after key are rejected."""
-    for field, value in (("e", ["light.not_automation"]), ("after", "light.not_automation")):
-        cursor = _cursor(
-            {"v": 1, "k": "automation", "q": "", "e": [], "p": [], "l": 10, "after": "automation.test"}
-            | {field: value}
-        )
-        result = await _call(hass, loaded_entry, {"cursor": cursor})
-        assert result["error"]["key"] == "invalid_cursor"
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        pytest.param("e", ["light.not_automation"], id="explicit-entity"),
+        pytest.param("after", "light.not_automation", id="continuation-key"),
+    ],
+)
+async def test_cursor_validates_full_automation_ids(
+    hass: HomeAssistant,
+    loaded_entry: MockConfigEntry,
+    field: str,
+    value: object,
+) -> None:
+    """Malformed domains in explicit IDs and continuation keys are rejected."""
+    cursor = _cursor(
+        {"v": 1, "k": "automation", "q": "", "e": [], "p": [], "l": 10, "after": "automation.test"} | {field: value}
+    )
+
+    result = await _call(hass, loaded_entry, {"cursor": cursor})
+
+    assert result["error"]["key"] == "invalid_cursor"
 
 
 async def test_cursor_continuation_reauthorizes_after_permission_loss(
