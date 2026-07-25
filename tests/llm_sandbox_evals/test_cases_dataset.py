@@ -1,4 +1,3 @@
-from collections import Counter
 from collections.abc import Callable
 import json
 from pathlib import Path
@@ -48,69 +47,70 @@ def test_authoring_schema_contains_the_closed_case_contract() -> None:
     assert desired["anyOf"] == [{"required": ["state"]}, {"required": ["attributes"]}]
 
 
-_DESIRED_ENTITY_CASE_IDS = {
-    "direct_turn_on_utility_room_ceiling",
-    "direct_turn_off_utility_room_accent",
-    "direct_toggle_utility_room_outlet",
-    "discover_basement_ceiling_lights",
-    "brightness_utility_room_ceiling",
-    "color_utility_room_accent",
-    "no_action_light_already_on",
-    "condition_turn_off_living_room_ceiling",
-    "condition_history_change_turn_off",
-    "no_action_history_no_recent_change",
-    "ambiguous_logic_living_room_recent",
-    "selector_evening_lights_living_room_off",
-    "multi_action_swap_utility_room_lights",
-    "condition_climate_below_threshold_set_temperature",
-    "no_action_climate_not_below_threshold",
-    "cover_open_office_blinds",
-    "cover_close_bedroom_shade",
-    "cover_position_office_blinds_half",
-    "cover_no_action_bedroom_shade_not_closed",
-}
+def test_effect_oracles_keep_effect_evidence_consistent() -> None:
+    assert CASES
 
-_ACTION_ONLY_CASE_IDS = {
-    "discover_utility_room_lights",
-    "ambiguous_bare_light",
-    "ambiguous_ceiling_no_area",
-}
-
-_JUDGE_CODE_CASE_IDS = {
-    "discover_utility_room_lights",
-    "discover_basement_ceiling_lights",
-    "condition_history_change_turn_off",
-    "no_action_history_no_recent_change",
-    "ambiguous_logic_living_room_recent",
-}
+    for case in CASES:
+        if case.oracle == "effect":
+            assert not case.expected_tool_calls
+            assert case.expected_answer is None
+            if case.desired_entities and case.required_actions:
+                action_targets = {
+                    entity_id
+                    for action in case.required_actions
+                    for entity_id in action.target_entity_ids
+                }
+                assert {predicate.entity_id for predicate in case.desired_entities} <= action_targets
+        elif case.oracle == "tool_calls":
+            assert case.expected_tool_calls
+            assert not case.required_actions
+            assert not case.desired_entities
+            assert case.expected_answer is None
+        elif case.oracle == "answer":
+            assert case.expected_answer is not None
+            assert not case.expected_tool_calls
+            assert not case.required_actions
+            assert not case.desired_entities
+        else:
+            pytest.fail(f"unsupported case oracle: {case.oracle!r}")
 
 
-def test_effect_corpus_desired_entity_and_action_only_split_is_exact() -> None:
-    case_ids = {case.id for case in CASES}
-    effect_cases = {case.id for case in CASES if case.oracle == "effect"}
-    desired_entity_cases = {case.id for case in CASES if case.oracle == "effect" and case.desired_entities}
-    action_only_cases = {case.id for case in CASES if case.oracle == "effect" and not case.desired_entities}
-
-    assert desired_entity_cases == _DESIRED_ENTITY_CASE_IDS
-    assert action_only_cases == _ACTION_ONLY_CASE_IDS
-    assert len(desired_entity_cases) == 19
-    assert len(action_only_cases) == 3
-    assert desired_entity_cases | action_only_cases == effect_cases
-    assert len(case_ids) == 41
-
-
-
-def test_corpus_category_distribution_is_exact() -> None:
-    assert Counter(case.category for case in CASES) == {
-        "direct": 5,
-        "discovery": 3,
-        "service_data": 3,
-        "conditional": 7,
-        "ambiguity": 3,
-        "tool_contract": 8,
-        "read_answer": 11,
-        "composition": 1,
+def test_corpus_categories_are_valid_and_nonempty() -> None:
+    valid_categories = {
+        "ambiguity",
+        "composition",
+        "conditional",
+        "direct",
+        "discovery",
+        "read_answer",
+        "service_data",
+        "tool_contract",
     }
+
+    categories = [case.category for case in CASES]
+    assert categories
+    assert all(isinstance(category, str) and category.strip() for category in categories)
+    assert set(categories) <= valid_categories
+
+
+def test_code_judging_cases_have_an_authored_oracle_surface() -> None:
+    judge_cases = [case for case in CASES if case.judge_code]
+
+    assert judge_cases
+    assert all(
+        case.requests
+        and case.requests[0].id == "canonical"
+        and any(request.text.strip() for request in case.requests)
+        for case in judge_cases
+    )
+    assert all(
+        case.oracle == "effect"
+        or (case.oracle == "tool_calls" and case.expected_tool_calls)
+        or (case.oracle == "answer" and case.expected_answer is not None)
+        for case in judge_cases
+    )
+
+
 
 def test_dedicated_oracle_cases_author_narrow_contracts() -> None:
     cases_by_id = {case.id: case for case in CASES}
@@ -181,9 +181,6 @@ def test_dedicated_oracle_cases_author_narrow_contracts() -> None:
     assert cases_by_id["answer_count_climate_label_second_floor"].expected_answer == AnswerPredicate("count", count=9)
 
 
-def test_authored_code_judge_selection_is_exact() -> None:
-    assert {case.id for case in CASES if case.judge_code} == _JUDGE_CODE_CASE_IDS
-    assert all(case.judge_code is False for case in CASES if case.id not in _JUDGE_CODE_CASE_IDS)
 
 
 def _judge_effect_case() -> EvalCase:

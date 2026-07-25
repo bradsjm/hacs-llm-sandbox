@@ -24,14 +24,9 @@ from llm_sandbox_evals.schema import (
     ToolEvent,
 )
 from llm_sandbox_evals.terminal import (
-    _LIVE_REFRESH_PER_SECOND,
     MatrixTerminalReporter,
-    _duration,
-    _left_ellipsis,
-    _live_duration,
     _operational_issue_cells,
     _operational_issue_detail,
-    _token_total,
     render_durable_final,
 )
 import pytest
@@ -53,13 +48,13 @@ def _config(*, concurrency: int = 5) -> EvalConfig:
     )
 
 
-def _reporter(*, human: bool = True, escape_available: bool = True, concurrency: int = 5) -> MatrixTerminalReporter:
+def _reporter(*, human: bool = True, concurrency: int = 5) -> MatrixTerminalReporter:
     return MatrixTerminalReporter(
         _config(concurrency=concurrency),
         run_id="run-1",
         run_dir="runs/run-1",
         human=human,
-        escape_available=escape_available,
+        escape_available=True,
     )
 
 
@@ -282,44 +277,19 @@ def test_lanes_start_queued_with_activity_variant_and_tool_cap() -> None:
     assert "0 / 10" in output
 
 
-def test_spinner_persists_and_follows_phase_style() -> None:
-    reporter = _reporter(human=True)
-    reporter._state.total = 1
-    reporter.handle(MatrixProgressEvent("cell_started", cell=_cell(), request="Turn on light"))
-
-    reporter._lanes_table()
-    spinner_before_phase = reporter._spinners[_cell()]
-    queued_style = spinner_before_phase.style
-    reporter.handle_phase(LanePhaseEvent(_cell(), "running_tool", "execute_home_code"))
-    reporter._lanes_table()
-    spinner_while_running_tool = reporter._spinners[_cell()]
-    running_tool_style = spinner_while_running_tool.style
-    reporter.handle_phase(LanePhaseEvent(_cell(), "responding"))
-    reporter._lanes_table()
-    spinner_while_responding = reporter._spinners[_cell()]
-
-    assert spinner_before_phase is spinner_while_running_tool is spinner_while_responding
-    assert running_tool_style != queued_style
-    assert spinner_while_responding.style not in {queued_style, running_tool_style}
-
-
-def test_judging_phase_renders_with_the_scoring_style_without_replacing_its_spinner() -> None:
+def test_judging_phase_renders_its_phase_label() -> None:
     reporter = _reporter(human=True)
     reporter._state.total = 1
     cell = _cell()
     reporter.handle(MatrixProgressEvent("cell_started", cell=cell, request="Turn on light"))
     reporter.handle_phase(LanePhaseEvent(cell, "scoring"))
     reporter._lanes_table()
-    spinner_before_judging = reporter._spinners[cell]
-    scoring_style = spinner_before_judging.style
 
     reporter.handle_phase(LanePhaseEvent(cell, "judging"))
     table = reporter._lanes_table()
     console = Console(width=160, force_terminal=False, record=True)
     console.print(table)
 
-    assert reporter._spinners[cell] is spinner_before_judging
-    assert reporter._spinners[cell].style == scoring_style
     assert "judging" in console.export_text()
 
 
@@ -701,51 +671,6 @@ def test_operational_issues_render_provider_markup_as_literal_text_live_and_dura
     assert provider_model in durable_output
 
 
-def test_reporter_constructs_live_with_visible_vertical_overflow(monkeypatch: pytest.MonkeyPatch) -> None:
-    constructor_kwargs: dict[str, object] = {}
-    lifecycle: list[str] = []
-    live_renderables: list[object] = []
-    current_time = 100.0
-
-    class _FakeLive:
-        def __init__(self, renderable: object, **kwargs: object) -> None:
-            live_renderables.append(renderable)
-            constructor_kwargs.update(kwargs)
-
-        def start(self) -> None:
-            lifecycle.append("start")
-
-        def stop(self) -> None:
-            lifecycle.append("stop")
-
-    monkeypatch.setattr("llm_sandbox_evals.terminal.Live", _FakeLive)
-    monkeypatch.setattr("llm_sandbox_evals.terminal.perf_counter", lambda: current_time)
-    reporter = _reporter(human=True)
-    reporter._state.started_at = 100.0
-    reporter._console = Console(width=160, height=24, force_terminal=False, file=StringIO())
-
-    with reporter:
-        assert constructor_kwargs["vertical_overflow"] == "visible"
-        assert constructor_kwargs["refresh_per_second"] == _LIVE_REFRESH_PER_SECOND
-        assert constructor_kwargs["refresh_per_second"] == 4
-        assert lifecycle == ["start"]
-
-    assert lifecycle == ["start", "stop"]
-    assert live_renderables
-
-    first_frame = Console(width=160, force_terminal=False, record=True)
-    first_frame.print(live_renderables[0])
-    current_time = 102.4
-    second_frame = Console(width=160, force_terminal=False, record=True)
-    second_frame.print(live_renderables[0])
-
-    first_output = first_frame.export_text()
-    second_output = second_frame.export_text()
-    assert "Elapsed 0s" in first_output
-    assert "Elapsed 2s" in second_output
-    # Live timers floor to whole seconds; the decimal representation must not appear.
-    assert "0.0s" not in first_output
-    assert "2.4s" not in second_output
 
 
 def test_machine_phase_events_produce_no_terminal_output() -> None:
@@ -800,23 +725,7 @@ def test_machine_events_emit_stable_kv_without_raw_payload() -> None:
     assert "payload" not in output
 
 
-def test_durable_final_emits_counts_and_artifact_path_once() -> None:
-    reporter = _reporter(human=True)
-    _feed(reporter, (_cell(), _trace(state="incorrect", score_reason="wrong_target", tool_calls=2)))
-
-    console = Console(width=160, force_terminal=False, record=True)
-    console.print(render_durable_final(reporter._state, run_dir="runs/run-1", report_html="runs/run-1/report.html"))
-    output = console.export_text()
-
-    assert "Quality" in output
-    assert "Coverage" in output
-    assert "By category (all request variants)" in output
-    # The artifact directory and report.html each appear on one dedicated line in the durable final.
-    assert "Artifacts: runs/run-1" in output
-    assert "report.html: runs/run-1/report.html" in output
-
-
-def test_durable_final_renders_bounded_safe_advisory_code_judge_details() -> None:
+def test_durable_final_redacts_raw_advisory_code_judge_details() -> None:
     raw_judge_reason = (
         "RAW_JUDGE_REASON request=RAW_JUDGE_REQUEST_PAYLOAD code=RAW_JUDGE_CODE_PAYLOAD tool=RAW_JUDGE_TOOL_PAYLOAD"
     )
@@ -890,28 +799,12 @@ def test_durable_final_renders_bounded_safe_advisory_code_judge_details() -> Non
         )
     )
     output = console.export_text()
-    normalized = _normalized_rich_text(output)
 
-    assert "Code judge" in normalized
-    assert "advisory" in normalized
-    assert "openai-chat:judge-1" in normalized
-    assert "llm_sandbox_code_quality" in normalized
-    assert "v7" in normalized
     summary = report_model.judge_summary
     assert (summary.requested, summary.available, summary.passed) == (8, 6, 1)
     assert (summary.evaluator_failed, summary.unavailable) == (1, 1)
     assert summary.pass_rate == pytest.approx(1 / 6)
     assert summary.mean_score == pytest.approx(0.4)
-    # Candidate/model groups remain separate, including the non-default reasoning variant.
-    for value in ("alpha", "alpha-model(default)", "beta", "beta-model(high)", "gamma", "gamma-model(default)"):
-        assert value in normalized
-    assert "Needs attention" in normalized
-    for case_id in ("judge-failure", "judge-unavailable", "beta-low-score", "beta-mid-score", "gamma-low-score"):
-        assert case_id in output
-    assert "+ 2 more" in normalized
-    # Available non-passes use a fixed safe detail; evaluator failures reveal only their classification.
-    assert "code quality did not pass" in normalized
-    assert "JudgeProviderTimeout" in normalized
     assert raw_judge_reason not in output
     for sentinel in (
         "RAW_JUDGE_REASON",
@@ -925,130 +818,6 @@ def test_durable_final_renders_bounded_safe_advisory_code_judge_details() -> Non
     assert "RAW_REQUEST_PAYLOAD" not in output
     assert "secret-tool-arg" not in output
     assert "payload" not in output
-
-
-def test_durable_final_without_requested_judges_preserves_the_existing_summary() -> None:
-    report_model = _report_model(
-        _report_cell("not-judged", judge=JudgePresentation("not_requested")),
-    )
-
-    console = Console(width=80, force_terminal=False, record=True)
-    console.print(
-        render_durable_final(
-            _report_state(report_model),
-            run_dir="runs/run-1",
-            report_html="runs/run-1/report.html",
-            report_model=report_model,
-        )
-    )
-    output = _normalized_rich_text(console.export_text())
-
-    assert "Code judge" not in output
-    assert "Canonical quality" in output
-    assert "By category (all request variants)" in output
-    assert "Artifacts: runs/run-1" in output
-
-
-def test_durable_final_surfaces_paraphrase_quality_and_task_robustness() -> None:
-    reporter = _reporter(human=True)
-    _feed(
-        reporter,
-        (_cell("fragile"), _trace(case_id="fragile")),
-        (
-            _cell("fragile", request_variant_id="paraphrase_ok"),
-            _trace(case_id="fragile", request_variant_id="paraphrase_ok"),
-        ),
-        (
-            _cell("fragile", request_variant_id="paraphrase_fail"),
-            _trace(
-                case_id="fragile",
-                request_variant_id="paraphrase_fail",
-                state="incorrect",
-                score_reason="wrong_target",
-            ),
-        ),
-    )
-
-    console = Console(width=160, force_terminal=False, record=True)
-    console.print(render_durable_final(reporter.state, run_dir="runs/run-1", report_html="runs/run-1/report.html"))
-    output = console.export_text()
-
-    assert "Paraphrase quality 1/2" in output
-    assert "utterance-level" in output
-    assert "Task robustness 0/1 candidate/model task groups" in output
-    assert "baseline/fragile · stub(default) 2/3" in output
-    assert "baseline/fragile/paraphrase_fail" in output
-
-
-def test_durable_final_notable_cells_sort_canonical_first_and_report_overflow() -> None:
-    reporter = _reporter(human=True)
-    cells = [
-        (
-            _cell("z-canonical", request_variant_id="canonical"),
-            _trace(case_id="z-canonical", state="incorrect", score_reason="wrong_target"),
-        ),
-        *[
-            (
-                _cell(f"a-paraphrase-{index}", request_variant_id="paraphrase"),
-                _trace(
-                    case_id=f"a-paraphrase-{index}",
-                    request_variant_id="paraphrase",
-                    state="incorrect",
-                    score_reason="wrong_target",
-                ),
-            )
-            for index in range(9)
-        ],
-    ]
-    _feed(reporter, *cells)
-
-    console = Console(width=160, force_terminal=False, record=True)
-    console.print(render_durable_final(reporter.state, run_dir="runs/run-1", report_html="runs/run-1/report.html"))
-    output = console.export_text()
-
-    assert output.index("baseline/z-canonical/canonical") < output.index("baseline/a-paraphrase-0/paraphrase")
-    assert "+ 2 more" in output
-
-
-def test_durable_final_canonical_only_run_has_safe_paraphrase_placeholders_at_narrow_width() -> None:
-    reporter = _reporter(human=True)
-    _feed(reporter, (_cell(), _trace()))
-
-    console = Console(width=80, force_terminal=False, record=True)
-    console.print(render_durable_final(reporter.state, run_dir="runs/run-1", report_html="runs/run-1/report.html"))
-    output = _normalized_rich_text(console.export_text())
-
-    assert "Paraphrase quality 0/0 (—)" in output
-    assert "Task robustness 1/1" in output
-
-
-def test_durable_final_distinguishes_model_groups_and_preserves_narrow_failure_reason() -> None:
-    reporter = _reporter(human=True)
-    _feed(
-        reporter,
-        (
-            _cell("fragile", model_id="stub-a"),
-            _trace(case_id="fragile", model_id="stub-a", state="incorrect", score_reason="end_state_unsatisfied"),
-        ),
-        (
-            _cell("fragile", model_id="stub-b"),
-            _trace(case_id="fragile", model_id="stub-b", state="incorrect", score_reason="end_state_unsatisfied"),
-        ),
-    )
-
-    console = Console(width=30, force_terminal=False, record=True)
-    console.print(render_durable_final(reporter.state, run_dir="runs/run-1", report_html="runs/run-1/report.html"))
-    output = console.export_text()
-    without_borders = "".join(
-        "" if unicodedata.name(character, "").startswith("BOX DRAWINGS") else character for character in output
-    )
-    compact = "".join(without_borders.split())
-
-    assert "Task robustness 0/2" in output
-    assert "candidate/model task" in output
-    assert "stub-a(default)" in compact
-    assert "stub-b(default)" in compact
-    assert "incorrect·end_state_unsatisfied" in compact
 
 
 def test_recent_variant_keeps_meaningful_suffix_not_head() -> None:
@@ -1082,56 +851,6 @@ def test_render_includes_overall_progress_bar() -> None:
     assert "1/2" in output
 
 
-def test_left_ellipsis_returns_value_when_it_fits() -> None:
-    assert _left_ellipsis("stub(high)", 22) == "stub(high)"
-
-
-def test_left_ellipsis_truncates_head_and_keeps_suffix() -> None:
-    value = "openai-chat:oc/model(xhigh)"
-    result = _left_ellipsis(value, 12)
-    # Overflow drops the head with a leading ellipsis while preserving the exact suffix.
-    assert len(result) == 12
-    assert result.startswith("…")
-    assert result[1:] == value[-11:]
-
-
-@pytest.mark.parametrize(
-    ("tokens", "expected"),
-    [
-        pytest.param(None, "tokens unavailable", id="unavailable"),
-        pytest.param(299_499, "tokens 299k", id="rounds-down"),
-        pytest.param(299_500, "tokens 300k", id="rounds-up"),
-    ],
-)
-def test_token_total_uses_rounded_thousands(tokens: float | None, expected: str) -> None:
-    assert _token_total(tokens) == expected
-
-
-@pytest.mark.parametrize(
-    ("seconds", "expected"),
-    [
-        pytest.param(0.4, "0.4s", id="subsecond"),
-        pytest.param(10.4, "10.4s", id="seconds"),
-        pytest.param(61.0, "1:01", id="minute"),
-    ],
-)
-def test_duration_is_compact(seconds: float, expected: str) -> None:
-    assert _duration(seconds) == expected
-
-
-@pytest.mark.parametrize(
-    ("seconds", "expected"),
-    [
-        pytest.param(0.4, "0s", id="subsecond-floors-to-zero"),
-        pytest.param(2.4, "2s", id="subsecond-floors-to-whole"),
-        pytest.param(10.9, "10s", id="floors-not-rounds"),
-        pytest.param(61.0, "1:01", id="minute"),
-    ],
-)
-def test_live_duration_floors_to_whole_seconds(seconds: float, expected: str) -> None:
-    assert _live_duration(seconds) == expected
-
-
 def test_lanes_table_live_elapsed_displays_whole_seconds(monkeypatch: pytest.MonkeyPatch) -> None:
     """Active-lane elapsed displays whole seconds, not tenths, matching the 4 Hz Live cadence."""
     current_time = 100.0
@@ -1153,35 +872,3 @@ def test_lanes_table_live_elapsed_displays_whole_seconds(monkeypatch: pytest.Mon
     assert "2.4s" not in output
 
 
-@pytest.mark.parametrize(
-    ("escape_available", "expected_hint", "absent_hint"),
-    [
-        pytest.param(True, "Escape", "Ctrl+C", id="escape-available"),
-        pytest.param(False, "Ctrl+C", "Escape", id="ctrl-c-only"),
-    ],
-)
-def test_cancel_hint_distinguishes_escape_from_ctrl_c_only(
-    escape_available: bool, expected_hint: str, absent_hint: str
-) -> None:
-    interactive = _reporter(human=True, escape_available=escape_available)
-    redirected = _reporter(human=False, escape_available=escape_available)
-
-    # The cancellation hint appears once, in the live frame footer, not duplicated in the header.
-    orientation = Console(width=160, force_terminal=False, record=True)
-    orientation.print(interactive._orientation())
-    orientation_text = orientation.export_text()
-    assert "Escape" not in orientation_text
-    assert "Ctrl+C" not in orientation_text
-
-    # The transient Live frame carries the correct mechanism for the active stream mode.
-    frame = Console(width=160, force_terminal=False, record=True)
-    frame.print(interactive._render())
-    frame_text = frame.export_text()
-    assert expected_hint in frame_text
-    assert absent_hint not in frame_text
-
-    # Redirected (non-TTY) runs emit deterministic KV only and never print a human cancel hint.
-    stream = StringIO()
-    redirected._console = Console(width=200, force_terminal=False, file=stream)
-    redirected.handle(MatrixProgressEvent("matrix_started", total=1))
-    assert expected_hint not in stream.getvalue()

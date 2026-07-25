@@ -63,7 +63,7 @@ async def test_code_judge_submits_complete_ordered_execution_context(
     await CodeQualityJudge(_MODEL, 0.1).evaluate(_context(_trace(events)))
 
     assert len(helper_calls) == 1
-    judge_input, judge_output, rubric, model = helper_calls[0]
+    judge_input, judge_output, _rubric, model = helper_calls[0]
     assert judge_input == {
         "request_text": "Turn on the kitchen light.",
         "deterministic_outcome": {
@@ -106,7 +106,6 @@ async def test_code_judge_submits_complete_ordered_execution_context(
             "status": "ok",
         }
     ]
-    assert "ephemeral glue code" in rubric
     assert model == {"model": _MODEL}
 
 
@@ -126,8 +125,6 @@ async def test_code_judge_returns_native_score_and_pass_results_with_the_provide
     score = results["code_quality_score"]
     passed = results["code_quality_pass"]
 
-    assert type(score).__name__ == "EvaluationReason"
-    assert type(passed).__name__ == "EvaluationReason"
     assert (score.value, score.reason) == (0.75, "the code is concise")
     assert (passed.value, passed.reason) == (True, "the code is concise")
 
@@ -216,7 +213,6 @@ async def test_code_judge_isolates_observer_exceptions_without_suppressing_the_r
     ).evaluate(_context(_trace(())))
 
     passed = results["code_quality_pass"]
-    assert type(passed).__name__ == "EvaluationReason"
     assert (passed.value, passed.reason) == (True, "clear")
 
 

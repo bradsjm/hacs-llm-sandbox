@@ -394,16 +394,23 @@ def test_report_writer_preserves_each_incomplete_error_as_ordered_ndjson(tmp_pat
     assert physical_lines[0] == physical_lines[1]
 
 
-@pytest.mark.parametrize("version", [None, 1, 5, 6], ids=["missing", "v1", "v5", "v6"])
-async def test_legacy_and_invalid_artifacts_are_strictly_rejected(tmp_path: Path, version: int | None) -> None:
-    config = _config(tmp_path)
-    report = await run_matrix(config, run_id="artifact-version")
-    run_dir = write_report_json(report, config, run_id=f"artifact-version-{version}")
+async def test_legacy_artifact_without_scoring_version_is_strictly_rejected(tmp_path: Path) -> None:
+    run_dir = await _artifact_report_dir(tmp_path, "artifact-version-missing")
     payload = json.loads((run_dir / "report.json").read_text(encoding="utf-8"))
-    if version is None:
-        del payload["scoring_version"]
-    else:
-        payload["scoring_version"] = version
+    del payload["scoring_version"]
+    (run_dir / "report.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=r"^legacy scoring artifact; rerun evaluation with scoring v9$"):
+        load_report(run_dir)
+
+
+@pytest.mark.parametrize("version", [1, 5, 6], ids=["v1", "v5", "v6"])
+async def test_artifacts_with_explicit_invalid_scoring_versions_are_strictly_rejected(
+    tmp_path: Path, version: int
+) -> None:
+    run_dir = await _artifact_report_dir(tmp_path, f"artifact-version-{version}")
+    payload = json.loads((run_dir / "report.json").read_text(encoding="utf-8"))
+    payload["scoring_version"] = version
     (run_dir / "report.json").write_text(json.dumps(payload), encoding="utf-8")
 
     with pytest.raises(ValueError, match=r"^legacy scoring artifact; rerun evaluation with scoring v9$"):
@@ -514,6 +521,12 @@ def test_partial_writer_cleans_temporary_file_when_json_serialization_fails(
     # The typed journal is either complete or absent; a serialization error leaves no partial file.
     assert not path.exists()
     assert not list(tmp_path.glob(".partial.json.*"))
+
+
+async def _artifact_report_dir(tmp_path: Path, run_id: str) -> Path:
+    config = _config(tmp_path)
+    report = await run_matrix(config, run_id=run_id)
+    return write_report_json(report, config, run_id=f"{run_id}-written")
 
 
 def _config(runs_dir: Path) -> EvalConfig:

@@ -12,7 +12,6 @@ from custom_components.llm_sandbox.const import (
 )
 from custom_components.llm_sandbox.llm_api.prompts.profiles import resolve_profile
 from custom_components.llm_sandbox.llm_api.tools import recorder
-from custom_components.llm_sandbox.llm_api.tools._cursor import Cursor, decode_cursor, encode_cursor
 from custom_components.llm_sandbox.llm_api.tools._recorder_runtime import (
     HistoryRowStream,
     LogbookEntryStream,
@@ -205,14 +204,10 @@ async def test_history_byte_rejected_fixture_stream_continues(
 
     assert _history_result_rows(first, _LIVING_TEMP) == []
     assert _history_result_rows(first, _LIVING_LIGHT) == [[timestamps[3], "small"]]
-    assert decode_cursor(
-        first["next_cursor"], expected_kind="history", expected_scope_ids=tuple(sorted(entity_ids))
-    ).scope_ids == tuple(sorted(entity_ids))
+    assert set(cast(dict[str, object], first["entities"])) == set(entity_ids)
     assert _history_result_rows(second, _LIVING_TEMP) == [[timestamps[2], large_states[2]]]
     assert _history_result_rows(second, _LIVING_LIGHT) == []
-    assert decode_cursor(
-        second["next_cursor"], expected_kind="history", expected_scope_ids=tuple(sorted(entity_ids))
-    ).scope_ids == tuple(sorted(entity_ids))
+    assert set(cast(dict[str, object], second["entities"])) == set(entity_ids)
     assert _history_result_rows(third, _LIVING_TEMP) == [[timestamps[1], large_states[1]]]
     assert _history_result_rows(fourth, _LIVING_TEMP) == [[timestamps[0], large_states[0]]]
     assert "next_cursor" not in fourth
@@ -368,33 +363,44 @@ async def test_history_byte_cursor_preserves_exhausted_stream_and_narrows_fetch(
     )
 
     first = await tool.run_query(snapshot, first_data, source)
-    cursor = decode_cursor(first["next_cursor"], expected_kind="history", expected_scope_ids=tuple(sorted(entity_ids)))
     second_data = cast(dict[str, object], tool.parameters({"entity_ids": entity_ids, "cursor": first["next_cursor"]}))
     second = await tool.run_query(snapshot, second_data, source)
 
-    assert cursor.cutoffs == {_LIVING_TEMP: "", _LIVING_LIGHT: timestamps[1]}
+    assert set(cast(dict[str, object], first["entities"])) == set(entity_ids)
     assert _history_result_rows(first, _LIVING_TEMP) == [[timestamps[2], "0"]]
     assert _history_result_rows(second, _LIVING_TEMP) == []
     assert _history_result_rows(second, _LIVING_LIGHT) == [[timestamps[0], "é" * 5_000]]
+    assert set(cast(dict[str, object], second["entities"])) == set(entity_ids)
     assert fetches[1] == ([_LIVING_LIGHT], datetime.fromisoformat(timestamps[1]))
 
 
 
 
-async def test_history_continuation_groups_fetches_and_merges_rows() -> None:
-    """Distinct stream cutoffs issue sequential grouped reads that merge one response."""
+async def test_history_continuation_groups_fetches_and_merges_rows(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Continuation reads with distinct stream boundaries issue sequential grouped reads."""
     timestamps = _ascending_timestamps(4)
     entity_ids = [_LIVING_TEMP, _LIVING_LIGHT]
+    states = [str(index) if index < 2 else f"large-{index}" + "x" * 4_000 for index in range(len(timestamps))]
+    history_rows = [
+        {
+            "state": state,
+            "attributes": {},
+            "last_changed": timestamp,
+            "last_updated": timestamp,
+        }
+        for timestamp, state in zip(timestamps, states, strict=True)
+    ]
     fixture = _fixture(
         {
             "history": {
-                _LIVING_TEMP: _history_rows(timestamps),
-                _LIVING_LIGHT: _history_rows(timestamps),
+                _LIVING_TEMP: history_rows,
+                _LIVING_LIGHT: history_rows,
             },
             "statistics": {},
             "logbook": {},
         }
     )
+    monkeypatch.setattr(recorder, "MAX_RECORDER_PAGE_BYTES", 15 * 1024)
     snapshot = _snapshot()
     base_source = build_fixture_recorder_source(snapshot, fixture)
     fetches: list[tuple[list[str], datetime]] = []
@@ -404,29 +410,41 @@ async def test_history_continuation_groups_fetches_and_merges_rows() -> None:
         return await base_source.fetch_history(entity_ids, start, end)
 
     source = replace(base_source, fetch_history=fetch_history)
-    cursor = encode_cursor(
-        Cursor(
-            kind="history",
-            scope_ids=tuple(sorted(entity_ids)),
-            start=datetime.fromisoformat(timestamps[0]) - timedelta(minutes=1),
-            end=datetime.fromisoformat(timestamps[-1]) + timedelta(minutes=1),
-            cutoffs={_LIVING_TEMP: timestamps[-1], _LIVING_LIGHT: timestamps[-2]},
-        )
-    )
     tool = GetHistoryTool("eval")
-    data = cast(dict[str, object], tool.parameters({"entity_ids": entity_ids, "cursor": cursor}))
+    first_data = cast(
+        dict[str, object],
+        tool.parameters(
+            {
+                "entity_ids": entity_ids,
+                "start": (datetime.fromisoformat(timestamps[0]) - timedelta(minutes=1)).isoformat(),
+                "end": (datetime.fromisoformat(timestamps[-1]) + timedelta(minutes=1)).isoformat(),
+            }
+        ),
+    )
 
-    result = await tool.run_query(snapshot, data, source)
+    first = await tool.run_query(snapshot, first_data, source)
+    second_data = cast(
+        dict[str, object], tool.parameters({"entity_ids": entity_ids, "cursor": first["next_cursor"]})
+    )
+    result = await tool.run_query(snapshot, second_data, source)
 
+    assert set(cast(dict[str, object], first["entities"])) == set(entity_ids)
+    assert set(cast(dict[str, object], result["entities"])) == set(entity_ids)
     assert fetches == [
+        (entity_ids, datetime.fromisoformat(timestamps[-1]) + timedelta(minutes=1)),
         ([_LIVING_TEMP], datetime.fromisoformat(timestamps[-1])),
         ([_LIVING_LIGHT], datetime.fromisoformat(timestamps[-2])),
     ]
+    assert _history_result_rows(first, _LIVING_TEMP) == [[timestamps[-1], states[-1]]]
+    assert _history_result_rows(first, _LIVING_LIGHT) == [
+        [timestamps[-2], states[-2]],
+        [timestamps[-1], states[-1]],
+    ]
     assert _history_result_rows(result, _LIVING_TEMP) == [
-        [timestamp, str(index)] for index, timestamp in enumerate(timestamps[:-1])
+        [timestamp, state] for timestamp, state in zip(timestamps[:3], states[:3], strict=True)
     ]
     assert _history_result_rows(result, _LIVING_LIGHT) == [
-        [timestamp, str(index)] for index, timestamp in enumerate(timestamps[:-2])
+        [timestamp, state] for timestamp, state in zip(timestamps[:2], states[:2], strict=True)
     ]
 
 
@@ -551,15 +569,19 @@ async def test_statistics_duplicate_types_are_stably_deduplicated() -> None:
     )
 
     result = await tool.run_query(snapshot, data, source)
-    cursor = decode_cursor(result["next_cursor"], expected_kind="statistics", expected_scope_ids=(_LIVING_TEMP,))
     second_data = cast(
         dict[str, object], tool.parameters({"statistic_ids": [_LIVING_TEMP], "cursor": result["next_cursor"]})
     )
-    await tool.run_query(snapshot, second_data, source)
-    row = _statistics_result_rows(result, _LIVING_TEMP)[0]
+    second = await tool.run_query(snapshot, second_data, source)
+    first_rows = _statistics_result_rows(result, _LIVING_TEMP)
+    second_rows = _statistics_result_rows(second, _LIVING_TEMP)
 
-    assert cursor.statistic_types == ("sum", "state", "mean")
-    assert list(cast(dict[str, object], row[1])) == ["sum", "state", "mean"]
+    assert set(cast(dict[str, object], result["statistics"])) == {_LIVING_TEMP}
+    assert set(cast(dict[str, object], second["statistics"])) == {_LIVING_TEMP}
+    assert len(first_rows) == len(second_rows) == 1
+    assert list(cast(dict[str, object], first_rows[0][1])) == ["sum", "state", "mean"]
+    assert list(cast(dict[str, object], second_rows[0][1])) == ["sum", "state", "mean"]
+    assert {first_rows[0][0], second_rows[0][0]} == set(timestamps)
 
 
 async def test_execute_home_code_runs_with_eval_runtime_context() -> None:

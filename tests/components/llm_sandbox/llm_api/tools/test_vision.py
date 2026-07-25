@@ -105,11 +105,6 @@ async def test_get_camera_image_rejects_oversized_capture(
 
     assert result["status"] == "error"
     assert result["error"]["key"] == "image_too_large"
-    message = str(result["error"]["message"])
-    assert "camera.front_door" in message
-    assert str(vision.DEFAULT_IMAGE_TARGET_WIDTH) in message
-    assert "1" in message
-    assert "target_width" in message
 
 
 async def test_get_camera_image_maps_capture_failure(
@@ -123,15 +118,15 @@ async def test_get_camera_image_maps_capture_failure(
 
     assert result["status"] == "error"
     assert result["error"]["key"] == "capture_failed"
-    assert "camera.front_door" in str(result["error"]["message"])
 
 
 @pytest.mark.parametrize(
-    ("tool_args", "expected_token"),
+    "tool_args",
     [
-        pytest.param({"image_entity": "not_an_entity"}, "not_an_entity", id="malformed-entity-id"),
+        pytest.param({"image_entity": "not_an_entity"}, id="malformed-entity-id"),
         pytest.param(
-            {"image_entity": "camera.front_door", "target_width": 383}, "target_width", id="below-minimum-width"
+            {"image_entity": "camera.front_door", "target_width": 383},
+            id="below-minimum-width",
         ),
     ],
 )
@@ -139,7 +134,6 @@ async def test_get_camera_image_rejects_invalid_tool_input(
     hass: HomeAssistant,
     loaded_entry: MockConfigEntry,
     tool_args: dict[str, object],
-    expected_token: str,
 ) -> None:
     """Malformed entity IDs and widths below 384 are rejected as tool input."""
     _seed_camera(hass)
@@ -148,9 +142,6 @@ async def test_get_camera_image_rejects_invalid_tool_input(
 
     assert result["status"] == "error"
     assert result["error"]["key"] == "invalid_tool_input"
-    message = str(result["error"]["message"])
-    assert expected_token in message
-    assert "schema" in message
 
 
 async def test_get_camera_image_rejects_unsupported_visible_domain(

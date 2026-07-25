@@ -1,13 +1,17 @@
 """Behavior tests for the direct automation LLM tool."""
 
 import base64
-from datetime import timedelta
+from datetime import datetime, timedelta
 import json
 from typing import cast
 
 from custom_components.llm_sandbox.const import TOOL_GET_AUTOMATION
 from custom_components.llm_sandbox.llm_api.tools import automation, recorder
-from custom_components.llm_sandbox.llm_api.tools.automation import GetAutomationTool
+from custom_components.llm_sandbox.llm_api.tools.automation import (
+    AutomationRecord,
+    AutomationSource,
+    GetAutomationTool,
+)
 from homeassistant.auth.models import Group, User
 from homeassistant.auth.permissions import system_policies
 from homeassistant.auth.permissions.const import CAT_ENTITIES, POLICY_READ
@@ -167,17 +171,29 @@ async def test_logbook_automation_runs_are_newest_first(hass: HomeAssistant, rec
     assert "trace" not in runs[0]
 
 
-async def test_unexpected_run_query_failure_uses_query_failed(
-    hass: HomeAssistant, recorder_entry: MockConfigEntry, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_unexpected_run_query_failure_uses_query_failed() -> None:
     """Unexpected Logbook failures use the stable direct-tool query envelope."""
-    await _setup_automations(hass, [_automation_config("test", "Test")])
 
-    async def fail(*_args: object, **_kwargs: object) -> None:
+    async def fail(_entity_ids: list[str], _start: datetime, _end: datetime) -> dict[str, list[dict[str, object]]]:
         raise RuntimeError("executor failed")
 
-    monkeypatch.setattr(GetAutomationTool, "_add_runs", staticmethod(fail))
-    result = await _call(hass, recorder_entry, {"include": ["runs"]})
+    source = AutomationSource(
+        now=dt_util.utcnow(),
+        available=True,
+        content_authorized=True,
+        records=(
+            AutomationRecord(
+                entity_id="automation.test",
+                summary={"entity_id": "automation.test"},
+                search_terms=("automation.test",),
+                content=None,
+            ),
+        ),
+        fetch_runs=fail,
+    )
+    tool = GetAutomationTool("test")
+    data = cast(dict[str, object], tool.parameters({"include": ["runs"]}))
+    result = await tool.run_query(data, source)
 
     assert result["status"] == "error"
     assert result["error"]["key"] == "query_failed"
@@ -202,7 +218,12 @@ async def test_automation_pagination_has_no_gaps_and_fits_utf8_budget(
 
     walked = [record["entity_id"] for record in first["automations"] + second["automations"]]
     assert walked == ["automation.one", "automation.second", "automation.third"]
-    assert len(json.dumps(first, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode()) > 0
+    assert len(json.dumps(first, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode()) <= (
+        automation.MAX_RECORDER_PAGE_BYTES
+    )
+    assert len(json.dumps(second, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode()) <= (
+        automation.MAX_RECORDER_PAGE_BYTES
+    )
 
 
 async def test_oversized_first_automation_still_advances(

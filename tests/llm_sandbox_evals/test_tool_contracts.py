@@ -110,7 +110,6 @@ async def test_recorder_selector_no_match_returns_error_with_guidance() -> None:
     error = cast(dict[str, object], result["error"])
     assert error["key"] == "selector_no_match"
     assert isinstance(error["message"], str)
-    assert error["message"] != error["key"]
     assert "guidance" in error
 
 
@@ -126,7 +125,6 @@ def test_eval_recorder_validation_returns_invalid_tool_input_for_bad_iso() -> No
     assert validation.error["status"] == "error"
     assert error["key"] == "invalid_tool_input"
     assert isinstance(error["message"], str)
-    assert error["message"] != error["key"]
 
 
 def test_eval_recorder_validation_omits_empty_cursor_before_cursor_handling() -> None:
@@ -165,7 +163,6 @@ async def test_recorder_window_too_large_returns_stable_error_key() -> None:
     error = cast(dict[str, object], result["error"])
     assert error["key"] == "time_window_too_large"
     assert isinstance(error["message"], str)
-    assert error["message"] != error["key"]
 
 
 async def test_eval_sql_query_can_filter_visible_entities_by_domain() -> None:

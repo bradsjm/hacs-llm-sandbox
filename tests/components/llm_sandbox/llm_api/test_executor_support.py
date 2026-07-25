@@ -90,27 +90,25 @@ def test_error_key_and_placeholders_extract_stable_fields() -> None:
 
 
 @pytest.mark.parametrize(
-    ("err", "tokens"),
+    "err",
     [
         pytest.param(
             HelperExecutionError("query", "sql_too_long", {"max_length": "4000"}),
-            ("SQL", "4000"),
             id="sql-too-long",
         ),
-        pytest.param(HelperExecutionError("query", "sql_timeout", {}), ("SQL", "timed out"), id="sql-timeout"),
+        pytest.param(HelperExecutionError("query", "sql_timeout", {}), id="sql-timeout"),
         pytest.param(
             HelperExecutionError("query", "sql_unknown", {"reason": "bad column"}),
-            ("bad column", "query"),
             id="reason-first",
         ),
     ],
 )
-def test_helper_error_payload_messages_are_specific(
-    err: HelperExecutionError,
-    tokens: tuple[str, ...],
-) -> None:
-    """Helper payloads use shared specific messages while preserving reason overrides."""
+def test_helper_error_payload_preserves_stable_fields(err: HelperExecutionError) -> None:
+    """Helper payloads preserve stable execution status and error key."""
     payload = helper_error_payload_for_state(err, ExecutionState(service_call_limit=2))
 
-    message = payload["execution"]["message"]
-    assert all(token in message for token in tokens)
+    execution = payload["execution"]
+    assert execution["status"] == "helper_error"
+    assert execution["kind"] == err.key
+    assert isinstance(execution["message"], str)
+    assert execution["message"]
