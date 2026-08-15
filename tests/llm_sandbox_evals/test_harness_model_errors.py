@@ -469,7 +469,10 @@ async def test_run_case_timeout_closes_pending_native_stream(monkeypatch: pytest
             cases=None,
             homes=None,
             runs_dir=tmp_path,
-            model_timeout=0.01,
+            # Safety constraint: the timeout must fire while the native stream is pending, so it
+            # needs ample headroom over agent/stream startup latency (~10-15ms observed) to avoid
+            # racing the generator's first entry under CI load.
+            model_timeout=1.0,
         ),
         profile=resolve_profile(DEFAULT_PROMPT_PROFILE),
     )
@@ -477,9 +480,10 @@ async def test_run_case_timeout_closes_pending_native_stream(monkeypatch: pytest
     assert trace.outcome.state == "incomplete"
     assert trace.diagnostics.failure == "timeout"
     assert trace.execution_error is not None
-    assert "after=0.01s" in trace.execution_error.message
+    assert "after=1s" in trace.execution_error.message
     assert trace.provider_error is not None
-    assert "after=0.01s" in trace.provider_error
+    assert "after=1s" in trace.provider_error
+
     assert stream_started.is_set()
     await asyncio.wait_for(stream_closed.wait(), timeout=0.1)
 
