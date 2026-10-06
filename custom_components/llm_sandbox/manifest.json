@@ -8,6 +8,6 @@
   "integration_type": "service",
   "iot_class": "calculated",
   "issue_tracker": "https://github.com/bradsjm/hacs-llm-sandbox/issues",
-  "requirements": ["pydantic-monty>=0.0.18", "pillow>=12.2.0"],
+  "requirements": ["pydantic-monty>=0.0.18"],
   "version": "0.1.0"
 }
